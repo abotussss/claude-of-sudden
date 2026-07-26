@@ -1,5 +1,5 @@
 /**
- * AI — one enemy: body, senses, brain, gun.
+ * AI — one soldier: body, senses, brain, gun.
  *
  * PERCEPTION is deliberately imperfect. A target has to be inside a 100 degree
  * cone, in line of sight through the physics BVH, and then *stay* there for a
@@ -8,11 +8,23 @@
  * a direction, which becomes a "last known position" that decays — so enemies
  * search where you were, not where you are.
  *
+ * It is also TEAM-RELATIVE. This actor looks for anything hostile to its own
+ * team, which may be the local player or another actor; `ai.pickVisibleHostile`
+ * owns the search and the ray budget. Two sides of seven means most of the men
+ * on the map are fighting somebody who is not you.
+ *
  * BEHAVIOUR is a small state machine:
- *   idle / patrol -> alert -> combat -> suppressed -> flank -> retreat -> dead
+ *   idle / patrol / advance -> alert -> combat -> suppressed -> flank ->
+ *   retreat -> dead
  * Combat runs a peek-and-shoot loop from a scored cover point, with the squad
  * handing out permission to peek so they never all lean out at once, plus
- * suppressing fire, grenades and repositioning when the player stops moving.
+ * suppressing fire, grenades and repositioning when the target stops moving.
+ *
+ * ADVANCE is the objective layer the demolition mode needs: a destination and a
+ * verb handed down by `match` (push to a site, carry the C4 in, hold an entry,
+ * go and cut the wires). It only runs while nothing is shooting at this man —
+ * a contact always outranks the objective, and the objective is picked back up
+ * when the contact is lost.
  *
  * DAMAGE is per-bone: capsule colliders for head, chest, pelvis, arms and legs
  * are pushed into `physics` every frame, so a headshot is a headshot because of
@@ -27,6 +39,8 @@ import { Animator } from './animator.js';
 const STATE = {
   IDLE: 'idle',
   PATROL: 'patrol',
+  /** Walking to the objective `match` handed down. */
+  ADVANCE: 'advance',
   ALERT: 'alert',
   COMBAT: 'combat',
   SUPPRESSED: 'suppressed',
@@ -180,6 +194,23 @@ export class Agent {
     this.stateTime = 0;
     this.squad = opts.squad ?? null;
     this.team = opts.team ?? 1;
+    /** Killfeed / scoreboard handle. */
+    this.name = opts.name ?? `BOT-${this.id}`;
+    /** 'attack' | 'defend' — informational; the objective carries the verb. */
+    this.role = opts.role ?? null;
+
+    /* ---------------- objective (owned by `match`) ---------------- */
+    /** { mode, position: Vector3, site, facing: Vector3|null } or null. */
+    this.objective = null;
+    this._objPos = new THREE.Vector3();
+    this._objFacing = new THREE.Vector3();
+    this._hasFacing = false;
+    /** 'plant' | 'defuse' while working the charge: no moving, no shooting. */
+    this.working = null;
+    /** Set by `ai._updateSpotting`; drives the enemy blip. */
+    this.spottedAt = -1e9;
+    /** Who put the last round into this man, for kill credit. */
+    this.lastAttacker = null;
 
     /* ---------------- perception ---------------- */
     this.eyeHeight = RIG.eyeHeight * this.scale;
@@ -189,6 +220,10 @@ export class Agent {
     this.hasTarget = false;
     this.targetVisible = false;
     this.target = null;
+    /** The actual hostile being engaged: another Agent, or the player system. */
+    this.targetActor = null;
+    /** Rotating start index for the line-of-sight budget in pickVisibleHostile. */
+    this._scanCursor = this.id % 7;
     this.lastKnown = new THREE.Vector3();
     this.lastKnownAge = Infinity;
     this.searchPoint = new THREE.Vector3();
@@ -291,38 +326,63 @@ export class Agent {
   /* ================================================================== */
 
   _sense(dt) {
-    const player = this.ai.playerPosition(this._v3);
-    if (!player) return;
-    const eye = this.eye;
-    const to = this._dir.copy(player).sub(eye);
-    const dist = to.length();
-    let visible = false;
-    if (dist < this.viewRange) {
-      to.multiplyScalar(1 / dist);
-      const fwd = this._v2.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-      const dot = fwd.x * to.x + fwd.z * to.z;
-      // peripheral vision widens once alerted
-      const cone = this.hasTarget ? -0.2 : this.viewCos - this.alertness * 0.25;
-      if (dot > cone || dist < 4.5) {
-        visible = this.phys ? this.phys.lineOfSight(eye, player, this.phys.MASK.SIGHT) : true;
-      }
-    }
-    this.targetVisible = visible;
+    // The cone, the range limit and the line-of-sight test all still apply —
+    // `ai.pickVisibleHostile` owns them now because it also owns the per-frame
+    // ray budget across every actor on the map.
+    const found = this.ai.pickVisibleHostile(this);
+    this.targetVisible = !!found;
 
-    if (visible) {
-      // reaction: fast head-on and close, slow at the edge of vision
-      const rate = 1 / Math.max(0.12, 0.16 + dist * 0.0075 + (1 - this.alertness) * 0.28);
+    if (found) {
+      this.targetActor = found;
+      const chest = this.ai.actorChest(found, this._v3);
+      const dist = this.position.distanceTo(chest);
+      // reaction: fast head-on and close, slow at the edge of vision. A less
+      // skilled bot takes measurably longer to commit.
+      const slack = 1.35 - 0.55 * (this.ai.skill ?? 0.62);
+      const rate = 1 / Math.max(0.12, (0.16 + dist * 0.0075 + (1 - this.alertness) * 0.28) * slack);
       this.awareness = Math.min(1, this.awareness + dt * rate);
-      this.lastKnown.copy(player);
+      this.lastKnown.copy(chest);
       this.lastKnownAge = 0;
       this.alertness = 1;
       if (this.awareness >= 1) {
         this.hasTarget = true;
-        this.target = player;
+        this.target = chest;
       }
     } else {
       this.awareness = Math.max(0, this.awareness - dt * 0.35);
-      if (this.hasTarget && this.lastKnownAge > 6.5) this.hasTarget = false;
+      if (this.hasTarget && this.lastKnownAge > 6.5) {
+        this.hasTarget = false;
+        this.targetActor = null;
+      }
+    }
+  }
+
+  /**
+   * Where to go and what to do when nobody is shooting. Called by `match`.
+   * @param {string} mode  'push'|'plant'|'hold'|'pickup'|'defuse'|'retake'
+   * @param {THREE.Vector3} position
+   * @param {object|null} site
+   * @param {THREE.Vector3|null} facing  look this way once in position
+   */
+  setObjective(mode, position, site = null, facing = null) {
+    if (!position) {
+      this.objective = null;
+      return;
+    }
+    const changed = !this.objective || this.objective.mode !== mode
+      || this._objPos.distanceToSquared(position) > 1.5 * 1.5;
+    this._objPos.copy(position);
+    if (facing) {
+      this._objFacing.copy(facing);
+      this._hasFacing = true;
+    } else {
+      this._hasFacing = false;
+    }
+    this.objective = { mode, position: this._objPos, site };
+    // Force a fresh path next time ADVANCE runs rather than finishing the old one.
+    if (changed) {
+      this.repathTimer = 0;
+      if (this.state === STATE.ADVANCE) this.hasMoveTarget = false;
     }
   }
 
@@ -362,12 +422,29 @@ export class Agent {
 
   _think(dt) {
     const sq = this.squad;
+
+    // Working the charge outranks everything: both hands are on it, so no
+    // walking, no shooting, and a crouched silhouette that reads as "busy".
+    if (this.working) {
+      this.desiredSpeed = 0;
+      this.hasMoveTarget = false;
+      this.wantFire = false;
+      this.crouch = true;
+      this.aimWeight = 0.2;
+      return;
+    }
+
     switch (this.state) {
       case STATE.IDLE:
         this.desiredSpeed = 0;
         this.crouch = false;
         if (this.hasTarget) this._enterCombat();
+        else if (this.objective) this._setState(STATE.ADVANCE);
         else if (this.patrolPoints && this.stateTime > 2.5) this._setState(STATE.PATROL);
+        break;
+
+      case STATE.ADVANCE:
+        this._advance(dt);
         break;
 
       case STATE.PATROL: {
@@ -375,6 +452,10 @@ export class Agent {
         this.desiredSpeed = 1.35;
         if (this.hasTarget) {
           this._enterCombat();
+          break;
+        }
+        if (this.objective) {
+          this._setState(STATE.ADVANCE);
           break;
         }
         // a route point whose path is still queued is not a route point reached:
@@ -399,6 +480,13 @@ export class Agent {
         }
         // move to the last known position, then look around
         if (this.lastKnownAge < 8 && !this.hasMoveTarget) this._goTo(this.lastKnown);
+        // An objective is a standing order: stop searching an empty street and
+        // get back on it. Without this the attack stalls the first time somebody
+        // fires a shot from a window and disappears.
+        if (this.objective && this.stateTime > 4.5) {
+          this._setState(STATE.ADVANCE);
+          break;
+        }
         if (this.stateTime > 12) this._setState(this.patrolPoints ? STATE.PATROL : STATE.IDLE);
         break;
       }
@@ -450,10 +538,105 @@ export class Agent {
     this.repathTimer = 0;
   }
 
+  /**
+   * Walk the objective. Nothing clever: a path to the point, a run or a jog
+   * depending on the verb, and a stand-and-face once there. What makes it read
+   * as a squad taking a site is that seven men are doing it at once with local
+   * avoidance between them, and that any contact drops them straight into the
+   * cover-and-peek loop they already had.
+   *
+   * Arrival distances are per-verb because the *match* decides what counts as
+   * arrived: standing on the C4 is 1 m, taking a bomb site is 2 m.
+   */
+  _advance(dt) {
+    // Freeze time. Nobody moves up before the round starts — and it is not
+    // cosmetic: at 4.3 m/s two teams that walk for ten seconds close 86 m, which
+    // on a 60 m map means the round is already a firefight before it begins.
+    if (this.ai.combatEnabled === false) {
+      this.desiredSpeed = 0;
+      this.hasMoveTarget = false;
+      this.wantFire = false;
+      return;
+    }
+    if (this.hasTarget) {
+      this._enterCombat();
+      return;
+    }
+    const obj = this.objective;
+    if (!obj) {
+      this._setState(this.patrolPoints ? STATE.PATROL : STATE.IDLE);
+      return;
+    }
+    this.crouch = false;
+    this.wantFire = false;
+    this.aimWeight = 0.4;
+
+    const arrive =
+      obj.mode === 'pickup' || obj.mode === 'defuse' ? 1.0
+        : obj.mode === 'plant' ? 1.6
+          : 2.2;
+    const dist = this.position.distanceTo(obj.position);
+
+    if (dist > arrive) {
+      this.desiredSpeed = obj.mode === 'hold' ? 3.4 : 4.3;
+      if (this.repathTimer <= 0 && !this.pathPending && (!this.hasMoveTarget || this.stuckTimer > 0.6)) {
+        this.repathTimer = this.rng.range(1.1, 2.2);
+        if (!this._goTo(obj.position) && !this.pathPending) {
+          // Unreachable — stand off rather than grind into a wall for ever.
+          this.repathTimer = this.rng.range(3, 5);
+          this.hasMoveTarget = false;
+          this.desiredSpeed = 0;
+        }
+      }
+      return;
+    }
+
+    // ---- in position ---------------------------------------------------
+    this.desiredSpeed = 0;
+    this.hasMoveTarget = false;
+    if (this._hasFacing) {
+      // Point at whatever the objective says the threat comes from, so a held
+      // site is watched rather than admired.
+      this.targetYaw = Math.atan2(
+        this._objFacing.x - this.position.x,
+        this._objFacing.z - this.position.z
+      );
+      this._v.copy(this._objFacing).setY(this.position.y + this.eyeHeight - 0.1);
+      this.aimTarget.lerp(this._v, Math.min(1, dt * 2.5));
+    }
+    // Half the men holding a site take a knee. It breaks up the silhouette line
+    // and it is what a defence actually looks like.
+    this.crouch = (this.id & 1) === 0 && obj.mode === 'hold';
+    this.aimWeight = 0.6;
+  }
+
   _combat(dt) {
     const target = this.hasTarget ? this.lastKnown : this.lastKnownAge < 5 ? this.lastKnown : null;
     if (!target) {
       this._setState(STATE.ALERT);
+      return;
+    }
+
+    // TIME-CRITICAL OBJECTIVES OUTRANK A FIREFIGHT.
+    //
+    // MEASURED, not a preference: with cover-and-peek always winning, a headless
+    // match had the C4 lying on the floor for 110 of a round's 120 seconds. The
+    // one man tasked to fetch it was in a duel, and a duel has no end condition —
+    // so the attack lost a round it had numbers for, twice, without anybody ever
+    // walking to the objective. The same applies to the defuser.
+    //
+    // The rule is deliberately narrow: only the three verbs that are somebody's
+    // job rather than the whole team's ('pickup', 'defuse', and the carrier's
+    // 'plant'), only once the firefight has stopped being immediate (nothing
+    // visible for a beat), and only after a dwell, so it can never be used to
+    // walk out of an ambush. The carrier waits twice as long as the other two
+    // because it is the man everybody is shooting at.
+    const mode = this.objective?.mode;
+    const urgency = mode === 'pickup' || mode === 'defuse' ? 3 : mode === 'plant' ? 6 : 0;
+    if (urgency && this.stateTime > urgency && !this.targetVisible) {
+      this.cover = null;
+      this.ai.cover?.release(this.id);
+      this._setState(STATE.ADVANCE);
       return;
     }
     const sq = this.squad;
@@ -753,6 +936,10 @@ export class Agent {
       this.aimTarget.lerp(this._v2, Math.min(1, dt * 3));
     }
 
+    // Freeze time: the round has not started, so nobody's weapon works —
+    // including theirs. `match` flips this.
+    if (this.ai.combatEnabled === false) this.wantFire = false;
+
     if (!this.wantFire || this.animator.reloading || this.animator.vaulting) return;
     if (this.ammo <= 0) {
       this.animator.reload(this.variantName === 'irregular' ? 2.9 : 2.35);
@@ -805,9 +992,11 @@ export class Agent {
    * @param part    'head' | 'torso' | 'arm' | 'leg'
    * @param point   world impact point
    * @param dir     incident direction (unit)
+   * @param source  who fired it, for kill credit. May be undefined.
    */
-  applyDamage(amount, part, point, dir) {
+  applyDamage(amount, part, point, dir, source) {
     if (!this.alive) return;
+    if (source) this.lastAttacker = source;
     this.health -= amount;
     this.alertness = 1;
     this.suppression = Math.min(1.6, this.suppression + 0.35);
@@ -822,7 +1011,7 @@ export class Agent {
     if (this.state === STATE.IDLE || this.state === STATE.PATROL) this._setState(STATE.ALERT);
 
     if (this.health <= 0) {
-      this.die(point, dir, amount);
+      this.die(point, dir, amount, part === 'head');
       return;
     }
     // hit reaction by region, with the side the round came from
@@ -843,10 +1032,13 @@ export class Agent {
     return dx * Math.cos(this.yaw) - dz * Math.sin(this.yaw);
   }
 
-  die(point, dir, amount = 30) {
+  die(point, dir, amount = 30, headshot = false) {
     if (!this.alive) return;
     this.alive = false;
     this.state = STATE.DEAD;
+    this.working = null;
+    this.objective = null;
+    this.targetActor = null;
     this.wantFire = false;
     this.animator.enabled = false;
     this.ai.cover?.release(this.id);
@@ -877,7 +1069,9 @@ export class Agent {
       actor: this,
       point: hitPoint,
       impulse,
-      headshot: false,
+      headshot,
+      /** Kill credit. `ui` and `match` both read this; null means the world. */
+      by: this.lastAttacker ?? null,
     });
     this.deadTime = 0;
   }

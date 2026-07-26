@@ -20,9 +20,11 @@ export const ACTIONS = {
   melee: ['KeyV'],
   leanLeft: ['KeyQ'],
   leanRight: ['KeyE'],
-  swapWeapon: ['Digit1', 'Digit2', 'Tab'],
+  swapWeapon: ['Digit1', 'Digit2', 'Digit3'],
   grenade: ['KeyG'],
   flashlight: ['KeyT'],
+  /** Held: the round scoreboard. Tab used to cycle weapons — see weapons/index.js. */
+  scoreboard: ['Tab'],
   pause: ['Escape'],
 };
 

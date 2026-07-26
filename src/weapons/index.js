@@ -68,6 +68,13 @@ export class WeaponSystem {
     this.states = new Map();
     this.activeId = 'rifle';
     this.debugMode = null;
+    /**
+     * Trigger disabled from outside. `match` holds this true through freeze
+     * time, the round-end dwell and while the player has both hands on the C4.
+     * Reload and weapon swap stay available during a freeze — changing loadout
+     * is the whole point of the ten seconds.
+     */
+    this.locked = false;
 
     this._fireTimer = 0;
     this._burstLeft = 0;
@@ -319,6 +326,30 @@ export class WeaponSystem {
     return true;
   }
 
+  /**
+   * Full loadout, as if you had just walked out of spawn: every magazine
+   * topped off, every reserve refilled, no half-finished animation. Called by
+   * `match` at the top of each round — there are no ammo pickups in this mode,
+   * so the round's ammunition is the round's budget.
+   */
+  resetAmmo() {
+    for (const s of this.states.values()) {
+      s.mag = s.def.magSize;
+      s.chambered = true;
+      s.reserve = s.def.reserve;
+    }
+    this._burstLeft = 0;
+    this._burstCooldown = 0;
+    this._fireTimer = 0;
+    this._shotIndex = 0;
+    this._spread = 0;
+    this._pendingShots = 0;
+    this.viewmodel?.stopClip();
+    this.viewmodel.boltHold = 0;
+    this.viewmodel?.play('draw');
+    return true;
+  }
+
   inspect() {
     if (this.reloading || this.switching || this.inspecting) return false;
     this.viewmodel.play('inspect');
@@ -397,6 +428,9 @@ export class WeaponSystem {
       maxRange: def.maxRange,
       weapon: def,
       tracer: this.stats.fired % def.tracerEvery === 0,
+      // Attribution: physics puts this on `damage:dealt` as `source`, which is
+      // what gives the player kill credit in a team mode.
+      shooter: this.player ?? 'player',
     });
 
     // ---- feedback ----
@@ -614,12 +648,17 @@ export class WeaponSystem {
       if (input.pressed('Digit1')) this.setWeapon('rifle');
       if (input.pressed('Digit2')) this.setWeapon('smg');
       if (input.pressed('Digit3')) this.setWeapon('pistol');
-      if (input.pressed('Tab')) this.nextWeapon();
+      // NOTE: Tab used to cycle weapons. In this build it opens the scoreboard,
+      // as it does in Sudden Attack. 1/2/3 and the mouse wheel still swap.
       if (input.wheel) this.nextWeapon();
-      this._runTrigger(dt, input.fire, input.firePressed, def, s);
-      st.trigger = input.fire && this.canFire();
-      // Auto-reload on a dry trigger pull, like every modern shooter.
-      if (input.firePressed && st.empty) this.reload();
+      if (!this.locked) {
+        this._runTrigger(dt, input.fire, input.firePressed, def, s);
+        st.trigger = input.fire && this.canFire();
+        // Auto-reload on a dry trigger pull, like every modern shooter.
+        if (input.firePressed && st.empty) this.reload();
+      } else {
+        st.trigger = false;
+      }
     } else if (this.debugMode) {
       this._runDebug(ctx);
       st.trigger = this._sinceShot < 0.09;

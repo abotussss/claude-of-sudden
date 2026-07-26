@@ -12,6 +12,7 @@ import { Minimap } from './minimap.js';
 import { WorldMarkers } from './markers.js';
 import { Prompt, Banner } from './prompts.js';
 import { PauseMenu } from './menu.js';
+import { RoundStrip, BombPanel, Scoreboard, SpectateBar } from './round.js';
 import { CombatDemo } from './demo.js';
 
 const MAX_BLIPS = 48;
@@ -40,6 +41,10 @@ const MAX_BLIPS = 48;
  *   ui.setBlips([{x,z,kind:'enemy'|'friend',heading}])
  *   ui.spawnGrenade(worldPos, fuse)
  *   ui.setMatch({scoreUs,scoreThem,timeLeft,mode})
+ *   ui.setRound(state)                  the demolition HUD: alive counts, phase,
+ *                                       C4 fuse, scoreboard. See src/match.
+ *   ui.matchDriven                      true ⇒ `match` owns the killfeed and the
+ *                                       score; stop inferring them from damage
  *   ui.setHudVisible(bool)              hide everything (cinematics)
  *   ui.pause() / ui.resume() / ui.menu.toggle()
  *   ui.debugState('combat'|'menu'|'clean')
@@ -90,6 +95,11 @@ export class UiSystem {
     this.ammo = new AmmoPanel(this.chromeLayer);
     this.prompt = new Prompt(this.chromeLayer);
     this.banner = new Banner(this.chromeLayer);
+    // Demolition-mode HUD. Inert until `match` calls setRound().
+    this.roundStrip = new RoundStrip(this.chromeLayer);
+    this.bombPanel = new BombPanel(this.chromeLayer);
+    this.spectateBar = new SpectateBar(this.chromeLayer);
+    this.scoreboard = new Scoreboard(this.root);
     this.menu = new PauseMenu(this.root, ctx);
 
     this.health.onBeat = (i) => this.sfx('heartbeat', 0.35 + i * 0.5);
@@ -148,6 +158,22 @@ export class UiSystem {
     this._blipView = [];
 
     this.demo = null;
+    /**
+     * Set true by `match`. Kill attribution in a team mode needs to know which
+     * side everyone is on, which this subsystem deliberately does not — so when
+     * a match is running, the killfeed and the score come from there and the
+     * two handlers below stop guessing.
+     */
+    this.matchDriven = false;
+    /**
+     * Optional predicate installed by `match`: true when a damage target is on
+     * the local player's side, so no hitmarker and no damage number are drawn
+     * for it.
+     */
+    this.isFriendlyTarget = null;
+    /** The snapshot `match` pushes each frame; null when nothing is running. */
+    this.round = null;
+    this._scoreboardHeld = false;
 
     this._unsubs = [];
     const on = (type, fn) => this._unsubs.push(ctx.events.on(type, fn));
@@ -180,6 +206,9 @@ export class UiSystem {
       // rounds that connect with the player, which must not draw a hitmarker or
       // a "YOU killed" killfeed row — that arrives as `damage:taken` below.
       if (this._isPlayerTarget(e.target)) return;
+      // Team modes: a round that lands on your own side is not a hit. `match`
+      // installs this predicate — `ui` itself knows nothing about teams.
+      if (this.isFriendlyTarget?.(e.target)) return;
       const kind = e.killed ? 'kill' : e.headshot ? 'head' : e.armour ? 'armour' : 'hit';
       this.hitmarker(kind);
       if (e.point) {
@@ -191,6 +220,8 @@ export class UiSystem {
       }
       if (e.killed) {
         this._lastKillAt = ctx.time.elapsed;
+        // `match` owns the row and the score when a match is running.
+        if (this.matchDriven) return;
         this.killfeed.push({
           attacker: 'YOU',
           victim: e.target?.name ?? e.name ?? 'ENEMY',
@@ -217,6 +248,7 @@ export class UiSystem {
     });
 
     on('actor:death', (e) => {
+      if (this.matchDriven) return; // `match` pushes the row, with real teams
       if (ctx.time.elapsed - this._lastKillAt < 0.3) return; // already credited
       this.killfeed.push({
         attacker: e?.by?.name ?? 'ENEMY',
@@ -354,6 +386,14 @@ export class UiSystem {
 
   setMatch(m) {
     Object.assign(this.state, m);
+  }
+
+  /**
+   * The demolition HUD's whole state, pushed by `match` every frame. The object
+   * is `match`'s own preallocated snapshot — read, never retained.
+   */
+  setRound(r) {
+    this.round = r;
   }
 
   setHudVisible(v) {
@@ -513,6 +553,18 @@ export class UiSystem {
     this.prompt.update(dt);
     this.banner.update(dt);
 
+    // ---- demolition HUD --------------------------------------------------
+    const r = this.round;
+    this.roundStrip.update(dt, r);
+    setStyle(this.roundStrip.root, 'display', r ? '' : 'none');
+    this.bombPanel.update(dt, r);
+    this.spectateBar.update(dt, r);
+    // Held on Tab, and shown for free between rounds — which is when you
+    // actually want to read it.
+    this._scoreboardHeld = !!(ctx.input.enabled && !ctx.input.frozen && ctx.input.action('scoreboard'));
+    const autoBoard = r ? r.phase === 'over' || r.phase === 'matchover' : false;
+    this.scoreboard.update(dt, (this._scoreboardHeld || autoBoard) && !this.menu.open, r);
+
     this._buildCompassObjectives(pos);
     this.compass.update(heading, this._compassObjs);
 
@@ -606,6 +658,10 @@ export class UiSystem {
     this.markers.dispose();
     this.prompt.dispose();
     this.banner.dispose();
+    this.roundStrip.dispose();
+    this.bombPanel.dispose();
+    this.spectateBar.dispose();
+    this.scoreboard.dispose();
     this.menu.dispose();
     this.root.remove();
     removeStyles();

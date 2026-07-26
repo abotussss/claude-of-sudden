@@ -42,6 +42,7 @@ import {
  *   world.root                THREE.Group holding everything
  *   world.bounds              THREE.Box3 of the playable area, world space
  *   world.spawnPoints         [{ position:Vector3, yaw:number, tag:string }]
+ *   world.levelYaw            the level->world yaw, for gameplay-authored facings
  *   world.spawn(i)            one of the above
  *   world.groundHeight(x, z)  cheap analytic floor height (physics is exact)
  *   world.isOpen(x, z)        true where a character can stand outdoors
@@ -141,6 +142,8 @@ export class WorldSystem {
     // -------------------------------------------------------------- queries --
     this._v = new THREE.Vector3();
     this._inv = new THREE.Matrix4().copy(A.xform).invert();
+    /** The level->world yaw, so gameplay can author facings in level space. */
+    this.levelYaw = LEVEL_YAW;
     this.spawnPoints = SPAWNS.map(([x, z, yaw, tag]) => ({
       position: A.toWorld(x, 0, z),
       yaw: yaw + LEVEL_YAW,

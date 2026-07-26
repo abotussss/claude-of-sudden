@@ -59,6 +59,12 @@ export class Movement {
     /** 0..1 aim-down-sight blend. `weapons` may drive this via setAdsProgress. */
     this.adsAmount = 0;
     this.controlEnabled = true;
+    /**
+     * Freeze time. Unlike `controlEnabled` this keeps the mouse, the stance and
+     * the weapon live and only takes the feet away — which is what a round's
+     * preparation phase is: look around, pick a gun, do not move up.
+     */
+    this.movementLocked = false;
 
     // ---- lean ----------------------------------------------------------
     this.leanInput = 0;
@@ -215,6 +221,15 @@ export class Movement {
     cmd.leanL = input.action('leanLeft');
     cmd.leanR = input.action('leanRight');
     cmd.ads = input.ads;
+
+    if (this.movementLocked) {
+      cmd.moveX = 0;
+      cmd.moveY = 0;
+      cmd.jump = false;
+      cmd.jumpHeld = false;
+      cmd.sprintHeld = false;
+      cmd.sprintPressed = false;
+    }
 
     prev.jump = jump;
     prev.crouch = crouch;

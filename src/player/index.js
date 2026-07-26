@@ -58,6 +58,7 @@
  *
  * CONTROL
  *   p.setControlEnabled(bool)     shot harness / cutscenes
+ *   p.movementLocked              freeze time: aim yes, feet no
  *   p.teleport(eyePosition, rotationEulerOrYaw)
  *   p.respawn(index)
  *   p.debugState(name)            'sprint'|'slide'|'crouch'|'hurt'|'critical'|
@@ -93,6 +94,10 @@ export class PlayerSystem {
   constructor() {
     /** Lets `ai` / `physics` recognise the local player from an owner pointer. */
     this.isPlayer = true;
+    /** Which side the player fights for. `match` sets it; 0 without a match. */
+    this.team = 0;
+    /** Killfeed / scoreboard handle. */
+    this.name = 'YOU';
     this.movement = null;
     this.rig = null;
     this.health = null;
@@ -100,6 +105,12 @@ export class PlayerSystem {
     this.hitbox = null;
 
     this.controlEnabled = true;
+    /**
+     * Freeze time: aim and stance stay live, the feet do not. `match` holds this
+     * true through the round's preparation phase. Distinct from
+     * `controlEnabled`, which takes the mouse away as well.
+     */
+    this.movementLocked = false;
     this.adsAmount = 0;
     this._adsExternal = false;
     this._adsExternalAge = 0;
@@ -265,6 +276,7 @@ export class PlayerSystem {
 
   fixedUpdate(h, ctx) {
     if (!this.movement) return;
+    this.movement.movementLocked = this.movementLocked;
     this._consumeLook(ctx.time.dt > 1e-5 ? ctx.time.dt : h);
     this.movement.latchInput(ctx.time.frame);
     if (!this.controlEnabled) return;
@@ -274,6 +286,7 @@ export class PlayerSystem {
 
   update(dt, ctx) {
     if (!this.movement) return;
+    this.movement.movementLocked = this.movementLocked;
     this._consumeLook(dt);
     this.movement.latchInput(ctx.time.frame);
 
@@ -569,6 +582,10 @@ export class PlayerSystem {
   get dead() {
     return this.health.dead;
   }
+  /** Mirrors `Agent.alive`, so `ai` can treat the player as one more actor. */
+  get alive() {
+    return !this.health.dead;
+  }
   get suppression() {
     return this.health.suppression;
   }
@@ -652,6 +669,30 @@ export class PlayerSystem {
     this.rig.fov = this.ctx.config.fov;
     this._lookFrame = this.ctx.time.frame;
     this._prev.state = '';
+  }
+
+  /**
+   * Put the player on an exact spot facing an exact way, fully healed, with the
+   * camera rig settled. `match` calls this at the top of every round — the
+   * indexed `respawn()` below picks a world spawn point instead and is what the
+   * engine shipped with.
+   */
+  respawnAt(position, yaw = 0) {
+    this.health.reset(true);
+    this.setControlEnabled(true);
+    if (!position) return;
+    const gy = this.physics.groundHeight(position.x, position.z, position.y + 6);
+    const feetY = Number.isFinite(gy) ? gy + 0.03 : position.y;
+    this.movement.yaw = yaw;
+    this.movement.pitch = 0;
+    this.movement.velocity.set(0, 0, 0);
+    this.movement.teleport(position.x, feetY, position.z);
+    this.rig.reset(STANCE.stand.eye);
+    this.rig.update(1 / 60, this.movement, this.health);
+    this.rig.applyTo(this.ctx.camera);
+    this._lookFrame = this.ctx.time.frame;
+    this._prev.state = '';
+    this._syncHitbox();
   }
 
   respawn(index = 0) {

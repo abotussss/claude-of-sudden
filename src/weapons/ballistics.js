@@ -30,6 +30,8 @@ class Projectile {
     this.dropoff = 0.5;
     this.weapon = null;
     this.mask = undefined;
+    /** Who fired it — handed to physics so `damage:dealt` carries attribution. */
+    this.shooter = null;
   }
 }
 
@@ -84,6 +86,7 @@ export class ProjectileSim {
     p.age = 0;
     p.weapon = o.weapon ?? null;
     p.mask = o.mask;
+    p.shooter = o.shooter ?? null;
     this.live.push(p);
     this.stats.fired++;
 
@@ -138,6 +141,7 @@ export class ProjectileSim {
             penetration: p.penetration,
             dropoff: 1,
             mask: p.mask,
+            shooter: p.shooter,
           });
           this.stats.impacts++;
           this._retire(p);
@@ -157,6 +161,7 @@ export class ProjectileSim {
   _retire(p) {
     p.alive = false;
     p.weapon = null;
+    p.shooter = null;
   }
 
   clear() {

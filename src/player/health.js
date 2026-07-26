@@ -27,6 +27,12 @@ export class Health {
     this.lastDamageTime = -100;
     this.suppression = 0;
     this.hitFlash = 0;
+    /**
+     * Health regeneration. On, as the Call of Duty tuning this engine shipped
+     * with requires; `match` turns it OFF, because Sudden Attack has no regen
+     * and that single fact is most of why the mode plays cautiously.
+     */
+    this.regenEnabled = true;
 
     /** Direction indicators, oldest first. angle is radians, 0 = straight ahead. */
     this.indicators = [];
@@ -165,7 +171,7 @@ export class Health {
 
     // ---- regeneration ---------------------------------------------------
     const since = this.ctx.time.elapsed - this.lastDamageTime;
-    if (!this.dead && this.value < this.max && since > H.regenDelay) {
+    if (this.regenEnabled && !this.dead && this.value < this.max && since > H.regenDelay) {
       this.regenerating = true;
       // Ramp in so the recovery has a shape rather than a step.
       const ramp = clamp01((since - H.regenDelay) / H.regenRamp);

@@ -3,8 +3,15 @@
 **Every agent must read this before writing code. It is the only coordination mechanism.**
 
 Target: a browser FPS whose *visual and tactile quality* stands next to a modern
-Call of Duty. WebGL2 + Three.js r180, no external art assets — all textures,
-meshes, animation and audio are generated procedurally at load time.
+Call of Duty, playing Sudden Attack's demolition mode. WebGL2 + Three.js r180, no
+external art assets — all textures, meshes, animation and audio are generated
+procedurally at load time.
+
+The engine and the game are separated on purpose. `src/render`, `src/materials`,
+`src/sky`, `src/world`, `src/physics`, `src/fx` and `src/audio` are the engine and
+are byte-for-byte what this repo shipped with. `src/match` is the game, and
+`src/ai`, `src/player`, `src/weapons` and `src/ui` carry only the hooks the game
+needs — teams, an objective, a locked trigger, a round HUD.
 
 ## Hard rules
 
@@ -66,9 +73,33 @@ export class MySystem {
 | `ai` | `src/ai/` | enemy characters, navigation, perception, cover selection, combat behaviour |
 | `ui` | `src/ui/` | HUD, crosshair, hitmarkers, damage indicators, ammo, killfeed, menus |
 | `audio` | `src/audio/` | synthesized weapon/foley audio, spatialisation, reverb, occlusion, mix |
+| `match` | `src/match/` | the GAME: teams, the round state machine, bomb sites and spawns, the C4, scoring, spectating |
 
 Shared, owned by the lead (do not edit): `src/core/`, `src/main.js`,
 `src/dev/`, `tools/`, `vite.config.js`.
+
+### `match` is the only gameplay owner
+
+Everything above `match` in that table is the engine. `match` is the ruleset —
+Sudden Attack's 폭파미션 — and it is the ONLY subsystem allowed to decide who is
+on which side, when a round starts, who has the C4 and who won. The subsystems
+it drives expose exactly these hooks and nothing more:
+
+```js
+ai.playerTeam / ai.friendlyFire / ai.combatEnabled / ai.matchControlled / ai.skill
+ai.clearAgents()            ai.spawn(variant, pos, yaw, { team, name, role })
+ai.teamOf(actor)            ai.getHudActors()
+agent.setObjective(mode, position, site, facing)   agent.working
+player.team / player.name / player.alive
+player.respawnAt(position, yaw)     player.health.regenEnabled
+weapons.locked              weapons.resetAmmo()
+ui.setRound(state)          ui.matchDriven      ui.isFriendlyTarget(actor)
+world.levelYaw              world.levelToWorld(x, y, z, out)
+```
+
+If a rule needs a hook that is not on that list, add the hook to the owning
+subsystem and add a line here — do not reach into another subsystem's internals
+from `src/match`.
 
 ## Cross-subsystem events
 
@@ -90,6 +121,21 @@ Emit and listen via `ctx.events`. Payloads are plain objects. The canonical set:
 | `player:state` | `{ stance, sprinting, sliding, ads }` | player |
 | `explosion` | `{ position, radius, damage }` | any |
 | `resize` | `{ width, height }` | engine |
+| `match:round` | `{ round, phase, attackers, score }` | match |
+| `match:bomb` | `{ state, site, fuse, carrier }` | match |
+| `match:result` | `{ winner, reason, score, matchOver }` | match |
+
+Two additive fields on existing payloads, both optional and both ignorable:
+
+| payload | field | meaning |
+|---|---|---|
+| `damage:dealt` | `source` | the actor that fired. Set by `physics` from `fireBullet({ shooter })`, and by `ai` for its own rounds. Absent ⇒ the environment. |
+| `actor:death` | `by` | kill credit: the actor that landed the last round, or null. |
+
+`source` is what makes team damage, kill credit and the killfeed possible at
+all, and it is threaded through without changing a signature in
+`src/physics/penetration.js`: `fireBullet` latches the shooter for the duration
+of the trace, because the penetration solver emits its events synchronously.
 
 If you need an event that is not listed, add a row here in the same commit.
 

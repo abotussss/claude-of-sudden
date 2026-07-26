@@ -706,11 +706,21 @@ export class PhysicsSystem {
    * Returns an array of impact records (reused; copy what you keep).
    */
   fireBullet(opts) {
-    const n = this.ballistics.fire({ rng: this.rng, ...opts });
-    const res = this._impactResult;
-    res.length = 0;
-    for (let i = 0; i < n; i++) res.push(this.ballistics.impacts[i]);
-    return res;
+    // Who pulled the trigger, latched for the duration of the trace. The
+    // penetration solver emits `bullet:impact` / `damage:dealt` synchronously
+    // from inside `fire()`, so a latch is enough and no signature in
+    // penetration.js has to change. Team damage, kill credit and the killfeed
+    // all read the `source` this puts on the payload.
+    this._shooter = opts?.shooter ?? null;
+    try {
+      const n = this.ballistics.fire({ rng: this.rng, ...opts });
+      const res = this._impactResult;
+      res.length = 0;
+      for (let i = 0; i < n; i++) res.push(this.ballistics.impacts[i]);
+      return res;
+    } finally {
+      this._shooter = null;
+    }
   }
 
   emitImpact(px, py, pz, nx, ny, nz, dx, dy, dz, si, damage, exit, hit) {
@@ -734,8 +744,11 @@ export class PhysicsSystem {
         target: p.actor,
         amount: damage * (hit?.collider?.damageScale ?? 1),
         headshot: hit?.part === 'head',
+        part: hit?.part ?? 'torso',
         killed: false,
         point: p.point,
+        /** The shooter, when `fireBullet` was told. Null for the environment. */
+        source: this._shooter ?? null,
       });
     }
   }

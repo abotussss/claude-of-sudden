@@ -17,14 +17,25 @@
  *   squad.js      peek rotation, contact sharing, flank and grenade rationing
  *
  * PUBLIC API — `const ai = ctx.get('ai')`
- *   ai.spawn(variant, position, yaw, opts) -> Agent
+ *   ai.spawn(variant, position, yaw, opts) -> Agent   opts: { team, name, role }
  *   ai.agents                              live Agent list
+ *   ai.clearAgents()                       dispose every actor (round restart)
  *   ai.debugStage('firefight')             staged combat tableau for captures
  *   ai.prewarmMaterials()                  await: build + compile every character
  *                                          shader without spawning anything
  *   ai.grid / ai.cover                     navigation + cover queries
+ *   ai.getHudActors()                      minimap blips, friend/foe from the
+ *                                          local player's point of view
  *   ai.stats                               { agents, alive, navMs, coverPts,
  *                                            pathsDeferred, lodIrrelevant }
+ *
+ * TEAMS — set by `match`, and the reason this file is not the one the repo
+ * shipped with. An actor's `team` decides who it looks for, who it may hit and
+ * whose blip it is. There are exactly two, so "hostile to team t" is `1 - t`.
+ *   ai.playerTeam        which side the local player fights for
+ *   ai.friendlyFire      false ⇒ rounds pass harmlessly through team-mates
+ *   ai.matchControlled   true ⇒ `match` owns spawning; do not garrison
+ *   ai.combatEnabled     false during freeze time: nobody may pull a trigger
  *
  * FRAME BUDGETS — navigation and the garrison are built during init(), not on
  * the first frame of play; A* is rationed to `ai.pathsPerFrame` solves per frame;
@@ -78,6 +89,20 @@ export class AiSystem {
     this._navPending = true;
     this.stats = { agents: 0, alive: 0, navMs: 0, coverPts: 0, walkable: 0 };
 
+    /* ---- teams (driven by `match`; the defaults are the shipped behaviour) -- */
+    this.playerTeam = 0;
+    /** Every actor spawned without an explicit team is hostile to the player. */
+    this.friendlyFire = true;
+    this.matchControlled = ctx.has('match');
+    this.combatEnabled = true;
+    /** 0..1, scales reaction time and aim discipline. */
+    this.skill = 0.62;
+    /** Actors hostile to team i, rebuilt at most once per frame. */
+    this._hostiles = [[], []];
+    this._hostileFrame = -1e9;
+    this._blips = [];
+    this._blipOut = [];
+
     /* scratch */
     this._v = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
@@ -109,8 +134,14 @@ export class AiSystem {
     this._pathBudget = 0;
     /** A* solves allowed per frame. Measured: one solve is 0.5-1.1 ms on the
      *  221x221 grid, and a squad that all enters combat on the same frame used to
-     *  ask for six of them at once. */
-    this.pathsPerFrame = 2;
+     *  ask for six of them at once.
+     *
+     *  Raised from 2 to 4 under `match`: two full seven-man teams are 13 actors
+     *  rather than 6, and a headless match measured 12k deferred solves across
+     *  4.1k frames — three requests a frame going unanswered, which reads as
+     *  bots hesitating at every corner. 4 solves is ~3 ms worst case and the
+     *  worst case does not happen on consecutive frames. */
+    this.pathsPerFrame = ctx.has('match') ? 4 : 2;
     this.stats.pathsDeferred = 0;
     this._frustum = new THREE.Frustum();
     this._mvp = new THREE.Matrix4();
@@ -161,7 +192,11 @@ export class AiSystem {
   _bootNav(ctx) {
     try {
       this._buildNav();
-      if (!this._navPending && (!ctx.config.deterministic || this.forcePopulate)) this.populate();
+      // Under `match` the round owns who exists and where: garrisoning here
+      // would spawn a patrol that the first round teardown throws away.
+      if (!this._navPending && !this.matchControlled && (!ctx.config.deterministic || this.forcePopulate)) {
+        this.populate();
+      }
     } catch (err) {
       this._navPending = true;
       console.warn('[ai] boot nav deferred to the first frame:', err?.message ?? err);
@@ -321,9 +356,20 @@ export class AiSystem {
       if (!e || !e.target || !(e.target instanceof Agent)) return;
       const a = e.target;
       if (!a.alive) return;
-      const amount = e.amount * this._falloff(e.point);
-      a.applyDamage(amount, e.headshot ? 'head' : e.part ?? 'torso', e.point ?? a.position, e.incident);
-      if (!a.alive) e.killed = true;
+      const src = e.source ?? null;
+      // A round from a team-mate still cracks past and still suppresses — it
+      // just does not wound. Turning it into a no-op instead would make the AI
+      // walk through its own squad's line of fire without flinching.
+      if (src && src !== a && !this.friendlyFire && this.teamOf(src) === a.team) {
+        a.suppress(0.25);
+        return;
+      }
+      const amount = e.amount * this._falloff(e.point, src);
+      a.applyDamage(amount, e.headshot ? 'head' : e.part ?? 'torso', e.point ?? a.position, e.incident, src);
+      if (!a.alive) {
+        e.killed = true;
+        e.killer = src;
+      }
     });
 
     on('explosion', (e) => {
@@ -349,13 +395,177 @@ export class AiSystem {
     });
   }
 
-  _falloff(point) {
+  /**
+   * Long-range damage taper, measured from whoever fired. Falls back to the
+   * player when the shot carries no shooter, which is exactly the behaviour
+   * this file had before teams existed.
+   */
+  _falloff(point, source) {
     if (!point) return 1;
-    const p = this.playerPosition(this._v2);
+    const p = source?.position ? this._v2.copy(source.position) : this.playerPosition(this._v2);
     if (!p) return 1;
     const d = p.distanceTo(point);
     // full damage inside 22 m, tapering to 45 % by 70 m
     return d < 22 ? 1 : Math.max(0.45, 1 - (d - 22) * 0.0125);
+  }
+
+  /* ================================================================== */
+  /* teams                                                              */
+  /* ================================================================== */
+
+  /** Team of any actor: an Agent, the player system, or the string 'player'. */
+  teamOf(actor) {
+    if (!actor) return -1;
+    if (actor === 'player') return this.playerTeam;
+    if (actor.isPlayer === true) return actor.team ?? this.playerTeam;
+    return actor.team ?? 1;
+  }
+
+  isHostile(a, b) {
+    const ta = this.teamOf(a);
+    const tb = this.teamOf(b);
+    return ta >= 0 && tb >= 0 && ta !== tb;
+  }
+
+  /** Chest position of any actor — what perception aims at. Writes into `out`. */
+  actorChest(actor, out) {
+    if (!actor) return null;
+    if (actor.isPlayer === true) {
+      const p = actor.position;
+      return out.set(p.x, p.y + 1.35, p.z);
+    }
+    const p = actor.position;
+    return out.set(p.x, p.y + actor.eyeHeight - 0.22, p.z);
+  }
+
+  /** Live actors hostile to `team`. The list is rebuilt at most once a frame. */
+  hostilesOf(team) {
+    const f = this.ctx.time.frame;
+    if (this._hostileFrame !== f) {
+      this._hostileFrame = f;
+      this._hostiles[0].length = 0;
+      this._hostiles[1].length = 0;
+      for (let i = 0; i < this.agents.length; i++) {
+        const a = this.agents[i];
+        if (!a.alive) continue;
+        const t = a.team === 1 ? 1 : 0;
+        this._hostiles[1 - t].push(a);
+      }
+      const p = this.ctx.peek('player');
+      if (p && p.dead !== true) {
+        const t = this.teamOf(p) === 1 ? 1 : 0;
+        this._hostiles[1 - t].push(p);
+      }
+    }
+    return this._hostiles[team === 1 ? 1 : 0];
+  }
+
+  /**
+   * The enemy `agent` can see right now, or null.
+   *
+   * Perception stays as imperfect as it was — 100 degree cone, real line of
+   * sight, distance limit — it just no longer assumes the only thing worth
+   * looking for is the local player. The line-of-sight test is the expensive
+   * part, so each actor re-tests the enemy it already has plus TWO others per
+   * frame on a rotating cursor: a 14-man server settles on a target inside a
+   * tenth of a second and costs ~40 rays a frame instead of ~200.
+   */
+  pickVisibleHostile(agent) {
+    const list = this.hostilesOf(agent.team);
+    const n = list.length;
+    if (!n) return null;
+    const eye = this._v.set(
+      agent.position.x,
+      agent.position.y + agent.eyeHeight,
+      agent.position.z
+    );
+    const fx = Math.sin(agent.yaw);
+    const fz = Math.cos(agent.yaw);
+    // Peripheral vision widens once alerted; a target already acquired is
+    // tracked almost all the way round, which is what stops the "walks past the
+    // man shooting him" read.
+    const cone = agent.hasTarget ? -0.2 : agent.viewCos - agent.alertness * 0.25;
+
+    let best = null;
+    let bestD = Infinity;
+    const cur = agent.targetActor;
+    if (cur && cur.alive !== false && cur.dead !== true && this.isHostile(agent, cur)) {
+      const d = this._sightTo(agent, cur, eye, fx, fz, cone);
+      if (d >= 0) {
+        best = cur;
+        bestD = d;
+      }
+    }
+    let checks = 0;
+    for (let k = 0; k < n && checks < 2; k++) {
+      const t = list[(agent._scanCursor + k) % n];
+      if (t === cur) continue;
+      checks++;
+      const d = this._sightTo(agent, t, eye, fx, fz, cone);
+      if (d >= 0 && d < bestD) {
+        best = t;
+        bestD = d;
+      }
+    }
+    agent._scanCursor = (agent._scanCursor + 2) % n;
+    return best;
+  }
+
+  /** Distance to `target` if `agent` can see it, else -1. */
+  _sightTo(agent, target, eye, fx, fz, cone) {
+    const p = this.actorChest(target, this._v3);
+    if (!p) return -1;
+    const dx = p.x - eye.x;
+    const dy = p.y - eye.y;
+    const dz = p.z - eye.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (dist > agent.viewRange || dist < 1e-4) return -1;
+    const inv = 1 / dist;
+    if ((dx * inv) * fx + (dz * inv) * fz <= cone && dist > 4.5) return -1;
+    if (this.phys && !this.phys.lineOfSight(eye, p, this.phys.MASK.SIGHT)) return -1;
+    return dist;
+  }
+
+  /** Wipe the board — every actor, every squad, every ragdoll. */
+  clearAgents() {
+    for (const a of this.agents) {
+      // A cover point claimed by a man who is about to stop existing would stay
+      // claimed for the rest of the match.
+      this.cover?.release(a.id);
+      a.dispose();
+    }
+    this.agents.length = 0;
+    this.squads.length = 0;
+    this._stagedAgents = null;
+    this._hostileFrame = -1e9;
+    this._hostiles[0].length = 0;
+    this._hostiles[1].length = 0;
+  }
+
+  /**
+   * Minimap blips, from the LOCAL player's point of view. Team-mates are always
+   * shown; the enemy only while somebody on your side actually has eyes on
+   * them, which is how Sudden Attack's radar behaves and is the difference
+   * between reading the map and reading a wallhack.
+   */
+  getHudActors() {
+    const out = this._blipOut;
+    out.length = 0;
+    const now = this.ctx.time.elapsed;
+    for (let i = 0; i < this.agents.length; i++) {
+      const a = this.agents[i];
+      if (!a.alive) continue;
+      const friendly = a.team === this.playerTeam;
+      if (!friendly && now - (a.spottedAt ?? -1e9) > 3) continue;
+      let rec = this._blips[out.length];
+      if (!rec) rec = this._blips[out.length] = { position: new THREE.Vector3(), alive: true, friendly: true, heading: 0 };
+      rec.position.copy(a.position);
+      rec.alive = true;
+      rec.friendly = friendly;
+      rec.heading = (a.yaw * 180) / Math.PI;
+      out.push(rec);
+    }
+    return out;
   }
 
   _distanceToRay(point, origin, dir, eyeH) {
@@ -601,7 +811,8 @@ export class AiSystem {
     se.velocity.set(dir.z, 0.55, -dir.x).multiplyScalar(2.1).addScaledVector(dir, -0.6);
     ctx.events.emit('weapon:shell', se);
 
-    // the round itself
+    // the round itself. `shooter` is what lets `damage:dealt` carry attribution,
+    // which is what team damage, kill credit and the killfeed all hang off.
     let end = null;
     if (phys) {
       const impacts = phys.fireBullet({
@@ -611,6 +822,7 @@ export class AiSystem {
         penetration: 0.9,
         maxDist: 200,
         mask: phys.MASK.BULLET,
+        shooter: agent,
       });
       if (impacts.length) end = impacts[0].point;
     }
@@ -626,6 +838,11 @@ export class AiSystem {
   }
 
   _testPlayerHit(agent, origin, dir, end) {
+    const player = this.ctx.peek('player');
+    if (player?.dead) return;
+    // A round from the player's own side passes through them. Without this the
+    // six team-mates walking in front of you would kill you inside a round.
+    if (!this.friendlyFire && this.teamOf(agent) === this.teamOf(player ?? 'player')) return;
     const p = this.playerPosition(this._v);
     if (!p) return;
     const maxT = end ? origin.distanceTo(end) : 200;
@@ -633,7 +850,6 @@ export class AiSystem {
     const t = px * dir.x + py * dir.y + pz * dir.z;
     if (t < 0.5 || t > maxT) return;
     const miss = Math.hypot(px - dir.x * t, py - dir.y * t, pz - dir.z * t);
-    const player = this.ctx.peek('player');
     if (miss > 0.42) {
       if (miss < 1.6) player?.onNearMiss?.(miss); // whip-crack past the ear
       return;
@@ -725,8 +941,10 @@ export class AiSystem {
       this._buildNav();
       // Populate the level for normal play. Capture runs stay empty unless a
       // shot asks for a tableau, so nobody's screenshot gets a stray patrol
-      // wandering through it.
-      if (!this._navPending && (!ctx.config.deterministic || this.forcePopulate)) this.populate();
+      // wandering through it. `match`, when present, spawns instead.
+      if (!this._navPending && !this.matchControlled && (!ctx.config.deterministic || this.forcePopulate)) {
+        this.populate();
+      }
     }
 
     // Per-frame A* budget: see requestPath().
@@ -756,8 +974,43 @@ export class AiSystem {
       }
     }
     this._updateGrenades(dt);
+    this._updateSpotting(ctx);
     this.stats.agents = this.agents.length;
     this.stats.alive = alive;
+  }
+
+  /**
+   * Radar contacts. An enemy appears on the minimap only while somebody on the
+   * other side is actually looking at them — the same "call it out or it isn't
+   * there" rule the mode is built on. Stamped as a time so `getHudActors` can
+   * let a contact fade instead of blinking.
+   */
+  _updateSpotting(ctx) {
+    const now = ctx.time.elapsed;
+    for (let i = 0; i < this.agents.length; i++) {
+      const a = this.agents[i];
+      if (!a.alive || !a.targetVisible) continue;
+      const t = a.targetActor;
+      if (t && t.isPlayer !== true) t.spottedAt = now;
+    }
+    // The player's own eyes count too: anything inside the view frustum and in
+    // line of sight is a contact for their team.
+    const player = ctx.peek('player');
+    if (!player || player.dead) return;
+    const eye = ctx.camera.position;
+    const f = player.forward;
+    for (let i = 0; i < this.agents.length; i++) {
+      const a = this.agents[i];
+      if (!a.alive || a.team === this.playerTeam) continue;
+      if (now - (a.spottedAt ?? -1e9) < 0.25) continue;
+      const p = this.actorChest(a, this._v);
+      const dx = p.x - eye.x, dy = p.y - eye.y, dz = p.z - eye.z;
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (d > 90 || d < 1e-3) continue;
+      if ((dx * f.x + dy * f.y + dz * f.z) / d < 0.55) continue;
+      if (this.phys && !this.phys.lineOfSight(eye, p, this.phys.MASK.SIGHT)) continue;
+      a.spottedAt = now;
+    }
   }
 
   lateUpdate() {

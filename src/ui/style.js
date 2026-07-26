@@ -677,6 +677,122 @@ const CSS = `
   letter-spacing:.2em; color: var(--ink-3);
 }
 
+/* ========================================================== round / mode */
+/* Everything below belongs to the demolition mode: the alive-count strip, the
+   C4 fuse panel, the scoreboard and the spectator line. Same design system as
+   the rest of the HUD — 4px grid, one condensed stack, --k scaling, two-stop
+   text shadows — so nothing reads as bolted on. */
+
+.ow-round {
+  position:absolute; left:50%; top: calc(var(--pad) * .7 + 72px * var(--k));
+  transform: translateX(-50%);
+  display:flex; align-items:center; gap: calc(var(--u) * 3);
+  white-space: nowrap;
+}
+.ow-round-pips { display:flex; gap: calc(var(--u) * .9); align-items:center; }
+.ow-round-pips.them { flex-direction: row-reverse; }
+.ow-pip {
+  display:block;
+  width: calc(4.5px * var(--k)); height: calc(11px * var(--k));
+  background: var(--friend);
+  box-shadow: 0 0 calc(4px * var(--k)) rgba(0,0,0,.75);
+  transform: skewX(-12deg);
+}
+.ow-round-pips.them .ow-pip { background: var(--enemy); }
+/* Specificity, deliberately: a two-class descendant rule outranks a bare
+   .ow-pip.down, so a dead man on the enemy side would keep his red pip. Both
+   sides get an explicit down rule.
+   (And no backticks in here: this whole sheet is a JS template literal.) */
+.ow-round-pips .ow-pip.down,
+.ow-round-pips.them .ow-pip.down { background: rgba(255,255,255,.13); box-shadow:none; }
+
+.ow-round-mid { text-align:center; min-width: calc(150px * var(--k)); }
+.ow-round-phase {
+  font-size: calc(9.5px * var(--k)); letter-spacing:.22em;
+  color: var(--ink-3); text-shadow: var(--sh-o1);
+}
+.ow-round-alert {
+  margin-top: calc(var(--u) * .5);
+  font-size: calc(11.5px * var(--k)); letter-spacing:.2em;
+  color: var(--amber); text-shadow: var(--sh-o1);
+}
+
+/* --------------------------------------------------------------- C4 */
+.ow-c4 {
+  position:absolute; left:50%; bottom: calc(var(--pad) * 3.6);
+  transform: translateX(-50%);
+  display:flex; align-items:center; gap: calc(var(--u) * 2);
+  padding: calc(var(--u) * 1.2) calc(var(--u) * 2.4);
+  background: linear-gradient(180deg, rgba(8,11,14,.42), rgba(8,11,14,.28));
+  border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair-2);
+}
+.ow-c4-l { font-size: calc(10.5px * var(--k)); letter-spacing:.2em; color: var(--ink);
+  text-shadow: var(--sh-o1); }
+.ow-c4-track { width: calc(150px * var(--k)); height: calc(2.5px * var(--k));
+  background: rgba(255,255,255,.14); }
+.ow-c4-track > i { display:block; height:100%; width:100%; background: var(--amber);
+  transform-origin:left; transform:scaleX(1); }
+.ow-c4-clock { font-family: var(--fd); font-size: calc(17px * var(--k));
+  color: var(--ink); text-shadow: var(--sh-o1); min-width: calc(34px * var(--k)); }
+
+/* -------------------------------------------------------- scoreboard */
+.ow-sb {
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  background: rgba(4,6,8,.46);
+}
+.ow-sb-panel {
+  width: min(calc(660px * var(--k)), 88vw);
+  padding: calc(var(--u) * 5) calc(var(--u) * 5.5) calc(var(--u) * 5);
+  background: linear-gradient(180deg, rgba(10,13,17,.90), rgba(10,13,17,.74));
+  border: 1px solid var(--hair);
+  box-shadow: 0 calc(18px * var(--k)) calc(50px * var(--k)) rgba(0,0,0,.6);
+}
+.ow-sb-head { border-bottom: 1px solid var(--hair); padding-bottom: calc(var(--u) * 2);
+  margin-bottom: calc(var(--u) * 3); }
+.ow-sb-title { font-family: var(--fd); font-size: calc(22px * var(--k));
+  letter-spacing:.1em; color: var(--ink); }
+.ow-sb-sub { margin-top: calc(var(--u) * .8); font-size: calc(10.5px * var(--k));
+  letter-spacing:.2em; color: var(--ink-2); }
+.ow-sb-cols { display:flex; gap: calc(var(--u) * 5); }
+.ow-sb-col { flex:1 1 0; min-width:0; }
+.ow-sb-team {
+  display:flex; align-items:baseline; gap: calc(var(--u) * 2);
+  font-size: calc(11px * var(--k)); letter-spacing:.24em;
+  padding-bottom: calc(var(--u) * 1.2); border-bottom: 1px solid var(--hair-2);
+  margin-bottom: calc(var(--u) * 1.2);
+}
+.ow-sb-team .n { flex:1 1 auto; }
+.ow-sb-team .k, .ow-sb-team .d {
+  width: calc(28px * var(--k)); text-align:right;
+  font-size: calc(9.5px * var(--k)); color: var(--ink-3); letter-spacing:.1em;
+}
+.ow-sb-row {
+  display:flex; align-items:baseline; gap: calc(var(--u) * 2);
+  padding: calc(var(--u) * .9) 0;
+  font-size: calc(11.5px * var(--k)); letter-spacing:.1em; color: var(--ink-2);
+  border-bottom: 1px solid rgba(255,255,255,.045);
+}
+.ow-sb-row .n { flex:1 1 auto; overflow:hidden; text-overflow:clip; }
+.ow-sb-row .k, .ow-sb-row .d {
+  font-family: var(--fd); font-size: calc(15px * var(--k));
+  width: calc(28px * var(--k)); text-align:right;
+}
+.ow-sb-row .k { color: var(--ink); }
+.ow-sb-row .d { color: var(--ink-3); }
+.ow-sb-row.you { color: var(--amber); }
+.ow-sb-row.you .k { color: var(--amber); }
+.ow-sb-row.dead { opacity:.42; }
+
+/* --------------------------------------------------------- spectator */
+.ow-spec {
+  position:absolute; left:50%; bottom: calc(var(--pad) * 6.4);
+  transform: translateX(-50%); text-align:center;
+  font-size: calc(12px * var(--k)); letter-spacing:.22em;
+  color: var(--ink); text-shadow: var(--sh-o1);
+}
+.ow-spec-hint { margin-top: calc(var(--u) * .8); font-size: calc(9px * var(--k));
+  letter-spacing:.2em; color: var(--ink-3); }
+
 /* ============================================================== fadeouts */
 .ow-hidden { display:none !important; }
 `;
