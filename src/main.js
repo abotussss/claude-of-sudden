@@ -25,10 +25,12 @@ const capture = params.get('capture') === '1';
 // free-run. See the long comment in src/dev/shots.js.
 const lockstep = capture && params.get('lockstep') === '1';
 
-const config = createConfig({
-  quality: params.get('q') ?? 'ultra',
-  deterministic: capture,
-});
+// `?q=low|medium|high|ultra` picks a preset; without it the default in
+// src/core/config.js applies. It used to say `?? 'ultra'` here, which silently
+// overrode that default — so changing DEFAULTS.quality did nothing at all.
+const configOpts = { deterministic: capture };
+if (params.has('q')) configOpts.quality = params.get('q');
+const config = createConfig(configOpts);
 
 const canvas = document.getElementById('game');
 

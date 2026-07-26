@@ -18,8 +18,27 @@ export const UNITS = {
   eyeOffset: 0.12, // below top of capsule
 };
 
+/**
+ * ONE FIELD THE UPSTREAM PRESETS DID NOT HAVE, added because the 7v7 mode
+ * doubled the actor count and the presets could no longer reach a playable
+ * frame rate on an M1 Pro at Retina.
+ *
+ * `pixelRatio`   the cap on `devicePixelRatio`, which was hardcoded to 1.5 in
+ *                render/index.js. MEASURED on an M1 Pro at 1728x1080: going
+ *                from 1.5 to 1.0 takes the drawing buffer from 4.20 MP to
+ *                1.87 MP and roughly DOUBLES the frame rate at every preset
+ *                (8→16, 8→16, 12→24, 23→45 fps p50). It is the single largest
+ *                lever in the whole build and it was not exposed.
+ *
+ * A per-actor shadow-caster budget was tried here too and REMOVED: in a frozen
+ * A/B (time.scale = 0, budgets interleaved) capping the casters changed neither
+ * the frame time nor the draw-call count, and it costs every soldier past the
+ * cap their cast shadow. The cascades are dominated by the level, not by the
+ * thirteen characters.
+ */
 export const QUALITY_PRESETS = {
   low: {
+    pixelRatio: 1.0,
     renderScale: 0.72,
     shadowMapSize: 1024,
     cascades: 3,
@@ -35,6 +54,7 @@ export const QUALITY_PRESETS = {
     decalBudget: 64,
   },
   medium: {
+    pixelRatio: 1.0,
     renderScale: 0.85,
     shadowMapSize: 2048,
     cascades: 3,
@@ -50,6 +70,7 @@ export const QUALITY_PRESETS = {
     decalBudget: 128,
   },
   high: {
+    pixelRatio: 1.25,
     renderScale: 1.0,
     shadowMapSize: 2048,
     cascades: 4,
@@ -65,6 +86,7 @@ export const QUALITY_PRESETS = {
     decalBudget: 256,
   },
   ultra: {
+    pixelRatio: 1.5,
     renderScale: 1.0,
     shadowMapSize: 4096,
     cascades: 4,
@@ -82,7 +104,14 @@ export const QUALITY_PRESETS = {
 };
 
 export const DEFAULTS = {
-  quality: 'ultra',
+  /**
+   * MEASURED, not chosen for looks. On an M1 Pro (16-core GPU) at 1728x1080
+   * with a full 7v7 round live, p50 was 8 fps at `ultra` and 24 fps at
+   * `medium`. `ultra` is unplayable on the machine this was built on, so it is
+   * no longer the default — it is still one click away in the pause menu, and
+   * `?q=ultra` still selects it.
+   */
+  quality: 'medium',
   fov: 80, // horizontal-ish vertical FOV, CoD default feel
   adsFovScale: 0.72,
   sensitivity: 0.0022,

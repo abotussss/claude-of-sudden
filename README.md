@@ -12,6 +12,36 @@ npm install
 npm run dev          # http://127.0.0.1:5173
 ```
 
+## Performance — read this first
+
+Two teams of seven means thirteen skinned characters on screen instead of
+upstream's six, and this engine was already heavy. **The default preset is
+`medium`, not `ultra`**, and the pixel-ratio cap is now part of the preset
+rather than hardcoded at 1.5.
+
+Measured on an M1 Pro (16-core GPU), headless Chromium with a live 7v7 round,
+p50 frames per second:
+
+| window | `low` | `medium` | `high` | `ultra` |
+|---|---|---|---|---|
+| 1728 × 1080 | **43** | **23** | 11 | 7 |
+| 1280 × 800 | **64** | **36** | 19 | — |
+
+Two knobs, in order of how much they buy you:
+
+1. **Preset** — pause menu (Esc) → Graphics Preset, or `?q=low` in the URL.
+   Switching in the menu reloads the page, because half of a preset (TAA, GTAO,
+   SSR, volumetrics, shadow resolution) is built at boot and cannot be toggled
+   live.
+2. **Window size** — `medium` at 1280 × 800 is 36 fps against 23 at
+   1728 × 1080. There is no visual quality cost at all, so try this before
+   dropping the preset.
+
+The single biggest change was exposing the pixel-ratio cap: on a Retina panel,
+1.5 means a 4.2 MP drawing buffer. `low` and `medium` now cap it at 1.0
+(1.87 MP), which roughly doubled the frame rate at every preset. `ultra` keeps
+1.5 and is unchanged from upstream.
+
 ## The mode
 
 Two teams of seven, one life each, on the market street.

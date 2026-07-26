@@ -13,7 +13,7 @@
  * program count per frame — a jump in programs on the same frame as a hitch is
  * a shader compilation stall, the classic cause of Three.js hitching.
  *
- *   node tools/profile.mjs --port=8080 --dpr=2 --w=1512 --h=982
+ *   node tools/profile.mjs --port=8080 --dpr=2 --w=1512 --h=982 [--stage=0] [--query=q=high]
  */
 import { chromium } from 'playwright';
 import { resolve } from 'node:path';
@@ -48,6 +48,8 @@ const bootMarks = await page.evaluate(() =>
   performance.getEntriesByType('measure').map((m) => ({ name: m.name, ms: +m.duration.toFixed(1) }))
     .sort((a, b) => b.ms - a.ms).slice(0, 25));
 
+await page.evaluate((stage) => { window.__PROFILE_STAGE__ = stage; }, args.stage !== '0');
+
 const internal = await page.evaluate(() => {
   const r = window.__ENGINE__.ctx.peek('render');
   const gl = r.renderer.getContext();
@@ -65,7 +67,10 @@ await page.evaluate(() => {
   const e = window.__ENGINE__;
   e.input.enabled = true; e.input.frozen = false;
   e.ctx.peek('player')?.setControlEnabled?.(true);
-  e.ctx.peek('ai')?.debugStage?.('firefight');
+  // The staged tableau adds SIX actors on top of whatever is already alive. With
+  // `match` running that is a 19-man scene, not the 13 a real round has, so
+  // `--stage=0` measures the load the game actually produces.
+  if (window.__PROFILE_STAGE__ !== false) e.ctx.peek('ai')?.debugStage?.('firefight');
 });
 
 const result = await page.evaluate((FRAMES) => new Promise((done) => {

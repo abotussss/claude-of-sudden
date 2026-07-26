@@ -475,6 +475,23 @@ export class RenderSystem {
 
     const w = ctx.canvas.clientWidth || 1920;
     const h = ctx.canvas.clientHeight || 1080;
+    this._lastSize = { w, h };
+    // Switching quality in the pause menu used to mutate `config.q` and change
+    // nothing: `renderScale` and the pixel-ratio cap are only read inside
+    // resize(), so the new preset did not take effect until the window happened
+    // to change size. Re-running resize is the same path a window resize takes.
+    // (Shadow map size and cascade count are baked into the CSM at init and
+    // still need a reload — the console says so rather than lying about it.)
+    this._offQuality = ctx.events.on('ui:quality', (e) => {
+      const s = this._lastSize;
+      this.resize(s.w, s.h, ctx);
+      console.info(
+        `[render] quality -> ${e?.quality}: pixelRatio ${this.renderer.getPixelRatio()}, ` +
+          `renderScale ${this.q.renderScale}, internal ` +
+          `${this.screenSize.width}x${this.screenSize.height}. ` +
+          'Shadow resolution and cascade count need a page reload.'
+      );
+    });
     this.resize(w, h, ctx);
 
     console.info(
@@ -866,7 +883,12 @@ export class RenderSystem {
   // ==========================================================================
 
   resize(w, h, ctx) {
-    const pr = Math.min(globalThis.devicePixelRatio || 1, 1.5);
+    // The cap comes from the quality preset now (see src/core/config.js). It was
+    // a hardcoded 1.5, which on a Retina panel is 4.2 MP of drawing buffer and
+    // is worth roughly HALF the frame rate on its own.
+    this._lastSize.w = w;
+    this._lastSize.h = h;
+    const pr = Math.min(globalThis.devicePixelRatio || 1, this.q.pixelRatio ?? 1.5);
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
 
@@ -1675,6 +1697,8 @@ export class RenderSystem {
     this.bloom?.dispose();
     this.exposure.dispose();
     this.composite.dispose();
+    this._offQuality?.();
+    this._offQuality = null;
     this.viewComposite.dispose();
     this.fxaa?.dispose();
     this.lut.texture.dispose();

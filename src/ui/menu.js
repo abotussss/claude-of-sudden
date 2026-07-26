@@ -132,14 +132,37 @@ export class PauseMenu {
     return api;
   }
 
+  /**
+   * Switch graphics preset.
+   *
+   * Half of a preset is only readable at boot: TAA, GTAO, SSR, volumetrics and
+   * motion blur are separate passes that `render` constructs (or does not
+   * construct) during init, and the cascade count and shadow map size are baked
+   * into the CSM. Mutating `config.q` alone therefore used to change NOTHING
+   * visible — which is worse than not offering the control at all.
+   *
+   * So: apply it live (resolution and pixel ratio follow immediately, and those
+   * are the dominant cost), then reload with `?q=` so the rest of the preset is
+   * real. Boot off a warm cache is 5-15 s. `?q=` in the URL is also the documented
+   * way to pick a preset without opening the menu at all.
+   */
   setQuality(name) {
     try {
       this.ctx.config.setQuality(name);
       this.ctx.events.emit('ui:quality', { quality: name });
     } catch (err) {
       console.warn('[ui] quality switch failed', err);
+      return;
     }
     this.syncFromConfig();
+    try {
+      const url = new URL(location.href);
+      if (url.searchParams.get('q') === name) return; // already the booted preset
+      url.searchParams.set('q', name);
+      location.replace(url.toString());
+    } catch {
+      /* file:// or a sandbox that forbids navigation — the live half still applied */
+    }
   }
 
   syncFromConfig() {
