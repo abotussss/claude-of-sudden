@@ -23,7 +23,14 @@
 
 import { airCutoff, clamp, gain, biquad } from './dsp.js';
 
-const MAX_EMITTERS = 40;
+/**
+ * Concurrent spatialised voices. Raised from 40 for the 7v7 mode: thirteen
+ * actors is twice upstream's garrison, and 40 was measured to sit at 100%
+ * capacity for a whole round. The budget in `_onFire` is the real fix — this is
+ * headroom so a genuine four-way firefight is not fighting the pool as well.
+ * Each emitter is a panner plus three filters and a gain, built once at boot.
+ */
+const MAX_EMITTERS = 48;
 
 /** Reference distance for the attenuation curve, in metres. */
 const REF = 2.0;

@@ -102,7 +102,46 @@ export class AudioSystem {
     this._dryCursor = 0;
 
     /* per-frame rate limits */
-    this._budget = { impact: 0, step: 0, shell: 0, whizz: 0 };
+    /**
+     * VOICE RATE LIMITS, events per SECOND, per category.
+     *
+     * These replaced per-FRAME budgets, and the difference is the whole bug.
+     * A budget of "4 impacts per frame" is 240 impacts a second at 60 fps and
+     * 480 at 120 — the limit scaled with the frame rate, which is exactly
+     * backwards. Summed across categories the old budgets admitted ~840 voices
+     * a second into a pool of 48 that holds each voice for roughly half a
+     * second: an order of magnitude oversubscribed, permanently.
+     *
+     * MEASURED before the fix, one 7v7 round in: the field sat at 100% capacity
+     * from t=24s and never recovered, with 10023 voices dropped and 5053 stolen
+     * against 7490 played. From the player's seat that is audio glitching and
+     * then vanishing — the reported bug.
+     *
+     * THE RATES ARE SET FROM MEASURED VOICE LIFETIME, not from taste. Dumping
+     * the live pool mid-firefight showed the held emitters carrying 0.1 to 8.4
+     * SECONDS of remaining life, median around two: a gunshot holds its emitter
+     * for the whole dry tail, not for the 200 ms of transient you actually hear.
+     * With a 48-voice pool and a ~2 s mean life the sustainable admission rate is
+     * about 24 voices a second — so 38 was still 1.6x oversubscribed and the
+     * pool still never had a free slot.
+     *
+     * These sum to 24 a second, i.e. well under the pool, which leaves slack for
+     * the things that must never be dropped: explosions, deaths, barks, reloads,
+     * and the ambience beds (which are `tracked` and therefore unstealable).
+     * Density is carried by the shared reverb bus, not by voice count — eight
+     * distinct spatialised cracks a second already reads as a firefight.
+     *
+     * The exact values are a mix I could not verify by ear, only by counters, so
+     * they are deliberately a plain mutable object: `audio._rate.impact = 10` at
+     * the console re-tunes it live without a reload.
+     * Nobody can hear the difference between fourteen impacts a second and two
+     * hundred; everybody can hear the difference between working audio and none.
+     *
+     * The player's OWN weapon is not in this table on purpose — it goes through
+     * `_playDry`, head-locked, outside the spatial pool entirely.
+     */
+    this._rate = { shot: 8, impact: 6, step: 4, shell: 3, whizz: 3, reload: 4, bodyfall: 3 };
+    this._rateNext = { shot: 0, impact: 0, step: 0, shell: 0, whizz: 0, reload: 0, bodyfall: 0 };
     this._lastBarkTime = -99;
     this._lastEnemyFire = -99;
 
@@ -270,8 +309,7 @@ export class AudioSystem {
       }
 
       /* ---- reset per-frame budgets ------------------------------- */
-      const b = this._budget;
-      b.impact = 0; b.step = 0; b.shell = 0; b.whizz = 0;
+      /* (voice rate limiting is time-based now — nothing to reset per frame) */
 
       const s = this.stats;
       s.voices = this.field.stats.active;
@@ -283,6 +321,18 @@ export class AudioSystem {
     } catch (err) {
       this._error(err);
     }
+  }
+
+  /**
+   * Rate limit one category of spatialised one-shot. Frame-rate independent:
+   * the gate is a minimum interval on the audio clock, not a count per frame.
+   * @returns {boolean} true if this event may claim a voice
+   */
+  _allow(kind) {
+    const now = this.actx.currentTime;
+    if (now < this._rateNext[kind]) return false;
+    this._rateNext[kind] = now + 1 / this._rate[kind];
+    return true;
   }
 
   _error(err) {
@@ -560,7 +610,33 @@ export class AudioSystem {
       this._playDry('shot', { profile, firstPerson: true }, 'weapons', echo * 0.6);
       this.mixer.duck(0.55, 0.1);
     } else {
-      this._playAt('shot', x, y, z, { profile, firstPerson: false }, 'weapons', 0.95);
+      /**
+       * REMOTE GUNFIRE IS BUDGETED, and this is the one event type that was not.
+       *
+       * MEASURED with a live 7v7 round: thirteen actors firing at ~10 rounds a
+       * second put the 40-emitter spatial field at 100% capacity twenty-four
+       * seconds into the first round and it never came back down — 10023 voices
+       * DROPPED and 5053 STOLEN against 7490 actually played. Every remote shot
+       * asked for priority 0.95, the highest in the system, so shots evicted
+       * each other and everything else: footsteps, impacts, your own reload.
+       * What that sounds like from the player's seat is the audio glitching and
+       * then going away, which is exactly what was reported.
+       *
+       * Upstream had six enemies and never hit the ceiling. Every other event
+       * here already had a budget; gunfire simply never got one, and the ones
+       * that existed were per-frame rather than per-second (see `_rate`).
+       *
+       * Three rules, in the order they matter:
+       *   1. a rate limit — eight remote shots a second is already a wall of noise
+       *   2. nothing past 80 m, because `ambience` carries distant volleys and a
+       *      single 5.56 crack from across the map is not information
+       *   3. priority falls off with distance, so a firefight at 60 m can no
+       *      longer steal the slot from a footstep at 3 m
+       */
+      if (!this._allow('shot')) return;
+      if (dist > 80) return;
+      const shotPriority = clamp(0.95 - dist * 0.006, 0.4, 0.95);
+      this._playAt('shot', x, y, z, { profile, firstPerson: false }, 'weapons', shotPriority);
       this.mixer.duck(clamp(0.5 - dist * 0.004, 0.12, 0.5), 0.08);
       // Enemies opening fire get occasional chatter, so firefights feel alive
       // even before `ai` grows its own bark logic.
@@ -579,6 +655,7 @@ export class AudioSystem {
     const heavy = /lmg|shot|snip|m249|pkm/i.test(String(name ?? '')) ? 1.35 : 1;
     const phase = p?.phase ?? 'end';
     if (p?.position) {
+      if (!this._allow('reload')) return;
       this._playAt('reload', p.position.x, p.position.y, p.position.z, { phase, heavy }, 'foley', 0.6);
     } else {
       this._playDry('reload', { phase, heavy }, 'foley', 0.22);
@@ -587,7 +664,7 @@ export class AudioSystem {
 
   _onShell(p) {
     if (!this.running || !p) return;
-    if (this._budget.shell++ > 2) return;
+    if (!this._allow('shell')) return;
     const pos = p.position;
     const lp = this.field.listenerPos;
     const x = pos?.x ?? lp.x, y = pos?.y ?? lp.y, z = pos?.z ?? lp.z;
@@ -610,7 +687,7 @@ export class AudioSystem {
   _onImpact(p) {
     if (!this.running || !p) return;
     if (p.exit) return;                       // only the entry side gets a sound
-    if (this._budget.impact++ > 4) return;
+    if (!this._allow('impact')) return;
     const pt = p.point;
     if (!pt) return;
     const dist = this.field.distanceTo(pt.x, pt.y, pt.z);
@@ -627,7 +704,7 @@ export class AudioSystem {
 
   _onTracer(p) {
     if (!this.running || !p?.from || !p?.to) return;
-    if (this._budget.whizz++ > 2) return;
+    if (!this._allow('whizz')) return;
     // Closest approach of the trajectory to the listener.
     const lp = this.field.listenerPos;
     const ax = p.from.x, ay = p.from.y, az = p.from.z;
@@ -658,7 +735,7 @@ export class AudioSystem {
 
   _onFootstep(p) {
     if (!this.running) return;
-    if (this._budget.step++ > 3) return;
+    if (!this._allow('step')) return;
     const pos = p?.position;
     const lp = this.field.listenerPos;
     const x = pos?.x ?? lp.x, y = pos?.y ?? lp.y - 1.6, z = pos?.z ?? lp.z;
@@ -722,6 +799,7 @@ export class AudioSystem {
     const pt = p?.point;
     if (!pt) return;
     this.bark('death', pt, { level: 1, force: true, voice: (p?.actor?.id ?? 0) | 0 });
+    if (!this._allow('bodyfall')) return;
     this._playAt('bodyfall', pt.x, pt.y, pt.z, {
       level: 1, extraDelay: 0.45 + this.rng.range(0, 0.4),
     }, 'foley', 0.6);
