@@ -464,6 +464,7 @@ export class UiSystem {
     if (ws) {
       if (ws.name) s.weaponName = ws.name;
       if (ws.mode) s.fireMode = ws.mode;
+      if (ws.melee !== undefined) s.melee = !!ws.melee;
       if (ws.ammo !== undefined) s.ammo = ws.ammo;
       if (ws.reserve !== undefined) s.reserve = ws.reserve;
       if (ws.magSize !== undefined) s.magSize = ws.magSize;

@@ -441,6 +441,21 @@ export class CoverMap {
     const maxTravel = opts.maxTravel ?? 22;
     const yRef = opts.yRef ?? null;
     const yTol = opts.yTol ?? Infinity;
+    /**
+     * OBJECTIVE PULL. Cover chosen purely for protection is cover that never
+     * moves, and in a 7v7 demolition round that produced a static firefight on
+     * the spawn line for the whole two minutes: eleven of thirteen actors sat in
+     * COMBAT eight seconds after the round went live and none of them ever
+     * played the objective again.
+     *
+     * `toward` biases the score by how much closer a cover point is to where
+     * this actor is supposed to end up, so an attacker under fire advances from
+     * cover to cover instead of holding the line. Defenders pass no `toward` and
+     * behave exactly as before — holding IS their objective.
+     */
+    const toward = opts.toward ?? null;
+    const towardW = opts.towardWeight ?? 0.55;
+    const dTowardNow = toward ? Math.hypot(toward.x - pos.x, toward.z - pos.z) : 0;
     let best = null;
     let bestScore = -Infinity;
     const tx = threat.x, tz = threat.z;
@@ -461,6 +476,11 @@ export class CoverMap {
       if (dT < wantMin) score -= (wantMin - dT) * 0.55;
       else if (dT > wantMax) score -= (dT - wantMax) * 0.28;
       score -= travel * 0.16;
+      // Progress toward the objective, in metres gained, scaled.
+      if (toward) {
+        const gain = dTowardNow - Math.hypot(toward.x - p.x, toward.z - p.z);
+        score += gain * towardW;
+      }
       // do not bunch up
       if (squad) {
         for (const other of squad) {

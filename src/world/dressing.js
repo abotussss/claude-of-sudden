@@ -27,7 +27,7 @@ import {
   tubeY,
   fbm3,
 } from './util.js';
-import { STREET, ALLEYS, BUILDINGS, MASSES, SET_PIECES, GATE } from './layout.js';
+import { STREET, ALLEYS, BUILDINGS, SET_PIECES, GATE } from './layout.js';
 
 /**
  * WORLD — set dressing.
@@ -47,13 +47,7 @@ const _m = new THREE.Matrix4();
 const _v = new THREE.Vector3();
 
 // --------------------------------------------------------------- occupancy --
-/**
- * True inside (or within `m` of) any building footprint — or inside one of the
- * hand-built masses in the middle of the street (the market hall, the collapsed
- * east wing). Those are not BUILDINGS entries, but every scatter pass in this
- * file asks this question to decide whether it may drop a prop, so they have to
- * answer it too or the street litter ends up inside the hall's walls.
- */
+/** True inside (or within `m` of) any building footprint. */
 export function inBuilding(x, z, m = 0.3) {
   for (let i = 0; i < BUILDINGS.length; i++) {
     const b = BUILDINGS[i];
@@ -64,10 +58,6 @@ export function inBuilding(x, z, m = 0.3) {
       z < b.z + b.d / 2 + m
     )
       return true;
-  }
-  for (let i = 0; i < MASSES.length; i++) {
-    const s = MASSES[i];
-    if (x > s.x0 - m && x < s.x1 + m && z > s.z0 - m && z < s.z1 + m) return true;
   }
   return false;
 }
@@ -1373,9 +1363,9 @@ function tyreStacks(A, rng) {
  */
 function coverClusters(A, rng) {
   const spots = [
-    [-2.4, 10.6, 0.35], // north of the hall, covering its north door
-    [-2.2, 14.6, 1.2],
-    [-3.4, -4.4, -0.4], // south of the hall, covering the crossing band
+    [0.6, 0.9, 0.35],
+    [-2.2, 8.6, 1.2],
+    [2.6, -6.4, -0.4],
     [-3.0, -21.5, 0.6],
     [2.2, -33.0, 1.9],
     [-2.6, 27.5, 0.2],

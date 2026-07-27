@@ -89,6 +89,7 @@ export class AmmoPanel {
     this._lastCount = -1;
     this._lastName = null;
     this._nameFit = 0;
+    this._lastMelee = false;
     setStyle(this.reload, 'display', 'none');
     setStyle(this.reloadBar, 'display', 'none');
   }
@@ -98,6 +99,41 @@ export class AmmoPanel {
    *                     reloadProgress, lethal, lethalCount, tacticalCount }
    */
   update(dt, s) {
+    /**
+     * A melee weapon has no ammunition, so the readout has nothing to count.
+     * Zeroes are not the answer: "0 / 0" under a flashing PRESS R TO RELOAD is
+     * a broken gun, not a knife. The count becomes an em dash, the separator
+     * and the reserve go away, and the pip strip and the reload prompt are
+     * hidden outright — everything else in the panel (the name, the equipment
+     * row) is still true and still drawn.
+     */
+    const melee = !!s.melee;
+    if (melee !== this._lastMelee) {
+      this._lastMelee = melee;
+      setClass(this.root, 'ow-ammo-melee', melee);
+      setStyle(this.sep, 'display', melee ? 'none' : '');
+      setStyle(this.res, 'display', melee ? 'none' : '');
+      setStyle(this.mag, 'display', melee ? 'none' : '');
+      this._lastAmmo = -1;
+    }
+    if (melee) {
+      setText(this.cur, '—');
+      this._fitName(String(s.weaponName ?? s.name ?? 'KM-7'));
+      setText(this.mode, s.fireMode ?? 'MELEE');
+      setClass(this.root, 'ow-ammo-low', false);
+      setClass(this.root, 'ow-ammo-empty', false);
+      setStyle(this.reload, 'display', 'none');
+      setStyle(this.reloadBar, 'display', 'none');
+      setStyle(this.cur, 'transform', 'scale(1)');
+      const lcm = s.lethalCount ?? 0;
+      const tcm = s.tacticalCount ?? 0;
+      setText(this.slotLn, lcm);
+      setText(this.slotTn, tcm);
+      setClass(this.slotL, 'empty', lcm <= 0);
+      setClass(this.slotT, 'empty', tcm <= 0);
+      return;
+    }
+
     const ammo = Math.max(0, s.ammo | 0);
     const magSize = Math.max(1, s.magSize | 0 || 30);
 

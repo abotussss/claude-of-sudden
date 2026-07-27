@@ -424,6 +424,7 @@ export class Agent {
       this._hasFacing = false;
     }
     this.objective = { mode, position: this._objPos, site };
+    if (changed) this.objectiveBlocked = false;
     // Force a fresh path next time ADVANCE runs rather than finishing the old one.
     if (changed) {
       this.repathTimer = 0;
@@ -584,6 +585,52 @@ export class Agent {
   }
 
   /**
+   * A* said there is no route to the objective. GET AS CLOSE AS THE GEOMETRY
+   * ALLOWS instead of standing still.
+   *
+   * The previous behaviour here — clear the move target, set speed 0, retry in
+   * three to five seconds — is what turned one badly placed bomb site into six
+   * motionless bots. An unreachable objective is a level-design bug, but the AI
+   * must degrade into "walk toward it and hold" rather than into a statue,
+   * because a statue is indistinguishable from a crash.
+   *
+   * Tries 70% and 40% of the way there, which on a real map lands in the room or
+   * the street outside whatever is sealed. Only if EVERY step fails does it give
+   * up, and then it says so once rather than silently.
+   */
+  _advanceFallback(obj) {
+    for (const t of [0.7, 0.4]) {
+      this._v.copy(this.position).lerp(obj.position, t);
+      const ci = this.ai.grid?.nearest(this._v.x, this._v.z, this._v.y, 5, 2.5) ?? -1;
+      if (ci < 0) continue;
+      const g = this.ai.grid;
+      this._v.set(g.worldX(ci % g.nx), g.floor[ci], g.worldZ((ci / g.nx) | 0));
+      if (this.position.distanceToSquared(this._v) < 2 * 2) continue; // already there
+      if (this._goTo(this._v)) {
+        this.repathTimer = this.rng.range(1.5, 2.5);
+        return;
+      }
+    }
+    // Genuinely boxed in. Hold, face the objective, and let `match` re-task on
+    // its two-second objective refresh.
+    if (!this._loggedUnreachable) {
+      this._loggedUnreachable = true;
+      console.warn(
+        `[ai] ${this.name}: no route to its "${obj.mode}" objective ` +
+          `(${obj.position.x.toFixed(1)}, ${obj.position.z.toFixed(1)}) — holding`
+      );
+    }
+    this.objectiveBlocked = true;
+    this.repathTimer = this.rng.range(2.5, 4);
+    this.hasMoveTarget = false;
+    this.desiredSpeed = 0;
+    this.targetYaw = Math.atan2(
+      obj.position.x - this.position.x,
+      obj.position.z - this.position.z
+    );
+  }
+
+  /**
    * Walk the objective. Nothing clever: a path to the point, a run or a jog
    * depending on the verb, and a stand-and-face once there. What makes it read
    * as a squad taking a site is that seven men are doing it at once with local
@@ -626,12 +673,7 @@ export class Agent {
       this.desiredSpeed = obj.mode === 'hold' ? 3.4 : 4.3;
       if (this.repathTimer <= 0 && !this.pathPending && (!this.hasMoveTarget || this.stuckTimer > 0.6)) {
         this.repathTimer = this.rng.range(1.1, 2.2);
-        if (!this._goTo(obj.position) && !this.pathPending) {
-          // Unreachable — stand off rather than grind into a wall for ever.
-          this.repathTimer = this.rng.range(3, 5);
-          this.hasMoveTarget = false;
-          this.desiredSpeed = 0;
-        }
+        if (!this._goTo(obj.position) && !this.pathPending) this._advanceFallback(obj);
       }
       return;
     }
@@ -677,7 +719,17 @@ export class Agent {
     // walk out of an ambush. The carrier waits twice as long as the other two
     // because it is the man everybody is shooting at.
     const mode = this.objective?.mode;
-    const urgency = mode === 'pickup' || mode === 'defuse' ? 3 : mode === 'plant' ? 6 : 0;
+    const urgency =
+      mode === 'pickup' || mode === 'defuse' ? 3
+        : mode === 'plant' ? 6
+          // 'push' joined the list because without it the attack never arrives:
+          // in a stalemate somebody is always visible, so a break-off gated only
+          // on "nothing in sight" never fires for the four men who are not
+          // carrying anything. Twelve seconds is long enough that it cannot be
+          // used to walk out of a duel, short enough that a 120 s round still
+          // sees an execute.
+          : mode === 'push' ? 12
+            : 0;
     if (urgency && this.stateTime > urgency && !this.targetVisible) {
       this.cover = null;
       this.ai.cover?.release(this.id);
@@ -704,12 +756,20 @@ export class Agent {
 
     // no cover yet, or the current one no longer protects: find one
     if (!this.cover || this.repathTimer <= 0) {
+      // An attacker's cover has to take ground. See `toward` in nav.js.
+      const mode2 = this.objective?.mode;
+      const pushing = mode2 === 'push' || mode2 === 'plant' || mode2 === 'pickup' ||
+        mode2 === 'defuse' || mode2 === 'retake';
       const pick = this.ai.cover?.pick(this.position, target, {
         id: this.id,
         squad: sq?.members,
         minRange: 7,
         maxRange: 30,
         maxTravel: this.cover ? 12 : 26,
+        toward: pushing ? this.objective.position : null,
+        // The carrier and the defuser push hardest; the rest of the attack
+        // still has to be willing to trade for ground.
+        towardWeight: mode2 === 'plant' || mode2 === 'defuse' ? 0.9 : 0.55,
       });
       this.repathTimer = this.rng.range(2.2, 4.5);
       if (pick && pick !== this.cover) {

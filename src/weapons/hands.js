@@ -47,24 +47,70 @@ const L_FORE = 0.3;
 /*  geometry                                                                  */
 /* -------------------------------------------------------------------------- */
 
-/** One finger segment: a tapered, chamfered capsule with a joint crease. */
+/**
+ * One finger segment: a tapered phalanx with a knuckle shoulder at its
+ * proximal end and a waist before the next joint.
+ *
+ * THIS IS THE "BLOCKY FINGER SLABS" FIX, and the profile is the whole of it.
+ * The old profile was r0 for the first 42% of the segment, r1*1.04 at 55%, and
+ * r1 to the tip — i.e. a straight tube with a 4% bump in the middle. Three of
+ * those stacked end to end have no joints in the silhouette at all: the only
+ * thing marking a knuckle was the dorsal pad sitting on top, which is exactly
+ * why the read was "slabs" rather than "fingers".
+ *
+ * A real phalanx is an hourglass. Its two ends are the articular heads — WIDER
+ * than the shaft, because they are the bearing surfaces — and the shaft between
+ * them is 12-18% narrower. So:
+ *   0.00-0.14  the proximal head, 1.06 x the nominal radius
+ *   0.14-0.62  the shaft, waisted to 0.87
+ *   0.62-0.88  the distal head swelling back out to 1.05
+ *   0.88-1.00  the crease and the roll-off into the next joint
+ * Stacked, that gives a visible constriction at every joint and a bulge either
+ * side of it, at zero extra cost — it is the same lathe with four more points.
+ *
+ * 16 segments rather than 12: the shooting hand's index finger comes within
+ * 0.22 m of the eye on the pistol, where a 10 mm radius is 46 px, and a 12-gon
+ * puts a 0.6 px sagitta on that silhouette. 16 takes it to 0.35 px.
+ */
 function segment(len, r0, r1) {
+  const rm = (r0 + r1) * 0.5;
   const g = latheZ(
     [
       [0, 0],
-      [0, r0 * 0.86],
-      [r0 * 0.5, r0],
-      [len * 0.42, r0 * 0.99],
-      [len * 0.55, r1 * 1.04],
-      [len - r1 * 0.7, r1],
-      [len - r1 * 0.2, r1 * 0.8],
-      [len, r1 * 0.35],
+      [0, r0 * 0.84],
+      [len * 0.03, r0 * 1.02],
+      [len * 0.14, r0 * 1.06], // proximal articular head
+      [len * 0.3, r0 * 0.92],
+      [len * 0.46, rm * 0.9], // shaft waist
+      [len * 0.62, rm * 0.97],
+      [len * 0.78, r1 * 1.05], // distal head
+      [len - r1 * 0.5, r1 * 0.98],
+      [len - r1 * 0.16, r1 * 0.78],
+      [len, r1 * 0.34],
       [len, 0],
     ],
-    12
+    16
   );
   g.scale(1, 0.88, 1); // fingers are wider than they are deep
   g.rotateY(Math.PI); // extend along -Z
+  return g;
+}
+
+/**
+ * The knuckle itself: an oblate boss straddling a joint on the DORSAL side.
+ *
+ * The lathe above can only make a body of revolution, so the articular heads it
+ * carries are symmetric — but a knuckle is not. It stands proud on the back of
+ * the hand and is flat on the palmar side, and that asymmetry is what you
+ * actually see when a fist closes: four hard lumps in a row catching the key,
+ * with shadow between them. Placed at the joint's own origin so it spans the
+ * crease and reads as one continuous form across two segments.
+ */
+function knuckleBoss(r) {
+  const g = dome(r * 1.04, 12, 0.62);
+  g.rotateX(-Math.PI / 2); // cap facing +Y, out of the back of the hand
+  g.scale(1.02, 0.72, 1.25); // wider than tall, longer along the finger
+  g.translate(0, r * 0.2, 0);
   return g;
 }
 
@@ -90,8 +136,18 @@ function segmentPad(len, r) {
  */
 function segmentSeam(len, r0, r1, sx) {
   const g = box(0.0015, (r0 + r1) * 0.34, len * 0.86, 0.0003, 1);
-  // The finger capsule is scaled to 0.88 in Y, so its side wall sits at r in X.
-  g.translate(sx * (r0 + r1) * 0.49, r0 * 0.1, -len * 0.47);
+  /**
+   * The finger capsule is scaled to 0.88 in Y, so its side wall sits at r in X.
+   *
+   * 0.455 of (r0+r1), not 0.49. The phalanx profile is waisted to 0.90 of the
+   * nominal radius through the middle of the shaft (see `segment`), and a seam
+   * laid on the OLD nominal radius therefore stood ~1 mm proud of a 10 mm
+   * finger down its whole length — measured on a capture, it read as a hard
+   * dark outline detached from the digit, which is worse than no seam at all.
+   * At 0.91 of the radius the strip sits on the waisted shaft and sinks into
+   * the articular heads at either end, which is what a real seam does.
+   */
+  g.translate(sx * (r0 + r1) * 0.455, r0 * 0.1, -len * 0.47);
   return g;
 }
 
@@ -108,7 +164,10 @@ function buildFinger(materials, spec) {
     const j = new THREE.Object3D();
     j.rotation.x = -curl[i];
     parent.add(j);
-    const geo = mergeAll([segment(lengths[i], radii[i], radii[i + 1])]);
+    // The boss goes in the SHELL mesh, not the pad mesh: it is the knuckle
+    // under the glove, not a piece of armour on top of it, and it has to shade
+    // like skin or it re-creates the "detached slabs" read one level down.
+    const geo = mergeAll([segment(lengths[i], radii[i], radii[i + 1]), knuckleBoss(radii[i])]);
     const mesh = new THREE.Mesh(geo, materials.glove);
     mesh.castShadow = false;
     mesh.receiveShadow = true;
@@ -132,10 +191,16 @@ function buildFinger(materials, spec) {
       const pad = new THREE.Mesh(segmentPad(lengths[i], radii[i]), materials.pad);
       j.add(pad);
     } else {
-      // fingertip grip patch on the palm side
+      // Distal phalanx: a grip patch on the palmar side and a nail plate on the
+      // dorsal one. The nail is 3 px across on screen and it is still worth its
+      // 40 triangles — it is the only thing that says which way up a fingertip
+      // is, and with four fingers curled toward the camera on a C-clamp that is
+      // four separate cues that these are fingers and not dowels.
       const tip = blob(radii[i] * 1.5, radii[i] * 0.5, lengths[i] * 0.7, radii[i] * 0.2, 2);
       tip.translate(0, -radii[i] * 0.72, -lengths[i] * 0.45);
-      j.add(new THREE.Mesh(tip, materials.pad));
+      const nail = blob(radii[i] * 1.24, radii[i] * 0.34, lengths[i] * 0.54, radii[i] * 0.16, 2);
+      nail.translate(0, radii[i] * 0.76, -lengths[i] * 0.42);
+      j.add(new THREE.Mesh(mergeAll([tip, nail]), materials.pad));
     }
     const next = new THREE.Object3D();
     next.position.z = -lengths[i];
@@ -294,9 +359,32 @@ function buildGlove(materials, opts = {}) {
  */
 function buildThumb(materials, scale = 1, spec = THUMB) {
   const root = new THREE.Object3D();
+  /**
+   * THE WEB. A thumb column rooted on the hand with nothing between it and the
+   * palm is a spur — there is a visible slot of background between the two, and
+   * on the support grip that slot is pointed straight at the camera. A real
+   * first web space is a sheet of muscle and skin that spans from the thumb's
+   * metacarpal to the index MCP and stretches as the thumb abducts.
+   *
+   * It hangs off the ROOT rather than off the first flexion joint, so it opens
+   * with abduction (which is right) and does not swing when the thumb curls
+   * (which would tear it off the palm).
+   */
+  const web = blob(0.019 * scale, 0.0225 * scale, 0.03 * scale, 0.007 * scale, 3);
+  web.scale(1, 0.62, 1);
+  web.rotateY(0.5);
+  web.translate(-0.007 * scale, -0.002 * scale, -0.013 * scale);
+  root.add(new THREE.Mesh(web, materials.glove));
+
   const j1 = new THREE.Object3D();
   root.add(j1);
-  const s1 = new THREE.Mesh(segment(spec.l0 * scale, spec.r0 * scale, spec.r1 * scale), materials.glove);
+  const s1 = new THREE.Mesh(
+    mergeAll([
+      segment(spec.l0 * scale, spec.r0 * scale, spec.r1 * scale),
+      knuckleBoss(spec.r0 * scale),
+    ]),
+    materials.glove
+  );
   j1.add(s1);
   j1.add(new THREE.Mesh(segmentPad(spec.l0 * scale, spec.r0 * scale), materials.pad));
   // Seams down both flanks, as on the fingers — the thumb is the widest single
@@ -313,7 +401,13 @@ function buildThumb(materials, scale = 1, spec = THUMB) {
   const j2 = new THREE.Object3D();
   j2.position.z = -spec.l0 * scale;
   j1.add(j2);
-  const s2 = new THREE.Mesh(segment(spec.l1 * scale, spec.r1 * scale, spec.r2 * scale), materials.glove);
+  const s2 = new THREE.Mesh(
+    mergeAll([
+      segment(spec.l1 * scale, spec.r1 * scale, spec.r2 * scale),
+      knuckleBoss(spec.r1 * scale),
+    ]),
+    materials.glove
+  );
   j2.add(s2);
   // Grip patch on the PALMAR side of the pad, matching the fingers, and a small
   // dorsal nail plate.
@@ -690,7 +784,13 @@ export class Arm {
   fitToCylinder(handPos, handQuat, axisPoint, axisDir, radius, opts = {}) {
     const clearance = opts.clearance ?? 0.001;
     const poseName = opts.poseName ?? this.pose;
-    const base = this.poses[poseName] ?? HAND_POSES[poseName] ?? HAND_POSES.clamp;
+    // The AUTHORED pose the solve starts from. It is not `poseName`: that is
+    // the per-weapon name the result is stored under (`cup:pistol`), which by
+    // definition is not in HAND_POSES yet, so reading the seed from it silently
+    // fell back to `clamp` — a carbine C-clamp used as the starting guess for
+    // every hand on every weapon, including the pistol's cup.
+    const src = opts.base ?? poseName;
+    const base = this.poses[src] ?? HAND_POSES[src] ?? HAND_POSES.clamp;
 
     this.hand.position.copy(handPos);
     this.hand.quaternion.copy(handQuat);

@@ -197,6 +197,17 @@ export function buildPistol() {
 
   /* ---- moving parts --------------------------------------------------- */
   const slideAsm = new Assembly('pistol-slide');
+  // Optic geometry first, because the IRONS ARE BUILT TO ITS CENTRE HEIGHT.
+  // A slide-mounted reflex and standard-height sights cannot both be used; the
+  // irons have to clear the window, which is what "suppressor height" means.
+  // Everything here is in SLIDE space (bore at y=0); the slide's rest node adds
+  // `bore` back to get weapon space.
+  const reflexH = 0.021;
+  const reflexLen = 0.0455;
+  const reflexBase = slideH * 0.5 + 0.0018;
+  const reflexZ = zSlideRear - 0.038;
+  /** Optic centre, slide space — and therefore the iron sight line as well. */
+  const sightTop = reflexBase + reflexH * 0.56;
   const slide = buildSlide(slideAsm, {
     w: slideW,
     h: slideH,
@@ -204,18 +215,19 @@ export function buildPistol() {
     // Nitrided, not bare steel: a slide is one big flat facing the sky.
     mat: 'steel_black',
     zRear: zSlideRear,
+    sightTop,
   });
   // Slide-mounted mini reflex, in a milled pocket behind the rear sight.
   const reflex = buildMiniReflex(slideAsm, {
     w: 0.0246,
-    h: 0.021,
-    len: 0.0455,
-    y: slideH * 0.5 + 0.0018,
-    z: zSlideRear - 0.038,
+    h: reflexH,
+    len: reflexLen,
+    y: reflexBase,
+    z: reflexZ,
     matBody: 'alu_fine',
   });
-  const opticY = bore + slideH * 0.5 + 0.0018 + 0.021 * 0.56;
-  const opticZ = zSlideRear - 0.038 + 0.0455 * 0.14;
+  const opticY = bore + sightTop;
+  const opticZ = reflexZ + reflexLen * 0.14;
 
   const magazine = new Assembly('pistol-mag');
   const mag = buildMagazine(magazine, null, {
@@ -262,18 +274,57 @@ export function buildPistol() {
       ejectDir: [0.82, 0.52, 0.24],
       sight: [0, opticY, opticZ],
       sightAxis: [0, 0, -1],
-      ironSight: [0, bore + slideH * 0.5 + 0.0065, zSlideRear - 0.012],
+      /**
+       * The rear notch, at the SAME height as the optic centre and the front
+       * post — an absolute co-witness. Because the ADS solve puts `sight` on
+       * the camera axis with an identity-ish rotation, and all three landmarks
+       * now share y = bore + 0.02596, the notch shoulders, the post top and the
+       * dot project to the same pixel at the crosshair. See defs.js.
+       */
+      ironSight: [0, bore + sightTop, zSlideRear - 0.012],
+      /** Rear notch to front post: the sight radius the picture is scaled by. */
+      sightRadius: (zSlideRear - 0.012) - (zSlideFront + 0.014),
       // Wrist targets (see models/rifle.js for the derivation).
       gripR: {
         pos: [0.028, 0.003, 0.07],
         finger: [0, -0.315, -0.949],
         back: [0.98, 0, -0.2],
       },
-      /** Support hand cups the firing hand rather than the frame. */
+      /**
+       * SUPPORT HAND — cups the firing hand, and now actually CLOSES on it.
+       *
+       * MEASURED against `supportCylinder` below (the grip plus the firing
+       * hand's own fingers wrapped round it, a 60 mm column on the grip axis).
+       * The old target put the support knuckle line
+       *   contact = pos + 0.098 * finger = (0.0033, -0.0394, -0.0122)
+       * which is 46.3 mm from that column's axis — 16 mm of daylight outside a
+       * 30 mm radius, with nothing for the fingers to close on, which is the
+       * whole of "the support hand floats near the slide". The target is moved
+       * 16.3 mm straight down the perpendicular so the contact lands 30 mm out,
+       * i.e. 2 mm inside the surface, and the per-fingertip solve then runs
+       * against it exactly as it does on the carbines. That is 1 mm in x, 5 mm
+       * in y and 15 mm in z from the old pose — the hand does not move
+       * anywhere the camera can notice, it just arrives at something solid.
+       */
       gripL: {
-        pos: [-0.03, -0.012, 0.076],
+        pos: [-0.0312, -0.0069, 0.0914],
         finger: [0.34, -0.28, -0.9],
         back: [0.15, 0.93, -0.33],
+      },
+      /**
+       * What the support hand closes on: not the frame — the firing hand.
+       *
+       * A two-handed pistol grip has the support fingers wrapped over the
+       * FIRING hand's fingers, so the cylinder is the grip (30.5 mm wide) plus
+       * a wrapped finger diameter either side: a 60 mm column on the grip's own
+       * raked axis. `dir` is the grip rake, (0, -cos 0.32, sin 0.32).
+       */
+      supportCylinder: {
+        axis: [0, bore - 0.0615, 0.0318],
+        dir: [0, -0.949, 0.315],
+        r: 0.03,
+        z0: 0.06,
+        z1: -0.01,
       },
       magSeat: { pos: [0, bore - 0.03, 0.019], rot: [-gripAngle, 0, 0] },
       magDrop: [0, -0.42, 0.05],

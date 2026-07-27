@@ -7,6 +7,7 @@ import { WEAPON_DEFS, buildRecoilPattern, SPREAD_MODS } from './defs.js';
 import { buildRifle } from './models/rifle.js';
 import { buildSmg } from './models/smg.js';
 import { buildPistol } from './models/pistol.js';
+import { buildKnife } from './models/knife.js';
 import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
 
 /**
@@ -21,7 +22,9 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  *   parts.js      real firearm components built from published dimensions:
  *                 receivers, barrels, muzzle devices, handguards, stocks,
  *                 grips, magazines, optics, iron sights, triggers.
- *   models/*.js   the three weapons assembled from those parts.
+ *   models/*.js   the four weapons assembled from those parts — three firearms
+ *                 and the combat knife (a `class: 'melee'` weapon with no
+ *                 magazine, no reserve, no fire mode and no ADS).
  *   hands.js      gloved hands + sleeved arms, two-bone IK from the hand.
  *   viewmodel.js  the animation stack (sway/bob/lag/recoil/ADS/clips).
  *   clips.js      keyframed reload / inspect / draw timelines.
@@ -37,9 +40,11 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  *   wp.spreadDegrees      live cone half-angle — drive the crosshair gap with it
  *   wp.adsProgress        0..1
  *   wp.reloading / wp.firing / wp.switching / wp.inspecting
- *   wp.weaponIds          ['rifle','smg','pistol']
+ *   wp.weaponIds          ['rifle','smg','pistol','knife']
+ *   wp.isMelee / wp.swinging
  *   wp.setWeapon(id)      draw/holster animated swap
  *   wp.nextWeapon()
+ *   wp.meleeAttack('slash'|'stab')   blade only; traces on the impact frame
  *   wp.cycleFireMode()
  *   wp.reload()           no-op if full or empty of reserve
  *   wp.inspect()
@@ -109,6 +114,18 @@ export class WeaponSystem {
     this._pendingShots = 0;
     this._pendingFirst = false;
 
+    // ---- melee (preallocated; the strike runs inside a clip callback) ----
+    this._meleeKind = 'slash';
+    this._meleeCooldown = 0;
+    this._meleePart = null;
+    this._meleeOrigin = new THREE.Vector3();
+    this._meleeDir = new THREE.Vector3();
+    this._meleePoint = new THREE.Vector3();
+    this._meleePayload = {
+      target: null, amount: 0, headshot: false, part: 'torso',
+      killed: false, point: null, source: null,
+    };
+
     // Deferred shell ejections (a case leaves the port a few ms after the shot).
     this._shellQueue = [];
     for (let i = 0; i < 8; i++) {
@@ -129,6 +146,7 @@ export class WeaponSystem {
     this._hudState = {
       name: '', mode: 'auto', ammo: 0, reserve: 0, magSize: 0,
       reloading: false, reloadProgress: 0, ads: false, spread: 0, firing: false,
+      melee: false,
     };
   }
 
@@ -153,20 +171,26 @@ export class WeaponSystem {
     this.viewmodel.onClipEvent = (name, clip) => this._onClipEvent(name, clip);
 
     const t0 = performance.now();
-    const builders = { rifle: buildRifle, smg: buildSmg, pistol: buildPistol };
+    const builders = { rifle: buildRifle, smg: buildSmg, pistol: buildPistol, knife: buildKnife };
     let tris = 0;
-    for (const id of ['rifle', 'smg', 'pistol']) {
+    for (const id of ['rifle', 'smg', 'pistol', 'knife']) {
       const def = { ...WEAPON_DEFS[id] };
-      def.cycleTime = 60 / def.rpm;
+      const melee = def.class === 'melee';
+      if (!melee) def.cycleTime = 60 / def.rpm;
       const model = builders[id]();
       const entry = this.viewmodel.addWeapon(model, def);
       tris += entry.tris;
+      if (melee) console.info(`[weapons] ${id}: ${entry.tris} tris`);
       this.states.set(id, {
         def,
-        pattern: buildRecoilPattern(def, Rng),
-        mag: def.magSize,
-        chambered: true,
-        reserve: def.reserve,
+        // A melee weapon has no recoil pattern to generate and no ammunition.
+        // 0/0/0 here is not a fake ammo count — it is what `ammo` reports as
+        // `empty: true, magSize: 0`, which is the flag the HUD reads to print
+        // an em dash instead of a number.
+        pattern: melee ? null : buildRecoilPattern(def, Rng),
+        mag: melee ? 0 : def.magSize,
+        chambered: !melee,
+        reserve: melee ? 0 : def.reserve,
         mode: def.modes[0],
         modeIndex: 0,
       });
@@ -217,10 +241,17 @@ export class WeaponSystem {
       inMag: mag,
       chambered: s.chambered,
       reserve: s.reserve,
-      magSize: s.def.magSize,
+      // A melee weapon has no magSize at all; 0 is what says "this weapon does
+      // not take ammunition", which is different from "this magazine is empty".
+      magSize: s.def.magSize ?? 0,
       total: mag + ch + s.reserve,
       empty: mag + ch === 0,
     };
+  }
+
+  /** True when the active weapon is a blade — no ammo, no fire mode, no ADS. */
+  get isMelee() {
+    return this.current?.class === 'melee';
   }
 
   get fireMode() {
@@ -270,6 +301,10 @@ export class WeaponSystem {
     const vm = this.viewmodel;
     h.name = s.def.label ?? s.def.id;
     h.mode = s.mode;
+    // `ui` prints an em dash for the count and hides the pip strip when this is
+    // set — see ui/ammo.js. Without it a knife reads "0 / 0" with an empty
+    // magazine strip and a flashing PRESS R TO RELOAD.
+    h.melee = s.def.class === 'melee';
     // `a.mag` counts the chambered round, so a topped-off rifle is 31. The HUD
     // draws one pip per round against magSize, so clamp the *display* to the
     // magazine capacity rather than overflowing the pip strip.
@@ -318,6 +353,7 @@ export class WeaponSystem {
   reload() {
     const s = this.state;
     if (!s || this.reloading || this.switching) return false;
+    if (s.def.class === 'melee') return false;
     if (s.mag >= s.def.magSize || s.reserve <= 0) return false;
     this.viewmodel.stopClip();
     const empty = s.mag === 0 && !s.chambered;
@@ -334,6 +370,7 @@ export class WeaponSystem {
    */
   resetAmmo() {
     for (const s of this.states.values()) {
+      if (s.def.class === 'melee') continue; // nothing to refill
       s.mag = s.def.magSize;
       s.chambered = true;
       s.reserve = s.def.reserve;
@@ -464,6 +501,104 @@ export class WeaponSystem {
   }
 
   /* ====================================================================== */
+  /*  melee                                                                 */
+  /* ====================================================================== */
+
+  /**
+   * Start a swing. `kind` is 'slash' (LMB) or 'stab' (RMB).
+   *
+   * Nothing is traced here — the clip's `meleeimpact` beat calls
+   * `_meleeStrike`, so the damage lands on the frame the edge is at full
+   * extension on screen (130 ms into a slash, 210 ms into a stab). Damaging on
+   * the button press and animating afterwards is the standard melee bug and it
+   * is what makes a knife feel like a hitscan pistol.
+   */
+  meleeAttack(kind = 'slash') {
+    const s = this.state;
+    if (!s || s.def.class !== 'melee') return false;
+    if (this.switching || this._meleeCooldown > 0) return false;
+    const spec = s.def.melee?.[kind];
+    if (!spec) return false;
+    this.viewmodel.stopClip();
+    this._meleeKind = kind;
+    this._meleeCooldown = spec.cycle;
+    this.viewmodel.play(kind);
+    return true;
+  }
+
+  get swinging() {
+    const n = this.viewmodel?.clipName;
+    return n === 'slash' || n === 'stab';
+  }
+
+  /**
+   * THE IMPACT FRAME. Two queries, because neither one alone is enough:
+   *
+   *  1. `sphereCast` sweeps a 160-180 mm sphere through the STATIC world only
+   *     (physics/index.js capsuleCast goes to `staticWorld.sweepCapsule` and
+   *     never visits the collider list), so it answers "how far can the blade
+   *     travel before it hits a wall" and nothing else. Without it a swing
+   *     through a doorframe kills the man on the other side of it.
+   *  2. Dynamic hitboxes — the AI's per-part capsules, which are what carry
+   *     `owner` and `part` — are only tested by `raycast`. So the actor query
+   *     is a five-ray fan: the centre line plus four rays offset by the swing
+   *     radius in screen right/up, which approximates the swept sphere to
+   *     within the radius and costs four extra rays ONCE PER SWING, not per
+   *     frame.
+   *
+   * Nearest actor inside the wall distance wins. `source` is required on the
+   * payload: `ai` reads it for friendly fire and kill credit, and `match` reads
+   * it for the scoreboard (see ARCHITECTURE.md).
+   */
+  _meleeStrike() {
+    const s = this.state;
+    const spec = s?.def.melee?.[this._meleeKind];
+    if (!spec) return false;
+    const phys = this.physics ?? (this.physics = this.ctx.peek('physics'));
+    if (!phys) return false;
+
+    const cam = this.ctx.camera;
+    cam.updateMatrixWorld();
+    const origin = this._meleeOrigin.setFromMatrixPosition(cam.matrixWorld);
+    const dir = this._meleeDir.set(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
+    this._right.set(1, 0, 0).applyQuaternion(cam.quaternion);
+    this._up.set(0, 1, 0).applyQuaternion(cam.quaternion);
+
+    // 1 — how far the blade can actually travel.
+    const wall = phys.sphereCast(origin, dir, spec.radius, spec.reach, phys.MASK.BULLET);
+    const maxDist = wall.hit ? Math.min(spec.reach, wall.distance + spec.radius) : spec.reach;
+
+    // 2 — the fan.
+    let best = null;
+    let bestD = Infinity;
+    for (let i = 0; i < 5; i++) {
+      const ox = i === 1 ? -spec.radius : i === 2 ? spec.radius : 0;
+      const oy = i === 3 ? -spec.radius : i === 4 ? spec.radius : 0;
+      this._tmp.copy(origin).addScaledVector(this._right, ox).addScaledVector(this._up, oy);
+      const h = phys.raycast(this._tmp, dir, maxDist, phys.MASK.BULLET);
+      if (!h.hit || !h.actor || h.distance >= bestD) continue;
+      bestD = h.distance;
+      // The hit record comes out of a 64-deep ring pool, so the two fields that
+      // outlive this loop are copied out rather than stashed by reference.
+      best = h.actor;
+      this._meleePoint.copy(h.point);
+      this._meleePart = h.part;
+    }
+    if (!best) return false;
+
+    const p = this._meleePayload;
+    p.target = best;
+    p.amount = spec.damage;
+    p.headshot = this._meleePart === 'head';
+    p.part = this._meleePart ?? 'torso';
+    p.killed = false;
+    p.point = this._meleePoint;
+    p.source = this.player ?? this.ctx.peek('player') ?? 'player';
+    this.ctx.events.emit('damage:dealt', p);
+    return true;
+  }
+
+  /* ====================================================================== */
   /*  reload / clip callbacks                                               */
   /* ====================================================================== */
 
@@ -488,6 +623,9 @@ export class WeaponSystem {
         break;
       case 'boltrelease':
         this.viewmodel.boltHold = 0;
+        break;
+      case 'meleeimpact':
+        this._meleeStrike();
         break;
       case 'end':
         if (isReload) {
@@ -624,6 +762,8 @@ export class WeaponSystem {
     this._sinceShot += dt;
     if (this._fireTimer > 0) this._fireTimer -= dt;
     if (this._burstCooldown > 0) this._burstCooldown -= dt;
+    if (this._meleeCooldown > 0) this._meleeCooldown -= dt;
+    const melee = def.class === 'melee';
 
     // ---- spread recovery -------------------------------------------------
     const rest = this._restSpread(def, player, st);
@@ -632,7 +772,12 @@ export class WeaponSystem {
 
     // ---- gather state ----------------------------------------------------
     const live = !input.frozen && input.enabled !== false && this.debugMode === null;
-    st.ads = live ? input.ads || player?.adsRequested === true : this.debugMode === 'ads';
+    // RMB is the heavy attack on a blade, not an aim request.
+    st.ads = melee
+      ? false
+      : live
+        ? input.ads || player?.adsRequested === true
+        : this.debugMode === 'ads';
     st.sprint = live ? player?.sprinting === true && this._sinceShot > 0.3 : false;
     st.speed = player?.horizontalSpeed ?? player?.speed ?? 0;
     st.crouch = player?.stance === 'crouch';
@@ -645,17 +790,29 @@ export class WeaponSystem {
       if (input.actionPressed('reload')) this.reload();
       if (input.pressed('KeyB')) this.cycleFireMode();
       if (input.pressed('KeyI')) this.inspect();
+      /**
+       * SLOTS: 1 primary, 2 sidearm, 3 knife — Sudden Attack's own layout.
+       *
+       * The SMG stays reachable on the mouse wheel, which cycles all four in
+       * `weaponIds` order (rifle, smg, pistol, knife). Tab is NOT touched: it
+       * is the scoreboard in this build.
+       */
       if (input.pressed('Digit1')) this.setWeapon('rifle');
-      if (input.pressed('Digit2')) this.setWeapon('smg');
-      if (input.pressed('Digit3')) this.setWeapon('pistol');
-      // NOTE: Tab used to cycle weapons. In this build it opens the scoreboard,
-      // as it does in Sudden Attack. 1/2/3 and the mouse wheel still swap.
+      if (input.pressed('Digit2')) this.setWeapon('pistol');
+      if (input.pressed('Digit3')) this.setWeapon('knife');
       if (input.wheel) this.nextWeapon();
       if (!this.locked) {
-        this._runTrigger(dt, input.fire, input.firePressed, def, s);
-        st.trigger = input.fire && this.canFire();
-        // Auto-reload on a dry trigger pull, like every modern shooter.
-        if (input.firePressed && st.empty) this.reload();
+        if (melee) {
+          // LMB quick slash, RMB heavy stab.
+          if (input.firePressed) this.meleeAttack('slash');
+          else if (input.pressed('Mouse2')) this.meleeAttack('stab');
+          st.trigger = false;
+        } else {
+          this._runTrigger(dt, input.fire, input.firePressed, def, s);
+          st.trigger = input.fire && this.canFire();
+          // Auto-reload on a dry trigger pull, like every modern shooter.
+          if (input.firePressed && st.empty) this.reload();
+        }
       } else {
         st.trigger = false;
       }

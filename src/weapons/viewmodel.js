@@ -322,9 +322,26 @@ export class Viewmodel {
     const meshes = [];
     const bake = this.mats.lib?.bakeMasks?.bind(this.mats.lib) ?? null;
 
-    const build = (asm, parent, wearScale = 1) => {
+    /**
+     * `wearScale` may be a number or a per-material map.
+     *
+     * The map exists because of the knife. `bakeMasks` measures convexity per
+     * VERTEX, and a lofted blade (geometry.js loftZ) has no interior vertices
+     * anywhere — every one of them sits on a section outline, so every one
+     * measures fully convex and the whole blade comes out at the wear layer's
+     * full amplitude. On a rail tooth that reads as a bright comb (see the note
+     * below); on a 125 x 30 mm flat it reads as WHITE PAPER, which is exactly
+     * what the first capture measured. The masks are still baked — the grime
+     * and AO layers are what put dirt in the fuller and along the guard — the
+     * wear layer alone is turned down.
+     */
+    const scaleFor = (wearScale, matKey) =>
+      typeof wearScale === 'object' ? wearScale[matKey] ?? 1 : wearScale;
+
+    const build = (asm, parent, wear = 1) => {
       const map = asm.build();
       for (const [matKey, geo] of map) {
+        const wearScale = scaleFor(wear, matKey);
         // Curvature masks: convex chamfers wear to bright metal, creases fill
         // with grime. This is what stops the gun reading as clean plastic.
         if (bake) {
@@ -382,7 +399,7 @@ export class Viewmodel {
       }
     };
 
-    build(model.body, group);
+    build(model.body, group, model.wearScale ?? 1);
 
     const parts = {};
     for (const [name, asm] of Object.entries(model.moving)) {
@@ -443,7 +460,9 @@ export class Viewmodel {
       triggerPull: model.nodes.triggerPull ?? -0.3,
       magLen: model.magSize?.len ?? 0.2,
       shell: model.shell,
-      lhandPose: model.id === 'pistol' ? 'cup' : 'clamp',
+      // A weapon may name its own support-hand pose; the knife's hand is off
+      // the weapon entirely and stays open.
+      lhandPose: model.nodes.lhandPose ?? (model.id === 'pistol' ? 'cup' : 'clamp'),
       /**
        * The SHOOTING hand's pose is per-weapon too now. It used to be the one
        * authored `grip` for everything, which is a pistol-grip pose: on a knife
@@ -482,20 +501,30 @@ export class Viewmodel {
    * so a mask of 0.9 is the 0.55 multiply asked for.
    */
   _fitSupportHand(w) {
-    const hg = w.model.nodes.handguard;
+    /**
+     * The pistol used to be excluded outright, and that exclusion is the whole
+     * of "the support hand floats near the slide instead of closing on it": its
+     * `cup` pose is authored curls, aimed at nothing, so the four fingertips
+     * ended up wherever 1.05-1.20 rad of curl put them. There IS a cylinder to
+     * close on — the shooting hand's own finger column wrapped round the front
+     * strap — and `supportCylinder` on the model is it, so the pistol now goes
+     * through exactly the same per-fingertip solve the carbines do.
+     */
+    const hg = w.model.nodes.handguard ?? w.model.nodes.supportCylinder;
     const gL = w.gripL;
-    if (!hg || !gL || w.id === 'pistol') return;
+    if (!hg || !gL) return;
     this._handPosL.fromArray(gL.pos);
     handBasis(this._handQuatL, gL.finger ?? [0.82, 0.5, -0.28], gL.back ?? [-0.5, 0.32, -0.8]);
-    const poseName = `clamp:${w.id}`;
-    this.armL.setPose('clamp');
+    const basePose = w.lhandPose ?? 'clamp';
+    const poseName = `${basePose}:${w.id}`;
+    this.armL.setPose(basePose);
     const contacts = this.armL.fitToCylinder(
       this._handPosL,
       this._handQuatL,
       hg.axis,
       hg.dir,
       hg.r,
-      { clearance: 0.001, poseName }
+      { clearance: 0.001, poseName, base: basePose }
     );
     w.lhandPose = poseName;
     // Only keep contacts that actually landed on the handguard's own extent —
@@ -506,6 +535,42 @@ export class Viewmodel {
     this.armL.bakeContactAO(kept, 0.012, 0.7);
     this._bakeContactAOOnWeapon(w, kept, 0.012, 0.9);
     this.armL.setPose(poseName);
+  }
+
+  /**
+   * GROUND THE SHOOTING HAND ON THE HANDLE — the same build-time solve the
+   * support hand gets, for weapons that declare a `gripCylinder`.
+   *
+   * A pistol grip is a tapered slab and the authored `grip` pose is right for
+   * it. A knife handle is a 21 x 27 mm oval cylinder held in a hammer grip, and
+   * the fingers have to wrap 200+ degrees of it — 1.15/1.20/0.62 rad of curl
+   * (HAND_POSES.grip) closes about 170 deg on a 34 mm section and therefore
+   * buries every fingertip inside a 24 mm one. Fitting per fingertip against
+   * the real cylinder is the same fix, applied to the other hand.
+   */
+  _fitShootingHand(w) {
+    const cyl = w.model.nodes.gripCylinder;
+    const gR = w.gripR;
+    if (!cyl || !gR) return;
+    this._handPos.fromArray(gR.pos);
+    handBasis(this._handQuat, gR.finger ?? [0, -0.35, -0.94], gR.back ?? [0.95, 0.25, 0.18]);
+    const poseName = `grip:${w.id}`;
+    this.armR.setPose('grip');
+    const contacts = this.armR.fitToCylinder(
+      this._handPos,
+      this._handQuat,
+      cyl.axis,
+      cyl.dir,
+      cyl.r,
+      { clearance: 0.001, poseName, base: 'grip' }
+    );
+    w.rhandPose = poseName;
+    const z0 = Math.max(cyl.z0, cyl.z1);
+    const z1 = Math.min(cyl.z0, cyl.z1);
+    const kept = contacts.filter((p) => p.z <= z0 + 0.012 && p.z >= z1 - 0.012);
+    this.armR.bakeContactAO(kept, 0.012, 0.7);
+    this._bakeContactAOOnWeapon(w, kept, 0.012, 0.9);
+    this.armR.setPose(poseName);
   }
 
   /**
@@ -551,8 +616,9 @@ export class Viewmodel {
     this.boltHold = 0;
     this.magInHand = 0;
     this.magVisible = true;
-    this.armR.setPose('grip');
-    // The FITTED clamp for this weapon, not the authored one — see _fitSupportHand.
+    // The FITTED poses for this weapon, not the authored ones — see
+    // _fitShootingHand / _fitSupportHand.
+    this.armR.setPose(w.rhandPose ?? 'grip');
     this.armL.setPose(w.lhandPose ?? (id === 'pistol' ? 'cup' : 'clamp'));
     return w;
   }
@@ -689,7 +755,10 @@ export class Viewmodel {
 
     /* -------- blends --------------------------------------------------- */
     const adsRate = 1 / Math.max(0.05, def.adsTime);
-    const wantAds = this.clip && this.clip.name !== 'draw' ? 0 : s.ads ? 1 : 0;
+    // `ads: false` in the def is a hard gate, not a preference: a knife has no
+    // sight node to solve against, and RMB is its heavy attack.
+    const canAds = def.ads !== false && w.sight;
+    const wantAds = !canAds || (this.clip && this.clip.name !== 'draw') ? 0 : s.ads ? 1 : 0;
     this.adsTarget = wantAds;
     // Linear rate with a smootherstep shaping: a spring here reads as mushy.
     this.adsT = clamp01(this.adsT + (wantAds ? adsRate : -adsRate * 1.25) * dt);
@@ -729,8 +798,12 @@ export class Viewmodel {
       this._baseQuat.slerp(this._tmpQuat, this.lowReadyT);
     }
 
-    /* -------- ADS pose: solved, not authored --------------------------- */
-    if (ads > 1e-4) {
+    /* -------- ADS pose: solved, not authored ---------------------------
+     * `canAds` gates the SOLVE as well as the target. Gating only the target
+     * is not enough: swapping from an aimed pistol to the knife leaves adsT
+     * mid-decay for a couple of frames, and the solve would then dereference a
+     * sight node the knife does not have. */
+    if (ads > 1e-4 && canAds) {
       const cant = def.adsCant;
       _e.set(cant[0], cant[1], cant[2], 'XYZ');
       this._adsQuat.setFromEuler(_e);
@@ -926,7 +999,9 @@ export class Viewmodel {
       const inHand = res.active ? res.parts.mag : 0;
       this.magVisible = res.active ? res.parts.magVisible : true;
       p.magazine.visible = this.magVisible;
-      if (inHand > 1e-4) {
+      if (!w.magSeatPos) {
+        // no magazine on this weapon at all
+      } else if (inHand > 1e-4) {
         // Follow the support hand: the magazine is gripped by its spine.
         this._magFromHand(w, p.magazine, inHand);
       } else {
@@ -962,8 +1037,14 @@ export class Viewmodel {
     const gR = w.gripR;
     this._handPos.fromArray(gR.pos);
     handBasis(this._handQuat, gR.finger ?? [0, -0.35, -0.94], gR.back ?? [0.95, 0.25, 0.18]);
+    const rPose = w.rhandPose ?? 'grip';
+    if (rPose !== this.armR.pose) this.armR.setPose(rPose);
     this.armR.solve(this._handPos, this._handQuat);
-    this.armR.setTrigger(this.triggerT);
+    // setTrigger overwrites the index finger's three joints every frame. On a
+    // weapon with no trigger group that would straighten the one finger the
+    // fingertip solve just wrapped around the handle, and it is the finger
+    // nearest the guard — the one the camera sees.
+    if (w.hasTrigger !== false) this.armR.setTrigger(this.triggerT);
 
     // ---- support hand: grip, or wherever the clip puts it ----
     const gL = w.gripL;
@@ -1073,7 +1154,7 @@ export class Viewmodel {
 
   ejectWorld(out) {
     const w = this.active;
-    if (!w) return out.set(0, 0, 0);
+    if (!w || !w.eject) return out.set(0, 0, 0);
     w.group.updateMatrixWorld();
     out.copy(w.eject).applyMatrix4(w.group.matrixWorld);
     return out;
@@ -1081,7 +1162,7 @@ export class Viewmodel {
 
   ejectVelocity(out, speed = 2.6) {
     const w = this.active;
-    if (!w) return out.set(0, 0, 0);
+    if (!w || !w.eject) return out.set(0, 0, 0);
     out.copy(w.ejectDir).transformDirection(w.group.matrixWorld).multiplyScalar(speed);
     return out;
   }

@@ -255,13 +255,58 @@ export const WEAPON_DEFS = {
     drawTime: 0.42,
     holsterTime: 0.3,
     /* A pistol is held out on the arms rather than braced on the shoulder, so
-     * the hip pose is FURTHER from the eye than a carbine's and the ADS eye
-     * relief is most of an arm's length. 0.34 m keeps both elbows visibly bent;
-     * past ~0.40 m the two-bone solve hits full extension and they lock. */
+     * the hip pose is FURTHER from the eye than a carbine's. */
     hipPos: [0.115, -0.15, -0.34],
     hipRot: [-0.05, 0.066, -0.115],
-    adsCant: [0, 0, 0.003],
-    eyeRelief: 0.34,
+    /**
+     * ADS CANT IS ZERO, ON PURPOSE.
+     *
+     * It was 0.003 rad, and the reason it can go is the same reason everything
+     * below works: the ADS solve puts ONE point (`sight`) on the camera axis
+     * and takes its orientation from this cant, so any non-zero roll rotates
+     * every OTHER landmark about that point. At the pistol's 157 mm sight
+     * radius, 0.003 rad moves the front post 0.47 mm across — 1.7 px at the
+     * distances below, which is a fifth of the post's width. On a red dot that
+     * is invisible; on a notch-and-post it is a visible lean.
+     */
+    adsCant: [0, 0, 0],
+    /**
+     * PISTOL ADS — MEASURED, and four separate things were wrong.
+     *
+     * Geometry, weapon space (bore at y = 0.036, slide top at 0.0484, sight
+     * radius 157 mm from the rear notch at z=+0.040 to the front post at
+     * z=-0.117), and screen maths at 1920x1080 with the ADS view FOV of
+     * 60 * 0.92 = 55.2 deg (half-height 0.5228|z|, 540 px):
+     *
+     * 1. THE IRONS WERE NEVER ON THE SIGHT LINE. The rig aligns `sight`, which
+     *    is the mini reflex's window centre at y = 0.06196. The rear notch sat
+     *    at 0.0551 and the front post top at 0.0570, so at full ADS they
+     *    projected to 22 px and 11 px BELOW the crosshair — and 11 px apart
+     *    from each other. The post could not sit in the notch and neither sat
+     *    on the aim point.
+     * 2. THE TWO SIGHT HEIGHTS DID NOT MATCH. Front post top 1.4 mm below the
+     *    rear blade top. A correct picture is post top flush with the notch
+     *    shoulders; 1.4 mm over 157 mm is 8.9 mrad, so eyeballing the picture
+     *    aimed 0.51 deg high no matter what the rig did.
+     * 3. THE OPTIC AND THE IRONS FOUGHT. Standard-height sights under a
+     *    slide-mounted reflex are unusable by construction — the window blocks
+     *    them. FIX: both irons are now built to the optic's own centre height
+     *    (parts.js buildSlide `sightTop`), an absolute co-witness, so the notch
+     *    shoulders, the post top and the emitter's dot all land on the SAME
+     *    pixel at the crosshair. Post 4.0 mm in a 4.4 mm notch = 0.60 of the
+     *    notch's angular width, i.e. ~2 px of light either side.
+     * 4. THE WHOLE PICTURE WAS A POSTAGE STAMP. At 0.34 m the 17.6 x 15.1 mm
+     *    window subtended 54 x 46 px — against the rifle's deliberately framed
+     *    336 px tube (see there) — and the notch was 13 px wide. 0.28 m puts
+     *    the window at 65 x 56 px, the notch at 16.3 px and the post at 9.7 px,
+     *    which is the smallest picture that still reads at 1080p.
+     *
+     * 0.28 m is safe for the arms: the shooting wrist lands 0.368 m from its
+     * shoulder, 58% of a 630 mm reach (it was 66% at 0.34 m), so both elbows
+     * keep a deep bend. The old note here warned that past ~0.40 m the two-bone
+     * solve locks — this moves in the other direction.
+     */
+    eyeRelief: 0.28,
     sprintPos: [0.09, -0.25, -0.28],
     sprintRot: [-0.42, 0.5, 0.14],
     lowReadyPos: [0.1, -0.26, -0.32],
@@ -326,35 +371,43 @@ export const WEAPON_DEFS = {
      * for the middle of the frame" is that the POINT must be, because the point
      * is the only part of a knife that says which way it is going.
      *
-     * Constraints, searched over pos x/y/z and rot x/y/z at 5 mm / 0.05 rad:
-     *   1. point projects to (1120, 560) at 1920x1080 — level with the
-     *      crosshair and 160 px right of it, i.e. converging on centre frame
-     *   2. blade axis 30.4 deg nose-UP and 16.7 deg left of view-forward
-     *   3. the guard on screen at (1243, 759) and the WRIST at (1481, 975), so
-     *      the guard, the scales and the gloved fist are all in frame — on a
-     *      weapon with no receiver and no magazine, the handle and the hand are
-     *      most of what there is to look at
-     *   4. |flat . viewZ| = 0.498: half of the blade's near flat faces the
-     *      camera, which is what lets the fuller and the swedge catch a
-     *      specular line instead of presenting the blade edge-on as a wire
-     *   5. edge canted (-0.62, -0.74) — down and outboard, so the polished
+     * THE FAILURE MODE IS FORESHORTENING, and the first solve walked straight
+     * into it. Aiming the blade close to view-forward (30 deg up, 17 deg left)
+     * projects only sin(34 deg) = 0.56 of its 125 mm, so plunge-to-point
+     * measured 185 px on screen against a fist 460 px across: measured on the
+     * first capture, the hand simply covered the knife. A blade has to be held
+     * ACROSS the view, not down it.
+     *
+     * Constraints, searched over pos x/y/z and rot x/y/z at 10 mm / 0.05 rad:
+     *   1. plunge-to-point spans 351 px at 1920x1080 — the blade is the
+     *      largest single thing in the frame's right half, which on a weapon
+     *      with no receiver and no magazine is the only thing that can be
+     *   2. blade axis 38.0 deg nose-UP and 59.9 deg left of view-forward, so
+     *      the point sweeps up and INTO the frame: point (1010, 360), plunge
+     *      (1295, 565), guard (1332, 642)
+     *   3. the fist centre projects to (1627, 623) and the wrist to (1881,
+     *      573) — 501 px from the blade's midpoint and hard against the right
+     *      edge, so the hand frames the weapon instead of hiding it
+     *   4. |flat . viewZ| = 0.860: the near flat is turned almost fully to the
+     *      camera, which is what lets the fuller, the swedge and the grind
+     *      line each catch their own specular band. Edge-on they are one wire.
+     *   5. edge canted (-0.52, -0.79) — down and outboard, so the polished
      *      bevel faces the key rather than the floor
-     *   6. point at 0.514 m and wrist at 0.292 m from the eye: nothing inside
-     *      the near plane, and the shooting arm at 57% extension (0.361 m of a
-     *      0.63 m reach), so the elbow keeps a deep bend.
+     *   6. point at 0.345 m, guard 0.289 m, wrist 0.207 m from the eye:
+     *      nothing inside the near plane, and the shooting arm at 52%
+     *      extension, so the elbow keeps a deep bend.
      */
-    hipPos: [0.13, -0.09, -0.38],
-    hipRot: [0.55, 0.25, -0.7],
+    hipPos: [0.13, -0.03, -0.28],
+    hipRot: [1.0, 0.75, -0.8],
     adsCant: [0, 0, 0],
-    /* Sprint: the blade drops and swings across the body — 28 deg of nose-up
-     * traded away and 21 deg more yaw, which takes the point from (1120, 560)
-     * to (971, 871), down-left and out of the sightline. Carried over by the
-     * same delta as the hip pose so the blend does not translate the knife
-     * sideways on the way into a sprint. */
-    sprintPos: [0.1, -0.175, -0.355],
-    sprintRot: [0.05, 0.62, -0.35],
-    lowReadyPos: [0.12, -0.16, -0.37],
-    lowReadyRot: [0.18, 0.32, -0.6],
+    /* Sprint: the blade drops and swings across the body — 31 deg of nose-up
+     * traded away and 14 deg more yaw, which takes the point down-left and out
+     * of the sightline. Carried over by the same delta as the hip pose so the
+     * blend does not translate the knife sideways on the way into a sprint. */
+    sprintPos: [0.1, -0.115, -0.255],
+    sprintRot: [0.46, 0.99, -0.45],
+    lowReadyPos: [0.12, -0.1, -0.27],
+    lowReadyRot: [0.62, 0.87, -0.72],
     swayScale: 1.25,
     bobScale: 1.2,
   },

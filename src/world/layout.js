@@ -1,25 +1,11 @@
 /**
  * WORLD — the map.
  *
- * A Middle-Eastern market street in the spirit of Crash / Backlot, cut into a
- * DEMOLITION layout: the main street still runs -Z, but it no longer runs
- * straight through. A covered market hall and the ruin opposite it stagger the
- * middle into a Z-dogleg, and two service lanes run north-south BEHIND the
- * building rows, so there are three ways from the attackers' end to the
- * objectives instead of one corridor.
- *
- *   MID    — down the street, past/through the market hall, across the 3 m
- *            crossing band between the hall and the collapsed east wing.
- *   WEST   — off the street at z≈+22 into the west lane (x≈-24), down past the
- *            courtyard and the mid alley into the DEPOT yard (site A).
- *   EAST   — off the street at z≈+23 into the east lane (x≈+24), down past the
- *            two alley rungs into the fuel YARD (site B).
- *
- * The two lanes only touch the street at their rungs, so a defender holding one
- * of the three cannot see the other two.
- *
- * All coordinates are in LEVEL space; the WorldSystem rotates the whole thing so
- * the street runs down the canonical hero-shot camera axis.
+ * A Middle-Eastern market street in the spirit of Crash / Backlot: one long
+ * main street running -Z, buildings tight to both kerbs, two flanking alleys, a
+ * plaza, and an arched gate closing the far vista. All coordinates are in LEVEL
+ * space; the WorldSystem rotates the whole thing so the street runs down the
+ * canonical hero-shot camera axis.
  *
  * Sides: 0 = -Z, 1 = +X, 2 = +Z, 3 = -X.
  */
@@ -32,83 +18,16 @@ export const STREET = {
   zMax: 46,
 };
 
-/**
- * Alleys and open ground, as rects [x0, z0, x1, z1]. They must not overlap each
- * other: each one lays a ground pad at the same height, and two pads on the same
- * plane z-fight. Every rect below therefore butts up against its neighbours.
- */
+/** Alleys and open ground, as rects [x0, z0, x1, z1]. */
 export const ALLEYS = [
-  // ------------------------------------------------------------- west route --
-  { rect: [-26, 20.2, -6.5, 24.2], surface: 'dirt' }, // rung 1: street -> west lane
-  { rect: [-26, 9.6, -21.5, 20.2], surface: 'dirt' }, // west lane, north leg
-  { rect: [-26, 5.6, -6.5, 9.6], surface: 'dirt' }, // rung 2: the west courtyard
-  { rect: [-26, -8.2, -21.5, 5.6], surface: 'dirt' }, // west lane, middle leg
-  { rect: [-26, -12.2, -6.5, -8.2], surface: 'dirt' }, // rung 3: the mid alley
-  { rect: [-26, -29.5, -16.5, -12.2], surface: 'gravel' }, // SITE A — the depot yard
-  { rect: [-16.5, -29.5, -6.5, -26], surface: 'dirt' }, // rung 4: depot -> street
-  { rect: [-26, -44, -21.5, -29.5], surface: 'dirt' }, // west lane, south leg
-  // ------------------------------------------------------------- east route --
-  { rect: [6.5, 21, 21.5, 25.5], surface: 'dirt' }, // rung 1: street -> east lane
-  { rect: [21.5, 2, 26, 25.5], surface: 'dirt' }, // east lane, north leg
-  { rect: [6.5, 2, 21.5, 7], surface: 'dirt' }, // rung 2: the market alley
-  { rect: [21.5, -20, 31, 2], surface: 'gravel' }, // SITE B — the fuel yard
-  { rect: [6.5, -15.5, 21.5, -12], surface: 'dirt' }, // rung 3: yard -> street
-  { rect: [21.5, -44, 26, -20], surface: 'dirt' }, // east lane, south leg
-  { rect: [6.5, -33, 21.5, -28.5], surface: 'dirt' }, // rung 4: lane -> street
-  // ------------------------------------------------------------------ south --
+  { rect: [-27, -12.2, -6.5, -8.2], surface: 'dirt' }, // west alley (mid street)
+  { rect: [-26, 20.2, -6.5, 24.2], surface: 'dirt' }, // west alley (near)
+  { rect: [-25, 5.6, -6.5, 9.6], surface: 'dirt' }, // west courtyard — lets the
+  // late sun through onto the market, and flanks the main street
+  { rect: [6.5, 1.8, 29, 7.8], surface: 'dirt' }, // east alley — main flank
+  { rect: [6.5, -14.2, 29, -30.2], surface: 'gravel' }, // yard behind the ruin
   { rect: [-30, -50, 30, -44], surface: 'dirt' }, // far cross street
 ];
-
-/**
- * Solid masses that are NOT in BUILDINGS — the market hall and the collapsed
- * wing that stagger the middle of the street. `dressing.inBuilding()` tests
- * these too, so the street scatter does not drop crates inside their walls.
- *
- * Their geometry is built by `objective.js`.
- */
-export const MASSES = [
-  /**
-   * The covered market hall: enterable, two rooms, a dogleg through it.
-   *
-   * Its west edge is at -6.9, 0.4 m INSIDE W2's footprint, on purpose. Flush at
-   * -6.5 the two walls' outer faces would be exactly coplanar over ten metres of
-   * facade and z-fight the whole way; overlapping them makes it one solid union
-   * with no shared plane, and north of W2 the extra 0.4 m reads as a pilaster.
-   */
-  { id: 'HALL', x0: -6.9, z0: -2, x1: 1.5, z1: 8 },
-];
-
-/**
- * THE MARKET HALL — the mass that killed the one-corridor sightline.
- *
- * A single storey covered market straddling the west two thirds of the street.
- * It is passable, not a wall: three openings (north face, west face into the
- * courtyard, south face) and ONE interior cross wall placed so that no two
- * openings see each other. Walk in the north door and you have to come round the
- * east end of the cross wall to reach the south door.
- *
- * `wallH` is the clear height under the roof slab; the nav grid needs 1.78 m of
- * standing clearance, so this has three metres of headroom to spare.
- */
-export const HALL = {
-  x0: -6.9,
-  z0: -2,
-  x1: 1.5,
-  z1: 8,
-  t: 0.36, // wall thickness
-  wallH: 3.7, // clear height under the slab
-  floorY: 0.16, // a step up off the road camber
-  /** Openings, each [centre along the face, width]. */
-  doorN: [-2.75, 2.6], // x centre, on the z1 face
-  doorS: [-3.75, 2.6], // x centre, on the z0 face
-  doorW: [7.0, 2.2], // z centre, on the x0 face — straight into the courtyard
-  /** The cross wall: z of the wall, and the x it stops at (gap runs to x1). */
-  crossZ: 3.0,
-  crossX1: -1.0,
-};
-
-/** The collapsed wing opposite the hall: a ruin mass, no interior. */
-export const WING = { x0: 1.5, z0: -11, x1: 6.5, z1: -5, h: 4.6 };
 
 /**
  * Buildings. `w` is the X extent, `d` the Z extent.
@@ -208,13 +127,10 @@ export const BUILDINGS = [
     ],
   },
   {
-    // Narrowed and pushed toward the street so the DEPOT yard (site A) opens up
-    // behind it: its west face at x=-16.5 is the yard's east wall, and it is the
-    // wall the painted A is on.
     id: 'W3',
-    x: -11.5,
+    x: -13,
     z: -19,
-    w: 10,
+    w: 13,
     d: 14,
     floors: 2,
     wallKey: 'plaster_blue',
@@ -228,13 +144,11 @@ export const BUILDINGS = [
     roofProps: 2,
   },
   {
-    // Pulled south to open rung 4 (z -29.5..-26) between it and W3: the depot's
-    // second mouth, straight onto the street.
     id: 'W4',
-    x: -14,
-    z: -36,
-    w: 15,
-    d: 13,
+    x: -14.5,
+    z: -34.5,
+    w: 16,
+    d: 15,
     floors: 2,
     setback: { from: 1, depth: 2.8, side: 1 },
     wallKey: 'plaster_pink',
@@ -262,13 +176,11 @@ export const BUILDINGS = [
     roofProps: 3,
   },
   {
-    // Shortened so rung 1 (z 21..25.5) and rung 2 (z 2..7) both open off the
-    // street into the east lane.
     id: 'E1',
     x: 14,
-    z: 14,
+    z: 16,
     w: 15,
-    d: 14,
+    d: 16,
     floors: 3,
     wallKey: 'plaster_cream',
     streetSide: 3,
@@ -323,13 +235,11 @@ export const BUILDINGS = [
     roofProps: 5,
   },
   {
-    // Shortened at both ends: rung 3 (z -15.5..-12) drops out of the market onto
-    // site B, rung 4 (z -33..-28.5) is the defence's route up the east lane.
     id: 'E3',
     x: 14,
     z: -22,
     w: 15,
-    d: 13,
+    d: 16,
     floors: 2,
     wallKey: 'plaster_sand',
     streetSide: 3,
@@ -359,7 +269,7 @@ export const BUILDINGS = [
   {
     id: 'E4',
     x: 13.5,
-    z: -40,
+    z: -39,
     w: 14,
     d: 14,
     floors: 3,
@@ -382,22 +292,11 @@ export const BUILDINGS = [
    * survives on the east side of the gap.
    */
   { id: 'BS3', x: -4, z: -53, w: 9, d: 8, floors: 4, wallKey: 'plaster_sand', streetSide: 2, damage: 0.3, balconies: 0.2, roofProps: 4 },
-  /**
-   * The two back rows moved OUT to x=∓26/∓27 and grew in Z until they form one
-   * continuous wall each. That gap — between the back of the shop row and the
-   * face of these — is the west and east service lane, and the whole non-linear
-   * half of the map lives in it. `skipSides` is dropped on the lane faces: that
-   * face is now a wall a player walks along, so it gets the full facade
-   * programme (windows, doors, plinth, drainpipes) instead of nothing.
-   */
-  { id: 'BW1', x: -34, z: 9.5, w: 16, d: 25, floors: 3, wallKey: 'plaster_sand', streetSide: 1, damage: 0.15, doorBays: { 1: 2 }, roofProps: 3 },
-  { id: 'BW2', x: -35, z: -16.5, w: 18, d: 27, floors: 2, wallKey: 'plaster_cream', streetSide: 1, damage: 0.2, doorBays: { 1: 3 }, roofProps: 2 },
-  { id: 'BW3', x: -34, z: 30, w: 16, d: 16, floors: 2, wallKey: 'plaster_blue', streetSide: 1, damage: 0.2, roofProps: 2 },
-  { id: 'BW4', x: -34, z: -37, w: 16, d: 14, floors: 3, wallKey: 'plaster_pink', streetSide: 1, damage: 0.3, roofProps: 2 },
-  { id: 'BE1', x: 35, z: 15, w: 18, d: 26, floors: 3, wallKey: 'plaster_pink', streetSide: 3, damage: 0.15, doorBays: { 3: 2 }, roofProps: 3 },
-  { id: 'BE2', x: 38, z: -11.5, w: 14, d: 27, floors: 2, wallKey: 'plaster_blue', streetSide: 3, damage: 0.2, doorBays: { 3: 3 }, roofProps: 2 },
-  { id: 'BE3', x: 34, z: -32, w: 16, d: 24, floors: 3, wallKey: 'plaster_cream', streetSide: 3, damage: 0.25, roofProps: 2 },
-  { id: 'BE4', x: 34, z: 36, w: 16, d: 14, floors: 2, wallKey: 'plaster_sand', streetSide: 3, damage: 0.2, roofProps: 2 },
+  { id: 'BW1', x: -30, z: 8, w: 16, d: 22, floors: 3, wallKey: 'plaster_sand', streetSide: 1, damage: 0.15, skipSides: [1], roofProps: 3 },
+  { id: 'BW2', x: -31, z: -18, w: 18, d: 24, floors: 2, wallKey: 'plaster_cream', streetSide: 1, damage: 0.2, skipSides: [1], roofProps: 2 },
+  { id: 'BE1', x: 31, z: 18, w: 18, d: 20, floors: 3, wallKey: 'plaster_pink', streetSide: 3, damage: 0.15, skipSides: [3], roofProps: 3 },
+  { id: 'BE2', x: 32, z: -8, w: 18, d: 20, floors: 2, wallKey: 'plaster_blue', streetSide: 3, damage: 0.2, skipSides: [3], roofProps: 2 },
+  { id: 'BE3', x: 30, z: -34, w: 16, d: 18, floors: 3, wallKey: 'plaster_cream', streetSide: 3, damage: 0.25, skipSides: [3], roofProps: 2 },
   // BS1/BS2 pulled apart to make room for BS3 in the middle of the far skyline.
   { id: 'BS1', x: -19, z: -58, w: 20, d: 14, floors: 3, wallKey: 'plaster_sand', streetSide: 2, damage: 0.2, roofProps: 2 },
   { id: 'BS2', x: 14, z: -60, w: 24, d: 16, floors: 2, wallKey: 'plaster_blue', streetSide: 2, damage: 0.2, roofProps: 2 },
@@ -455,12 +354,12 @@ export const GATE = {
 export const SET_PIECES = {
   /** Market stalls: [x, z, ry, width] */
   stalls: [
-    [-3.2, 10.6, 0.08, 2.4],
-    [-2.6, 14.4, -0.05, 2.2],
+    [-3.2, 6.4, 0.08, 2.4],
+    [-3.0, 2.2, -0.05, 2.2],
     [3.1, 9.5, 3.2, 2.4],
     [3.4, 4.0, 3.05, 2.6],
-    [4.4, -1.2, 1.62, 2.3],
-    [-3.0, -8.6, 3.25, 2.2],
+    [-0.4, 2.6, 1.62, 2.3],
+    [3.0, -9.0, 3.25, 2.2],
     [-3.3, -14.5, 0.12, 2.4],
     [2.9, -20.0, 3.0, 2.3],
   ],
@@ -485,13 +384,9 @@ export const SET_PIECES = {
   ],
   /** Burnt-out vehicles: [x, z, ry, rollDeg] */
   wrecks: [
-    // Hard against the east kerb, running down Z: the landmark in the squeeze
-    // past the hall, and it must NOT close the squeeze — 3 m stays open west of
-    // it, which is the whole of mid's east approach.
-    [5.5, 1.0, 0.06, 0],
+    [2.5, 0.5, 0.42, 0],
     [-2.8, -28.5, -2.6, 4],
     [4.9, 24.0, 1.5, 0],
-    [-19.6, -16.4, 0.28, 4], // the burnt-out truck in the depot yard, site A
   ],
   /** Palm trees: [x, z, scale] */
   palms: [
@@ -525,17 +420,17 @@ export const SET_PIECES = {
     // Kept off the main sightline and up at balcony height: lines that cross the
     // street at eye level clutter the vista and read as floating cards.
     [6.35, 3.6, 9.0, 6.35, 3.75, 14.2],
-    [-6.35, 3.7, -20.0, -6.35, 3.6, -15.4],
+    [-6.35, 3.7, 1.0, -6.35, 3.6, 5.4],
     [-6.35, 6.6, -20.5, -6.35, 6.4, -15.5],
-    [6.35, 6.5, -19.0, 6.35, 6.7, -14.0],
+    [6.35, 6.5, -6.0, 6.35, 6.7, -1.0],
     [-6.35, 3.65, -27.0, -6.35, 3.8, -22.0],
     [6.4, 3.7, 21.0, 6.4, 3.6, 25.5],
   ],
   /** Hanging rugs / cloth on facades: [x, y, z, ry, w, h] */
   hangings: [
-    [-6.45, 2.6, 12.5, Math.PI / 2, 1.5, 2.1],
-    [-6.45, 2.4, 4.5, Math.PI / 2, 1.2, 1.7], // on the market hall's west wall
-    [6.45, 2.7, 10.0, -Math.PI / 2, 1.6, 2.2],
+    [-6.45, 2.6, 8.5, Math.PI / 2, 1.5, 2.1],
+    [-6.45, 2.4, 4.5, Math.PI / 2, 1.2, 1.7],
+    [6.45, 2.7, 6.0, -Math.PI / 2, 1.6, 2.2],
     [6.45, 2.5, -8.5, -Math.PI / 2, 1.3, 1.9],
     [-6.45, 2.5, -16.0, Math.PI / 2, 1.4, 2.0],
   ],
@@ -550,7 +445,7 @@ export const SET_PIECES = {
   /** Tyre stacks: [x, z, n] */
   tyres: [
     [-5.2, 12.5, 4],
-    [-5.3, -3.0, 3],
+    [5.3, -6.0, 3],
     [6.2, 3.0, 5],
     [-5.4, -28.0, 3],
   ],

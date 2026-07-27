@@ -130,6 +130,10 @@ export class RenderSystem {
     const cfg = ctx.config;
     const q = cfg.q;
     this.q = q;
+    /** Multiplier on `q.renderScale`, driven by `_updateDynamicResolution`. */
+    this._dynScale = 1;
+    this._dynInit = false;
+    this._lastSize = { w: 1, h: 1 };
     this.qLevel = QUALITY_LEVEL[cfg.quality] ?? 3;
     this.rng = ctx.rng.fork();
     this.frame = 0;
@@ -476,6 +480,7 @@ export class RenderSystem {
     const w = ctx.canvas.clientWidth || 1920;
     const h = ctx.canvas.clientHeight || 1080;
     this._lastSize = { w, h };
+    this._initDynamicResolution(ctx);
     // Switching quality in the pause menu used to mutate `config.q` and change
     // nothing: `renderScale` and the pixel-ratio cap are only read inside
     // resize(), so the new preset did not take effect until the window happened
@@ -879,6 +884,108 @@ export class RenderSystem {
   }
 
   // ==========================================================================
+  //  dynamic resolution
+  // ==========================================================================
+
+  /**
+   * ADAPTIVE RESOLUTION — hold the look, float the pixel count.
+   *
+   * MEASURED on an M1 Pro with the scene frozen and only the internal scale
+   * varied, interleaved to cancel drift:
+   *
+   *     scale  0.40   0.60   0.85   1.00
+   *     MP     0.30   0.67   1.35   1.87
+   *     ms     14.0   24.5   43.0   57.2
+   *
+   * That is a straight line: ms ~= 5.2 + 27.8 x megapixels. Which says two
+   * things. First, the frame is FILL bound — 671 draw calls and 6.7M triangles
+   * are constant across every row, so batching and culling attack the 5 ms
+   * intercept, not the 28 ms/MP slope. Second, resolution is a precise,
+   * predictable dial rather than a guess.
+   *
+   * A per-pass breakdown said the same thing louder: the single forward world
+   * pass is 37 ms of a 43 ms frame. Shadows are 1.8 ms and EVERY post effect
+   * together — TAA, GTAO, SSR, bloom, motion blur, DOF, composite — is under
+   * 0.2 ms. Turning post off would buy nothing; the cost is the patched PBR
+   * shader running on every fragment.
+   *
+   * The usual answer to a fill-bound frame is an early-Z prepass to kill
+   * overdraw. NOT DONE, deliberately: this is Apple Silicon, a tile-based
+   * deferred GPU that already does hidden-surface removal in hardware, so the
+   * classic immediate-mode win is close to zero here and the extra depth pass
+   * is not free.
+   *
+   * So the only honest lever left that does not touch image quality is how many
+   * pixels get shaded — and the user asked for exactly that: keep the graphics,
+   * make it smoother. This governor holds a frame-time target by scaling the
+   * internal resolution between `dynMin` and 1.0 of the preset's own
+   * `renderScale`. Nothing about WHAT is drawn changes: same shaders, same
+   * shadows, same post, same materials — and the range is bounded at 25% linear
+   * so it can never quietly turn into a preset downgrade.
+   *
+   * Each adjustment reallocates render targets, so it is deliberately lazy:
+   * a 0.35 s window, a +/-12% dead band, one 8% step at a time, and it stops
+   * moving once inside the band. Set `render.dynamicResolution = false` (or
+   * `?dynres=0`) to pin it.
+   */
+  _initDynamicResolution(ctx) {
+    if (this._dynInit) return;
+    this._dynInit = true;
+    const params = new URLSearchParams(globalThis.location?.search ?? '');
+    this.dynamicResolution = params.get('dynres') !== '0';
+    /**
+     * Frame-time target in ms. 26 ms is ~38 fps.
+     *
+     * MEASURED: at 22 ms (45 fps) the governor ran all the way to its floor on
+     * an M1 Pro at 1728x1080 and stayed there — an unreachable target turns an
+     * adaptive control into a permanent quality cut, which is the opposite of
+     * what it is for.
+     */
+    this.dynTarget = Number(params.get('dyntarget')) || 26;
+    /**
+     * Floor, as a fraction of the preset's own `renderScale`. 0.75 is a 25%
+     * linear reduction at worst, which with TAA resolving over it is very hard
+     * to see; anything lower starts to read as soft and would be trading the
+     * look the user asked to keep.
+     */
+    this.dynMin = 0.75;
+    this._dynScale = 1;
+    this._dynSamples = [];
+    this._dynCooldown = 0;
+    this._dynCtx = ctx;
+  }
+
+  /**
+   * One sample per frame; act at most every 0.35 s. Called from `render()`.
+   * Uses the MEDIAN of the window, not the mean — a single 900 ms shader stall
+   * must not drive the resolution down and leave it there.
+   */
+  _updateDynamicResolution(dtMs) {
+    if (!this.dynamicResolution || !this._lastSize) return;
+    const s = this._dynSamples;
+    s.push(dtMs);
+    if (s.length > 24) s.shift();
+    this._dynCooldown -= dtMs;
+    if (this._dynCooldown > 0 || s.length < 24) return;
+    this._dynCooldown = 350;
+
+    const sorted = s.slice().sort((a, b) => a - b);
+    const med = sorted[sorted.length >> 1];
+    const target = this.dynTarget;
+    // 12% dead band, so it settles instead of oscillating.
+    if (med > target * 1.12 && this._dynScale > this.dynMin) {
+      this._dynScale = Math.max(this.dynMin, this._dynScale - 0.08);
+    } else if (med < target * 0.82 && this._dynScale < 1) {
+      this._dynScale = Math.min(1, this._dynScale + 0.06);
+    } else {
+      return;
+    }
+    s.length = 0;
+    const { w, h } = this._lastSize;
+    this.resize(w, h, this._dynCtx);
+  }
+
+  // ==========================================================================
   //  sizing
   // ==========================================================================
 
@@ -894,8 +1001,9 @@ export class RenderSystem {
 
     const dw = Math.max(1, Math.floor(w * pr));
     const dh = Math.max(1, Math.floor(h * pr));
-    const rw = Math.max(1, Math.floor(dw * this.q.renderScale));
-    const rh = Math.max(1, Math.floor(dh * this.q.renderScale));
+    const scale = this.q.renderScale * this._dynScale;
+    const rw = Math.max(1, Math.floor(dw * scale));
+    const rh = Math.max(1, Math.floor(dh * scale));
 
     this.displaySize.width = dw;
     this.displaySize.height = dh;
@@ -1292,6 +1400,13 @@ export class RenderSystem {
     const dt = Math.min(0.1, Math.max(1 / 480, ctx.time.dt || 1 / 60));
     this.frame++;
     renderer.info.reset();
+
+    // Frame-time governor. Sampled off the RAW clock, so a paused game or a
+    // time-scaled test does not confuse it, and acted on at most every 0.35 s.
+    this._updateDynamicResolution(
+      Math.min(200, Math.max(0.5, (ctx.time.raw - (this._dynLastRaw ?? ctx.time.raw)) * 1000))
+    );
+    this._dynLastRaw = ctx.time.raw;
 
     camera.updateMatrixWorld();
     viewCamera.updateMatrixWorld();

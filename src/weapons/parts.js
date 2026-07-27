@@ -2040,36 +2040,86 @@ export function buildSlide(asm, o) {
   asm.add(breech, 'steel_bright', { y: bore + 0.001, z: zRear - 0.032 });
   breech.dispose();
 
-  // Sights: front post with a dot, rear notch with two.
+  /* ---- irons ----------------------------------------------------------
+   *
+   * SUPPRESSOR-HEIGHT, CO-WITNESSED WITH THE SLIDE OPTIC, AND THE TWO TOPS ARE
+   * THE SAME HEIGHT. All three of those were wrong before, and they are what a
+   * notch-and-post sight picture IS:
+   *
+   *   1. The rear blade topped out at bore+0.0584 and the front post at
+   *      bore+0.0570 — 1.4 mm apart. A sight picture is "post top FLUSH with
+   *      the notch shoulders"; with the front 1.4 mm low over a 157 mm sight
+   *      radius the post can only ever sit buried in the notch, and aligning it
+   *      by eye would point the bore 8.9 mrad (0.51 deg) high.
+   *   2. Both tops were below the optic's own centre (bore+0.06196), so the
+   *      irons did not co-witness with the sight the pistol actually carries.
+   *      A slide-mounted mini reflex REQUIRES suppressor-height irons; standard
+   *      ones sit under the window and are simply not usable.
+   *
+   * `sightTop` is the co-witness height and the caller passes the optic's
+   * centre, so at full ADS the notch shoulders, the post top and the emitter's
+   * dot all land on the same pixel. Both sights are now built DOWN from that
+   * height to the slide, as stepped pedestals, so neither one floats.
+   *
+   * The rear blade is also blacked out (steel_black) with only its two dots
+   * bright: a rear notch that is as bright as the front post is the classic
+   * "which one am I looking at" sight picture, and it is why match sights black
+   * the rear. Post 4.0 mm against a 4.4 mm notch is 0.60 of the notch's angular
+   * width at these distances — 2 px of light either side, which is the ratio
+   * every service pistol ships. */
+  const slideTop = h * 0.5;
+  const sightTop = o.sightTop ?? slideTop + 0.0055;
+  const stand = sightTop - slideTop + 0.0016; // reaches 1.6 mm below the slide top
+  const notchW = 0.0022;
+  const notchD = 0.0033;
   const rear = extrude(
     [
       [-0.009, 0],
       [0.009, 0],
-      [0.009, 0.0055],
-      [0.0022, 0.0055],
-      [0.0022, 0.0022],
-      [-0.0022, 0.0022],
-      [-0.0022, 0.0055],
-      [-0.009, 0.0055],
+      [0.009, stand],
+      [notchW, stand],
+      [notchW, stand - notchD],
+      [-notchW, stand - notchD],
+      [-notchW, stand],
+      [-0.009, stand],
     ],
     0.0055,
     { bevel: 0.0004 }
   );
-  asm.add(rear, 'steel_bright', { y: bore + h * 0.5 + 0.0045, z: zRear - 0.012 });
+  asm.add(rear, 'steel_black', { y: bore + slideTop - 0.0016, z: zRear - 0.012 });
   rear.dispose();
   for (const sx of [-1, 1]) {
     const dot = dome(0.0011, 8, 0.5);
-    asm.add(dot, 'steel_bright', { x: sx * 0.0055, y: bore + h * 0.5 + 0.0075, z: zRear - 0.0148, ry: Math.PI });
+    asm.add(dot, 'steel_bright', {
+      x: sx * 0.0055,
+      y: bore + sightTop - 0.0014,
+      z: zRear - 0.0148,
+      ry: Math.PI,
+    });
     dot.dispose();
   }
-  const front = box(0.0035, 0.0062, 0.0042, 0.0004, 1);
-  asm.add(front, 'steel_bright', { y: bore + h * 0.5 + 0.0055, z: zFront + 0.014 });
+  const postW = 0.002;
+  const front = extrude(
+    [
+      [-0.0031, 0],
+      [0.0031, 0],
+      [0.0031, stand * 0.4],
+      [postW, stand * 0.52],
+      [postW, stand],
+      [-postW, stand],
+      [-postW, stand * 0.52],
+      [-0.0031, stand * 0.4],
+    ],
+    0.0042,
+    { bevel: 0.0004 }
+  );
+  asm.add(front, 'steel_black', { y: bore + slideTop - 0.0016, z: zFront + 0.014 });
   front.dispose();
-  const fdot = dome(0.0013, 8, 0.5);
-  asm.add(fdot, 'steel_bright', { y: bore + h * 0.5 + 0.0058, z: zFront + 0.0118, ry: Math.PI });
+  const fdot = dome(0.0014, 8, 0.5);
+  asm.add(fdot, 'steel_bright', { y: bore + sightTop - 0.0022, z: zFront + 0.0118, ry: Math.PI });
   fdot.dispose();
 
-  return { zRear, zFront, w, h, len, sightY: bore + h * 0.5 + 0.0065 };
+  return { zRear, zFront, w, h, len, sightY: bore + sightTop, sightRadius: 0.157 };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2309,10 +2359,16 @@ export function addKnifeHandle(asm, matPoly, matRubber, matSteel, o = {}) {
 
   // ---- moulded scales on both flanks, with fasteners ----
   const scale = extrude(roundRect(0.084, 0.0206, 0.004, 3), 0.0026, { bevel: 0.0007 });
+  // Moulded grip texture. Domes, not chamfered boxes: a 2.6 mm bump is under a
+  // pixel across at the 0.3 m the handle sits from the eye, so a rounded box's
+  // ~100 triangles buy nothing a 6-segment dome's 36 do not — and there are 66
+  // of them, which is the difference between a 3.6k and an 8.4k handle.
   const chequer = [];
   for (let r = 0; r < 11; r++) {
     for (let c = 0; c < 3; c++) {
-      const g = box(0.0026, 0.0026, 0.0011, 0.0004, 1);
+      const g = dome(0.0015, 6, 0.55);
+      g.rotateX(-Math.PI / 2);
+      g.scale(1, 1, 0.8);
       g.translate(-0.036 + r * 0.0072, -0.006 + c * 0.006 + (r % 2) * 0.003, 0.0014);
       chequer.push(g);
     }
@@ -2327,8 +2383,13 @@ export function addKnifeHandle(asm, matPoly, matRubber, matSteel, o = {}) {
       z: (z0 + z1) * 0.5 + 0.002,
       ry: sx * Math.PI * 0.5,
     });
-    addScrew(asm, matSteel, sx * 0.0118, 0, (z0 + z1) * 0.5 - 0.028, 0.0021, 'x', 0.006);
-    addScrew(asm, matSteel, sx * 0.0118, 0, (z0 + z1) * 0.5 + 0.03, 0.0021, 'x', 0.006);
+    // addScrew's 'x' axis always drives the shank toward -X, which protrudes on
+    // the left flank. Placed by hand so both fasteners sink INTO the handle.
+    const fastener = screw(0.0021, 0.0021 * 0.55, 0.00105, 0.006, 10);
+    for (const z of [(z0 + z1) * 0.5 - 0.028, (z0 + z1) * 0.5 + 0.03]) {
+      asm.add(fastener, matSteel, { x: sx * 0.0118, z, ry: sx * -Math.PI * 0.5 });
+    }
+    fastener.dispose();
   }
   scaleG.dispose();
 
