@@ -270,6 +270,94 @@ export const WEAPON_DEFS = {
     bobScale: 1.1,
     magLen: 0.108,
   },
+
+  knife: {
+    id: 'knife',
+    label: 'KM-7',
+    class: 'melee',
+    /* NO magazine, NO reserve, NO fire mode, NO ADS. Those keys are ABSENT
+     * rather than zeroed: `ammo` returns magSize 0 / total 0, the HUD prints an
+     * em dash instead of a count (see ui/ammo.js), `cycleFireMode` is a no-op
+     * because `modes` is a single entry, and `reload()` exits on the melee
+     * class before it can touch a magazine that does not exist. */
+    modes: ['melee'],
+    /* --- melee --- */
+    melee: {
+      /**
+       * LMB slash, RMB stab. Both are a wind-up, an impact frame and a
+       * recovery; only the impact frame casts.
+       *
+       * `impact` is when the edge is at full extension in the clip, `reach` is
+       * how far in front of the eye the cast runs and `radius` is the swept
+       * sphere. 1.9 m of reach on a 281 mm knife is a LUNGE, not an arm's
+       * length, and it is deliberate: the player's collision capsule stops
+       * ~0.55 m short of an enemy's, so a cast measured from the eye has to
+       * cover the standoff plus the enemy's own radius before the blade can
+       * ever connect. The slash trades 250 mm of that for a 40% faster cycle.
+       */
+      slash: { damage: 55, impact: 0.13, cycle: 0.52, reach: 1.65, radius: 0.18 },
+      /** 110 kills a 100 hp actor outright — a back stab is a back stab. */
+      stab: { damage: 110, impact: 0.21, cycle: 0.86, reach: 1.9, radius: 0.16 },
+    },
+    /* --- handling (seconds) --- */
+    ads: false,
+    adsTime: 0.16,
+    adsFov: 1,
+    viewFov: 1,
+    inspectTime: 2.4,
+    drawTime: 0.44,
+    holsterTime: 0.3,
+    cycleTime: 0.3,
+    /* --- accuracy: a knife has no cone. The HUD reads these every frame, so
+     * they are real zeros rather than missing keys that would produce NaN. --- */
+    spreadHip: 0,
+    spreadAds: 0,
+    spreadPerShot: 0,
+    spreadMax: 0,
+    spreadDecay: 1,
+    /* --- pose ---
+     * Weapon-local origin is the web of the shooting hand, immediately behind
+     * the guard. Blade tip at (0, -0.0035, -0.161), guard at z=-0.013, pommel
+     * butt at z=+0.120, wrist target at (0.0014, 0.0099, 0.1038).
+     *
+     * SOLVED FROM THE BLADE AXIS AND THE SCREEN FRAMING, the same way the
+     * rifle's is — a knife's equivalent of the bore is the line from the ricasso
+     * to the point, and its equivalent of "the muzzle must be visible heading
+     * for the middle of the frame" is that the POINT must be, because the point
+     * is the only part of a knife that says which way it is going.
+     *
+     * Constraints, searched over pos x/y/z and rot x/y/z at 5 mm / 0.05 rad:
+     *   1. point projects to (1120, 560) at 1920x1080 — level with the
+     *      crosshair and 160 px right of it, i.e. converging on centre frame
+     *   2. blade axis 30.4 deg nose-UP and 16.7 deg left of view-forward
+     *   3. the guard on screen at (1243, 759) and the WRIST at (1481, 975), so
+     *      the guard, the scales and the gloved fist are all in frame — on a
+     *      weapon with no receiver and no magazine, the handle and the hand are
+     *      most of what there is to look at
+     *   4. |flat . viewZ| = 0.498: half of the blade's near flat faces the
+     *      camera, which is what lets the fuller and the swedge catch a
+     *      specular line instead of presenting the blade edge-on as a wire
+     *   5. edge canted (-0.62, -0.74) — down and outboard, so the polished
+     *      bevel faces the key rather than the floor
+     *   6. point at 0.514 m and wrist at 0.292 m from the eye: nothing inside
+     *      the near plane, and the shooting arm at 57% extension (0.361 m of a
+     *      0.63 m reach), so the elbow keeps a deep bend.
+     */
+    hipPos: [0.13, -0.09, -0.38],
+    hipRot: [0.55, 0.25, -0.7],
+    adsCant: [0, 0, 0],
+    /* Sprint: the blade drops and swings across the body — 28 deg of nose-up
+     * traded away and 21 deg more yaw, which takes the point from (1120, 560)
+     * to (971, 871), down-left and out of the sightline. Carried over by the
+     * same delta as the hip pose so the blend does not translate the knife
+     * sideways on the way into a sprint. */
+    sprintPos: [0.1, -0.175, -0.355],
+    sprintRot: [0.05, 0.62, -0.35],
+    lowReadyPos: [0.12, -0.16, -0.37],
+    lowReadyRot: [0.18, 0.32, -0.6],
+    swayScale: 1.25,
+    bobScale: 1.2,
+  },
 };
 
 /**

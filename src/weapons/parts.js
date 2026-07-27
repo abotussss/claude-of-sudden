@@ -13,6 +13,7 @@ import {
   knurlBand,
   picatinny,
   mlokSlot,
+  loftZ,
   mergeAll,
 } from './geometry.js';
 
@@ -2069,4 +2070,300 @@ export function buildSlide(asm, o) {
   fdot.dispose();
 
   return { zRear, zFront, w, h, len, sightY: bore + h * 0.5 + 0.0065 };
+}
+
+/* -------------------------------------------------------------------------- */
+/*  melee                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * DROP-POINT FIGHTING BLADE, ground rather than extruded.
+ *
+ * The whole point of `loftZ` (geometry.js) is here: a blade's cross-section is
+ * a different polygon at every station along its length, and an extruded
+ * outline — one section swept unchanged — is the exact shape of the "it's a
+ * box with a pointy end" failure. Fourteen stations, sixteen points each:
+ *
+ *   spine        4.9 mm stock at the ricasso, distally tapered to 2.7 mm at the
+ *                tip. Real knives taper the SPINE as well as grinding the edge;
+ *                without it the blade reads as sheet metal.
+ *   swedge       a false edge on the top of the forward 45%: the spine's half
+ *                thickness collapses from full stock to 0.7 mm over the top
+ *                7 mm of the section, which is the facet that catches a hard
+ *                specular line all the way to the tip.
+ *   fuller       a 9 mm-wide, 0.75 mm-deep groove from 12% to 66% of the blade,
+ *                centred 5 mm under the spine, faded in and out over 15% of its
+ *                length so it does not end in a wall. This is a genuine
+ *                concavity — the only one on the weapon — so it is where the
+ *                curvature-mask bake puts its grime line.
+ *   primary bevel a full flat grind: below the grind line the half-thickness
+ *                runs linearly to 0.14 mm at the edge. The grind line itself
+ *                rises toward the tip (43% of blade height at the ricasso,
+ *                72% at the tip), which is what makes the bevel read as a
+ *                sweeping curve instead of a stripe.
+ *   drop point   the spine falls from y=+0.012 to the tip over the last 38% and
+ *                the edge belly rises to meet it, so the point lands at
+ *                y=-0.0035 — below the spine line, which is what "drop point"
+ *                means and what distinguishes it from a clip or a tanto.
+ *
+ * Authored in weapon space directly (the blade is not a moving part), edge on
+ * -Y, flats on ±X, tip toward -Z.
+ *
+ * @returns {{ tip:number[], edgeMid:number[], len:number }}
+ */
+export function addKnifeBlade(asm, matBlade, matEdge, o = {}) {
+  const z0 = o.z0 ?? -0.036; // ricasso / plunge line
+  const z1 = o.z1 ?? -0.161; // tip
+  const len = z0 - z1;
+  const ySpine = o.ySpine ?? 0.012;
+  const yEdge = o.yEdge ?? -0.019;
+  const yTip = o.yTip ?? -0.0035;
+  const tStock = (o.thickness ?? 0.0049) * 0.5;
+  const tTip = (o.thicknessTip ?? 0.0027) * 0.5;
+  const tEdge = 0.00014; // the edge is 0.28 mm wide — sharp, but not a zero-area sliver
+  const STATIONS = o.stations ?? 14;
+
+  const lerpN = (a, b, k) => a + (b - a) * k;
+  const smooth = (k) => k * k * (3 - 2 * k);
+
+  const sections = [];
+  const bevels = [];
+  for (let s = 0; s < STATIONS; s++) {
+    const k = s / (STATIONS - 1); // 0 at the ricasso, 1 at the tip
+    const z = lerpN(z0, z1, k);
+
+    // ---- silhouette ----
+    // Spine runs dead flat then drops over the last 38%.
+    const drop = k <= 0.62 ? 0 : smooth((k - 0.62) / 0.38);
+    const yTop = lerpN(ySpine, yTip, drop);
+    // Edge: straight for the first half, then the belly sweeps up to the point.
+    const belly = k <= 0.46 ? 0 : smooth((k - 0.46) / 0.54);
+    const yBot = lerpN(yEdge, yTip, belly);
+    const h = Math.max(0.0006, yTop - yBot);
+
+    // ---- distal taper ----
+    const t = lerpN(tStock, tTip, smooth(k));
+    // ---- grind line: rises toward the tip ----
+    const yGrind = yBot + h * lerpN(0.43, 0.72, k);
+    // ---- swedge: forward 55%, and it eats the top 7 mm of the section ----
+    const swedge = k <= 0.45 ? 0 : smooth((k - 0.45) / 0.55);
+    const swH = Math.min(h * 0.42, 0.007) * swedge;
+    const tSwedge = lerpN(t, 0.0007, swedge);
+    const ySwedge = yTop - swH;
+    // ---- fuller ----
+    const fIn = smooth(Math.max(0, Math.min(1, (k - 0.12) / 0.15)));
+    const fOut = smooth(Math.max(0, Math.min(1, (0.66 - k) / 0.15)));
+    const fuller = Math.min(fIn, fOut);
+    const fY = yTop - 0.005;
+    const fW = 0.0045 * fuller + 1e-5;
+    const fD = 0.00075 * fuller;
+
+    // Half-outline from the spine down to the grind shoulder, on -X. The point
+    // order is fixed for every station — loftZ stitches point i to point i.
+    const half = [
+      [-tSwedge, yTop], //  0 spine, swedged
+      [-t, ySwedge], //  1 bottom of the swedge facet
+      [-t, fY + fW], //  2 above the fuller
+      [-t + fD, fY], //  3 fuller trough
+      [-t, fY - fW], //  4 below the fuller
+      [-t, yGrind], //  5 grind shoulder
+    ];
+    const body = [[0, yTop + tSwedge * 0.55]];
+    for (const p of half) body.push(p);
+    for (let i = half.length - 1; i >= 0; i--) body.push([-half[i][0], half[i][1]]);
+    sections.push({ z, pts: body });
+    // The primary bevel is a SEPARATE solid sharing the grind line, because it
+    // is a different surface finish: the flats are blued and the ground bevel is
+    // polished back to bright steel. One material cannot say both, and a bright
+    // edge under a blued flat is the single strongest read that this is a
+    // sharpened object rather than a painted prop.
+    bevels.push({
+      z,
+      pts: [
+        [-t, yGrind],
+        [-tEdge, yBot],
+        [0, yBot - tEdge * 0.4],
+        [tEdge, yBot],
+        [t, yGrind],
+      ],
+    });
+  }
+  const body = loftZ(sections);
+  asm.add(body, matBlade, {});
+  body.dispose();
+  const bevel = loftZ(bevels);
+  asm.add(bevel, matEdge, {});
+  bevel.dispose();
+
+  return { tip: [0, yTip, z1], edgeMid: [0, (yEdge + yTip) * 0.5, (z0 + z1) * 0.5], len };
+}
+
+/**
+ * Ricasso, plunge collar and the finger guard.
+ *
+ * The guard is a genuine cross-guard, not a plate: a short upper quillon and a
+ * long lower one that sweeps FORWARD, which is the shape that actually stops a
+ * hand sliding onto the edge and the shape that reads as a fighting knife at a
+ * glance. Extruded in XY (the face you see looking down the blade) and swept
+ * along Z, so the silhouette against the arm is the guard's real profile.
+ */
+export function addKnifeGuard(asm, matSteel, o = {}) {
+  const zFront = o.zFront ?? -0.036;
+  const zRear = o.zRear ?? -0.0075;
+  const d = zRear - zFront;
+
+  // Ricasso: the unground flat between the plunge line and the guard, with the
+  // maker's stock thickness carried straight through.
+  const ric = box(0.0049, 0.0286, d + 0.006, 0.0006, 1);
+  asm.add(ric, matSteel, { y: -0.0035, z: (zFront + zRear) * 0.5 - 0.002 });
+  ric.dispose();
+
+  // Cross-guard. Lower quillon 17 mm below the axis and swept 4 mm forward;
+  // upper quillon 12 mm above and stubby.
+  const guard = extrude(
+    [
+      [-0.0128, 0.0132],
+      [-0.0052, 0.0186],
+      [0.0052, 0.0186],
+      [0.0128, 0.0132],
+      [0.0138, 0.0],
+      [0.0122, -0.0135],
+      [0.0086, -0.0212],
+      [0.0, -0.0248],
+      [-0.0086, -0.0212],
+      [-0.0122, -0.0135],
+      [-0.0138, 0.0],
+    ],
+    0.0092,
+    { bevel: 0.0011, bevelSegments: 2 }
+  );
+  asm.add(guard, matSteel, { z: zRear - 0.0046, sx: 0.62 });
+  guard.dispose();
+
+  // The forward sweep: a wedge on the front face of each quillon, so the guard
+  // is not a flat slab in profile.
+  for (const [y, s] of [[-0.019, 1], [0.0155, 0.62]]) {
+    const q = blob(0.0072, 0.007 * s, 0.011 * s, 0.0016, 2);
+    asm.add(q, matSteel, { y, z: zRear - 0.0104, sx: 0.62 });
+    q.dispose();
+  }
+
+  // Tang collar behind the guard — where the handle butts up against it.
+  const collar = latheZ(
+    [
+      [0, 0.0092],
+      [0.0016, 0.0106],
+      [0.005, 0.0108],
+      [0.005, 0.0092],
+    ],
+    18
+  );
+  asm.add(collar, matSteel, { z: zRear, sx: 0.8 });
+  collar.dispose();
+  return { zFront, zRear };
+}
+
+/**
+ * Textured handle: scalloped polymer core, moulded scales, rings, and a
+ * skull-crusher pommel with a lanyard hole.
+ *
+ * The core is a lathe whose PROFILE carries four finger scallops, so the
+ * grooves are in the silhouette rather than painted on — the same reason the
+ * Picatinny rail is built as separate teeth. Everything is then squashed to
+ * 0.78 in X: a knife handle is an oval 20 mm wide by 26 mm tall, and a circular
+ * one is the single most obvious "this is a lathe" tell on the model.
+ */
+export function addKnifeHandle(asm, matPoly, matRubber, matSteel, o = {}) {
+  const z0 = o.z0 ?? -0.0075; // butts against the guard collar
+  const z1 = o.z1 ?? 0.0925; // start of the pommel
+  const squash = 0.78;
+
+  // ---- scalloped core ----
+  const grooves = 4;
+  const prof = [
+    [z0, 0.0],
+    [z0, 0.0102],
+    [z0 + 0.004, 0.0128],
+  ];
+  const span = z1 - 0.006 - (z0 + 0.008);
+  for (let i = 0; i < grooves; i++) {
+    const t = (i + 0.5) / grooves;
+    prof.push([z0 + 0.008 + span * (t - 0.5 / grooves), 0.0139 - i * 0.00035]);
+    prof.push([z0 + 0.008 + span * t, 0.0113 - i * 0.0002]);
+  }
+  prof.push([z1 - 0.006, 0.0136], [z1, 0.0129], [z1, 0]);
+  const core = latheZ(prof, 26);
+  asm.add(core, matPoly, { sx: squash });
+  core.dispose();
+
+  // ---- rings between the scallops ----
+  // Proud bands at each ridge. They are what the fingers actually bear on, so
+  // they are rubber, not the polymer of the core.
+  for (let i = 0; i < grooves; i++) {
+    const t = (i + 0.5) / grooves;
+    const z = z0 + 0.008 + span * (t - 0.5 / grooves);
+    const r = ring(0.0139 - i * 0.00035, 0.0016, 22, 6);
+    asm.add(r, matRubber, { z, sx: squash, sy: 0.94 });
+    r.dispose();
+  }
+
+  // ---- moulded scales on both flanks, with fasteners ----
+  const scale = extrude(roundRect(0.084, 0.0206, 0.004, 3), 0.0026, { bevel: 0.0007 });
+  const chequer = [];
+  for (let r = 0; r < 11; r++) {
+    for (let c = 0; c < 3; c++) {
+      const g = box(0.0026, 0.0026, 0.0011, 0.0004, 1);
+      g.translate(-0.036 + r * 0.0072, -0.006 + c * 0.006 + (r % 2) * 0.003, 0.0014);
+      chequer.push(g);
+    }
+  }
+  const scaleG = mergeAll([scale, ...chequer]);
+  // ry=+/-90 deg maps the outline's X onto Z (the long axis of the handle), its
+  // Y onto Y, and the extrusion depth onto +/-X — so the same geometry lands
+  // proud on both flanks with no mirroring and no flipped winding.
+  for (const sx of [-1, 1]) {
+    asm.add(scaleG, matRubber, {
+      x: sx * 0.0106,
+      z: (z0 + z1) * 0.5 + 0.002,
+      ry: sx * Math.PI * 0.5,
+    });
+    addScrew(asm, matSteel, sx * 0.0118, 0, (z0 + z1) * 0.5 - 0.028, 0.0021, 'x', 0.006);
+    addScrew(asm, matSteel, sx * 0.0118, 0, (z0 + z1) * 0.5 + 0.03, 0.0021, 'x', 0.006);
+  }
+  scaleG.dispose();
+
+  // ---- pommel: a steel skull-crusher with a real lanyard hole ----
+  const cap = latheZ(
+    [
+      [z1 - 0.002, 0.0126],
+      [z1 + 0.001, 0.0146],
+      [z1 + 0.013, 0.0142],
+      [z1 + 0.0168, 0.0118],
+      [z1 + 0.0182, 0.0072],
+      [z1 + 0.0182, 0],
+    ],
+    22
+  );
+  asm.add(cap, matSteel, { sx: squash });
+  cap.dispose();
+  // The hole runs through the FLATS, which is where a lanyard hole goes, and it
+  // is a genuine void in the extrusion rather than a painted dot: the tab is
+  // extruded along X (ry=90 deg puts the outline in the ZY plane and the depth
+  // on X), so the hole's axis is the one you can see through. It stands PROUD
+  // of the butt — buried inside the pommel flare the hole would never be
+  // visible from any angle the camera can reach.
+  const holeR = 0.0034;
+  const ringPts = [];
+  for (let i = 0; i < 14; i++) {
+    const a = (i / 14) * TAU;
+    ringPts.push([Math.cos(a) * holeR, Math.sin(a) * holeR]);
+  }
+  const lug = extrude(roundRect(0.0138, 0.0152, 0.0026, 3), 0.0166, {
+    bevel: 0.0009,
+    holes: [ringPts],
+  });
+  const zLug = z1 + 0.0206;
+  asm.add(lug, matSteel, { z: zLug, ry: Math.PI * 0.5 });
+  lug.dispose();
+  return { z0, z1, butt: zLug + 0.0069 };
 }

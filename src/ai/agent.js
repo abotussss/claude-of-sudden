@@ -232,14 +232,55 @@ export class Agent {
     this.alertness = 0;
 
     /* ---------------- combat ---------------- */
-    this.weaponRange = 60;
-    this.fireRate = this.variantName === 'irregular' ? 8.2 : 10.5;
+    /**
+     * SKILL. 0 = a conscript who sprays and misses, 1 = a player you should be
+     * afraid of. Drawn per actor around `ai.skill` so a squad is a spread of
+     * people rather than seven copies of the same shooter.
+     *
+     * WHY THIS EXISTS. Before it, every bot had spread 0.032 rad and fired 10.5
+     * rounds a second for 17 damage. At 20 m that cone is 0.64 m across against
+     * a 0.42 m player capsule — roughly a 40% hit rate, i.e. ~68 damage per
+     * second from ONE bot. Two of them killed a full-health player in under a
+     * second, from full health, with no regeneration to fall back on. That is
+     * not difficulty, it is a coin flip decided before you can react.
+     *
+     * Everything below is derived from this one number so difficulty is a single
+     * dial: `RULES.botSkill` shifts the mean, and the gaussian gives the squad
+     * its individuals.
+     */
+    this.skill = Math.min(0.95, Math.max(0.12,
+      (ai.skill ?? 0.5) + this.rng.gauss() * 0.19));
+    const k = this.skill;
+
+    this.weaponRange = 44 + k * 18;
+    // Rate of fire barely varies — trigger discipline is expressed in the burst
+    // pattern below, which is what a player actually reads as "good" or "bad".
+    this.fireRate = (this.variantName === 'irregular' ? 8.2 : 10.5) * (0.86 + k * 0.2);
     this.burstLeft = 0;
     this.fireCooldown = 0;
     this.burstCooldown = this.rng.range(0.4, 1.4);
     this.magSize = 30;
     this.ammo = this.magSize;
-    this.spread = 0.032;
+    /**
+     * Cone half-angle, radians. 0.030 at the top of the range down to 0.085 at
+     * the bottom — a poor shooter is 2.8x wider, which at 25 m is the difference
+     * between hitting you and hitting the wall beside you.
+     */
+    this.spread = 0.030 + (1 - k) * 0.055;
+    /**
+     * FIRST-CONTACT SETTLE, 0..1, the single biggest change to how survivable a
+     * fight is. A bot that has just acquired a target does not start on it: for
+     * the first moment its cone is up to 2.6x wider and it closes over
+     * `settleTime`. Good bots settle in about a third of a second, poor ones
+     * take over a second. This is what buys the player the beat they need to
+     * find cover instead of dying to the first burst from across the street.
+     */
+    this.aimSettle = 0;
+    this.settleTime = 1.25 - k * 0.85;
+    /** How fast the muzzle tracks a moving target. Low skill = visibly behind. */
+    this.trackRate = 2.6 + k * 4.2;
+    /** Baseline hand shake, before suppression is added on top. */
+    this.aimWobble = 0.007 + (1 - k) * 0.026;
     this.weaponDamage = 17;
     this.aimTarget = new THREE.Vector3();
     this.aimActual = new THREE.Vector3();
@@ -333,12 +374,14 @@ export class Agent {
     this.targetVisible = !!found;
 
     if (found) {
+      // A NEW target resets the settle; the same one keeps building.
+      if (found !== this.targetActor) this.aimSettle = 0;
       this.targetActor = found;
       const chest = this.ai.actorChest(found, this._v3);
       const dist = this.position.distanceTo(chest);
       // reaction: fast head-on and close, slow at the edge of vision. A less
       // skilled bot takes measurably longer to commit.
-      const slack = 1.35 - 0.55 * (this.ai.skill ?? 0.62);
+      const slack = 1.5 - 0.6 * this.skill;
       const rate = 1 / Math.max(0.12, (0.16 + dist * 0.0075 + (1 - this.alertness) * 0.28) * slack);
       this.awareness = Math.min(1, this.awareness + dt * rate);
       this.lastKnown.copy(chest);
@@ -350,6 +393,8 @@ export class Agent {
       }
     } else {
       this.awareness = Math.max(0, this.awareness - dt * 0.35);
+      // Losing sight costs some of the settle back — re-peeking is not free.
+      this.aimSettle = Math.max(0, this.aimSettle - dt * 0.8);
       if (this.hasTarget && this.lastKnownAge > 6.5) {
         this.hasTarget = false;
         this.targetActor = null;
@@ -922,11 +967,11 @@ export class Agent {
       this._v.set(t.x, t.y + 0.05, t.z);
       const dist = this.position.distanceTo(this._v);
       const wobbleT = this.ctx.time.elapsed * 1.7 + this.id;
-      const wob = 0.012 + this.suppression * 0.05;
+      const wob = this.aimWobble + this.suppression * 0.05;
       this._v.x += Math.sin(wobbleT) * wob * dist * 0.12;
       this._v.y += Math.sin(wobbleT * 1.7 + 1.1) * wob * dist * 0.08;
       this._v.z += Math.cos(wobbleT * 0.8) * wob * dist * 0.12;
-      this.aimTarget.lerp(this._v, Math.min(1, dt * 6));
+      this.aimTarget.lerp(this._v, Math.min(1, dt * this.trackRate));
     } else {
       const fwd = this._v.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
       this._v2
@@ -934,6 +979,12 @@ export class Agent {
         .addScaledVector(fwd, 12)
         .setY(this.position.y + this.eyeHeight - 0.1);
       this.aimTarget.lerp(this._v2, Math.min(1, dt * 3));
+    }
+
+    // Settling on the target. Only counts while it is actually visible — a bot
+    // holding an angle at a doorway does not get to pre-aim you through it.
+    if (this.targetVisible && this.hasTarget) {
+      this.aimSettle = Math.min(1, this.aimSettle + dt / Math.max(0.1, this.settleTime));
     }
 
     // Freeze time: the round has not started, so nobody's weapon works —
@@ -949,8 +1000,13 @@ export class Agent {
     }
     if (this.burstLeft <= 0) {
       if (this.burstCooldown > 0) return;
-      this.burstLeft = this.rng.int(3, 7);
-      this.burstCooldown = this.rng.range(0.45, 1.35) + this.suppression * 0.5;
+      // A good shooter fires short, controlled bursts with a short reset. A poor
+      // one dumps half a magazine and then has to wait — which is the window the
+      // player uses.
+      this.burstLeft = this.rng.int(2, 4 + Math.round((1 - this.skill) * 7));
+      this.burstCooldown =
+        this.rng.range(0.45, 1.0) + (1 - this.skill) * this.rng.range(0.3, 1.1) +
+        this.suppression * 0.5;
     }
     if (this.fireCooldown > 0) return;
     this.fireCooldown = 1 / this.fireRate;
@@ -963,8 +1019,18 @@ export class Agent {
     const an = this.animator;
     const origin = an.muzzleWorld;
     const dir = this._muzzleDir.copy(an.muzzleDir);
-    // cone of fire: worse when suppressed, better the longer we have been aiming
-    const spread = this.spread * (1 + this.suppression * 1.5);
+    /**
+     * Cone of fire. Three multipliers, all of which a player can feel:
+     *   settle      up to 2.6x while the target is fresh, decaying over
+     *               `settleTime` — the first burst out of a corner sprays
+     *   bloom       sustained fire opens the group up, exactly as the player's
+     *               own weapon does (see `spreadPerShot` in weapons/defs.js).
+     *               A long burst from a low-skill bot is genuinely inaccurate
+     *   suppression being shot at makes it worse, as before
+     */
+    const settle = 1 + (1 - this.aimSettle) * 1.6;
+    const bloom = 1 + Math.min(6, this.magSize - this.ammo) * 0.055 * (1.4 - this.skill);
+    const spread = this.spread * settle * bloom * (1 + this.suppression * 1.5);
     dir.x += this.rng.gauss() * spread;
     dir.y += this.rng.gauss() * spread * 0.8;
     dir.z += this.rng.gauss() * spread;

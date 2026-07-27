@@ -67,8 +67,19 @@ export const RULES = {
   /** Rounds that connect with a teammate still make noise; they just do no harm. */
 
   /* ---- bots ---- */
-  /** 0..1. Scales bot reaction time, aim wobble and burst discipline. */
-  botSkill: 0.62,
+  /**
+   * MEAN bot skill, 0..1. Each actor draws its own around this (gaussian, sd
+   * 0.19, clamped 0.12..0.95), and everything about how it shoots — cone,
+   * tracking rate, hand shake, burst length, reaction time, how long it takes to
+   * settle on a fresh target — is derived from that one number. See the comment
+   * block in `src/ai/agent.js`.
+   *
+   * Lowered from 0.62: at that mean, two bots killed a full-health player in
+   * under a second from across the street, with no regeneration to fall back on.
+   * 0.44 gives a squad that ranges from genuinely dangerous to genuinely bad,
+   * which is what makes a round readable.
+   */
+  botSkill: 0.44,
 };
 
 /**

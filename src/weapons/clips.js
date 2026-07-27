@@ -118,6 +118,7 @@ const v3 = (x, y, z) => [x, y, z];
  * `scale` compresses or stretches the whole timeline (weapon reload speed).
  */
 export function buildClips(nodes, def) {
+  if (def.class === 'melee') return buildMeleeClips(nodes, def);
   const grip = nodes.gripL;
   const seat = nodes.magSeat.pos;
   const magLen = def.magLen ?? 0.2;
@@ -315,4 +316,121 @@ export function buildClips(nodes, def) {
   });
 
   return { reloadTac, reloadEmpty, inspect, draw, holster };
+}
+
+/* ========================================================================== */
+/*  melee                                                                     */
+/* ========================================================================== */
+
+/**
+ * Clips for a bladed weapon.
+ *
+ * A melee weapon has no magazine, no charging handle and no support-hand work,
+ * so none of the tracks above apply and none of the nodes they read
+ * (`magSeat`, `chargeRest`) exist. The `lhand` channel is deliberately NULL
+ * rather than a run of keys pinned to the rest position: a null channel leaves
+ * `lhand.weight` at 0, which is what tells `_solveHands` to keep the support
+ * hand on its authored guard position for the whole swing. Writing keys would
+ * mean re-authoring that position in six places and getting it wrong in one.
+ *
+ * TIMING IS THE WHOLE DESIGN. Each attack is wind-up / impact / follow-through
+ * / recovery, and the `impact` beat in defs.js `melee` is the frame the trace
+ * is cast on — so the damage lands exactly when the edge is at full extension
+ * on screen, not when the button went down. A knife that damages on press and
+ * animates afterwards is the single most common melee bug in the genre.
+ */
+function buildMeleeClips(nodes, def) {
+  const m = def.melee ?? {};
+  const sl = m.slash ?? { cycle: 0.52, impact: 0.13 };
+  const st = m.stab ?? { cycle: 0.86, impact: 0.21 };
+
+  /**
+   * SLASH — a right-to-left diagonal, edge leading.
+   *
+   * The wind-up carries the knife back, right and up (+x, +y, +z with 0.45 rad
+   * of counter-yaw), so the blade leaves the frame edge-first before it comes
+   * back across; the impact key is at full extension 60 mm left and 50 mm
+   * forward of rest with 0.62 rad of yaw the other way, which sweeps the point
+   * across roughly 700 px of screen in 60 ms. Follow-through overshoots by
+   * another 0.18 rad before the long, slow recovery — the overshoot is what
+   * gives the swing weight.
+   */
+  const slash = new Clip('slash', sl.cycle, {
+    weapon: [
+      { t: 0, p: v3(0, 0, 0), r: v3(0, 0, 0) },
+      { t: 0.135 * sl.cycle, p: v3(0.032, 0.03, 0.042), r: v3(-0.3, -0.45, 0.36), ease: 'out' },
+      { t: sl.impact, p: v3(-0.058, -0.048, -0.052), r: v3(0.26, 0.62, -0.56), ease: 'linear' },
+      { t: 0.42 * sl.cycle, p: v3(-0.076, -0.072, -0.016), r: v3(0.16, 0.8, -0.76), ease: 'out' },
+      { t: 0.62 * sl.cycle, p: v3(-0.03, -0.03, 0.012), r: v3(0.02, 0.34, -0.3) },
+      { t: 1, p: v3(0, 0, 0), r: v3(0, 0, 0), ease: 'out' },
+    ],
+    events: [
+      { t: 0.02 * sl.cycle, name: 'start' },
+      { t: sl.impact, name: 'meleeimpact' },
+      { t: 0.995 * sl.cycle, name: 'end' },
+    ],
+  });
+
+  /**
+   * STAB — chamber to the ribs, then a straight thrust down the sight line.
+   *
+   * The chamber pulls the knife 90 mm back and 40 mm right and rolls the edge
+   * outboard, which is the only part of the animation the victim gets to read.
+   * The thrust is 130 mm of forward travel with the blade axis rotated 0.42 rad
+   * back toward view-forward — i.e. the point converges on the crosshair rather
+   * than crossing it — and it holds there for 90 ms, which is what makes the
+   * stab feel committed and is why it is the slower of the two.
+   */
+  const stab = new Clip('stab', st.cycle, {
+    weapon: [
+      { t: 0, p: v3(0, 0, 0), r: v3(0, 0, 0) },
+      { t: 0.16 * st.cycle, p: v3(0.04, -0.012, 0.09), r: v3(-0.22, -0.3, 0.5), ease: 'out' },
+      { t: st.impact, p: v3(-0.028, 0.016, -0.132), r: v3(-0.1, 0.42, -0.16), ease: 'linear' },
+      { t: 0.36 * st.cycle, p: v3(-0.03, 0.018, -0.138), r: v3(-0.09, 0.44, -0.14) },
+      { t: 0.56 * st.cycle, p: v3(0.008, -0.006, 0.026), r: v3(0.04, -0.06, 0.1), ease: 'out' },
+      { t: 1, p: v3(0, 0, 0), r: v3(0, 0, 0), ease: 'out' },
+    ],
+    events: [
+      { t: 0.02 * st.cycle, name: 'start' },
+      { t: st.impact, name: 'meleeimpact' },
+      { t: 0.995 * st.cycle, name: 'end' },
+    ],
+  });
+
+  const drawT = def.drawTime ?? 0.44;
+  const draw = new Clip('draw', drawT, {
+    weapon: [
+      { t: 0, p: v3(0.06, -0.28, 0.16), r: v3(-0.5, 0.7, 0.9) },
+      { t: 0.6 * drawT, p: v3(0.008, -0.02, 0.014), r: v3(-0.06, 0.05, 0.08), ease: 'out' },
+      { t: 0.8 * drawT, p: v3(-0.004, 0.008, -0.006), r: v3(0.04, -0.03, -0.03) },
+      { t: 1, p: v3(0, 0, 0), r: v3(0, 0, 0), ease: 'out' },
+    ],
+    events: [{ t: 0.995 * drawT, name: 'end' }],
+  });
+
+  const holT = def.holsterTime ?? 0.3;
+  const holster = new Clip('holster', holT, {
+    weapon: [
+      { t: 0, p: v3(0, 0, 0), r: v3(0, 0, 0) },
+      { t: 0.25 * holT, p: v3(0.004, 0.016, -0.012), r: v3(0.07, -0.05, -0.06) },
+      { t: 1, p: v3(0.06, -0.3, 0.17), r: v3(-0.55, 0.75, 0.95), ease: 'out' },
+    ],
+    events: [{ t: 0.995 * holT, name: 'end' }],
+  });
+
+  /** Inspect: turn the blade over so both flats and the swedge pass the key. */
+  const insp = def.inspectTime ?? 2.4;
+  const inspect = new Clip('inspect', insp, {
+    weapon: [
+      { t: 0, p: v3(0, 0, 0), r: v3(0, 0, 0) },
+      { t: 0.2 * insp, p: v3(-0.05, 0.03, 0.05), r: v3(-0.25, -0.5, 0.9) },
+      { t: 0.44 * insp, p: v3(-0.06, 0.045, 0.04), r: v3(-0.15, -0.72, 2.1) },
+      { t: 0.68 * insp, p: v3(-0.03, 0.03, 0.05), r: v3(0.1, -0.3, 3.0) },
+      { t: 0.86 * insp, p: v3(-0.01, 0.008, 0.02), r: v3(0.05, -0.1, 0.35) },
+      { t: 1, p: v3(0, 0, 0), r: v3(0, 0, 0), ease: 'out' },
+    ],
+    events: [{ t: 0.995 * insp, name: 'end' }],
+  });
+
+  return { slash, stab, draw, holster, inspect };
 }

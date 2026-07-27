@@ -411,17 +411,30 @@ export class Viewmodel {
       meshes,
       tris,
       clips: buildClips(model.nodes, def),
-      // the sight point and its axis, in weapon space
-      sight: new THREE.Vector3().fromArray(model.nodes.sight),
-      ironSight: new THREE.Vector3().fromArray(model.nodes.ironSight ?? model.nodes.sight),
+      /**
+       * Every node below is OPTIONAL, because a melee weapon genuinely has none
+       * of them. They are left null rather than defaulted to the origin: a
+       * zeroed `magSeat` is a magazine seated inside the shooter's hand, and a
+       * zeroed `sight` is an ADS solve that yanks the weapon to the eye. Each
+       * consumer branches on null instead (see _updateParts, ejectWorld and the
+       * ADS block in update()).
+       */
+      sight: model.nodes.sight ? new THREE.Vector3().fromArray(model.nodes.sight) : null,
+      ironSight: model.nodes.ironSight ?? model.nodes.sight
+        ? new THREE.Vector3().fromArray(model.nodes.ironSight ?? model.nodes.sight)
+        : null,
       muzzle: new THREE.Vector3().fromArray(model.nodes.muzzle),
-      eject: new THREE.Vector3().fromArray(model.nodes.eject),
+      eject: model.nodes.eject ? new THREE.Vector3().fromArray(model.nodes.eject) : null,
       ejectDir: new THREE.Vector3().fromArray(model.nodes.ejectDir ?? [1, 0.4, 0.2]).normalize(),
       optic: model.nodes.opticGlass ?? null,
-      magSeatPos: new THREE.Vector3().fromArray(model.nodes.magSeat.pos),
-      magSeatQuat: new THREE.Quaternion().setFromEuler(
-        new THREE.Euler().fromArray(model.nodes.magSeat.rot)
-      ),
+      magSeatPos: model.nodes.magSeat
+        ? new THREE.Vector3().fromArray(model.nodes.magSeat.pos)
+        : null,
+      magSeatQuat: model.nodes.magSeat
+        ? new THREE.Quaternion().setFromEuler(
+          new THREE.Euler().fromArray(model.nodes.magSeat.rot)
+        )
+        : null,
       gripR: model.nodes.gripR,
       gripL: model.nodes.gripL,
       chargePull: new THREE.Vector3().fromArray(model.nodes.chargePull ?? [0, 0, 0]),
@@ -431,8 +444,19 @@ export class Viewmodel {
       magLen: model.magSize?.len ?? 0.2,
       shell: model.shell,
       lhandPose: model.id === 'pistol' ? 'cup' : 'clamp',
+      /**
+       * The SHOOTING hand's pose is per-weapon too now. It used to be the one
+       * authored `grip` for everything, which is a pistol-grip pose: on a knife
+       * handle — a 21 x 27 mm oval instead of a 31 x 34 mm grip section — the
+       * same curls leave every fingertip 6-9 mm inside the handle. See
+       * _fitShootingHand.
+       */
+      rhandPose: 'grip',
+      /** No trigger group => nothing for setTrigger to drive. */
+      hasTrigger: !!parts.trigger,
     };
     this._fitSupportHand(entry);
+    this._fitShootingHand(entry);
     this.weapons.set(model.id, entry);
     return entry;
   }

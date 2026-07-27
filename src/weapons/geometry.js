@@ -356,6 +356,82 @@ export function mlokSlot(len = 0.032, wide = 0.0075, depth = 0.0022) {
   return mergeAll(parts);
 }
 
+/**
+ * Loft a run of closed cross-sections along Z.
+ *
+ * THIS IS THE ONLY WAY TO BUILD A GROUND BLADE. A knife is not a box and it is
+ * not a lathe: its cross-section is a different polygon at every station along
+ * the blade — full thickness at the ricasso, a hollow where the fuller runs, a
+ * secondary facet where the swedge starts, and a wedge that closes to 0.3 mm at
+ * the edge. `extrude` can only sweep ONE outline, so a blade built with it is a
+ * flat slab with a bevelled outline: exactly the "it's a box" failure.
+ *
+ * `sections` is an array of `{ z, pts }`, ordered along Z, every `pts` the same
+ * length and wound the same way (CCW in XY). Quads are emitted between adjacent
+ * sections and both ends are fan-capped, so the result is a closed solid.
+ *
+ * Normals are computed after welding, so a facet whose two neighbouring
+ * sections are coplanar gets a hard edge and a curved run gets a smooth one —
+ * which is what puts the specular line down the primary bevel.
+ */
+export function loftZ(sections) {
+  const n = sections.length;
+  const m = sections[0].pts.length;
+  const verts = [];
+  const idx = [];
+  for (let s = 0; s < n; s++) {
+    const sec = sections[s];
+    for (let i = 0; i < m; i++) {
+      verts.push(sec.pts[i][0], sec.pts[i][1], sec.z);
+    }
+  }
+  for (let s = 0; s < n - 1; s++) {
+    const a = s * m;
+    const b = (s + 1) * m;
+    for (let i = 0; i < m; i++) {
+      const j = (i + 1) % m;
+      idx.push(a + i, b + i, b + j);
+      idx.push(a + i, b + j, a + j);
+    }
+  }
+  // End caps, fanned from the first vertex of each ring. The sections are
+  // convex-ish shield shapes, so a fan is watertight and adds m-2 triangles.
+  for (let i = 1; i < m - 1; i++) idx.push(0, i + 1, i);
+  const last = (n - 1) * m;
+  for (let i = 1; i < m - 1; i++) idx.push(last, last + i, last + i + 1);
+
+  // WINDING IS SOLVED, NOT ASSUMED. Whether the quads above come out
+  // front-facing depends on the caller's point order AND on whether z ascends
+  // or descends through the sections — two independent sign flips, and getting
+  // it wrong renders the solid inside-out (backface-culled to a hole in the
+  // silhouette, with the interior lit as if it were the exterior). The signed
+  // volume of a closed mesh is negative exactly when the winding is inverted,
+  // so measure it and flip once. Build time only.
+  let vol = 0;
+  for (let i = 0; i < idx.length; i += 3) {
+    const a = idx[i] * 3;
+    const b = idx[i + 1] * 3;
+    const c = idx[i + 2] * 3;
+    vol +=
+      verts[a] * (verts[b + 1] * verts[c + 2] - verts[c + 1] * verts[b + 2]) -
+      verts[a + 1] * (verts[b] * verts[c + 2] - verts[c] * verts[b + 2]) +
+      verts[a + 2] * (verts[b] * verts[c + 1] - verts[c] * verts[b + 1]);
+  }
+  if (vol < 0) {
+    for (let i = 0; i < idx.length; i += 3) {
+      const t = idx[i];
+      idx[i] = idx[i + 2];
+      idx[i + 2] = t;
+    }
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return normalizeAttributes(g);
+}
+
 /* ========================================================================== */
 /*  assembly                                                                  */
 /* ========================================================================== */
