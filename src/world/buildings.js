@@ -166,17 +166,9 @@ export function buildBuilding(A, rng, spec) {
     top: 0,
   };
 
-  // ---------------------------------------------------------------- plinth --
-  // A base course everywhere: catches the ground grime band and stops the walls
-  // reading as slabs dropped on a plane.
+  // The plinth is built AFTER the facades now — it has to know where the doors
+  // ended up. See `plinthCourse` below the floor loop.
   const plinthH = spec.plinthH ?? 0.42;
-  A.add(
-    spec.plinthKey ?? 'concrete',
-    BOX(A),
-    LL(IDENT, spec.x, plinthH / 2, spec.z, 0, spec.w + 0.14, plinthH, spec.d + 0.14),
-    { masks: [0.55, 0.75, 0.45] }
-  );
-  A.box('concrete', spec.x, plinthH / 2, spec.z, spec.w + 0.14, plinthH, spec.d + 0.14);
 
   let y = 0;
   info.terraces = [];
@@ -200,6 +192,11 @@ export function buildBuilding(A, rng, spec) {
   }
   info.roofY = y;
   info.top = y;
+
+  // ---------------------------------------------------------------- plinth --
+  // A base course everywhere: catches the ground grime band and stops the walls
+  // reading as slabs dropped on a plane.
+  plinthCourse(A, spec, plinthH, spec.plinthKey ?? 'concrete', t, info.doors, !!spec.enterable);
 
   // ------------------------------------------------------------------ roof --
   const ts = floorSpec(spec, floors - 1);
@@ -269,6 +266,86 @@ export function buildBuilding(A, rng, spec) {
   }
 
   return info;
+}
+
+/**
+ * THE BASE COURSE — a ring, not a plug.
+ *
+ * This used to be a single box the size of the whole footprint with a matching
+ * `A.box` collision proxy, and that one proxy is why the player could not get
+ * into any building on the map. Two separate ways:
+ *
+ *   1. It sealed every ground-floor doorway from the floor up to 0.42 m. The
+ *      stand step height is 0.42 m exactly (STANCE.stand.stepHeight), so the
+ *      capsule was trying to mount a step precisely at its limit and stopped
+ *      dead at the threshold — measurably, 0.15-0.38 m short of the footprint,
+ *      which is a capsule radius pressed against the lip.
+ *   2. It buried the interior. Partitions, stairs and every piece of furniture
+ *      are authored at `floorY[0] + 0.13` and the interior slab tops out at
+ *      0.14, so a solid 0.42 m plug sank the whole ground floor 0.29 m into
+ *      concrete. Nobody had noticed, because nobody could get in to look.
+ *
+ * So it is four bars around the perimeter instead, flush with the inner face of
+ * the wall and notched at every door the facade actually cut. From the street it
+ * is the same base course it always was — the inside of a solid box was never
+ * visible from outside — but the doorways are now open right down to the floor,
+ * and the step from the pavement is the interior slab's 0.09 m rather than 0.42.
+ *
+ * `notch` is off for non-enterable blocks: their doors are decoration in front
+ * of a solid core, and leaving their course unbroken keeps the change to the
+ * buildings that are supposed to open.
+ */
+function plinthCourse(A, spec, h, key, t, doors, notch) {
+  const out = 0.07; // how far the course stands proud of the wall
+  const bw = out + t / 2; // ring width: flush with the inner face of the wall
+  const hw = spec.w / 2 + out;
+  const hd = spec.d / 2 + out;
+  const half = 0.7; // half the gap a 1.12 m doorway needs, with its reveal
+
+  const gapsOn = (side) =>
+    notch
+      ? doors.filter((dr) => dr.side === side).map((dr) => (side === 1 || side === 3 ? dr.wp[2] : dr.wp[0]))
+      : [];
+
+  /** The stretches of a run left over once the door gaps are taken out. */
+  const runs = (lo, hi, gaps) => {
+    let segs = [[lo, hi]];
+    for (const g of gaps) {
+      const next = [];
+      for (const [a, b] of segs) {
+        const g0 = g - half;
+        const g1 = g + half;
+        if (g1 <= a || g0 >= b) {
+          next.push([a, b]);
+          continue;
+        }
+        if (g0 > a) next.push([a, g0]);
+        if (g1 < b) next.push([g1, b]);
+      }
+      segs = next;
+    }
+    return segs.filter(([a, b]) => b - a > 0.02);
+  };
+
+  const bar = (cx, cz, sx, sz) => {
+    A.add(key, BOX(A), LL(IDENT, cx, h / 2, cz, 0, sx, h, sz), { masks: [0.55, 0.75, 0.45] });
+    A.box('concrete', cx, h / 2, cz, sx, h, sz);
+  };
+
+  // north/south faces run the full width; east/west run between them, so the
+  // four bars tile the ring without overlapping at the corners.
+  for (const side of [0, 2]) {
+    const cz = side === 0 ? spec.z - spec.d / 2 - out + bw / 2 : spec.z + spec.d / 2 + out - bw / 2;
+    for (const [a, b] of runs(spec.x - hw, spec.x + hw, gapsOn(side))) {
+      bar((a + b) / 2, cz, b - a, bw);
+    }
+  }
+  for (const side of [1, 3]) {
+    const cx = side === 1 ? spec.x + spec.w / 2 + out - bw / 2 : spec.x - spec.w / 2 - out + bw / 2;
+    for (const [a, b] of runs(spec.z - hd + bw, spec.z + hd - bw, gapsOn(side))) {
+      bar(cx, (a + b) / 2, bw, b - a);
+    }
+  }
 }
 
 // =============================================================== facades ====
@@ -647,11 +724,15 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
   const it = 0.16; // partition thickness
   const g0 = floorSpec(spec, 0);
 
-  // ground slab, a step up from the street
-  A.add('floor_concrete', BOX(A), LL(IDENT, g0.x, 0.06, g0.z, 0, g0.w - t * 2, 0.14, g0.d - t * 2), {
+  // Ground slab, a step up from the street. It runs the FULL footprint (and the
+  // 0.07 the base course stands proud) rather than stopping two wall-thicknesses
+  // short: the old inset left a 0.5 m ring with no floor between the slab edge
+  // and the wall, which the plinth plug used to hide. With the course notched at
+  // the doors that ring is the threshold you walk over, so it has to be floored.
+  A.add('floor_concrete', BOX(A), LL(IDENT, g0.x, 0.06, g0.z, 0, g0.w + 0.14, 0.14, g0.d + 0.14), {
     masks: [0.3, 0.6, 0.4],
   });
-  A.box('concrete', g0.x, 0.06, g0.z, g0.w - t * 2, 0.16, g0.d - t * 2);
+  A.box('concrete', g0.x, 0.06, g0.z, g0.w + 0.14, 0.16, g0.d + 0.14);
 
   const rooms = spec.rooms ?? [];
   for (let f = 0; f < floors; f++) {
