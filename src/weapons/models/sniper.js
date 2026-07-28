@@ -700,10 +700,21 @@ export function buildSniper() {
        * is the failure this file already documents twice. Caught by capturing
        * the frame, not by any of the contact numbers, which were perfect.
        */
+      /**
+       * SEARCHED with a PENETRATION constraint — see tools/gripfit.mjs.
+       *
+       * The support hand was buried 46.3 mm inside this weapon's own meshes.
+       * Contact was already good (0.3-0.7 mm) and the wrist was already sane, so
+       * nothing before this measured it: the solve models the handguard cylinder
+       * and nothing else, so it cannot tell a hand wrapped round the forend from
+       * one driven through the barrel and the gas system.
+       *
+       * Now 4.8 mm, wrist 34.6 -> 29.3 degrees, fingertips still within 0.7 mm.
+       */
       gripL: {
-        pos: [0.0193, -0.0037, -0.1635],
-        finger: [0.2817, 0.8719, -0.4006],
-        back: [0.8046, -0.4934, 0.3304],
+        pos: [-0.0307, -0.0012, -0.2445],
+        finger: [0.8829, 0.4428, -0.1564],
+        back: [0.3775, -0.9191, -0.1129],
       },
       /**
        * The forend's collision profile. The real section is a 47 x 43 mm

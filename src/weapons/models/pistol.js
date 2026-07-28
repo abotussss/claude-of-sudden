@@ -332,10 +332,29 @@ export function buildPistol() {
        * reported in contact and the captured frame had no hand on the weapon at
        * all. The span is part of the score now.
        */
+      /**
+       * SEARCHED with a PENETRATION constraint — see tools/gripfit.mjs.
+       *
+       * Reported as "なんで武器に手が貫通してる", and measured: 72.6 mm of
+       * total joint burial inside this weapon's own meshes. The contact solve
+       * models exactly ONE cylinder, the grip, and knows nothing about the
+       * slide, the frame, the receiver or the magwell — so every search before
+       * this one was free to satisfy "fingertips on the grip" with a hand the
+       * weapon passes straight through, and on the pistol it visibly did.
+       *
+       * Now 4.7 mm, which is the normal amount for a hand wrapped round a
+       * grip with a finger inside the trigger guard, at 39.8 degrees of
+       * wrist and every fingertip within 0.8 mm.
+       *
+       * Demanding ZERO was tried and is wrong: it drove the carbine's wrist from
+       * 40 to 82 degrees and pushed a finger off the grip entirely, because a
+       * real grip legitimately puts joints inside the trigger guard's box. The
+       * budget is 20 mm of total burial across fifteen joints.
+       */
       gripR: {
-        pos: [0.033, -0.007, 0.07],
-        finger: [-0.1833, 0.3681, -0.9115],
-        back: [0.9682, -0.0935, -0.2321],
+        pos: [-0.0295, -0.093, 0.1025],
+        finger: [-0.068, 0.3328, -0.9405],
+        back: [-0.9145, -0.2126, -0.3443],
       },
       /**
        * SUPPORT HAND — cups the firing hand, and now actually CLOSES on it.

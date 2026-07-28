@@ -374,10 +374,29 @@ export function buildSmg() {
        * reported in contact and the captured frame had no hand on the weapon at
        * all. The span is part of the score now.
        */
+      /**
+       * SEARCHED with a PENETRATION constraint — see tools/gripfit.mjs.
+       *
+       * Reported as "なんで武器に手が貫通してる", and measured: 106.4 mm of
+       * total joint burial inside this weapon's own meshes. The contact solve
+       * models exactly ONE cylinder, the grip, and knows nothing about the
+       * slide, the frame, the receiver or the magwell — so every search before
+       * this one was free to satisfy "fingertips on the grip" with a hand the
+       * weapon passes straight through, and on the pistol it visibly did.
+       *
+       * Now 0.0 mm, which is the normal amount for a hand wrapped round a
+       * grip with a finger inside the trigger guard, at 37.2 degrees of
+       * wrist and every fingertip within 0.8 mm.
+       *
+       * Demanding ZERO was tried and is wrong: it drove the carbine's wrist from
+       * 40 to 82 degrees and pushed a finger off the grip entirely, because a
+       * real grip legitimately puts joints inside the trigger guard's box. The
+       * budget is 20 mm of total burial across fifteen joints.
+       */
       gripR: {
-        pos: [0.0435, -0.032, 0.084],
-        finger: [-0.1814, 0.3494, -0.9192],
-        back: [0.9568, -0.1433, -0.2529],
+        pos: [0.0785, -0.042, 0.075],
+        finger: [-0.6134, 0.2599, -0.7458],
+        back: [0.9603, -0.1441, -0.2388],
       },
       /** Support hand on the vertical foregrip: metacarpals run forward around
        *  the front of the post, palm facing inboard. */
@@ -415,9 +434,20 @@ export function buildSmg() {
        * wrist. Now 0.4 mm, all four on the post, 36.4 degrees, and the arm holds
        * a bend at 0.757 extension.
        */
+      /**
+       * SEARCHED with a PENETRATION constraint — see tools/gripfit.mjs.
+       *
+       * The support hand was buried 27.6 mm inside this weapon's own meshes.
+       * Contact was already good (0.3-0.7 mm) and the wrist was already sane, so
+       * nothing before this measured it: the solve models the handguard cylinder
+       * and nothing else, so it cannot tell a hand wrapped round the forend from
+       * one driven through the barrel and the gas system.
+       *
+       * Now 0.0 mm, wrist 36.3 -> 30.5 degrees, fingertips still within 0.7 mm.
+       */
       gripL: {
-        pos: [-0.076, -0.045, -0.153],
-        finger: [0.4062, 0.2016, -0.8913],
+        pos: [-0.076, -0.005, -0.1605],
+        finger: [0.4062, 0.3746, -0.8335],
         back: [-0.7876, -0.3821, -0.4834],
       },
       magSeat: { pos: [0, bore - 0.02, magZ], rot: [magTilt, 0, 0] },

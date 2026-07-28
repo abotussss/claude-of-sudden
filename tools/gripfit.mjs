@@ -107,7 +107,24 @@ const result = await page.evaluate(([ONLY, SIDE]) => {
      * making: 0.08 over budget already costs 20 mm of fingertip gap.
      */
     const reach = Math.max(0, (r.ext ?? 0) - 0.92);
-    return contact + over * 0.00025 + off * 0.005 + reach * 0.25;
+    /**
+     * THE HAND MUST NOT BE INSIDE THE GUN. The solve models one cylinder and
+     * knows nothing about the slide, the frame or the receiver, so every search
+     * before this one was free to thread the weapon through the palm — and did,
+     * on the pistol, visibly. Weighted hard: 10 mm of total joint burial costs
+     * as much as 20 mm of fingertip gap, because a hand inside the weapon is
+     * never acceptable and a millimetre of gap often is.
+     */
+    /**
+     * A BUDGET, not zero. Demanding zero was measured and is wrong: it drove the
+     * carbine's wrist from 40 to 82 degrees and pushed a finger off the grip,
+     * because a hand wrapped round a rifle grip legitimately has joints inside
+     * the trigger guard's and the magwell's boxes. 20 mm of TOTAL burial across
+     * fifteen joints is what a real grip scores; the pistol was at 72.6 mm and
+     * the carbine at 97.9, which is a weapon threaded through the palm.
+     */
+    const pen = Math.max(0, (r.pen ?? 0) - 0.02);
+    return contact + over * 0.00025 + off * 0.005 + reach * 0.25 + pen * 2;
   };
 
   for (const id of ONLY) {
@@ -194,6 +211,7 @@ const result = await page.evaluate(([ONLY, SIDE]) => {
       wristBefore: before?.wrist, wristAfter: after?.wrist,
       onBefore: before?.onGrip, onAfter: after?.onGrip,
       extBefore: before?.ext, extAfter: after?.ext,
+      penBefore: before?.pen, penAfter: after?.pen,
       pos: pos.map((v) => +v.toFixed(4)),
       finger: finger.map((v) => +v.toFixed(4)),
       back: back.map((v) => +v.toFixed(4)),
@@ -205,8 +223,8 @@ const result = await page.evaluate(([ONLY, SIDE]) => {
 for (const r of result) {
   const worst = (a) => Math.max(...a.map(Math.abs)).toFixed(1);
   console.log(`\n${r.id}`);
-  console.log(`  tip gaps before (mm): [${r.before.join(', ')}]  worst ${worst(r.before)}   wrist ${r.wristBefore} deg   onGrip ${r.onBefore}/4   ext ${r.extBefore}`);
-  console.log(`  tip gaps after  (mm): [${r.after.join(', ')}]  worst ${worst(r.after)}   wrist ${r.wristAfter} deg   onGrip ${r.onAfter}/4   ext ${r.extAfter}`);
+  console.log(`  tip gaps before (mm): [${r.before.join(', ')}]  worst ${worst(r.before)}   wrist ${r.wristBefore} deg   onGrip ${r.onBefore}/4   ext ${r.extBefore}   pen ${(r.penBefore*1000).toFixed(1)}mm`);
+  console.log(`  tip gaps after  (mm): [${r.after.join(', ')}]  worst ${worst(r.after)}   wrist ${r.wristAfter} deg   onGrip ${r.onAfter}/4   ext ${r.extAfter}   pen ${(r.penAfter*1000).toFixed(1)}mm`);
   console.log(`      grip${SIDE === 'left' ? 'L' : 'R'}: {`);
   console.log(`        pos: [${r.pos.join(', ')}],`);
   console.log(`        finger: [${r.finger.join(', ')}],`);

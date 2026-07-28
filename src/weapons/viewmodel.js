@@ -86,9 +86,73 @@ function shapeMasks(geo, o) {
 }
 
 /** Right-handed hand basis from a finger direction and a back-of-hand direction. */
+
+/**
+ * HOW FAR THE HAND IS BURIED IN THE WEAPON, in metres, summed over the joints.
+ *
+ * The contact solve knows about exactly ONE cylinder — the grip — and nothing
+ * else. It has no idea the pistol has a slide, a frame or a trigger guard, so a
+ * search that only scores "fingertips on the grip cylinder" is free to put the
+ * hand somewhere the slide passes straight through the palm. That is what
+ * shipped, and it is what "なんで武器に手が貫通してる" is: the gun visibly
+ * threaded through the fist.
+ *
+ * Axis-aligned boxes per mesh, not triangles: this runs thousands of times
+ * inside the search, there is no BVH in the repo and adding a dependency is
+ * forbidden. A box is conservative in the useful direction — it over-reports
+ * near a slanted surface and never misses a gross impalement, which is the
+ * failure being hunted.
+ *
+ * The GRIP REGION is exempt, or the metric would fight the thing it is meant to
+ * preserve: a hand holding a 34 mm grip is legitimately inside the grip's own
+ * bounding box, and its palm should interpenetrate by a few millimetres. Points
+ * within `r + 0.03` of the grip axis and inside its span are skipped.
+ */
+function handPenetration(arm, weapon, cyl) {
+  if (!cyl) return 0;
+  _penInv.copy(arm.root.matrixWorld).invert();
+  _penAxis.set(cyl.dir[0], cyl.dir[1], cyl.dir[2]).normalize();
+  _penA0.set(cyl.axis[0], cyl.axis[1], cyl.axis[2]);
+  const zHi = Math.max(cyl.z0, cyl.z1) + 0.02;
+  const zLo = Math.min(cyl.z0, cyl.z1) - 0.02;
+  const gripR2 = (cyl.r + 0.03) * (cyl.r + 0.03);
+
+  const joints = [arm.hand];
+  for (const f of arm.fingers) for (const j of f.joints) joints.push(j);
+  for (const j of arm.thumb.joints) joints.push(j);
+
+  let total = 0;
+  for (const j of joints) {
+    j.updateWorldMatrix(true, false);
+    _penP.setFromMatrixPosition(j.matrixWorld).applyMatrix4(_penInv);
+    // In the grip's own neighbourhood, interpenetration is the point.
+    _penD.copy(_penP).sub(_penA0);
+    _penD.addScaledVector(_penAxis, -_penD.dot(_penAxis));
+    if (_penD.lengthSq() < gripR2 && _penP.z <= zHi && _penP.z >= zLo) continue;
+    for (const mesh of weapon.meshes) {
+      const geo = mesh.geometry;
+      if (!geo.boundingBox) geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      // Depth of penetration = distance to the nearest face of the box, so a
+      // joint just inside a big slide scores small and one at its centre scores
+      // large. Zero when outside on any axis.
+      const dx = Math.min(_penP.x - bb.min.x, bb.max.x - _penP.x);
+      const dy = Math.min(_penP.y - bb.min.y, bb.max.y - _penP.y);
+      const dz = Math.min(_penP.z - bb.min.z, bb.max.z - _penP.z);
+      if (dx > 0 && dy > 0 && dz > 0) total += Math.min(dx, dy, dz);
+    }
+  }
+  return +total.toFixed(4);
+}
+
 /** Scratch for debugRefitRight's wrist measurement. Debug path only. */
 const _wv = new THREE.Vector3();
 const _wv2 = new THREE.Vector3();
+const _penInv = new THREE.Matrix4();
+const _penAxis = new THREE.Vector3();
+const _penA0 = new THREE.Vector3();
+const _penP = new THREE.Vector3();
+const _penD = new THREE.Vector3();
 
 function handBasis(out, finger, back) {
   _v.set(-finger[0], -finger[1], -finger[2]).normalize(); // hand +Z
@@ -590,7 +654,8 @@ export class Viewmodel {
      */
     const ext = this.armL.hand.position.distanceTo(this.armL.shoulder) /
       (this.armL.l1 + this.armL.l2);
-    return { gaps: w.fitL?.gaps ?? null, wrist: +wrist.toFixed(1), onGrip, ext: +ext.toFixed(3) };
+    return { gaps: w.fitL?.gaps ?? null, wrist: +wrist.toFixed(1), onGrip, ext: +ext.toFixed(3),
+      pen: handPenetration(this.armL, w, hg) };
   }
 
   /**
@@ -661,7 +726,8 @@ export class Viewmodel {
      */
     const ext = this.armR.hand.position.distanceTo(this.armR.shoulder) /
       (this.armR.l1 + this.armR.l2);
-    return { gaps: w.fitR?.gaps ?? null, wrist: +wrist.toFixed(1), onGrip, ext: +ext.toFixed(3) };
+    return { gaps: w.fitR?.gaps ?? null, wrist: +wrist.toFixed(1), onGrip, ext: +ext.toFixed(3),
+      pen: handPenetration(this.armR, w, cyl) };
   }
 
   /**
