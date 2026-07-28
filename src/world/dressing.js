@@ -364,7 +364,77 @@ export function dressStreet(A, rng) {
   tyreStacks(A, rng);
   coverClusters(A, rng);
   streetFloor(A, rng);
+  laneFloor(A, rng);
   A.jitter = null;
+}
+
+/**
+ * THE LANE FLOOR.
+ *
+ * `streetFloor` banks sand against every wall down the mid street and lays the
+ * polished ruts that give it a driving line. The two outer lanes had none of
+ * that, and it showed the moment I looked at one from eye level rather than
+ * counting triangles: thirty metres of pale, flat, empty ground with the
+ * building line meeting it on a ruled polygon edge — the exact "flat surface"
+ * failure the quality bar names, on the largest surfaces in the level.
+ *
+ * So each lane rect gets the same treatment as the street: a wind berm banked
+ * along both long walls, a weathering band on the wall foot above it, weeds and
+ * spill in the toe, and a scatter of masonry that has come off the buildings.
+ * All merged into batches that already exist, so it costs triangles and not one
+ * extra draw call.
+ */
+function laneFloor(A, rng) {
+  for (const a of ALLEYS) {
+    const [x0, z0, x1, z1] = a.rect;
+    const w = x1 - x0;
+    const d = z1 - z0;
+    const alongZ = d > w;
+    const len = alongZ ? d : w;
+    if (len < 12) continue;
+    for (const s of [-1, 1]) {
+      // the wall line on this side of the lane
+      const wx = alongZ ? (s < 0 ? x0 : x1) : (x0 + x1) / 2;
+      const wz = alongZ ? (z0 + z1) / 2 : s < 0 ? z0 : z1;
+      let t = -len / 2 + 1;
+      while (t < len / 2 - 1) {
+        const seg = rng.range(2.6, 6.5);
+        const px = alongZ ? wx : wx + t + seg / 2;
+        const pz = alongZ ? wz + t + seg / 2 : wz;
+        // The berm's local +Z is the feathered toe, so it has to point INTO the
+        // lane: a berm laid the other way runs under the building.
+        const ry = alongZ ? (s < 0 ? Math.PI / 2 : -Math.PI / 2) : s < 0 ? 0 : Math.PI;
+        if (isOpen(px + (alongZ ? -s * 0.6 : 0), pz + (alongZ ? 0 : -s * 0.6), 0.05)) {
+          const g = driftBerm(rng, seg * 0.94, rng.range(0.45, 1.15), rng.range(0.06, 0.17), {
+            nz: 3,
+          });
+          A.addOnce('sand', g, LL(IDENT, px, 0.05, pz, ry, 1, 1, 1), {
+            masks: [0.15, rng.range(0.45, 0.75), 0.3],
+          });
+          // masonry and rubbish that has come off the wall into the toe
+          for (let i = 0; i < rng.int(1, 4); i++) {
+            const off = rng.range(0.2, 1.5);
+            const qx = alongZ ? px - s * off : px + rng.range(-seg / 2, seg / 2);
+            const qz = alongZ ? pz + rng.range(-seg / 2, seg / 2) : pz - s * off;
+            if (!isOpen(qx, qz, 0.05)) continue;
+            A.put(
+              rng.pick([
+                'brick_a', 'brick_b', 'cinder', 'rock_a', 'rock_b', 'weeds', 'weeds',
+                'litter', 'plank_a', 'slab_shard', 'shrub',
+              ]),
+              qx,
+              groundY(qx, qz) + 0.015,
+              qz,
+              rng.float() * 6.28,
+              rng.range(0.65, 1.25),
+              [1, rng.range(1.0, 1.5), 1]
+            );
+          }
+        }
+        t += seg + rng.range(0.2, 1.4);
+      }
+    }
+  }
 }
 
 /**

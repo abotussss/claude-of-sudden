@@ -74,11 +74,11 @@ export const STREET = {
  */
 export const ALLEYS = [
   // ------------------------------------------------------------- A lane (west)
-  { rect: [-31, 3, -20.5, 32], surface: 'dirt', density: 0.22 }, // north run
+  { rect: [-31, 3, -20.5, 32], surface: 'dirt', density: 0.5 }, // north run
   { rect: [-36, -11, -20.5, 3], surface: 'gravel', density: 0.5 }, // SITE A courtyard
   { rect: [-31, -26, -20.5, -11], surface: 'dirt', density: 0.3 }, // south run
   // ------------------------------------------------------------- B lane (east)
-  { rect: [20.5, 3, 31, 32], surface: 'dirt', density: 0.22 }, // north run
+  { rect: [20.5, 3, 31, 32], surface: 'dirt', density: 0.5 }, // north run
   { rect: [20.5, -11, 36, 3], surface: 'gravel', density: 0.5 }, // SITE B courtyard
   { rect: [20.5, -26, 31, -11], surface: 'dirt', density: 0.3 }, // south run
   // ------------------------------------------------------- north cross street
@@ -207,7 +207,8 @@ export const BUILDINGS = [
         furnish: [
           { kind: 'shop', x0: 0.42, z0: 0.5, x1: 1.0, z1: 1.0 },
           { kind: 'storage', x0: 0.42, z0: 0.0, x1: 1.0, z1: 0.5 },
-          { kind: 'living', x0: 0.0, z0: 0.0, x1: 0.42, z1: 1.0 },
+          { kind: 'living', x0: 0.0, z0: 0.0, x1: 0.42, z1: 0.52 },
+          { kind: 'storage', x0: 0.0, z0: 0.52, x1: 0.42, z1: 1.0 },
         ],
       },
       {
@@ -258,7 +259,8 @@ export const BUILDINGS = [
         furnish: [
           { kind: 'shop', x0: 0.5, z0: 0.45, x1: 1.0, z1: 1.0 },
           { kind: 'storage', x0: 0.5, z0: 0.0, x1: 1.0, z1: 0.45 },
-          { kind: 'living', x0: 0.0, z0: 0.0, x1: 0.5, z1: 1.0 },
+          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.5, z1: 0.5 },
+          { kind: 'living', x0: 0.0, z0: 0.5, x1: 0.5, z1: 1.0 },
         ],
       },
       {
@@ -307,8 +309,10 @@ export const BUILDINGS = [
           [0.0, 0.66, 1.0, 0.66, 0.28],
         ],
         furnish: [
-          { kind: 'storage', x0: 0.46, z0: 0.0, x1: 1.0, z1: 0.66 },
-          { kind: 'ruin', x0: 0.0, z0: 0.0, x1: 0.46, z1: 0.66 },
+          { kind: 'storage', x0: 0.46, z0: 0.0, x1: 1.0, z1: 0.34 },
+          { kind: 'living', x0: 0.46, z0: 0.34, x1: 1.0, z1: 0.66 },
+          { kind: 'ruin', x0: 0.0, z0: 0.0, x1: 0.46, z1: 0.34 },
+          { kind: 'storage', x0: 0.0, z0: 0.34, x1: 0.46, z1: 0.66 },
           { kind: 'shop', x0: 0.0, z0: 0.66, x1: 1.0, z1: 1.0 },
         ],
       },
@@ -394,7 +398,8 @@ export const BUILDINGS = [
         furnish: [
           { kind: 'shop', x0: 0.0, z0: 0.5, x1: 0.58, z1: 1.0 },
           { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.58, z1: 0.5 },
-          { kind: 'living', x0: 0.58, z0: 0.0, x1: 1.0, z1: 1.0 },
+          { kind: 'living', x0: 0.58, z0: 0.0, x1: 1.0, z1: 0.52 },
+          { kind: 'storage', x0: 0.58, z0: 0.52, x1: 1.0, z1: 1.0 },
         ],
       },
       {
@@ -429,6 +434,11 @@ export const BUILDINGS = [
     damage: 0.3,
     balconies: 0.7,
     doorBays: { 3: 0, 1: 2 },
+    bayKinds: {
+      // The MID lane's window entry: vault straight off the street into the
+      // building that leads through to site B.
+      3: { 0: { 2: { kind: 'window', state: 'open', grille: false, y: 1.85, h: 1.8, w: 1.5 } } },
+    },
     enterable: true,
     roofAccess: false,
     roofProps: 5,
@@ -449,7 +459,8 @@ export const BUILDINGS = [
         furnish: [
           { kind: 'shop', x0: 0.0, z0: 0.45, x1: 0.5, z1: 1.0 },
           { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.5, z1: 0.45 },
-          { kind: 'living', x0: 0.5, z0: 0.0, x1: 1.0, z1: 1.0 },
+          { kind: 'storage', x0: 0.5, z0: 0.0, x1: 1.0, z1: 0.5 },
+          { kind: 'living', x0: 0.5, z0: 0.5, x1: 1.0, z1: 1.0 },
         ],
       },
       {
@@ -499,9 +510,11 @@ export const BUILDINGS = [
           [0.0, 0.66, 1.0, 0.66, 0.72],
         ],
         furnish: [
-          { kind: 'ruin', x0: 0.54, z0: 0.0, x1: 1.0, z1: 0.66 },
-          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.54, z1: 0.66 },
-          { kind: 'ruin', x0: 0.0, z0: 0.66, x1: 1.0, z1: 1.0 },
+          { kind: 'ruin', x0: 0.54, z0: 0.0, x1: 1.0, z1: 0.34 },
+          { kind: 'storage', x0: 0.54, z0: 0.34, x1: 1.0, z1: 0.66 },
+          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.54, z1: 0.34 },
+          { kind: 'ruin', x0: 0.0, z0: 0.34, x1: 0.54, z1: 0.66 },
+          { kind: 'shop', x0: 0.0, z0: 0.66, x1: 1.0, z1: 1.0 },
         ],
       },
       {
@@ -687,6 +700,11 @@ export const SET_PIECES = {
     // connectors
     [-11.0, 12.6, 1.62, 2.3],
     [11.4, -5.2, 1.5, 2.3],
+    // the lane north runs
+    [-22.4, 8.0, 1.5, 2.4],
+    [22.6, 5.0, -1.6, 2.4],
+    [-29.6, 14.5, -1.6, 2.2],
+    [29.8, 16.5, 1.5, 2.2],
   ],
   /** Jersey barriers: [x, z, ry] */
   jerseys: [
@@ -723,6 +741,11 @@ export const SET_PIECES = {
     // the cross streets, where each side steps out of spawn
     [-16.0, 28.6, 0.0, 3.0],
     [16.2, -30.4, 0.0, 3.0],
+    // the long north runs, which need something to break a 29 m sightline
+    [-24.6, 15.5, 1.57, 3.2],
+    [24.8, 13.0, 1.57, 3.2],
+    [-29.8, 7.5, 0.0, 2.8],
+    [29.9, 9.5, 0.0, 2.8],
   ],
   /** Burnt-out vehicles: [x, z, ry, rollDeg] */
   wrecks: [
@@ -813,6 +836,8 @@ export const SET_PIECES = {
     [34.8, -9.2, 2.6, 36],
     [-28.0, -22.0, 2.2, 26],
     [28.2, -23.0, 2.2, 26],
+    [-29.4, 20.5, 2.4, 30],
+    [29.6, 21.5, 2.4, 30],
   ],
   /** Tyre stacks: [x, z, n] */
   tyres: [
@@ -824,5 +849,9 @@ export const SET_PIECES = {
     [32.2, 2.2, 4],
     [-21.6, 12.0, 3],
     [21.8, -6.0, 3],
+    [-30.2, 26.5, 5],
+    [30.4, 25.0, 4],
+    [-21.4, 20.0, 3],
+    [21.6, 18.5, 4],
   ],
 };
