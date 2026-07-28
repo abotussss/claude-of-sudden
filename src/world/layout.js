@@ -53,6 +53,18 @@ export const BUILDINGS = [
     roofProps: 3,
   },
   {
+    /**
+     * W1 OVERLOOKS BOMB SITE A, so it is enterable and has a first floor you can
+     * shoot the courtyard from. A demolition site with no elevated angle is a
+     * site you take by walking in, which is not a site — the defence needs
+     * somewhere to hold that the attack has to clear first, and the attack needs
+     * a reason to throw something before it enters.
+     *
+     * Interior modelled on W2's (the shop below, an apartment above), with the
+     * stair in the south-west corner and its hole cut in the first floor
+     * directly over it. `stairHoles` are absolute LEVEL coordinates and must sit
+     * inside the footprint — W1 is x -20.5..-6.5, z 10..20.
+     */
     id: 'W1',
     x: -13.5,
     z: 15,
@@ -67,8 +79,40 @@ export const BUILDINGS = [
     damage: 0.25,
     balconies: 0.55,
     arches: true,
-    doorBays: { 1: 1 },
+    // Two door bays now, on the street side and the courtyard side, so the
+    // building is a ROUTE between the street and site A rather than a room with
+    // one mouth that a single defender can hold for ever.
+    doorBays: { 1: 2, 2: 1 },
+    enterable: true,
+    roofAccess: false,
     roofProps: 4,
+    stairFlights: [{ floor: 0, x: 0.16, z: 0.3, ry: 0, w: 1.2, railing: 'right' }],
+    stairHoles: { 1: { x0: -19.6, x1: -17.2, z0: 11.2, z1: 15.8 } },
+    rooms: [
+      {
+        // Ground floor: a through route. The cross wall stops short of the
+        // south face so you can get from the street door to the courtyard door
+        // without crossing the open middle of the room.
+        walls: [
+          [0.52, 0.0, 0.52, 0.72, 0.62],
+          [0.0, 0.48, 0.52, 0.48, 0.34],
+        ],
+        furnish: [
+          { kind: 'shop', x0: 0.52, z0: 0.0, x1: 1.0, z1: 1.0 },
+          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.52, z1: 0.48 },
+          { kind: 'living', x0: 0.0, z0: 0.48, x1: 0.52, z1: 1.0 },
+        ],
+      },
+      {
+        // First floor: the angle onto the courtyard. One long room on the
+        // balcony side, so a defender holding it can be flushed from the stair.
+        walls: [[0.46, 0.0, 0.46, 1.0, 0.7]],
+        furnish: [
+          { kind: 'living', x0: 0.46, z0: 0.0, x1: 1.0, z1: 1.0 },
+          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.46, z1: 1.0 },
+        ],
+      },
+    ],
   },
   {
     id: 'W2',
@@ -220,6 +264,17 @@ export const BUILDINGS = [
     ],
   },
   {
+    /**
+     * E2 OVERLOOKS BOMB SITE B, and is the mirror of what W1 does for site A:
+     * three floors, a stair you can be pushed on, and balconies onto the alley
+     * the site sits in. Site B is the defence's site (navcheck puts them 7 m
+     * closer), so the attack needs a way to contest the height rather than
+     * walking into it from the street.
+     *
+     * `stairHoles` are absolute LEVEL coordinates and must land inside the
+     * footprint — E2 is x 6.5..20.5, z -12..2 — and over the stair, which sits
+     * at normalised (0.72, 0.12).
+     */
     id: 'E2',
     x: 13.5,
     z: -5,
@@ -231,8 +286,48 @@ export const BUILDINGS = [
     secondarySide: 2,
     damage: 0.3,
     balconies: 0.7,
-    doorBays: { 3: 1 },
+    // Street door plus a back door onto the alley, so the building connects the
+    // two rather than being a dead end off one of them.
+    doorBays: { 3: 2, 2: 1 },
+    enterable: true,
+    roofAccess: false,
     roofProps: 5,
+    stairFlights: [
+      { floor: 0, x: 0.72, z: 0.12, ry: 0, w: 1.2, railing: 'right' },
+      { floor: 1, x: 0.72, z: 0.12, ry: 0, w: 1.2, railing: 'right' },
+    ],
+    stairHoles: {
+      1: { x0: 15.7, x1: 17.5, z0: -10.8, z1: -4.9 },
+      2: { x0: 15.7, x1: 17.5, z0: -10.8, z1: -4.9 },
+    },
+    rooms: [
+      {
+        walls: [
+          [0.0, 0.44, 0.6, 0.44, 0.34],
+          [0.6, 0.0, 0.6, 0.44, 0.55],
+        ],
+        furnish: [
+          { kind: 'shop', x0: 0.0, z0: 0.44, x1: 0.6, z1: 1.0 },
+          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.6, z1: 0.44 },
+        ],
+      },
+      {
+        walls: [[0.0, 0.46, 0.6, 0.46, 0.72]],
+        furnish: [
+          { kind: 'living', x0: 0.0, z0: 0.46, x1: 0.6, z1: 1.0 },
+          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.6, z1: 0.46 },
+        ],
+      },
+      {
+        // Top floor left mostly open: the balcony angle onto the alley, with
+        // enough clutter to break a silhouette but nothing to hide behind.
+        walls: [[0.55, 0.0, 0.55, 0.6, 0.4]],
+        furnish: [
+          { kind: 'ruin', x0: 0.55, z0: 0.0, x1: 1.0, z1: 1.0 },
+          { kind: 'living', x0: 0.0, z0: 0.0, x1: 0.55, z1: 1.0 },
+        ],
+      },
+    ],
   },
   {
     id: 'E3',

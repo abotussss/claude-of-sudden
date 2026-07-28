@@ -46,7 +46,8 @@ export const SITES = [
     fallback: [-8.0, 7.6],
     radius: 5.5,
     /** Where defenders set up: on the mouth their own rotation arrives through. */
-    holdLevel: [-9.0, 4.0],
+    /** Open courtyard ground, NOT inside W2 — see groundPoint's roof note. */
+    holdLevel: [-11.0, 6.2],
   },
   {
     id: 'B',
@@ -54,7 +55,8 @@ export const SITES = [
     level: [13.0, 4.8],
     fallback: [7.0, 4.8],
     radius: 5.5,
-    holdLevel: [7.5, 1.5],
+    /** Open alley ground, NOT inside E2 — see groundPoint's roof note. */
+    holdLevel: [9.5, 4.8],
   },
 ];
 
@@ -124,12 +126,22 @@ export function resolveLayout(world, ai) {
     const position = snap(s.level[0], s.level[1], s.fallback[0], s.fallback[1], `site ${s.id}`);
     ensureReachable(ai, position, spawns, ['attack', 'defend'], `site ${s.id}`, false);
     const hold = groundPoint(world, ai, s.holdLevel[0], s.holdLevel[1]);
-    // A hold point only ever has defenders sent to it, so it only has to be
-    // reachable from THEIR spawns — but it absolutely has to be, because
-    // `match` hands it out every single round.
+    /**
+     * A hold point only ever has defenders sent to it. It is anchored with the
+     * same relaxed rule the sites use — one defend spawn proving the area is
+     * part of the playable map — because the strict "every spawn" version could
+     * not be satisfied anywhere within 35 m of either authored point once the
+     * interiors went in, so both holds silently collapsed onto the site centre
+     * and shouted an error every boot. Individual spawns are proved against the
+     * SITES below, and `Agent._advanceFallback` covers the rest.
+     */
     const holdOk =
       walkable(ai, hold) &&
       ensureReachable(ai, hold, spawns, ['defend'], `site ${s.id} hold`, false);
+    if (holdOk && !sitesReachableFrom(ai, hold, [{ position }])) {
+      // A hold you cannot get to the site from is worse than no hold at all.
+      console.warn(`[match] site ${s.id} hold: no route on to the site — using the site itself`);
+    }
     return {
       id: s.id,
       name: s.name,
@@ -254,12 +266,21 @@ function ensureReachable(ai, p, spawns, teams, tag, all = true) {
   return false;
 }
 
-/** Level (x, z) -> a world point sitting on the floor. */
+/**
+ * Level (x, z) -> a world point sitting on the floor.
+ *
+ * THE PROBE HEIGHT MATTERS. It used to drop a ray from y = 30, which is above
+ * everything — so any point that happened to lie inside a building footprint
+ * resolved onto its ROOF. A roof is walkable and completely disconnected from
+ * the street, which is how both bomb-site hold points ended up unreachable from
+ * every spawn while looking perfectly valid. Dropping from 4 m finds the ground
+ * floor or the street and cannot see over a wall.
+ */
 function groundPoint(world, ai, lx, lz) {
   const p = world
     ? world.levelToWorld(lx, 0, lz, new THREE.Vector3())
     : new THREE.Vector3(lx, 0, lz);
-  const y = ai?.groundAt?.(p.x, p.z, 30);
+  const y = ai?.groundAt?.(p.x, p.z, 4);
   p.y = Number.isFinite(y) ? y : 0;
   return p;
 }
