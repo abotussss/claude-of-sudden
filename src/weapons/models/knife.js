@@ -32,7 +32,26 @@ export function buildKnife() {
 
   // Blade: blued flats, polished ground bevel. See addKnifeBlade for the
   // section-by-section derivation of the swedge, the fuller and the grind line.
-  const blade = addKnifeBlade(body, 'steel_black', 'steel', {
+  /**
+   * FLATS IN `steel_enamel`, BEVEL IN BARE `steel`.
+   *
+   * The flats were `steel_black` and the blade photographed as a sheet of white
+   * paper — the brightest object in the frame, with no grain and no value
+   * change across it. That is the defect `steel_enamel` was created for, and it
+   * is written up at length in materials.js: `steel_black` is a METAL, so three
+   * folds its tint into F0 and `specularIntensity` cannot touch it, and a
+   * smooth FLAT metal aimed at the viewmodel key is a mirror by construction.
+   * The AK's stamped receiver failed exactly this way. A knife blade is a
+   * 125 x 30 mm flat held 0.3 m from the eye, so it is the worst case in the
+   * whole directory.
+   *
+   * Reference agrees with the render: a fighting knife is bead-blasted,
+   * phosphated or coated precisely SO THAT it does not flash — a mirror blade
+   * is a liability. The ground bevel stays bare `steel` because that thin bright
+   * line down the edge is what reads as "sharp", and being a narrow curved
+   * surface it is the one part that should catch the key.
+   */
+  const blade = addKnifeBlade(body, 'steel_enamel', 'steel', {
     z0: zPlunge,
     z1: zTip,
     ySpine: 0.012,

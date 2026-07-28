@@ -661,17 +661,38 @@ export const WEAPON_DEFS = {
      *      nothing inside the near plane, and the shooting arm at 52%
      *      extension, so the elbow keeps a deep bend.
      */
-    hipPos: [0.13, -0.03, -0.28],
-    hipRot: [1.0, 0.75, -0.8],
+    /**
+     * THE KNIFE IS IN FRAME NOW.
+     *
+     * hipRot was [1.0, 0.75, -0.8] — 57 deg of pitch and 43 deg of yaw — which
+     * jammed the whole knife against the right edge of the screen with the
+     * blade pointing up and away, the guard off-frame and the hand only half
+     * visible. Reported as "意味のわからないナイフの持ち方". It was not a bug in
+     * the grip solve or in the swing clip; the swing does return to exactly
+     * this pose, which I checked before changing anything. The authored rest
+     * pose was simply wrong.
+     *
+     * Reference: a knife in a first-person view is carried in the lower right
+     * with the blade angled up and INBOARD, toward the centre of the screen, so
+     * that the edge, the guard and the fist are all readable at once — the
+     * player has to be able to see what they are holding. Chosen by capturing
+     * five candidates and looking at them, not by arithmetic.
+     *
+     * sprint and lowReady are shifted by the SAME delta rather than re-authored,
+     * so their relationship to the rest pose is preserved: low ready still sits
+     * below and outboard of the idle, sprint further still.
+     */
+    hipPos: [0.11, -0.07, -0.3],
+    hipRot: [0.55, 0.45, -0.45],
     adsCant: [0, 0, 0],
     /* Sprint: the blade drops and swings across the body — 31 deg of nose-up
      * traded away and 14 deg more yaw, which takes the point down-left and out
      * of the sightline. Carried over by the same delta as the hip pose so the
      * blend does not translate the knife sideways on the way into a sprint. */
-    sprintPos: [0.1, -0.115, -0.255],
-    sprintRot: [0.46, 0.99, -0.45],
-    lowReadyPos: [0.12, -0.1, -0.27],
-    lowReadyRot: [0.62, 0.87, -0.72],
+    sprintPos: [0.08, -0.155, -0.275],
+    sprintRot: [0.01, 0.69, -0.1],
+    lowReadyPos: [0.1, -0.14, -0.29],
+    lowReadyRot: [0.17, 0.57, -0.37],
     swayScale: 1.25,
     bobScale: 1.2,
   },
