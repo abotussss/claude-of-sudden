@@ -29,20 +29,32 @@ import * as THREE from 'three';
 export const SITES = [
   {
     id: 'A',
-    name: 'WEST ALLEY',
-    level: [-12.0, -10.2],
-    fallback: [-5.4, -10.2],
-    radius: 4.5,
-    /** Where defenders set up: pushed back toward their own spawn. */
-    holdLevel: [-7.0, -12.5],
+    name: 'WEST COURTYARD',
+    /**
+     * MOVED OUT OF THE DEAD-END ALLEY. Site A used to sit at level (-12, -10.2)
+     * in the west mid alley, and `tools/navcheck.mjs` measured what that cost:
+     * the attack's shortest real A* route was 49.6 m against the defence's
+     * 23.3 m. Twenty-six metres of head start on a 120 second round is not a
+     * defender advantage, it is an unplayable site — the defence is set before
+     * the attack can see the entrance, every time.
+     *
+     * The courtyard between W2 and BW1 is open on three sides (the street to
+     * the east, the lane north, the wall line west), which is what a bomb site
+     * needs: more than one way in, so a retake and an execute are both possible.
+     */
+    level: [-15.0, 7.6],
+    fallback: [-8.0, 7.6],
+    radius: 5.5,
+    /** Where defenders set up: on the mouth their own rotation arrives through. */
+    holdLevel: [-9.0, 4.0],
   },
   {
     id: 'B',
     name: 'EAST ALLEY',
     level: [13.0, 4.8],
-    fallback: [5.4, 4.8],
-    radius: 4.5,
-    holdLevel: [7.4, 2.4],
+    fallback: [7.0, 4.8],
+    radius: 5.5,
+    holdLevel: [7.5, 1.5],
   },
 ];
 
@@ -70,13 +82,13 @@ export const SPAWNS = {
     [4.6, 34.0, Math.PI],
   ],
   defend: [
-    [-3.6, -30.0, 0],
-    [0.0, -32.5, 0],
-    [3.6, -30.0, 0],
-    [-2.2, -26.5, 0],
-    [2.2, -26.5, 0],
-    [-4.6, -34.0, 0],
-    [4.6, -34.0, 0],
+    [-3.6, -20.0, 0],
+    [0.0, -22.5, 0],
+    [3.6, -20.0, 0],
+    [-2.2, -17.0, 0],
+    [2.2, -17.0, 0],
+    [-4.6, -24.0, 0],
+    [4.6, -24.0, 0],
   ],
 };
 
