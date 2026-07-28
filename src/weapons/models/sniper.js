@@ -627,10 +627,20 @@ export function buildSniper() {
        * daylight): (0.0305, 0.0002, 0.0385). Targets are WRISTS, so the value
        * below is that contact minus 0.098 along `finger`.
        */
+      /**
+       * SEARCHED against the real contact solve — see tools/gripfit.mjs.
+       *
+       * These were copied from the M4's gripR, and the M4's gripR was broken:
+       * the index fingertip landed on the grip and the other three finished
+       * 15.2, 16.8 and 23.3 mm away from it, so the hand rested one finger on the
+       * weapon and held the rest in the air. The M4 was fixed by search rather
+       * than by derivation; the same search closes this one to
+       * [0.3, 0.4, 0.4, 0.4] mm.
+       */
       gripR: {
-        pos: [0.0256, 0.0507, 0.1222],
-        finger: [0.05, -0.5162, -0.8543],
-        back: [1, 0.0284, 0.0412],
+        pos: [0.0456, 0.0007, 0.1022],
+        finger: [0.05, 0.2534, -0.9661],
+        back: [0.9988, 0.0284, 0.0411],
       },
       /**
        * The pistol grip as a cylinder, for Viewmodel._fitShootingHand: a point

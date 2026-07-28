@@ -862,10 +862,20 @@ export function buildAk() {
        *                                daylight)
        *                 = (0.0298, 0.0037, 0.0393)
        */
+      /**
+       * SEARCHED against the real contact solve — see tools/gripfit.mjs.
+       *
+       * These were copied from the M4's gripR, and the M4's gripR was broken:
+       * the index fingertip landed on the grip and the other three finished
+       * 15.0, 16.5 and 23.1 mm away from it, so the hand rested one finger on the
+       * weapon and held the rest in the air. The M4 was fixed by search rather
+       * than by derivation; the same search closes this one to
+       * [0.4, 0.4, 0.3, 0.4] mm.
+       */
       gripR: {
-        pos: [0.0249, 0.0624, 0.1176],
-        finger: [0.05, -0.599, -0.799],
-        back: [1, 0.032, 0.038],
+        pos: [0.0449, 0.0524, 0.1176],
+        finger: [0.05, -0.2888, -0.9561],
+        back: [0.9988, 0.032, 0.038],
       },
       /**
        * The pistol grip AS A CYLINDER, for the build-time fingertip solve
