@@ -82,6 +82,8 @@ export class WeaponSystem {
     this.sim = null;
     this.states = new Map();
     this.activeId = 'rifle';
+    /** Which weapon slot 1 draws. @see setPrimary */
+    this.primaryId = 'rifle';
     this.debugMode = null;
     /**
      * Trigger disabled from outside. `match` holds this true through freeze
@@ -242,6 +244,45 @@ export class WeaponSystem {
 
   get current() {
     return this.state?.def ?? null;
+  }
+
+  /**
+   * THE PRIMARY SLOT'S CANDIDATES — carbine, AK, sniper, SMG.
+   *
+   * A loadout is not the same thing as what is in your hands, and the menu was
+   * conflating them: it listed all six weapons and switching one was the same
+   * action as pressing its number key. That is a weapon SWITCHER. What a
+   * demolition game needs, and what was asked for, is choosing WHICH primary
+   * you carry — the sidearm and the knife are fixed, slot 1 is the choice.
+   *
+   * Derived from `class` rather than listed, so a new primary added to defs.js
+   * appears in the menu with nothing else to change.
+   */
+  get primaryIds() {
+    return WEAPON_IDS.filter((id) => {
+      const c = WEAPON_DEFS[id]?.class;
+      return c !== 'pistol' && c !== 'melee';
+    });
+  }
+
+  /**
+   * Choose the primary. Slot 1 draws it from now on.
+   *
+   * If the player is currently holding a primary — which they are, in the menu,
+   * essentially always — swap to the new one so the choice is visible
+   * immediately rather than only after the next number-key press. If they are
+   * holding the pistol or the knife, the choice is recorded and takes effect
+   * when they go back to slot 1.
+   */
+  setPrimary(id) {
+    if (!this.primaryIds.includes(id)) return false;
+    this.primaryId = id;
+    const holdingPrimary = this.primaryIds.includes(this.activeId);
+    if (holdingPrimary) {
+      if (typeof this.setWeaponImmediate === 'function') this.setWeaponImmediate(id);
+      else this.setWeapon(id);
+    }
+    return true;
   }
 
   get weaponIds() {
@@ -814,7 +855,9 @@ export class WeaponSystem {
        * `weaponIds` order (rifle, smg, pistol, knife). Tab is NOT touched: it
        * is the scoreboard in this build.
        */
-      if (input.pressed('Digit1')) this.setWeapon('rifle');
+      // Slot 1 is whatever primary the player chose in the menu, not always
+      // the M4. @see setPrimary
+      if (input.pressed('Digit1')) this.setWeapon(this.primaryId);
       if (input.pressed('Digit2')) this.setWeapon('pistol');
       if (input.pressed('Digit3')) this.setWeapon('knife');
       if (input.wheel) this.nextWeapon();

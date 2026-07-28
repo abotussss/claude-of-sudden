@@ -120,7 +120,20 @@ export class PauseMenu {
    */
   _buildWeaponRow() {
     const wp = this.ctx.peek('weapons');
-    const ids = wp?.weaponIds ?? [];
+    /**
+     * PRIMARIES ONLY — carbine / AK / sniper / SMG.
+     *
+     * This listed `weaponIds`, i.e. all six, and clicking one did exactly what
+     * pressing its number key does. So the "weapon" control in the settings
+     * screen was a weapon SWITCHER, not a loadout: it offered the pistol and
+     * the knife as if they were choices, and offered no way to say "I want the
+     * AK as my rifle". Reported as "why is the weapon selection which of the
+     * weapons I'm holding, instead of which AR to take".
+     *
+     * Slot 1 draws whatever is chosen here. Slots 2 and 3 are fixed, as they
+     * are in the game this is modelled on.
+     */
+    const ids = wp?.primaryIds ?? [];
     if (!this.wSeg || ids.length === this.wBtns.length) return;
     this.wSeg.textContent = '';
     this.wBtns.length = 0;
@@ -129,7 +142,7 @@ export class PauseMenu {
       const b = el('button', null, this.wSeg, (def?.label ?? id).toUpperCase());
       b.type = 'button';
       b.dataset.wid = id;
-      b.addEventListener('click', () => this.setWeapon(id));
+      b.addEventListener('click', () => this.setPrimary(id));
       this.wBtns.push(b);
     }
   }
@@ -139,9 +152,15 @@ export class PauseMenu {
    * exactly like pressing 1/2/3 — no instant swap that the viewmodel has to
    * catch up with.
    */
-  setWeapon(id) {
+  setPrimary(id) {
     const wp = this.ctx.peek('weapons');
     if (!wp) return;
+    if (typeof wp.setPrimary === 'function') {
+      wp.setPrimary(id);
+      this.ctx.events.emit('ui:setting', { key: 'primary', value: id });
+      this.syncFromConfig();
+      return;
+    }
     // A holster/draw cannot play while the trigger is locked and the game is
     // paused, so swap immediately and let the draw play on resume.
     if (typeof wp.setWeaponImmediate === 'function') wp.setWeaponImmediate(id);
@@ -222,7 +241,9 @@ export class PauseMenu {
   syncFromConfig() {
     const cfg = this.ctx.config;
     this._buildWeaponRow();
-    const active = this.ctx.peek('weapons')?.activeId;
+    // Highlight the chosen PRIMARY, not whatever is in hand — the pistol being
+    // out must not leave every button unlit. @see WeaponSystem.setPrimary
+    const active = this.ctx.peek('weapons')?.primaryId;
     for (const b of this.wBtns) b.classList.toggle('on', b.dataset.wid === active);
     for (let i = 0; i < this.qBtns.length; i++)
       this.qBtns[i].classList.toggle('on', PRESETS[i] === cfg.quality);
