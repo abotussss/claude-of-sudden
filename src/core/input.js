@@ -12,7 +12,13 @@ export const ACTIONS = {
   left: ['KeyA', 'ArrowLeft'],
   right: ['KeyD', 'ArrowRight'],
   jump: ['Space'],
-  crouch: ['ControlLeft', 'KeyC'],
+  /**
+   * LEFT CONTROL ONLY. `KeyC` was bound alongside it and is removed by request:
+   * with both live, C is a second crouch key sitting right next to the movement
+   * keys, and slot 4 is about to become the grenade, so the hand wants to stay
+   * on the number row rather than learn two crouches.
+   */
+  crouch: ['ControlLeft'],
   prone: ['KeyZ'],
   sprint: ['ShiftLeft'],
   reload: ['KeyR'],
