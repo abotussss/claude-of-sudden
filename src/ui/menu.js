@@ -240,6 +240,13 @@ export class PauseMenu {
     this.open = true;
     this.syncFromConfig();
     setStyle(this.root, 'display', '');
+    /**
+     * REFUSE the lock for as long as the menu is up, rather than just exiting
+     * it once. Exiting alone did not work: `Input._onMouseDown` re-locks on any
+     * left click, so the first click on a menu button took the cursor straight
+     * back and the only way to see it again was Escape — every time.
+     */
+    this.ctx.input?.setLockAllowed?.(false);
     document.exitPointerLock?.();
     const t = this.ctx.time;
     if (t) {
@@ -256,6 +263,7 @@ export class PauseMenu {
     const t = this.ctx.time;
     if (t) t.scale = this._prevScale ?? 1;
     this.ctx.peek('player')?.setControlEnabled?.(true);
+    this.ctx.input?.setLockAllowed?.(true);
     this.ctx.input?.requestPointerLock?.();
     this.ctx.events.emit('ui:pause', { paused: false });
   }

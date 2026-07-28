@@ -46,6 +46,8 @@ export class Input {
     this._pendingWheel = 0;
 
     this.pointerLocked = false;
+    /** @see setLockAllowed — a modal turns this off so it can keep the cursor. */
+    this.lockAllowed = true;
     this.enabled = true;
     /** Set true by capture mode so scripted shots aren't fought by real input. */
     this.frozen = false;
@@ -90,7 +92,27 @@ export class Input {
     this.canvas.removeEventListener('contextmenu', this._bound.contextmenu);
   }
 
+  /**
+   * Re-locking is REFUSED while this is false.
+   *
+   * The menu called `document.exitPointerLock()` on open, which is correct, and
+   * then the very first click on the menu re-locked the pointer through
+   * `_onMouseDown` below and the cursor vanished again. From the outside that is
+   * "the settings screen has no mouse cursor and I have to press Escape every
+   * single time" — the lock was being handed back a frame after being released,
+   * by the same click the user made to press a button.
+   *
+   * A pointer lock is a MODE, not an event, so it needs a gate rather than a
+   * one-shot exit call: while a modal owns the screen, nothing may take the
+   * cursor back. `PlayerMenu.show()/close()` is the only thing that moves it.
+   */
+  setLockAllowed(v) {
+    this.lockAllowed = !!v;
+    if (!this.lockAllowed && this.pointerLocked) document.exitPointerLock?.();
+  }
+
   requestPointerLock() {
+    if (!this.lockAllowed) return;
     // Chrome returns a promise that rejects if the document is not eligible
     // (headless capture, an iframe, a lock request too soon after an exit).
     // An unhandled rejection there shows up as a page error in the harness, so
