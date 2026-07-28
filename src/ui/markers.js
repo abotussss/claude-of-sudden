@@ -52,7 +52,8 @@ function diamond(parent) {
       width: 9.6,
       height: 9.6,
       transform: 'rotate(45 8 8)',
-      fill: 'rgba(121,210,255,.9)',
+      // currentColor so `updateObjectives` can tint a marker per item.
+      fill: 'currentColor',
       stroke: 'rgba(6,20,28,.75)',
       'stroke-width': 1,
     },
@@ -63,7 +64,7 @@ function diamond(parent) {
 
 function chevron(parent) {
   const s = svg('svg', { viewBox: '0 0 16 16' }, parent);
-  svg('path', { d: 'M8 1.5 14.4 13H1.6z', fill: 'rgba(121,210,255,.95)', stroke: 'rgba(6,20,28,.7)', 'stroke-width': 1 }, s);
+  svg('path', { d: 'M8 1.5 14.4 13H1.6z', fill: 'currentColor', stroke: 'rgba(6,20,28,.7)', 'stroke-width': 1 }, s);
   return s;
 }
 
@@ -156,6 +157,16 @@ export class WorldMarkers {
         setText(node._dist, metres(p.dist));
         setText(node._name, o.name ?? '');
         const edge = p.offscreen;
+        /**
+         * PER-MARKER COLOUR. `o.color` was accepted by every caller and then
+         * never applied here, so a bomb site and an enemy contact rendered
+         * identically — which makes an enemy marker worse than useless, because
+         * it reads as another objective. The glyphs are authored with
+         * `fill="currentColor"`, so setting the node's colour tints the diamond,
+         * the chevron and the text together — the two glyph fills were
+         * hardcoded cyan and are `currentColor` now.
+         */
+        setStyle(node, 'color', o.color ?? 'var(--cyan)');
         setStyle(node._dia, 'display', edge ? 'none' : '');
         setStyle(node._chev, 'display', edge ? '' : 'none');
         setStyle(node._letter, 'opacity', edge ? '0' : '1');

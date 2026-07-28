@@ -949,7 +949,39 @@ export class MatchSystem {
         out.push(this._marker(s.id, s.id, s.position, hot ? '#ffb02a' : '#79d2ff'));
       }
     }
+    this._publishEnemyMarkers(out);
     this.ui.setObjectives(out);
+  }
+
+  /**
+   * ENEMY MARKERS — a red diamond over anyone your side currently has eyes on.
+   *
+   * The characters wear real camouflage against a sand-and-plaster street, and
+   * the camo bake measures a mean albedo of 0.09 (see the `[ai] camo` lines at
+   * boot). That is doing its job: at 30 m in shadow a man in woodland against a
+   * dirt alley is genuinely hard to pick out, and the player said so.
+   *
+   * The fix is NOT to make the characters brighter — that undoes the art. It is
+   * to tell you what you have already seen, which is what Sudden Attack's own
+   * enemy nameplates do.
+   *
+   * IT IS NOT A WALLHACK. `ai._updateSpotting` stamps `spottedAt` only when
+   * somebody on your side genuinely has line of sight — your own eyes, inside
+   * the view cone, LOS-tested through the physics BVH, or a team-mate who has
+   * the man as a live target. `ai.getHudActors()` then drops any enemy whose
+   * stamp is more than three seconds old, so a contact FADES rather than
+   * following him through a wall. You get told about a man you could already
+   * see, and you keep the information for three seconds after you lose him —
+   * which is the same rule the minimap blips already follow.
+   */
+  _publishEnemyMarkers(out) {
+    const actors = this.ai.getHudActors?.();
+    if (!actors) return;
+    for (let i = 0; i < actors.length; i++) {
+      const a = actors[i];
+      if (a.friendly) continue;
+      out.push(this._marker(`e${i}`, '', a.position, '#ff3f31'));
+    }
   }
 
   _marker(id, label, position, color) {
