@@ -584,6 +584,22 @@ export const TEAM_RIM = {
   /** Metres over which the band opens and the fill comes in. */
   d0: 13,
   d1: 55,
+  /**
+   * NEAR FADE — off entirely inside `n0`, full by `n1`.
+   *
+   * MEASURED BY LOOKING at the `combat` shot, which is the only way this was
+   * ever going to be caught: a man at FIVE metres fills a quarter of the screen,
+   * so the grazing band is wide enough to land on every sling strap, pouch edge
+   * and trouser fold he has, and the result is a net of orange lines over a
+   * figure — precisely the drawn-outline, cheat-overlay look this is supposed to
+   * avoid. It was invisible at 15 m, where it was first judged.
+   *
+   * It is also pointless there. Nobody has ever failed to notice a man at five
+   * metres. The rim exists for the range where camouflage wins, so it starts
+   * where camouflage starts working.
+   */
+  n0: 7,
+  n1: 14,
   /** Falloff exponent inside the band. */
   power: 2.0,
   /** Flat tint under the whole figure once past `d1`. */
@@ -627,6 +643,9 @@ export class SoldierMaterials {
         value: new THREE.Vector4(
           TEAM_RIM.power, TEAM_RIM.fill, TEAM_RIM.lumSlope, TEAM_RIM.lumFloor
         ),
+      },
+      owTeamP2: {
+        value: new THREE.Vector2(TEAM_RIM.n0, 1 / (TEAM_RIM.n1 - TEAM_RIM.n0)),
       },
     };
     this._disposables = [];
@@ -1008,9 +1027,11 @@ export class SoldierMaterials {
       shader.uniforms.owCharTeam = uni.owCharTeam;
       shader.uniforms.owTeamP0 = this.teamShape.owTeamP0;
       shader.uniforms.owTeamP1 = this.teamShape.owTeamP1;
+      shader.uniforms.owTeamP2 = this.teamShape.owTeamP2;
       shader.fragmentShader =
         'uniform vec4 owCharRim;\nuniform vec3 owCharTeam;\n' +
-        'uniform vec4 owTeamP0;\nuniform vec4 owTeamP1;\n' + shader.fragmentShader;
+        'uniform vec4 owTeamP0;\nuniform vec4 owTeamP1;\nuniform vec2 owTeamP2;\n' +
+        shader.fragmentShader;
       if (d) {
         shader.uniforms.owDetailTex = uni.owDetailTex;
         shader.uniforms.owDetailParams = uni.owDetailParams;
@@ -1044,7 +1065,11 @@ export class SoldierMaterials {
           float owF = 1.0 - abs( dot( normalize( vViewPosition ), nonPerturbedNormal ) );
           float owEdge = pow( smoothstep( owCharRim.y, 1.0, owF ), owCharRim.z );
           outgoingLight *= 1.0 - owCharRim.x * owEdge;
-          float owT = clamp( ( length( vViewPosition ) - owTeamP0.z ) * owTeamP0.w, 0.0, 1.0 );
+          float owD = length( vViewPosition );
+          float owT = clamp( ( owD - owTeamP0.z ) * owTeamP0.w, 0.0, 1.0 );
+          // Off inside n0, full by n1. See TEAM_RIM: the band is many pixels
+          // wide on a man at five metres and lands on every strap he has.
+          float owNear = smoothstep( 0.0, 1.0, clamp( ( owD - owTeamP2.x ) * owTeamP2.y, 0.0, 1.0 ) );
           float owBand = mix( owTeamP0.x, owTeamP0.y, owT );
           float owRimT = pow( smoothstep( owBand, 1.0, owF ), owTeamP1.x );
           // Gain on the surface's OWN radiance, so this behaves like a light and
@@ -1055,7 +1080,7 @@ export class SoldierMaterials {
           // it to luminance keeps the rim at a constant ratio to the figure
           // through four stops, and caps what bloom can ever pick up.
           float owLum = dot( outgoingLight, vec3( 0.2126, 0.7152, 0.0722 ) );
-          outgoingLight += owCharTeam * max( owRimT, owT * owTeamP1.y ) *
+          outgoingLight += owCharTeam * max( owRimT, owT * owTeamP1.y ) * owNear *
             min( owLum * owTeamP1.z + owTeamP1.w, 2.6 );
         }
         #include <opaque_fragment>`
