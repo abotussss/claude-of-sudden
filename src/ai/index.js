@@ -49,7 +49,7 @@
  */
 
 import * as THREE from 'three';
-import { SoldierMaterials } from './textures.js';
+import { SoldierMaterials, TEAM_RIM } from './textures.js';
 import { buildSoldier, resolveMaterials, MATERIAL_SLOTS, VARIANTS } from './soldier.js';
 import { RIG } from './rig.js';
 import { NavGrid, CoverMap } from './nav.js';
@@ -100,6 +100,17 @@ export class AiSystem {
     /** Actors hostile to team i, rebuilt at most once per frame. */
     this._hostiles = [[], []];
     this._hostileFrame = -1e9;
+    /**
+     * Which side wears each appearance, so the team rim can be resolved (see
+     * TEAM_RIM in textures.js). A variant's materials are shared by every actor
+     * wearing it — three uniform floats, not a per-actor value — which is what
+     * makes the rim free. `match` already gives the two sides disjoint variant
+     * lists (rules.js TEAM_VARIANTS); if that ever stops being true this warns
+     * once rather than silently rimming half a squad the wrong colour.
+     */
+    this._variantTeam = new Map();
+    this._rimTeam = -1;
+    this._rimWarned = false;
     this._blips = [];
     this._blipOut = [];
 
@@ -681,7 +692,39 @@ export class AiSystem {
   spawn(variantName, position, yaw = 0, opts = {}) {
     const a = new Agent(this, { variant: variantName, position, yaw, ...opts });
     this.agents.push(a);
+    this._noteVariantTeam(a.variantName, a.team);
     return a;
+  }
+
+  /**
+   * Record which side wears `variant` and repaint its team rim if that changed.
+   * Costs a Map lookup on spawn and three float writes per material when it
+   * actually moves; nothing at all per frame.
+   */
+  _noteVariantTeam(variant, team) {
+    const t = team === 1 ? 1 : 0;
+    const prev = this._variantTeam.get(variant);
+    if (prev === t) return;
+    if (prev !== undefined && !this._rimWarned) {
+      this._rimWarned = true;
+      console.warn(
+        `[ai] variant "${variant}" is now worn by team ${t} as well as ${prev}; ` +
+          'the team rim is per-appearance, so both sides will read as the newer one'
+      );
+    }
+    this._variantTeam.set(variant, t);
+    this._applyTeamRims();
+  }
+
+  /** Re-key every known variant's rim against the CURRENT `playerTeam`. */
+  _applyTeamRims() {
+    this._rimTeam = this.playerTeam;
+    for (const [variant, team] of this._variantTeam) {
+      this.materials.setTeamRim(
+        variant,
+        team === this.playerTeam ? TEAM_RIM.friendly : TEAM_RIM.hostile
+      );
+    }
   }
 
   /**
@@ -946,6 +989,9 @@ export class AiSystem {
         this.populate();
       }
     }
+
+    // `match` flips playerTeam at the half; hostile and friendly swap with it.
+    if (this._rimTeam !== this.playerTeam) this._applyTeamRims();
 
     // Per-frame A* budget: see requestPath().
     this._pathBudget = this.pathsPerFrame;

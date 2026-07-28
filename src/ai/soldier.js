@@ -789,6 +789,7 @@ export function resolveMaterials(name, slots, materials) {
       case 'cloth':
         return materials.get(`camo_${V.camo}`, {
           key: name,
+          variant: name,
           tint: V.clothTint,
           rough: ROUGH.cloth,
           metal: 1,
@@ -800,6 +801,7 @@ export function resolveMaterials(name, slots, materials) {
       case 'plate':
         return materials.get('plate', {
           key: name,
+          variant: name,
           tint: V.plateTint,
           rough: ROUGH.plate,
           normalScale: 1.0,
@@ -808,6 +810,7 @@ export function resolveMaterials(name, slots, materials) {
       case 'gear':
         return materials.get('nylon', {
           key: name,
+          variant: name,
           tint: V.gearTint,
           normalScale: 1.1,
           detail: detail('nylon', 'gear', 0.5, 0.14),
@@ -815,23 +818,24 @@ export function resolveMaterials(name, slots, materials) {
       case 'boot':
         return materials.get('nylon', {
           key: `${name}_boot`,
+          variant: name,
           tint: V.gearTint,
           rough: ROUGH.boot,
           normalScale: 1.1,
           detail: detail('nylon', 'boot', 0.5, 0.10),
         });
       case 'skin':
-        return materials.get('skin', { key: name, tint: V.skinTint, normalScale: 0.8, ao: 0.6 });
+        return materials.get('skin', { key: name, variant: name, tint: V.skinTint, normalScale: 0.8, ao: 0.6 });
       case 'polymer':
-        return materials.get('polymer', { key: name, normalScale: 1.0 });
+        return materials.get('polymer', { key: name, variant: name, normalScale: 1.0 });
       case 'steel':
-        return materials.get('steel', { key: name, normalScale: 1.0 });
+        return materials.get('steel', { key: name, variant: name, normalScale: 1.0 });
       case 'rubber':
-        return materials.get('rubber', { key: name, normalScale: 1.2 });
+        return materials.get('rubber', { key: name, variant: name, normalScale: 1.2 });
       case 'glass':
         return materials.glass();
       default:
-        return materials.get('polymer', { key: name });
+        return materials.get('polymer', { key: name, variant: name });
     }
   });
 }

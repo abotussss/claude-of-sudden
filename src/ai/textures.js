@@ -521,6 +521,78 @@ export function camoTexel(nz, cfg, u, v, out) {
  */
 export const RIM = { strength: 0.62, edge: 0.42, power: 1.9 };
 
+/**
+ * TEAM RIM — the identification pass, and the answer to "the enemies wear
+ * camouflage against a sand map and I cannot see them".
+ *
+ * WHY A RIM AND NOT AN OUTLINE. Three options were on the table: a screen-space
+ * outline pass on actors with line of sight, raising the value contrast of the
+ * enemy uniform, and this. The outline loses on cost and on honesty — it needs
+ * either a second draw of every actor or an id buffer, it draws *through* the
+ * silhouette-preserving edge darkening above rather than with it, and a hard
+ * line over a figure is the thing that reads as a cheat overlay. Repainting the
+ * uniform loses because the camouflage is the art direction: an arid uniform
+ * that is no longer arid-valued is a different character, and it would still be
+ * flat-toned against a wall of the same value at 70 m, where the figure is 16
+ * pixels tall and its interior is one averaged colour anyway.
+ *
+ * A rim wins on all three counts. It is FOUR ALU on geometry that is already
+ * being shaded, so it costs nothing measurable in a 35 ms frame that is 35 ms of
+ * forward world pass. It is occluded for free, because it is part of the actor's
+ * own forward shading and lives behind the same depth test as his chest — a man
+ * behind a wall has no rim, which no overlay gets right without extra work. And
+ * it rides in the SAME grazing band the edge darkening already owns: dark core,
+ * coloured edge, which is how a real backlit figure separates from a background
+ * and why it does not read as a drawn line.
+ *
+ * IT RAMPS WITH DISTANCE, and that is the whole trick.
+ *
+ * At 15 m a hostile is 75 px tall and needs almost nothing — `edgeNear` keeps
+ * the tint in the outer sliver, so a man in front of you is a man, not a neon
+ * sign. At 70 m he is SIXTEEN pixels tall, and a fresnel sliver is worse than
+ * useless there: a fresnel term is zero on every surface facing the camera, and
+ * at 16 px almost the entire figure faces the camera. MEASURED — the first cut
+ * of this was band-only and, looked at, changed the 70 m read by nothing at all.
+ *
+ * So the band opens (`edgeNear` -> `edgeFar`) AND a floor slides under it
+ * (`fill`), over `d0`..`d1` metres. Past `d1` the figure carries a flat tint of
+ * `fill × colour` with the rim on top. Flattening a character is a sin at 5 m
+ * and free at 70 m, where his interior is one averaged colour anyway — which is
+ * also why this doubles as the "raise the value contrast of enemy uniforms"
+ * option, applied only at the ranges where camouflage actually beats the player
+ * and never at the range where the art direction is legible.
+ *
+ * COLOURS ARE THE HUD'S. `--enemy #ff7a63` and `--friend #8fc8ff` from
+ * `src/ui/style.js`, converted to linear and scaled: warm = shoot it, cool = do
+ * not. Hostile is the louder of the two because a friendly is already announced
+ * by a nameplate and a minimap blip, and over-lighting your own squad just adds
+ * noise. Neither is keyed to the team INDEX — `AiSystem` resolves hostile and
+ * friendly against `playerTeam` — so a side swap cannot invert the meaning.
+ *
+ * The five shape numbers are UNIFORMS, not literals in the shader source: they
+ * are shared by every character material, so retuning them is four float writes
+ * and no recompile, and the dev console can turn the whole thing off with
+ * `ai.materials.setTeamRim(v, null)` for an honest before/after in one session.
+ */
+export const TEAM_RIM = {
+  /** Linear-space rim colour × strength, hostile and friendly. */
+  hostile: [0.95, 0.175, 0.085],
+  friendly: [0.10, 0.26, 0.58],
+  /** |N.V| threshold at close range (outer sliver) and at long range (open). */
+  edgeNear: 0.52,
+  edgeFar: 0.10,
+  /** Metres over which the band opens and the fill comes in. */
+  d0: 13,
+  d1: 55,
+  /** Falloff exponent inside the band. */
+  power: 2.0,
+  /** Flat tint under the whole figure once past `d1`. */
+  fill: 0.52,
+  /** Gain on the surface's own radiance: slope, and the floor in full dark. */
+  lumSlope: 2.2,
+  lumFloor: 0.12,
+};
+
 /* ------------------------------------------------------------------ */
 /* Public: the material set                                            */
 /* ------------------------------------------------------------------ */
@@ -538,6 +610,25 @@ export class SoldierMaterials {
 
     this.sets = {};
     this.materials = new Map();
+    /** variant name -> the materials that variant wears, for `setTeamRim`. */
+    this.byVariant = new Map();
+    /**
+     * Team-rim SHAPE, shared by every character material (one uniform object,
+     * every program points at it) so it can be retuned live. See TEAM_RIM.
+     *   P0 = (edgeNear, edgeFar, d0, 1/(d1-d0))   P1 = (power, fill, -, -)
+     */
+    this.teamShape = {
+      owTeamP0: {
+        value: new THREE.Vector4(
+          TEAM_RIM.edgeNear, TEAM_RIM.edgeFar, TEAM_RIM.d0, 1 / (TEAM_RIM.d1 - TEAM_RIM.d0)
+        ),
+      },
+      owTeamP1: {
+        value: new THREE.Vector4(
+          TEAM_RIM.power, TEAM_RIM.fill, TEAM_RIM.lumSlope, TEAM_RIM.lumFloor
+        ),
+      },
+    };
     this._disposables = [];
 
     // ---- camouflage cloth, one bake per pattern ------------------------
@@ -851,7 +942,33 @@ export class SoldierMaterials {
     m.name = `ai_${setName}`;
     this._attachShader(m, d && this.details[d.set] ? d : null, opts.rim);
     this.materials.set(key, m);
+    // Index by variant so the team rim can be re-keyed without walking the cache
+    // or knowing how `resolveMaterials` spells each slot's key.
+    if (opts.variant) {
+      let list = this.byVariant.get(opts.variant);
+      if (!list) this.byVariant.set(opts.variant, (list = []));
+      list.push(m);
+    }
     return m;
+  }
+
+  /**
+   * Point every material a variant wears at a team rim colour. Called by
+   * `AiSystem` when an actor of that variant spawns, and again if `playerTeam`
+   * changes — the uniform object is shared with the compiled program, so this is
+   * three float writes per material and no recompile.
+   *
+   * @param variant  a key from VARIANTS
+   * @param rgb      linear colour × strength, or null to switch the rim off
+   */
+  setTeamRim(variant, rgb) {
+    const list = this.byVariant.get(variant);
+    if (!list) return 0;
+    for (const m of list) {
+      const u = m.userData.owCharTeam?.value;
+      if (u) u.set(rgb ? rgb[0] : 0, rgb ? rgb[1] : 0, rgb ? rgb[2] : 0);
+    }
+    return list.length;
   }
 
   /**
@@ -877,14 +994,23 @@ export class SoldierMaterials {
         value: new THREE.Vector3(d?.scale ?? 8, d?.normal ?? 0.7, d?.rough ?? 0.2),
       },
       owCharRim: { value: rim },
+      // Linear colour × strength. Zero until AiSystem assigns a side, so a
+      // material that nobody is wearing costs an add of exactly 0.0.
+      owCharTeam: { value: new THREE.Vector3(0, 0, 0) },
     };
     m.userData.owDetailUniforms = uni;
     m.userData.owCharRim = uni.owCharRim;
+    m.userData.owCharTeam = uni.owCharTeam;
     const tag = `ai-${d ? `detail-${d.set}-${d.scale}` : 'plain'}-rim${rim.x.toFixed(2)}`;
     m.customProgramCacheKey = () => tag;
     m.onBeforeCompile = (shader) => {
       shader.uniforms.owCharRim = uni.owCharRim;
-      shader.fragmentShader = 'uniform vec4 owCharRim;\n' + shader.fragmentShader;
+      shader.uniforms.owCharTeam = uni.owCharTeam;
+      shader.uniforms.owTeamP0 = this.teamShape.owTeamP0;
+      shader.uniforms.owTeamP1 = this.teamShape.owTeamP1;
+      shader.fragmentShader =
+        'uniform vec4 owCharRim;\nuniform vec3 owCharTeam;\n' +
+        'uniform vec4 owTeamP0;\nuniform vec4 owTeamP1;\n' + shader.fragmentShader;
       if (d) {
         shader.uniforms.owDetailTex = uni.owDetailTex;
         shader.uniforms.owDetailParams = uni.owDetailParams;
@@ -909,13 +1035,28 @@ export class SoldierMaterials {
         );
       }
       // silhouette: darken the grazing sliver of every closed surface, using the
-      // geometric normal so the band cannot crawl with the detail tile.
+      // geometric normal so the band cannot crawl with the detail tile. Then lay
+      // the team rim into the SAME band — dark core, coloured edge — with the
+      // band opening up as the figure gets small. See TEAM_RIM.
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <opaque_fragment>',
         `{
           float owF = 1.0 - abs( dot( normalize( vViewPosition ), nonPerturbedNormal ) );
           float owEdge = pow( smoothstep( owCharRim.y, 1.0, owF ), owCharRim.z );
           outgoingLight *= 1.0 - owCharRim.x * owEdge;
+          float owT = clamp( ( length( vViewPosition ) - owTeamP0.z ) * owTeamP0.w, 0.0, 1.0 );
+          float owBand = mix( owTeamP0.x, owTeamP0.y, owT );
+          float owRimT = pow( smoothstep( owBand, 1.0, owF ), owTeamP1.x );
+          // Gain on the surface's OWN radiance, so this behaves like a light and
+          // not like an emissive decal. A fixed add is wrong in two directions:
+          // the frame is exposure-driven, so the same 0.4 of linear red is
+          // invisible on a sunlit wall and a blooming orange dot on a man in
+          // shade — which is exactly what the first shade capture showed. Tying
+          // it to luminance keeps the rim at a constant ratio to the figure
+          // through four stops, and caps what bloom can ever pick up.
+          float owLum = dot( outgoingLight, vec3( 0.2126, 0.7152, 0.0722 ) );
+          outgoingLight += owCharTeam * max( owRimT, owT * owTeamP1.y ) *
+            min( owLum * owTeamP1.z + owTeamP1.w, 2.6 );
         }
         #include <opaque_fragment>`
       );
