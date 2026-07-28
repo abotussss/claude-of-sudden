@@ -856,16 +856,44 @@ export const WEAPON_DEFS = {
      * still in it. The rotation turns the fuze up and rolls the lever toward
      * the camera so the spoon, the ring and the marking band are all readable.
      */
-    hipPos: [0.115, -0.115, -0.30],
-    hipRot: [-0.18, 0.28, -0.34],
+    /**
+     * SEARCHED, not authored — and the thing being searched for is not framing,
+     * it is VISIBILITY. The first pose was reasoned out (carried high and
+     * inboard, fuze up) and the capture showed a fist and no grenade at all:
+     * the body is 57 mm and the fist is 100, so unless the ball is between the
+     * camera and the hand it is simply inside it. Measured through the real rig
+     * over the whole rotation cube, scoring
+     *   1. the body centre NEARER the eye than the wrist (the ball in front of
+     *      the fist, not behind it) — the term that fixes the defect
+     *   2. the fuze above the body on screen, and the lever turned toward the
+     *      eye, so the two features that say "grenade" are the two you see
+     *   3. wrist bend, because turning the weapon turns the hand with it (the
+     *      target lives in weapon space) and the naive visibility optimum put
+     *      the wrist at 85 degrees, which is a fracture
+     *   4. the elbow no closer than 0.36 m — inside that the forearm fills half
+     *      the frame and the sleeve's end cap reads as the "mystery ring"
+     *   5. the body centre landing in the lower right, around (1270, 707) at
+     *      1600x900
+     * Result: ball 46 mm in front of the wrist, wrist 37.3 deg, arm at 63%
+     * extension, elbow 0.362 m from the eye.
+     */
+    hipPos: [0.1675, -0.0916, -0.2766],
+    hipRot: [-1.73, -1.17, -1.8],
     adsCant: [0, 0, 0],
+    /**
+     * MOVEMENT. Carrying a 400 g ball is the lightest thing in the game, and
+     * this is a weapon you switch to in order to cross ground and throw from
+     * cover, so it moves like the knife (1.18) less a hair for the arm being
+     * cocked rather than tucked.
+     */
+    moveScale: 1.15,
     /* Sprint and low ready are the SAME deltas the knife uses off its own rest
      * pose, so the relationship between the three is preserved rather than
      * re-authored: the hand drops and swings across the body. */
-    sprintPos: [0.085, -0.20, -0.275],
-    sprintRot: [-0.72, 0.52, 0.01],
-    lowReadyPos: [0.105, -0.185, -0.29],
-    lowReadyRot: [-0.56, 0.40, -0.26],
+    sprintPos: [0.1375, -0.1766, -0.2516],
+    sprintRot: [-2.27, -0.93, -1.45],
+    lowReadyPos: [0.1575, -0.1616, -0.2666],
+    lowReadyRot: [-2.11, -1.05, -1.72],
     swayScale: 1.2,
     bobScale: 1.15,
   },

@@ -529,6 +529,47 @@ export const WEAPON_MATERIALS = {
     },
   ],
 
+  /**
+   * OLIVE-DRAB ENAMEL — the grenade body, and the only thing on the rack that
+   * is painted rather than coated, anodised or moulded.
+   *
+   * A NEW KEY rather than a re-tint of `steel_enamel`, because that one is the
+   * knife's blade flats and the AK's stamped receiver and neither may move.
+   * The difference that matters is VALUE: `steel_enamel` is a near-black
+   * baked-on finish, and a 57 mm ball in that finish photographed as a bowling
+   * ball — a black circle with a specular pole and no readable form at all,
+   * measured on the first capture. Ordnance paint is a mid-value olive for the
+   * same reason ordnance is stencilled: it has to be identifiable in a pouch.
+   *
+   * Sits between the black polymer furniture (0.224) and the FDE (0.62) with a
+   * deliberate green bias, which is the one hue nothing else on the weapon rack
+   * carries, so a grenade never reads as a spare magazine at a glance. Matte —
+   * 0.74 base roughness, a hair rougher than the enamel — because a sphere is
+   * the worst possible shape to put a gloss on: every one of them has exactly
+   * one specular hot spot and it slides around the surface as the hand moves.
+   */
+  enamel_od: [
+    'rubber',
+    {
+      ...BASE,
+      bake: { size: 1024, seed: 419, relief: 0.007 },
+      scale: 0.09,
+      tint: c(0.6, 0.62, 0.42),
+      roughness: [0.74, 0.12, 0.3],
+      three: { physical: true, specularIntensity: 0.1 },
+      normalStrength: 1.5,
+      // A 6 mm stipple: sprayed enamel over a sand-cast body is never smooth,
+      // and on a shape with no edges the micro layer is the ONLY thing carrying
+      // the surface at 0.5 m.
+      detail: [20, 1.3, 0.75, 5],
+      /** Paint chips to bare phosphate on the seam and the collar, like enamel. */
+      wear: [0.22, 0.6, 0.5, 0],
+      wearColor: 0x39392f,
+      wearMaterial: [0.5, 0.85, 0, 0.8],
+      grimeColor: 0x0a0906,
+    },
+  ],
+
   /** Glass-filled polymer: magazine, stock, grip shell, handguard panels. */
   polymer: [
     'rubber',

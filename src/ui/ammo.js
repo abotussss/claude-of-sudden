@@ -90,6 +90,7 @@ export class AmmoPanel {
     this._lastName = null;
     this._nameFit = 0;
     this._lastMelee = false;
+    this._lastCountless = false;
     setStyle(this.reload, 'display', 'none');
     setStyle(this.reloadBar, 'display', 'none');
   }
@@ -131,6 +132,52 @@ export class AmmoPanel {
       setText(this.slotTn, tcm);
       setClass(this.slotL, 'empty', lcm <= 0);
       setClass(this.slotT, 'empty', tcm <= 0);
+      return;
+    }
+
+    /**
+     * COUNTED, BUT NOT OUT OF A MAGAZINE — the thrown weapons.
+     *
+     * `magSize: 0` is the weapon system's flag for "this does not take
+     * magazines" (see the `ammo` getter in weapons/index.js), and the melee
+     * branch above answers it with an em dash because a knife has nothing to
+     * count. A grenade has: two of them, and how many are left is the entire
+     * question the player asks this panel. So the count is real and everything
+     * that only makes sense against a magazine — the separator, the reserve,
+     * the pip strip, PRESS R TO RELOAD — goes away exactly as it does for the
+     * knife. Without this the panel reads "0 / 0" with a flashing reload
+     * prompt while the player is holding two live frags.
+     */
+    const countless = (s.magSize | 0) === 0;
+    if (countless !== this._lastCountless) {
+      this._lastCountless = countless;
+      setStyle(this.sep, 'display', countless ? 'none' : '');
+      setStyle(this.res, 'display', countless ? 'none' : '');
+      setStyle(this.mag, 'display', countless ? 'none' : '');
+      this._lastAmmo = -1;
+    }
+    if (countless) {
+      const n = Math.max(0, s.ammo | 0);
+      if (this._lastAmmo !== n) {
+        if (this._lastAmmo >= 0 && n < this._lastAmmo) this.punch = 1;
+        this._lastAmmo = n;
+        setText(this.cur, n);
+      }
+      this._fitName(String(s.weaponName ?? s.name ?? 'M67'));
+      setText(this.mode, s.fireMode ?? 'THROW');
+      setClass(this.root, 'ow-ammo-low', n === 1);
+      setClass(this.root, 'ow-ammo-empty', n === 0);
+      setStyle(this.reload, 'display', 'none');
+      setStyle(this.reloadBar, 'display', 'none');
+      this.punch = Math.max(0, this.punch - dt * 6.5);
+      const pc = 1 - 0.075 * ease.outQuad(this.punch);
+      setStyle(this.cur, 'transform', `scale(${pc.toFixed(3)})`);
+      const lcc = s.lethalCount ?? 0;
+      const tcc = s.tacticalCount ?? 0;
+      setText(this.slotLn, lcc);
+      setText(this.slotTn, tcc);
+      setClass(this.slotL, 'empty', lcc <= 0);
+      setClass(this.slotT, 'empty', tcc <= 0);
       return;
     }
 

@@ -119,6 +119,7 @@ const v3 = (x, y, z) => [x, y, z];
  */
 export function buildClips(nodes, def) {
   if (def.class === 'melee') return buildMeleeClips(nodes, def);
+  if (def.class === 'grenade') return buildThrowClips(nodes, def);
   const grip = nodes.gripL;
   const seat = nodes.magSeat.pos;
   const magLen = def.magLen ?? 0.2;
@@ -433,4 +434,132 @@ function buildMeleeClips(nodes, def) {
   });
 
   return { slash, stab, draw, holster, inspect };
+}
+
+/* ========================================================================== */
+/*  thrown                                                                    */
+/* ========================================================================== */
+
+/**
+ * Clips for a thrown weapon.
+ *
+ * Like the melee set, `lhand` is deliberately NULL on every clip: a grenade is
+ * thrown one-handed, so leaving `lhand.weight` at 0 keeps the support hand on
+ * its authored guard position for the whole sequence instead of re-authoring
+ * that position in five places and getting it wrong in one.
+ *
+ * THE COOK CLIP IS AS LONG AS THE FUZE, and that is the design rather than an
+ * accident. A clip that ended would snap the pose back to rest (see
+ * `Viewmodel.update`: `clipT >= duration` calls `stopClip`), so a "hold the
+ * wind-up" pose cannot be the tail of a short clip — it has to be the tail of a
+ * clip that outlives the hold. Running it for exactly `def.fuse` means the one
+ * frame it CAN end on is the frame the grenade cooks off in the hand, where the
+ * pose snapping back is the least of the player's problems.
+ */
+function buildThrowClips(nodes, def) {
+  const cook = def.cookTime ?? 0.42;
+  const fuse = def.fuse ?? 3;
+  const thr = def.throwTime ?? 0.66;
+  const rel = (def.releaseAt ?? 0.26) * thr;
+
+  /**
+   * THE COCKED POSE, shared by the end of `cook` and the start of `throw`.
+   *
+   * Authored once and referenced twice: a clip's keys are absolute additive
+   * offsets, not deltas, so if the throw started anywhere other than where the
+   * cook left off the weapon would jump on the release frame.
+   */
+  const HOLD_P = v3(0.05, 0.082, 0.128);
+  const HOLD_R = v3(-0.46, -0.36, 0.54);
+
+  /**
+   * COOK — thumb the ring off, then draw back and hold.
+   *
+   * 0 .. 0.35 cook   the grenade comes up in front of the face and the wrist
+   *                  rolls so the ring faces the camera: the player has to be
+   *                  able to SEE the pin leave, because from that frame on a
+   *                  timer they cannot see is running.
+   * 0.35 .. 1 cook   the arm draws back over the shoulder.
+   * then             a slow creep outward for the rest of the fuze — a held
+   *                  grenade is not a frozen prop, and the drift is the only
+   *                  thing on screen that says the fuze is still burning.
+   */
+  const cookClip = new Clip('cook', fuse, {
+    weapon: [
+      { t: 0, p: v3(0, 0, 0), r: v3(0, 0, 0) },
+      { t: 0.35 * cook, p: v3(-0.012, 0.036, 0.052), r: v3(-0.1, -0.62, 0.22), ease: 'out' },
+      { t: 0.62 * cook, p: v3(0.004, 0.058, 0.086), r: v3(-0.26, -0.55, 0.36) },
+      { t: cook, p: HOLD_P, r: HOLD_R, ease: 'out' },
+      { t: Math.max(cook + 0.05, fuse * 0.55), p: v3(0.056, 0.09, 0.134), r: v3(-0.5, -0.34, 0.58) },
+      { t: fuse, p: v3(0.062, 0.084, 0.142), r: v3(-0.54, -0.3, 0.62) },
+    ],
+    events: [
+      { t: 0.02, name: 'start' },
+      /** The pin leaves the fuze here — the ring is hidden and the fuze lights. */
+      { t: 0.3 * cook, name: 'pinpull' },
+      { t: cook, name: 'cocked' },
+    ],
+  });
+
+  /**
+   * THROW — the whip.
+   *
+   * The grenade leaves the hand at `releaseAt`, which is 170 ms in: past the
+   * top of the arc, with the wrist still accelerating. Everything after that
+   * beat is an empty hand following through, and the model is hidden for it —
+   * a grenade that stays in the fist while a second one flies away is the
+   * classic version of this bug.
+   */
+  const throwClip = new Clip('throw', thr, {
+    weapon: [
+      { t: 0, p: HOLD_P, r: HOLD_R },
+      { t: 0.42 * rel, p: v3(0.038, 0.104, 0.148), r: v3(-0.62, -0.42, 0.66) },
+      { t: rel, p: v3(-0.052, 0.016, -0.148), r: v3(0.42, 0.22, -0.34), ease: 'linear' },
+      { t: rel + 0.11 * thr, p: v3(-0.086, -0.062, -0.118), r: v3(0.58, 0.34, -0.46), ease: 'out' },
+      { t: 0.62 * thr, p: v3(-0.03, -0.05, 0.014), r: v3(0.2, 0.16, -0.12) },
+      { t: 1, p: v3(0, 0, 0), r: v3(0, 0, 0), ease: 'out' },
+    ],
+    events: [
+      { t: 0.02, name: 'start' },
+      { t: rel, name: 'release' },
+      { t: 0.995 * thr, name: 'end' },
+    ],
+  });
+
+  const drawT = def.drawTime ?? 0.5;
+  const draw = new Clip('draw', drawT, {
+    weapon: [
+      { t: 0, p: v3(0.07, -0.3, 0.18), r: v3(-0.6, 0.65, 0.8) },
+      { t: 0.6 * drawT, p: v3(0.01, -0.022, 0.016), r: v3(-0.07, 0.06, 0.09), ease: 'out' },
+      { t: 0.8 * drawT, p: v3(-0.004, 0.008, -0.006), r: v3(0.04, -0.03, -0.03) },
+      { t: 1, p: v3(0, 0, 0), r: v3(0, 0, 0), ease: 'out' },
+    ],
+    events: [{ t: 0.995 * drawT, name: 'end' }],
+  });
+
+  const holT = def.holsterTime ?? 0.32;
+  const holster = new Clip('holster', holT, {
+    weapon: [
+      { t: 0, p: v3(0, 0, 0), r: v3(0, 0, 0) },
+      { t: 0.25 * holT, p: v3(0.004, 0.016, -0.012), r: v3(0.07, -0.05, -0.06) },
+      { t: 1, p: v3(0.07, -0.32, 0.19), r: v3(-0.62, 0.7, 0.85), ease: 'out' },
+    ],
+    events: [{ t: 0.995 * holT, name: 'end' }],
+  });
+
+  /** Inspect: turn the body over so the lever, the ring and the band all pass the key. */
+  const insp = def.inspectTime ?? 2.2;
+  const inspect = new Clip('inspect', insp, {
+    weapon: [
+      { t: 0, p: v3(0, 0, 0), r: v3(0, 0, 0) },
+      { t: 0.22 * insp, p: v3(-0.052, 0.028, 0.056), r: v3(-0.2, -0.55, 0.7) },
+      { t: 0.48 * insp, p: v3(-0.058, 0.036, 0.05), r: v3(-0.1, -0.8, 2.2) },
+      { t: 0.72 * insp, p: v3(-0.03, 0.026, 0.052), r: v3(0.12, -0.34, 3.6) },
+      { t: 0.88 * insp, p: v3(-0.012, 0.008, 0.02), r: v3(0.05, -0.12, 0.4) },
+      { t: 1, p: v3(0, 0, 0), r: v3(0, 0, 0), ease: 'out' },
+    ],
+    events: [{ t: 0.995 * insp, name: 'end' }],
+  });
+
+  return { cook: cookClip, throw: throwClip, draw, holster, inspect };
 }
