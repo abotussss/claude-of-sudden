@@ -143,6 +143,214 @@ export const WEAPON_DEFS = {
     magLen: 0.212,
   },
 
+  ak: {
+    id: 'ak',
+    label: 'AKM-47',
+    /* `rifle` rather than `carbine`: fx keys the muzzle flash off this string
+     * (see fx/muzzle.js MUZZLE_PROFILES) and 7.62x39 out of a 314 mm barrel
+     * throws a bigger, hotter flash than a 5.56 carbine does. Audio keys off
+     * the ID and already has an `ak` profile. */
+    class: 'rifle',
+    caliber: '7.62x39',
+    /* --- fire control ---
+     * A real AKM is 600 rpm against the M4's 800: SLOWER, and every 100 rpm of
+     * that is what buys the damage below. No burst — the AKM's selector has
+     * exactly two fire positions plus safe. */
+    rpm: 600,
+    modes: ['auto', 'semi'],
+    burstCount: 2,
+    burstRpm: 600,
+    burstDelay: 0.18,
+    /* --- ammunition --- */
+    magSize: 30,
+    reserve: 180,
+    /* --- terminal ballistics ---
+     * 42 against the M4's 33 is a 3-shot kill against a 4-shot at close range,
+     * which is the trade the rate of fire pays for. A heavier, slower, blunter
+     * bullet also sheds velocity faster, so the falloff starts sooner (0.70 of
+     * maxRange against 0.62) but maxRange itself is shorter. */
+    muzzleVelocity: 715,
+    damage: 42,
+    penetration: 1.25,
+    dropoff: 0.7,
+    maxRange: 360,
+    dragK: 0.34,
+    tracerEvery: 3,
+    /* --- accuracy (degrees) --- */
+    spreadHip: 2.65,
+    spreadAds: 0.32,
+    spreadPerShot: 0.44,
+    spreadMax: 4.5,
+    spreadDecay: 3.1,
+    /* --- recoil ---
+     * Half again the M4's climb per shot and nearly twice its yaw, with a
+     * slower, heavier oscillation (7.4 Hz against 8.5) and a first-shot
+     * multiplier that starts at 1.5. The pattern is 30 long with its own seed,
+     * so it is a different learnable snake, not a scaled copy of the M4's. */
+    recoil: {
+      pitch: 0.0128,
+      yaw: 0.0039,
+      kickBack: 0.0265,
+      kickUp: 0.0104,
+      roll: 0.045,
+      punch: 0.52,
+      freq: 7.4,
+      damping: 0.44,
+      patternLength: 30,
+      patternSeed: 0x7a2e5b,
+      climbShape: [1.5, 1.36, 1.22, 1.1, 1.0],
+      drift: 0.72,
+    },
+    /* --- handling (seconds) ---
+     * Heavier than the M4 everywhere: 280 ms to the sights against 220, a
+     * slower draw, and a reload that has to rock a magazine out of a receiver
+     * that has no magwell to guide it. */
+    adsTime: 0.28,
+    adsFov: 0.76,
+    viewFov: 0.86,
+    reloadTac: 2.45,
+    reloadEmpty: 3.2,
+    inspectTime: 3.4,
+    drawTime: 0.72,
+    holsterTime: 0.46,
+    /* --- pose ---
+     * Carried over from the M4's solve (see there for the derivation): the same
+     * 4 deg of bore convergence, 2.9 deg nose-down and 7.7 deg of outboard
+     * roll. Only Y moves, by the 3.5 mm this weapon's bore sits higher than the
+     * M4's, so the two guns present their sights at the same screen height. */
+    hipPos: [0.118, -0.1885, -0.3],
+    hipRot: [-0.05, 0.081, -0.135],
+    adsCant: [0, 0, 0.004],
+    /**
+     * IRON SIGHTS, so this number is bounded on both sides and 0.16 is what is
+     * left in the middle.
+     *
+     * The ADS solve puts `sight` — here the rear notch at z = -0.1295 — on the
+     * camera axis, and every other landmark then lands at
+     * (p.z - sight.z) - eyeRelief.
+     *
+     *   UPPER BOUND: the shooting hand is at z = +0.1176, so anything past
+     *   0.247 puts the firing fist in front of the camera. Physically honest
+     *   (an eye 60 mm behind an AK's receiver is 0.29 of relief) and unusable.
+     *   LOWER BOUND: the rear leaf is the closest object to the eye and it
+     *   subtends leafWidth/relief. At 0.10 the 16 mm leaf is 180 px across a
+     *   1080 frame, i.e. the pale slab across the bottom of the sight picture
+     *   that models/rifle.js spent a whole comment removing.
+     *
+     * 0.16 puts the leaf at 112 px, the front sight hood at 0.40 m (a 42 px
+     * ring), and the firing hand 87 mm behind the eye where it belongs.
+     */
+    eyeRelief: 0.16,
+    sprintPos: [0.09, -0.2655, -0.275],
+    sprintRot: [-0.4, 0.6, 0.2],
+    lowReadyPos: [0.112, -0.2835, -0.289],
+    lowReadyRot: [-0.46, 0.125, -0.09],
+    swayScale: 1.12,
+    bobScale: 1.08,
+    magLen: 0.235,
+  },
+
+  sniper: {
+    id: 'sniper',
+    label: 'M91-SR',
+    class: 'sniper',
+    caliber: '7.62x51',
+    /* --- fire control ---
+     * BOLT ACTION, expressed in the fire-control system that exists rather than
+     * in a new one. There is no 'bolt' mode: `tryFire` honours `modes[0]` and
+     * `cycleTime = 60/rpm`, so a single-entry `['semi']` at 48 rpm is exactly
+     * "one shot, then 1.25 s of cycle before the trigger will answer again" —
+     * which is the bolt throw. A single-entry `modes` also makes
+     * `cycleFireMode` a no-op, the same way the knife's does. */
+    rpm: 48,
+    modes: ['semi'],
+    burstCount: 1,
+    burstRpm: 48,
+    burstDelay: 1.25,
+    /* --- ammunition --- */
+    magSize: 5,
+    reserve: 40,
+    /* --- terminal ballistics ---
+     * 125 is a one-shot kill on a 100 hp actor anywhere on the body, which is
+     * the whole contract of a bolt gun: you get one round every 1.25 s and it
+     * has to count. It holds that damage to 90% of a 900 m range, drags far
+     * less than the intermediate cartridges (0.16 against 0.28), and every
+     * round tracers. */
+    muzzleVelocity: 840,
+    damage: 125,
+    penetration: 2.4,
+    dropoff: 0.9,
+    maxRange: 900,
+    dragK: 0.16,
+    tracerEvery: 1,
+    /* --- accuracy (degrees) ---
+     * Unusable from the hip (5.6 deg) and near-perfect from the glass (0.05),
+     * with a per-shot bloom of 1.2 that takes 2.2 s to decay — the mirror image
+     * of the automatics, and the reason a scoped rifle is a positional weapon
+     * rather than a duelling one. */
+    spreadHip: 5.6,
+    spreadAds: 0.05,
+    spreadPerShot: 1.2,
+    spreadMax: 7.5,
+    spreadDecay: 2.2,
+    /* --- recoil ---
+     * One big slow shove: 2.5x the M4's pitch, 2.9x its rearward travel, and a
+     * 5.2 Hz oscillation that reads as mass rather than chatter. The pattern is
+     * only 5 long because the magazine is. */
+    recoil: {
+      pitch: 0.0325,
+      yaw: 0.0052,
+      kickBack: 0.055,
+      kickUp: 0.0225,
+      roll: 0.052,
+      punch: 1.15,
+      freq: 5.2,
+      damping: 0.52,
+      patternLength: 5,
+      patternSeed: 0x5d19c7,
+      climbShape: [1.0],
+      drift: 0.4,
+    },
+    /* --- handling (seconds) ---
+     * 420 ms to the glass — nearly twice the M4's — plus the slowest draw and
+     * holster in the loadout. Everything about picking this weapon up is slow;
+     * that is the cost of the damage line above. */
+    adsTime: 0.42,
+    adsFov: 0.7,
+    /* The VIEWMODEL camera's FOV scale, and it has to track the player camera's
+     * global `adsFovScale` (0.72, see core/config.js) or the collimated reticle
+     * — which is drawn in the viewmodel scene — stops landing on the same pixel
+     * as the bore. There is no magnified optic in this engine; a scope's
+     * magnification would have to come from the world camera, which weapons
+     * does not own. */
+    viewFov: 0.74,
+    reloadTac: 3.0,
+    reloadEmpty: 3.7,
+    inspectTime: 3.8,
+    drawTime: 0.95,
+    holsterTime: 0.62,
+    /* --- pose ---
+     * Same bore-derived solve as the M4 (see there), pulled 20 mm further from
+     * the eye because this weapon is 60 mm longer and the scope's objective
+     * bell would otherwise sit in the middle of the frame at hipfire. */
+    hipPos: [0.12, -0.182, -0.32],
+    hipRot: [-0.05, 0.081, -0.135],
+    adsCant: [0, 0, 0.003],
+    /* Eye to the rear lens. Bounded the same way the AK's is, but by the
+     * OCULAR BELL rather than a sight leaf: at 0.09 the 42 mm bell subtends
+     * 60% of the frame height and the 25 mm clear aperture 36%, so the sight
+     * picture is 59% of the housing — a scope, not a red dot, and not a
+     * porthole. See buildScope for the matching aperture budget. */
+    eyeRelief: 0.09,
+    sprintPos: [0.092, -0.26, -0.295],
+    sprintRot: [-0.4, 0.6, 0.2],
+    lowReadyPos: [0.114, -0.278, -0.309],
+    lowReadyRot: [-0.46, 0.125, -0.09],
+    swayScale: 1.3,
+    bobScale: 1.2,
+    magLen: 0.078,
+  },
+
   smg: {
     id: 'smg',
     label: 'MPX-9',
@@ -306,7 +514,30 @@ export const WEAPON_DEFS = {
      * keep a deep bend. The old note here warned that past ~0.40 m the two-bone
      * solve locks — this moves in the other direction.
      */
-    eyeRelief: 0.28,
+    /**
+     * 0.38, up from 0.28 — set against reference photographs of two-handed
+     * pistol shooting, which is what the user asked for and which the previous
+     * number was not checked against.
+     *
+     * In every reference the arms are near FULL extension and the two hands
+     * make one compact mass on the grip; the forearms are the dominant shape in
+     * frame and the hands are small. At 0.28 this rig sat at 0.58 / 0.53
+     * extension — elbows deeply bent, hands 0.28 m from the eye and subtending
+     * about 200 px each — so the two gloves were the biggest things on screen
+     * and the pistol hung between them. 0.38 gives 0.72 / 0.66 extension and
+     * takes about a quarter off the apparent size of the hands.
+     *
+     * The cost is real and is accepted deliberately: the note below was written
+     * to justify 0.28 on sight-picture size, and the reflex window drops from
+     * roughly 65 x 56 px to 48 x 41 px. The window still carries an emitter dot,
+     * and a small sight picture is a much smaller problem than not being able to
+     * see the sight picture past your own hands.
+     *
+     * NOT the fix for the "mystery ring" — that was the 33 mm step between the
+     * glove heel and the forearm cuff, see hands.js. Eye relief was measured
+     * across 0.28-0.44 and moves the elbow by 17 mm, so it could never have been.
+     */
+    eyeRelief: 0.38,
     /**
      * ELBOW POLE, rig space, pistol only. See `Arm.setElbowPole`.
      * The shared default is (side*0.46, -0.86, +0.22) — elbow down, outboard and

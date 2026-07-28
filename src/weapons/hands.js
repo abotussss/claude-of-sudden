@@ -240,7 +240,15 @@ function buildGlove(materials, opts = {}) {
   const thenar = blob(w * 0.42, h * 0.92, palmLen * 0.6, 0.014 * scale, 3);
   thenar.translate(w * 0.3, -h * 0.06, -palmLen * 0.3);
   shell.push(thenar);
-  const heel = blob(w * 0.92, h * 0.86, 0.03 * scale, 0.012 * scale, 3);
+  /**
+   * The heel narrows to 0.78 of the knuckle width (was 0.92). Same reason as the
+   * forearm's wrist radius above: this is the face the camera looks straight
+   * into in pistol ADS, and the wider it is the more of it stands proud of the
+   * sleeve as a ring. A hand really is much narrower at the heel than across
+   * the knuckles — the taper was already noted for the palm above and the heel
+   * was not following it.
+   */
+  const heel = blob(w * 0.78, h * 0.86, 0.03 * scale, 0.012 * scale, 3);
   heel.translate(0, -h * 0.04, -0.012 * scale);
   shell.push(heel);
   // Knuckle lumps.
@@ -696,7 +704,27 @@ export class Arm {
       folds: 5,
       elbowPad: true,
     });
-    this.fore = buildSleeve(materials.sleeve, this.l2, 0.034 * this.scale, 0.024 * this.scale, {
+    /**
+     * THE WRIST END IS 0.030, NOT 0.024 — this is the "mystery ring".
+     *
+     * The hand is 88 mm across the knuckles and its heel blob is 81 mm across.
+     * A 24 mm sleeve radius is 48 mm across. So where the hand meets the sleeve
+     * there was a 33 mm STEP, all the way round, and in pistol ADS both hands
+     * point their heels straight down the view axis: the step projects as a
+     * smooth ring of glove standing out around a much thinner tube, one on each
+     * side of the sights, at 0.28 m from the eye. That is the ring the player
+     * kept reporting, and it is why the earlier passes at the wrist cuff
+     * profile and at the elbow pole both failed — neither one touched the step.
+     *
+     * A real wrist is 55-60 mm across against a 72 mm palm heel, so the two are
+     * nearly continuous and there is no ring to see. 0.030 gives 60 mm, which
+     * closes the step to 10 mm and lets the glove read as the end of an arm
+     * instead of as a separate object stuck on one.
+     *
+     * The elbow end is unchanged: it was measured against a real combat shirt
+     * (68 mm) and it is not the end that was ever in frame.
+     */
+    this.fore = buildSleeve(materials.sleeve, this.l2, 0.034 * this.scale, 0.030 * this.scale, {
       folds: 7,
       cuff: true,
     });
