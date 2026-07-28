@@ -54,11 +54,17 @@ export const BUILDINGS = [
   },
   {
     /**
-     * W1 OVERLOOKS BOMB SITE A, so it is enterable and has a first floor you can
-     * shoot the courtyard from. A demolition site with no elevated angle is a
-     * site you take by walking in, which is not a site — the defence needs
-     * somewhere to hold that the attack has to clear first, and the attack needs
-     * a reason to throw something before it enters.
+     * W1 OVERLOOKS BOMB SITE A and is enterable, with a first floor you can
+     * shoot the courtyard from.
+     *
+     * CORRECTION TO WHAT THIS COMMENT ORIGINALLY CLAIMED. I wrote that this
+     * gives "the defence somewhere to hold that the attack has to clear first".
+     * That is true for a human and FALSE for the bots: `NavGrid` stores one
+     * height per (x, z) cell, so no actor can path up any staircase anywhere in
+     * the level — measured, 0 waypoints ground-to-upper in all four enterable
+     * buildings. Worse, W1 currently resolves to ZERO walkable cells at all, so
+     * bots do not enter it even on the ground floor. This is a player route and
+     * a player angle. See the note in src/ai/nav.js.
      *
      * Interior modelled on W2's (the shop below, an apartment above), with the
      * stair in the south-west corner and its hole cut in the first floor
@@ -265,11 +271,12 @@ export const BUILDINGS = [
   },
   {
     /**
-     * E2 OVERLOOKS BOMB SITE B, and is the mirror of what W1 does for site A:
-     * three floors, a stair you can be pushed on, and balconies onto the alley
-     * the site sits in. Site B is the defence's site (navcheck puts them 7 m
-     * closer), so the attack needs a way to contest the height rather than
-     * walking into it from the street.
+     * E2 OVERLOOKS BOMB SITE B: three floors, a stair, and balconies onto the
+     * alley the site sits in.
+     *
+     * Same correction as W1 — this is a PLAYER route. Measured: bots cannot
+     * path from the street into E2 at all (0 waypoints), and cannot climb any
+     * stair in the level. See the note in src/ai/nav.js.
      *
      * `stairHoles` are absolute LEVEL coordinates and must land inside the
      * footprint — E2 is x 6.5..20.5, z -12..2 — and over the stair, which sits

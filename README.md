@@ -129,12 +129,18 @@ both hold points unreachable from every defender spawn, a probe ray that
 resolved points inside buildings onto their ROOFS, and a site sealed into a
 courtyard with no route from the attacking half.
 
-**Getting inside matters.** W1 overlooks site A and E2 overlooks site B; both
-are enterable, both have a second door on the far side, so each is a route
-between the street and its site rather than a room with one mouth. And you can
-**vault in through a ground-floor window** — measured, street level to inside,
-climbing 1 m on the forward key alone. That was always possible; it was useless
-until there were buildings worth entering next to the objectives.
+**Getting inside is a PLAYER route, not an AI one.** W1 overlooks site A and E2
+overlooks site B; both are enterable, both have a second door on the far side,
+and you can **vault in through a ground-floor window** — measured, street level
+to inside, climbing 1 m on the forward key alone.
+
+The bots cannot follow you. `NavGrid` stores one floor height per (x, z) cell —
+a 2.5D height field, not a multi-level navmesh — so a two-storey building can
+only be represented at one height per cell and **A\* can never path up a
+staircase anywhere in this level**. Measured across all four enterable
+buildings: 0 waypoints ground-to-upper in every one, and E1/E2 cannot be entered
+from the street at all. Interiors and height are yours alone; the AI fights for
+the ground outside. Fixing that means a real navmesh, which this does not have.
 
 **Spawn separation is a gameplay parameter.** The map is one straight street and
 an actor's view range is 58 m. At the first spacing tried the two spawn clusters

@@ -100,6 +100,22 @@ export class NavGrid {
     const n = this.nx * this.nz;
     /** 0 = blocked, 1 = walkable standing, 2 = walkable crouched only */
     this.flags = new Uint8Array(n);
+    /**
+     * ONE HEIGHT PER CELL. This is a 2.5D height field, not a multi-level
+     * navmesh, and that is a hard limit on what the AI can use — worth knowing
+     * before you build a map around interiors.
+     *
+     * A two-storey building occupies the same (x, z) cells on both floors, so
+     * the grid can only ever store ONE of them, and A* can therefore never path
+     * up a staircase. MEASURED across every enterable building in the level:
+     * ground-to-upper is 0 waypoints in all four, including the two the repo
+     * shipped with. W2 resolves to 68 upper cells and 4 ground ones; E1 and E2
+     * cannot even be entered from the street.
+     *
+     * So interiors and upper floors are a PLAYER feature. Bots hold the ground
+     * outside. Do not write a map comment claiming a building gives the defence
+     * an elevated angle without checking this first — I did, twice.
+     */
     this.floor = new Float32Array(n);
     this.floor.fill(-Infinity);
     /** how enclosed a cell is: 0 open, 1 hemmed in — used for cover scoring */
