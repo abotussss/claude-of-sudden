@@ -44,7 +44,7 @@ The single biggest change was exposing the pixel-ratio cap: on a Retina panel,
 
 ## The mode
 
-Two teams of seven, one life each, on the market street.
+Two teams of seven, one life each, on a three-lane demolition map.
 
 | | |
 |---|---|
@@ -95,7 +95,7 @@ The engine is upstream's, untouched:
 | `render` | HDR pipeline, cascaded shadow maps in a `sampler2DArray` with texel snapping and PCSS contact hardening, MRT depth/normal/velocity prepass, GTAO, TAA with YCoCg variance clipping, tile-dilated motion blur, Karis bloom pyramid, GPU EV100 metering, procedural 33³ grade LUT, AgX composite |
 | `materials` | GPU texture forge: 19 procedural surfaces, periodic noise so everything tiles seamlessly, Sobel height→normal, parallax occlusion mapping, triplanar projection, curvature-driven edge wear |
 | `sky` | Atmospheric scattering, time of day, PMREM environment generation, volumetric fog and light shafts |
-| `world` | ~120×120 m market street: modular building kit with real wall thickness, enterable interiors, several hundred instanced props. **W1 and E2 opened up** so both bomb sites have a building overlooking them |
+| `world` | ~120×120 m, **three lanes**: an A lane and a B lane down the outside, the old market street as MID, joined by two connectors with a building island in each so a rotation is a dog-leg and not a firing line. Each site is a walled 15×14 m courtyard with three mouths. Modular building kit with real wall thickness, **eight enterable buildings**, several hundred instanced props |
 | `physics` | Written from scratch, no library. Binned-SAH BVH, swept-capsule character controller, impulse rigid bodies with CCD, PBD ragdolls, multi-layer bullet penetration |
 | `fx` | GPU particles, decals, tracers, muzzle flash, explosions |
 | `audio` | Web Audio synthesis — no sound files. Layered weapon fire, convolution reverb, HRTF spatialisation, occlusion |
@@ -117,22 +117,35 @@ spawn of both teams has an A* route to every bomb site and every hold point, and
 prints the real route lengths, which is the map's balance in one table:
 
 ```
-site A: attack 34.1 m vs defend 36.8 m — attack arrives first by 2.7 m
-site B: attack 37.2 m vs defend 28.2 m — defence arrives first by 9.0 m
+site A: attack 51.8 m vs defend 43.5 m — defence arrives first by 8.3 m
+site B: attack 53.2 m vs defend 46.5 m — defence arrives first by 6.7 m
 PASS — every spawn reaches every site
 ```
 
-That asymmetry is deliberate: A is the fast site the attack can contest on
-timing, B is the one the defence holds. Run it after ANY change to `src/world`
-or `src/match/sites.js`. It has already caught three things nothing else did —
-both hold points unreachable from every defender spawn, a probe ray that
-resolved points inside buildings onto their ROOFS, and a site sealed into a
-courtyard with no route from the attacking half.
+Both sites are defender-sided by 3-10 m, which is the window in which a site can
+be held but not locked. Run it after ANY change to `src/world` or
+`src/match/sites.js`. It has already caught four things nothing else did — both
+hold points unreachable from every defender spawn, a probe ray that resolved
+points inside buildings onto their ROOFS, a site sealed into a courtyard with no
+route from the attacking half, and a crate 45 cm from an authored site centre
+that put the site on a one-cell island (see `KEEPOUT` in `src/world/layout.js`).
 
-**Getting inside is a PLAYER route, not an AI one.** W1 overlooks site A and E2
-overlooks site B; both are enterable, both have a second door on the far side,
-and you can **vault in through a ground-floor window** — measured, street level
-to inside, climbing 1 m on the forward key alone.
+**`tools/lanecheck.mjs` asks the question navcheck cannot.** navcheck proves
+every spawn *reaches* every site and says nothing about whether the two routes
+are the SAME route. On the one-street map they were: 59.3 % of the attack's
+route to A lay within 6 m of its route to B, so there was nothing to fake and
+nothing to rotate between. On the three-lane map it is 17.5 %, and all that is
+left is the spawn pocket both routes have to leave through. A defender's
+rotation from site A to site B is 58.7 m — 12.8 s at the player's stand speed.
+
+**Getting inside is a PLAYER route, not an AI one.** Eight buildings are
+enterable. W2 and E2 sit between the two connectors with a door on the mid
+street and a door on their site's courtyard, so the ground floor is a covered
+way into the site that skips both connector mouths; W3 and E3 do the same job
+further south. Every lane has at least one **vault-in window** — a 1.5 m wide
+glassless opening with its sill at 0.95 m, against a mantle that reaches 1.85 m.
+Probed, not assumed: at all five the facade is solid at knee height, clear at
+chest and head, and solid again at 3 m.
 
 The bots cannot follow you. `NavGrid` stores one floor height per (x, z) cell —
 a 2.5D height field, not a multi-level navmesh — so a two-storey building can
@@ -142,12 +155,13 @@ buildings: 0 waypoints ground-to-upper in every one, and E1/E2 cannot be entered
 from the street at all. Interiors and height are yours alone; the AI fights for
 the ground outside. Fixing that means a real navmesh, which this does not have.
 
-**Spawn separation is a gameplay parameter.** The map is one straight street and
-an actor's view range is 58 m. At the first spacing tried the two spawn clusters
-were 51 m apart, so both sides acquired a target on the spawn frame and spent the
-round trading shots down the middle instead of playing the objective. The closest
-pair is now 60.5 m — past the range at which anybody can see anybody — and the
-round opens with two teams walking. See the comment in `src/match/sites.js`.
+**Spawn separation is a gameplay parameter.** An actor's view range is 58 m. At
+the first spacing tried the two spawn clusters were 51 m apart, so both sides
+acquired a target on the spawn frame and spent the round trading shots down the
+middle instead of playing the objective. Each side now spawns in a pocket behind
+its own cross street, closest pair 72 m, with the mid street's two building
+islands standing between them — so the round opens with two teams walking. See
+the comment in `src/match/sites.js`.
 
 **Bomb sites are snapped to the navigation grid, not trusted.** Authoring a site
 six inches inside a wall is the classic way to lose a whole team to a stuck
@@ -232,11 +246,11 @@ sides fighting each other rather than only the player. What is *not* claimed:
   difficulty curve and no per-bot personality.
 - The three upstream weapons (M4A1, MPX-9, P-19) are the whole armoury. Sudden
   Attack's loadout screen, knives and grenades are not in this build.
-- **The map favours the defence.** Across headless matches, attacks planted
-  roughly a third of the rounds they played; the rest ended on the clock or with
-  the attack wiped. On one straight street a stationary defence holding both
-  flanks is simply strong, and no attempt has been made to tune that out. Site A
-  and site B have not been compared against each other at all.
+- **The map favours the defence.** Across headless matches on the OLD one-street
+  layout, attacks planted roughly a third of the rounds they played. The
+  three-lane map has not been re-measured that way: its route lengths and lane
+  separation are gated (`navcheck`, `lanecheck`) but its win rate is not, and
+  site A and site B have not been compared against each other in play.
 
 What the headless matches *did* verify, repeatedly and with no page errors: all
 four round-end conditions fire (detonation, defusal, either side eliminated, the
