@@ -2,7 +2,34 @@ import * as THREE from 'three';
 import { BOX, BOX_SOFT, IDENT, LL } from './kit.js';
 import { fbm3, patchGeometry, paintMasks } from './util.js';
 import { Rng } from '../core/rng.js';
-import { STREET, ALLEYS } from './layout.js';
+import { STREET, ALLEYS, FLAT } from './layout.js';
+
+/**
+ * How flat the ground is at (x, z): 1 inside a `FLAT` rect, 0 out in the dunes,
+ * smoothly across a `SHOULDER`-metre shoulder.
+ *
+ * The terrain used to be flattened only under the mid street, because that was
+ * the only place anybody walked. The map is three lanes wide now, and ±0.55 m
+ * of dune under a lane you fight down is a lane that makes a bot's A* pay a
+ * height penalty and makes a player's crosshair sit on a hill. Everything
+ * inside the playable box is flat; the dunes still carry the far ground, which
+ * is the only place they were ever doing any work.
+ */
+const SHOULDER = 7;
+function flatness(x, z) {
+  let best = 0;
+  for (let i = 0; i < FLAT.length; i++) {
+    const [x0, z0, x1, z1] = FLAT[i];
+    // signed distance outside the rect, 0 inside
+    const dx = Math.max(x0 - x, 0, x - x1);
+    const dz = Math.max(z0 - z, 0, z - z1);
+    const d = Math.hypot(dx, dz);
+    const f = 1 - Math.min(1, d / SHOULDER);
+    if (f > best) best = f;
+  }
+  // smoothstep, so the shoulder has no crease at either end
+  return best * best * (3 - 2 * best);
+}
 
 /**
  * WORLD — ground plane, road, kerbs and the stuff wind piles against them.
@@ -18,17 +45,18 @@ export function buildGround(A, rng) {
   // ------------------------------------------------------------- terrain --
   // Sandy ground under everything, gently undulating so the horizon isn't a
   // ruler-straight line where it meets the buildings.
+  // Subdivided finer than it was: at 42 segments a 168 m plane has a 4 m quad,
+  // which is coarser than the 7 m shoulder the flattening needs to resolve.
   const S = 168;
-  const N = 42;
+  const N = 84;
   const terrain = new THREE.PlaneGeometry(S, S, N, N);
   terrain.rotateX(-Math.PI / 2);
   const pa = terrain.getAttribute('position');
   for (let i = 0; i < pa.count; i++) {
     const x = pa.getX(i);
     const z = pa.getZ(i);
-    const inStreet = Math.abs(x) < KB + 1 && z > zMin && z < zMax;
-    const h = inStreet ? 0 : (fbm3(x * 0.045, 7.3, z * 0.045, 3) - 0.5) * 1.1 + 0.02;
-    pa.setY(i, h - 0.03);
+    const dune = (fbm3(x * 0.045, 7.3, z * 0.045, 3) - 0.5) * 1.1 + 0.02;
+    pa.setY(i, dune * (1 - flatness(x, z)) - 0.03);
   }
   terrain.computeVertexNormals();
   paintMasks(terrain, (x, y, z, nx, ny, nz, out) => {
@@ -155,9 +183,9 @@ export function buildGround(A, rng) {
   // Its own fixed-seed stream: the seam scatter must not shift the draw sequence
   // the rest of the level's placement depends on.
   const sr = new Rng(0x5ea31d);
-  const seam = (ax, az, bx, bz, keyA, keyB, y) => {
+  const seam = (ax, az, bx, bz, keyA, keyB, y, step = 1.15) => {
     const len = Math.hypot(bx - ax, bz - az);
-    const n = Math.max(6, Math.round(len / 1.15));
+    const n = Math.max(6, Math.round(len / step));
     const tx = (bx - ax) / len;
     const tz = (bz - az) / len;
     // unit normal across the seam
@@ -217,13 +245,66 @@ export function buildGround(A, rng) {
   // perimeter of every alley and courtyard where its floor meets the sand
   seam(-KB, zMin + 2, -KB, zMax - 2, 'concrete', 'sand', WH + 0.004);
   seam(KB, zMin + 2, KB, zMax - 2, 'concrete', 'sand', WH + 0.004);
+  // The lanes are twenty times the area the old alley stubs were, so their
+  // perimeters are seamed at 2.1 m rather than 1.15 — same read at eye level,
+  // a third of the patches.
   for (const a of ALLEYS) {
     const [ax0, az0, ax1, az1] = a.rect;
     const ay = 0.062;
-    seam(ax0, az0, ax1, az0, a.surface, 'sand', ay);
-    seam(ax0, az1, ax1, az1, a.surface, 'sand', ay);
-    seam(ax0, az0, ax0, az1, a.surface, 'sand', ay);
-    seam(ax1, az0, ax1, az1, a.surface, 'sand', ay);
+    const st = Math.max(ax1 - ax0, az1 - az0) > 16 ? 2.1 : 1.15;
+    seam(ax0, az0, ax1, az0, a.surface, 'sand', ay, st);
+    seam(ax0, az1, ax1, az1, a.surface, 'sand', ay, st);
+    seam(ax0, az0, ax0, az1, a.surface, 'sand', ay, st);
+    seam(ax1, az0, ax1, az1, a.surface, 'sand', ay, st);
+  }
+
+  // ---------------------------------------------------- the lane surfaces --
+  /**
+   * A lane is not a flat rectangle of dirt. Wheels have polished two ruts down
+   * every one of them, water has washed the fines out along the wall lines, and
+   * where the old tarmac survives it shows through in long patches. Without
+   * this the two outer lanes are the largest untextured-looking surfaces in the
+   * level, which is exactly the failure the quality bar names.
+   */
+  const lr = new Rng(0x1a2eb70d);
+  for (const a of ALLEYS) {
+    const [ax0, az0, ax1, az1] = a.rect;
+    const w = ax1 - ax0;
+    const d = az1 - az0;
+    const alongZ = d > w;
+    const len = alongZ ? d : w;
+    const span = alongZ ? w : d;
+    if (len < 10) continue;
+    // two wheel ruts, a third of the way in from each side
+    for (const s of [-1, 1]) {
+      const off = s * span * lr.range(0.16, 0.22);
+      const n = Math.max(3, Math.round(len / 5));
+      for (let i = 0; i < n; i++) {
+        const t = ((i + lr.range(0.1, 0.9)) / n - 0.5) * (len - 2);
+        const px = alongZ ? (ax0 + ax1) / 2 + off : (ax0 + ax1) / 2 + t;
+        const pz = alongZ ? (az0 + az1) / 2 + t : (az0 + az1) / 2 + off;
+        const g = patchGeometry(lr, lr.range(0.5, 1.0), { lobes: 11, wobble: 0.5 });
+        A.addOnce(
+          lr.float() < 0.55 ? 'asphalt' : 'dirt',
+          g,
+          LL(IDENT, px, 0.068, pz, alongZ ? 0 : Math.PI / 2, 1, 1, lr.range(2.2, 4.4)),
+          { masks: [0.4, lr.range(0.2, 0.6), 0.12] }
+        );
+      }
+    }
+    // silt and blown sand washed up against both long walls
+    const n2 = Math.max(4, Math.round(len / 2.2));
+    for (let i = 0; i < n2; i++) {
+      const s = lr.float() < 0.5 ? -1 : 1;
+      const off = s * (span / 2 - lr.range(0.1, 1.1));
+      const t = (lr.float() - 0.5) * (len - 1.5);
+      const px = alongZ ? (ax0 + ax1) / 2 + off : (ax0 + ax1) / 2 + t;
+      const pz = alongZ ? (az0 + az1) / 2 + t : (az0 + az1) / 2 + off;
+      const g = patchGeometry(lr, lr.range(0.4, 1.4), { lobes: 9, wobble: 0.55 });
+      A.addOnce('sand', g, LL(IDENT, px, 0.07, pz, lr.float() * 6.28, 1, 1, lr.range(0.45, 0.9)), {
+        masks: [0.15, 0.55, 0.35],
+      });
+    }
   }
 
   // ------------------------------------------- drifts, stains and covers --

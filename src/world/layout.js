@@ -1,15 +1,60 @@
 /**
  * WORLD — the map.
  *
- * A Middle-Eastern market street in the spirit of Crash / Backlot: one long
- * main street running -Z, buildings tight to both kerbs, two flanking alleys, a
- * plaza, and an arched gate closing the far vista. All coordinates are in LEVEL
- * space; the WorldSystem rotates the whole thing so the street runs down the
- * canonical hero-shot camera axis.
+ * A THREE-LANE DEMOLITION LAYOUT, which is the shape the mode needs and the
+ * shape this map did not have.
+ *
+ * WHAT WAS HERE BEFORE, and why it was wrong. One long market street running
+ * -Z from z 46 to z -58, buildings tight to both kerbs, a few four-metre alley
+ * stubs off it, and both bomb sites hung off the SAME forty metres of that one
+ * street a couple of metres either side of it. Measured with
+ * `tools/lanecheck.mjs`: 59.3 % of the attack's A* route to site A lay within
+ * 6 m of its route to site B. There was one corridor with two labels on it, so
+ * there was nothing to fake, nothing to rotate between, and no reason to ever
+ * take a different route.
+ *
+ *      x -31        x -20.5   -6.5    +6.5   +20.5        +31
+ *        |   A LANE   |  west  | MID  | east  |   B LANE   |
+ *        |            |  row   |street|  row  |            |
+ *   z 46 +------------+--------+  ^   +-------+------------+
+ *        |            |  W5    |  |   |  E5   |            |   attack spawn
+ *   z 32 +   ~~~~~~~~ NORTH CROSS ~~~~~~~~~~~~~~~~~~~~~~   +   z 34..44, mid
+ *   z 24 +            |  W1    |  |   |  E1   |            |
+ *   z 15 +   ~~~~ CONNECTOR 1 ~~~+ K1 +~~~~~~~~~~~~~~~~~   +
+ *   z  9 +            |  W2 ▣  |  |   |  E2 ▣ |            |   ▣ = enterable,
+ *   z  3 +   [ SITE A courtyard ]  |   [ SITE B courtyard ]      through-route
+ *   z -1 +            |  (x -36) |  |   | (x +36) |          |
+ *   z -8 +   ~~~~ CONNECTOR 2 ~~~+ K2 +~~~~~~~~~~~~~~~~~   +
+ *   z-11 +            |        |  |   |       |            |
+ *   z-26 +            |  W3 ▣  |  |   |  E3 ▣ |            |
+ *   z-34 +   ~~~~~~~~ SOUTH CROSS ~~~~~~~~~~~~~~~~~~~~~~   +
+ *   z-46 +------------+--W4----+  v   +--E4---+------------+   defend spawn
+ *                                                              z -46..-34, mid
+ *
+ * THE THREE LANES ARE GENUINELY SEPARATE. The west and east building rows are
+ * continuous walls of building from z 44 to z -34 except at the four marked
+ * cross links, so from the mid street you cannot see into either lane and from
+ * one lane you cannot see the other. The two CONNECTORS are what a defender
+ * rotates through and what lets the attack fake one site and hit the other;
+ * `K1` and `K2` sit in the middle of the street inside each connector so the
+ * connector is a dog-leg rather than a fifty-metre firing line straight from
+ * site A into site B.
+ *
+ * EACH SITE IS A COURTYARD, not a dot. `RULES.plantRadius` is 8, so a site is a
+ * 16 m circle: each one bulges its lane out to x ±36 over z -11..3 and has
+ * three mouths — the lane from the north (the attack's), the lane from the
+ * south (the defence's), and the connector from the mid street (either side's).
+ *
+ * BOTS ONLY EVER USE GROUND LEVEL. `src/ai/nav.js` is a 2.5D height field with
+ * one floor per (x, z) cell, so A* cannot climb a stair or use an upper floor
+ * anywhere in this level. Every route either team's bots need — spawn to both
+ * sites, site to site — is an outdoor ground-level route. The interiors and the
+ * roofs are a PLAYER flank on top of that, never the only way in.
  *
  * Sides: 0 = -Z, 1 = +X, 2 = +Z, 3 = -X.
  */
 
+/** The MID lane: the original market street, kept as the middle route. */
 export const STREET = {
   halfWidth: 4.5, // asphalt
   kerb: 6.5, // building line
@@ -18,100 +63,154 @@ export const STREET = {
   zMax: 46,
 };
 
-/** Alleys and open ground, as rects [x0, z0, x1, z1]. */
+/**
+ * The three lanes and the links between them, as level-space rects
+ * [x0, z0, x1, z1]. Everything here becomes ground surface, collision and — via
+ * `isOpen()` in dressing.js — somewhere props are allowed to stand.
+ *
+ * `density` scales the debris scatter. The lanes are an order of magnitude
+ * bigger than the old four-metre alley stubs and the scatter is per square
+ * metre, so without this a single lane would draw six hundred instanced props.
+ */
 export const ALLEYS = [
-  { rect: [-27, -12.2, -6.5, -8.2], surface: 'dirt' }, // west alley (mid street)
-  { rect: [-26, 20.2, -6.5, 24.2], surface: 'dirt' }, // west alley (near)
-  { rect: [-25, 5.6, -6.5, 9.6], surface: 'dirt' }, // west courtyard — lets the
-  // late sun through onto the market, and flanks the main street
-  { rect: [6.5, 1.8, 29, 7.8], surface: 'dirt' }, // east alley — main flank
-  { rect: [6.5, -14.2, 29, -30.2], surface: 'gravel' }, // yard behind the ruin
-  { rect: [-30, -50, 30, -44], surface: 'dirt' }, // far cross street
+  // ------------------------------------------------------------- A lane (west)
+  { rect: [-31, 3, -20.5, 32], surface: 'dirt', density: 0.22 }, // north run
+  { rect: [-36, -11, -20.5, 3], surface: 'gravel', density: 0.5 }, // SITE A courtyard
+  { rect: [-31, -26, -20.5, -11], surface: 'dirt', density: 0.3 }, // south run
+  // ------------------------------------------------------------- B lane (east)
+  { rect: [20.5, 3, 31, 32], surface: 'dirt', density: 0.22 }, // north run
+  { rect: [20.5, -11, 36, 3], surface: 'gravel', density: 0.5 }, // SITE B courtyard
+  { rect: [20.5, -26, 31, -11], surface: 'dirt', density: 0.3 }, // south run
+  // ------------------------------------------------------- north cross street
+  { rect: [-31, 24, -6.5, 32], surface: 'dirt', density: 0.35 },
+  { rect: [6.5, 24, 31, 32], surface: 'dirt', density: 0.35 },
+  // ------------------------------------------------------------- connector 1
+  { rect: [-20.5, 9, -6.5, 15], surface: 'gravel', density: 0.7 },
+  { rect: [6.5, 9, 20.5, 15], surface: 'gravel', density: 0.7 },
+  // ------------------------------------------------------------- connector 2
+  { rect: [-20.5, -8, -6.5, -1], surface: 'gravel', density: 0.7 },
+  { rect: [6.5, -8, 20.5, -1], surface: 'gravel', density: 0.7 },
+  // ------------------------------------------------------- south cross street
+  { rect: [-31, -34, -6.5, -26], surface: 'dirt', density: 0.35 },
+  { rect: [6.5, -34, 31, -26], surface: 'dirt', density: 0.35 },
+];
+
+/**
+ * Ground that must be FLAT. The terrain outside the old street was a dune field
+ * with ±0.55 m of fbm in it, which is fine under a background block and wrong
+ * under a lane you fight down. `buildGround` flattens the union of these with a
+ * soft shoulder so the dunes still carry the far ground.
+ */
+export const FLAT = [
+  [-33, -48, 33, 46], // the whole three-lane box
+  [-38, -13, 38, 5], // both site courtyards
+];
+
+/**
+ * GROUND THAT MUST STAY WALKABLE — [x, z, radius] in level space.
+ *
+ * This is not a style rule, it is a nav rule, and it cost two debugging runs to
+ * find. Anything the dressing pass drops with a collision proxy — a crate, a
+ * barrel, a rubble mound — becomes the FLOOR of the nav cells it covers, and
+ * `src/match/sites.js` resolves a bomb site or a spawn by dropping a ray from
+ * 4 m and taking whatever it lands on. A rubble mound 1.5 m from a spawn point
+ * put that spawn on a 0.6 m island with no route off it, and a crate 0.45 m
+ * from the authored centre of site B did the same to the site. Both were then
+ * silently relocated by `ensureReachable`, which is the mode papering over a
+ * level bug.
+ *
+ * So: no collision-bearing prop inside these circles. Flat dressing, litter,
+ * stains and the ground paint are all still welcome — they have no proxy.
+ *
+ * The two site entries duplicate the centres authored in `src/match/sites.js`.
+ * That is deliberate: `world` may not import `match`. If a site moves, move it
+ * here too.
+ */
+export const KEEPOUT = [
+  [-28.0, -4.0, 3.4], // site A plant area
+  [28.4, -3.6, 3.4], // site B plant area
+  [0, 40.4, 6.0], // attack spawn pocket
+  [0, -40.4, 6.0], // defend spawn pocket
 ];
 
 /**
  * Buildings. `w` is the X extent, `d` the Z extent.
  * Interiors are described in normalised room coordinates (0..1 across the
  * interior), so a plan survives a change of footprint.
+ *
+ * THE TWO ROWS ARE THE LANE WALLS. Their z ranges are chosen so the only gaps
+ * between them are the four cross links, and the outer faces (x ∓20.5) are the
+ * lane's inner wall while the inner faces (x ∓6.5) are the mid street's.
  */
 export const BUILDINGS = [
   // ------------------------------------------------------------- west row --
   {
+    /** North block. Runs the full width of the row AND the A lane, so it caps
+     *  the north end of the lane and forms the north wall of the cross street. */
     id: 'W5',
-    x: -12.5,
-    z: 31,
-    w: 12,
-    d: 14,
+    x: -18.5,
+    z: 38,
+    w: 24,
+    d: 12,
     floors: 2,
-    setback: { from: 1, depth: 2.2, side: 1 },
+    setback: { from: 1, depth: 2.2, side: 2 },
     wallKey: 'plaster_cream',
-    streetSide: 1,
-    secondarySide: 0,
+    streetSide: 2,
+    secondarySide: 1,
     damage: 0.15,
     balconies: 0.3,
-    doorBays: { 1: 1 },
+    doorBays: { 2: 3 },
     roofProps: 3,
   },
   {
     /**
-     * W1 OVERLOOKS BOMB SITE A and is enterable, with a first floor you can
-     * shoot the courtyard from.
-     *
-     * CORRECTION TO WHAT THIS COMMENT ORIGINALLY CLAIMED. I wrote that this
-     * gives "the defence somewhere to hold that the attack has to clear first".
-     * That is true for a human and FALSE for the bots: `NavGrid` stores one
-     * height per (x, z) cell, so no actor can path up any staircase anywhere in
-     * the level — measured, 0 waypoints ground-to-upper in all four enterable
-     * buildings. Worse, W1 currently resolves to ZERO walkable cells at all, so
-     * bots do not enter it even on the ground floor. This is a player route and
-     * a player angle. See the note in src/ai/nav.js.
-     *
-     * Interior modelled on W2's (the shop below, an apartment above), with the
-     * stair in the south-west corner and its hole cut in the first floor
-     * directly over it. `stairHoles` are absolute LEVEL coordinates and must sit
-     * inside the footprint — W1 is x -20.5..-6.5, z 10..20.
+     * W1 — the block between connector 1 and the north cross, so it has open
+     * faces on all four sides: the mid street (+X), the A lane (-X), connector
+     * 1 (-Z) and the cross street (+Z). Enterable, and the ground floor is a
+     * genuine four-way crossing for a player who wants to skip the corner.
      */
     id: 'W1',
     x: -13.5,
-    z: 15,
+    z: 19.5,
     w: 14,
-    d: 10,
+    d: 9,
     floors: 2,
-    setback: { from: 1, depth: 2.6, side: 1 },
-    wallKey: 'plaster_cream',
+    wallKey: 'plaster_sand',
     trimKey: 'concrete',
     streetSide: 1,
-    secondarySide: 2,
+    secondarySide: 3,
     damage: 0.25,
-    balconies: 0.55,
+    balconies: 0.5,
     arches: true,
-    // Two door bays now, on the street side and the courtyard side, so the
-    // building is a ROUTE between the street and site A rather than a room with
-    // one mouth that a single defender can hold for ever.
-    doorBays: { 1: 2, 2: 1 },
+    doorBays: { 1: 1, 3: 1, 0: 2 },
+    /**
+     * A low, wide, glassless opening onto the A lane at sill height 0.95 m.
+     * `MOVE.mantle.maxHeight` is 1.85, so this is a vault, and it is the A
+     * lane's window entry.
+     */
+    bayKinds: {
+      3: { 0: { 0: { kind: 'window', state: 'open', grille: false, y: 1.85, h: 1.8, w: 1.5 } } },
+    },
     enterable: true,
     roofAccess: false,
     roofProps: 4,
-    stairFlights: [{ floor: 0, x: 0.16, z: 0.3, ry: 0, w: 1.2, railing: 'right' }],
-    stairHoles: { 1: { x0: -19.6, x1: -17.2, z0: 11.2, z1: 15.8 } },
+    stairFlights: [{ floor: 0, x: 0.12, z: 0.06, ry: 0, w: 1.15, railing: 'right' }],
+    stairHoles: { 1: { x0: -19.3, x1: -17.75, z0: 15.5, z1: 21.4 } },
     rooms: [
       {
-        // Ground floor: a through route. The cross wall stops short of the
-        // south face so you can get from the street door to the courtyard door
-        // without crossing the open middle of the room.
+        // A cross-shaped through route: one partition with a doorway in it, and
+        // the stair tucked into the north-west corner out of the walking line.
         walls: [
-          [0.52, 0.0, 0.52, 0.72, 0.62],
-          [0.0, 0.48, 0.52, 0.48, 0.34],
+          [0.42, 0.0, 0.42, 1.0, 0.62],
+          [0.42, 0.5, 1.0, 0.5, 0.35],
         ],
         furnish: [
-          { kind: 'shop', x0: 0.52, z0: 0.0, x1: 1.0, z1: 1.0 },
-          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.52, z1: 0.48 },
-          { kind: 'living', x0: 0.0, z0: 0.48, x1: 0.52, z1: 1.0 },
+          { kind: 'shop', x0: 0.42, z0: 0.5, x1: 1.0, z1: 1.0 },
+          { kind: 'storage', x0: 0.42, z0: 0.0, x1: 1.0, z1: 0.5 },
+          { kind: 'living', x0: 0.0, z0: 0.0, x1: 0.42, z1: 1.0 },
         ],
       },
       {
-        // First floor: the angle onto the courtyard. One long room on the
-        // balcony side, so a defender holding it can be flushed from the stair.
         walls: [[0.46, 0.0, 0.46, 1.0, 0.7]],
         furnish: [
           { kind: 'living', x0: 0.46, z0: 0.0, x1: 1.0, z1: 1.0 },
@@ -121,42 +220,48 @@ export const BUILDINGS = [
     ],
   },
   {
+    /**
+     * W2 — THE A-SIDE INTERIOR ROUTE. It sits between connector 1 and connector
+     * 2 with the mid street on one face and site A's courtyard on the other, so
+     * its ground floor is a covered way from mid straight into the site that
+     * bypasses both connector mouths. For a player only: see the nav note above.
+     */
     id: 'W2',
-    x: -14,
-    z: -1.5,
-    w: 15,
-    d: 13,
+    x: -13.5,
+    z: 4,
+    w: 14,
+    d: 10,
     floors: 2,
     setback: { from: 1, depth: 2.4, side: 1 },
-    wallKey: 'plaster_sand',
+    wallKey: 'plaster_cream',
     streetSide: 1,
-    secondarySide: 0,
+    secondarySide: 3,
     damage: 0.3,
     balconies: 0.6,
-    doorBays: { 1: 2 },
+    doorBays: { 1: 2, 3: 0 },
     // The interior camera stands in the shop and looks out through bay 1 of the
     // street facade, so that bay is an open shopfront by hand, not by dice.
     bayKinds: { 1: { 0: { 1: { kind: 'shop', drop: 0 } } } },
     enterable: true,
     roofAccess: false,
     roofProps: 5,
-    stairFlights: [{ floor: 0, x: 0.14, z: 0.28, ry: 0, w: 1.2, railing: 'right' }],
-    stairHoles: { 1: { x0: -20.4, x1: -18.0, z0: -4.8, z1: 1.5 } },
+    stairFlights: [{ floor: 0, x: 0.12, z: 0.08, ry: 0, w: 1.2, railing: 'right' }],
+    stairHoles: { 1: { x0: -19.35, x1: -17.8, z0: -0.2, z1: 5.95 } },
     rooms: [
       {
-        // ground floor: a shop opening onto the street, storage and a back room
+        // One partition across the through route with a door in the middle of
+        // it: cover to fight over rather than a clear tunnel.
         walls: [
-          [0.55, 0.0, 0.55, 1.0, 0.34],
-          [0.0, 0.52, 0.55, 0.52, 0.7],
+          [0.5, 0.0, 0.5, 1.0, 0.72],
+          [0.5, 0.45, 1.0, 0.45, 0.3],
         ],
         furnish: [
-          { kind: 'shop', x0: 0.55, z0: 0.0, x1: 1.0, z1: 1.0 },
-          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.55, z1: 0.52 },
-          { kind: 'living', x0: 0.0, z0: 0.52, x1: 0.55, z1: 1.0 },
+          { kind: 'shop', x0: 0.5, z0: 0.45, x1: 1.0, z1: 1.0 },
+          { kind: 'storage', x0: 0.5, z0: 0.0, x1: 1.0, z1: 0.45 },
+          { kind: 'living', x0: 0.0, z0: 0.0, x1: 0.5, z1: 1.0 },
         ],
       },
       {
-        // first floor: apartment
         walls: [
           [0.48, 0.0, 0.48, 1.0, 0.62],
           [0.48, 0.45, 1.0, 0.45, 0.25],
@@ -167,199 +272,236 @@ export const BUILDINGS = [
           { kind: 'living', x0: 0.0, z0: 0.0, x1: 0.48, z1: 1.0 },
         ],
       },
+    ],
+  },
+  {
+    /**
+     * W3 — the long block south of connector 2. Enterable, badly knocked about,
+     * and the second A-side interior route: a defender falling back from site A
+     * can cut through it to the mid street instead of running the south cross.
+     */
+    id: 'W3',
+    x: -13.5,
+    z: -17,
+    w: 14,
+    d: 18,
+    floors: 2,
+    wallKey: 'plaster_blue',
+    streetSide: 1,
+    secondarySide: 3,
+    damage: 0.5,
+    balconies: 0.3,
+    doorBays: { 1: 1, 3: 4 },
+    bayKinds: {
+      // The A lane's second vault-in, at the south end of the site approach.
+      3: { 0: { 1: { kind: 'window', state: 'open', grille: false, y: 1.8, h: 1.7, w: 1.4 } } },
+    },
+    enterable: true,
+    roofProps: 2,
+    stairFlights: [{ floor: 0, x: 0.86, z: 0.06, ry: 0, w: 1.15, railing: 'right' }],
+    stairHoles: { 1: { x0: -8.9, x1: -7.3, z0: -25.2, z1: -19.2 } },
+    rooms: [
       {
-        walls: [[0.5, 0.0, 0.5, 1.0, 0.5]],
+        walls: [
+          [0.46, 0.0, 0.46, 0.66, 0.4],
+          [0.0, 0.66, 1.0, 0.66, 0.28],
+        ],
         furnish: [
-          { kind: 'ruin', x0: 0.5, z0: 0.0, x1: 1.0, z1: 1.0 },
-          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.5, z1: 1.0 },
+          { kind: 'storage', x0: 0.46, z0: 0.0, x1: 1.0, z1: 0.66 },
+          { kind: 'ruin', x0: 0.0, z0: 0.0, x1: 0.46, z1: 0.66 },
+          { kind: 'shop', x0: 0.0, z0: 0.66, x1: 1.0, z1: 1.0 },
+        ],
+      },
+      {
+        walls: [[0.0, 0.52, 1.0, 0.52, 0.6]],
+        furnish: [
+          { kind: 'living', x0: 0.0, z0: 0.52, x1: 1.0, z1: 1.0 },
+          { kind: 'ruin', x0: 0.0, z0: 0.0, x1: 1.0, z1: 0.52 },
         ],
       },
     ],
   },
   {
-    id: 'W3',
-    x: -13,
-    z: -19,
-    w: 13,
-    d: 14,
-    floors: 2,
-    wallKey: 'plaster_blue',
-    streetSide: 1,
-    secondarySide: 2,
-    damage: 0.55,
-    ruin: true,
-    ruinSide: 1,
-    balconies: 0.3,
-    doorBays: { 1: 0 },
-    roofProps: 2,
-  },
-  {
+    /** South block, mirror of W5: caps the A lane's south end and forms the
+     *  south wall of the cross street the defence fans out along. */
     id: 'W4',
-    x: -14.5,
-    z: -34.5,
-    w: 16,
-    d: 15,
+    x: -18.5,
+    z: -40,
+    w: 24,
+    d: 12,
     floors: 2,
-    setback: { from: 1, depth: 2.8, side: 1 },
+    setback: { from: 1, depth: 2.4, side: 0 },
     wallKey: 'plaster_pink',
-    streetSide: 1,
-    secondarySide: 0,
+    streetSide: 0,
+    secondarySide: 1,
     damage: 0.3,
     balconies: 0.5,
     arches: true,
-    doorBays: { 1: 2 },
+    doorBays: { 0: 3 },
     roofProps: 4,
   },
 
   // ------------------------------------------------------------- east row --
   {
     id: 'E5',
-    x: 12.5,
-    z: 33,
-    w: 12,
-    d: 14,
+    x: 18.5,
+    z: 38,
+    w: 24,
+    d: 12,
     floors: 2,
     wallKey: 'plaster_blue',
-    streetSide: 3,
+    streetSide: 2,
+    secondarySide: 3,
     damage: 0.2,
-    doorBays: { 3: 2 },
+    doorBays: { 2: 4 },
     roofProps: 3,
   },
   {
+    /** E1 — mirror of W1, three floors, and the only roof you can reach. */
     id: 'E1',
-    x: 14,
-    z: 16,
-    w: 15,
-    d: 16,
+    x: 13.5,
+    z: 19.5,
+    w: 14,
+    d: 9,
     floors: 3,
     wallKey: 'plaster_cream',
     streetSide: 3,
-    secondarySide: 0,
+    secondarySide: 1,
     damage: 0.3,
     balconies: 0.45,
-    doorBays: { 3: 2, 0: 1 },
+    doorBays: { 3: 1, 1: 1, 0: 0 },
+    bayKinds: {
+      // The B lane's window entry.
+      1: { 0: { 2: { kind: 'window', state: 'open', grille: false, y: 1.85, h: 1.8, w: 1.5 } } },
+    },
     enterable: true,
     roofAccess: true,
     roofProps: 6,
     stairFlights: [
-      { floor: 0, x: 0.72, z: 0.12, ry: 0, w: 1.2, railing: 'right' },
-      { floor: 1, x: 0.72, z: 0.12, ry: 0, w: 1.2, railing: 'right' },
+      { floor: 0, x: 0.86, z: 0.06, ry: 0, w: 1.2, railing: 'right' },
+      { floor: 1, x: 0.86, z: 0.06, ry: 0, w: 1.2, railing: 'right' },
     ],
     stairHoles: {
-      1: { x0: 16.3, x1: 18.1, z0: 9.4, z1: 16.2 },
-      2: { x0: 16.3, x1: 18.1, z0: 9.4, z1: 16.2 },
+      1: { x0: 17.75, x1: 19.3, z0: 15.5, z1: 21.4 },
+      2: { x0: 17.75, x1: 19.3, z0: 15.5, z1: 21.4 },
     },
     rooms: [
       {
         walls: [
-          [0.0, 0.42, 0.62, 0.42, 0.3],
-          [0.62, 0.0, 0.62, 0.42, 0.5],
+          [0.58, 0.0, 0.58, 1.0, 0.62],
+          [0.0, 0.5, 0.58, 0.5, 0.35],
         ],
         furnish: [
-          { kind: 'shop', x0: 0.0, z0: 0.42, x1: 0.62, z1: 1.0 },
-          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.62, z1: 0.42 },
+          { kind: 'shop', x0: 0.0, z0: 0.5, x1: 0.58, z1: 1.0 },
+          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.58, z1: 0.5 },
+          { kind: 'living', x0: 0.58, z0: 0.0, x1: 1.0, z1: 1.0 },
         ],
       },
       {
-        walls: [[0.0, 0.45, 0.62, 0.45, 0.72]],
+        walls: [[0.54, 0.0, 0.54, 1.0, 0.7]],
         furnish: [
-          { kind: 'living', x0: 0.0, z0: 0.45, x1: 0.62, z1: 1.0 },
-          { kind: 'ruin', x0: 0.0, z0: 0.0, x1: 0.62, z1: 0.45 },
+          { kind: 'living', x0: 0.0, z0: 0.0, x1: 0.54, z1: 1.0 },
+          { kind: 'storage', x0: 0.54, z0: 0.0, x1: 1.0, z1: 1.0 },
+        ],
+      },
+      {
+        walls: [[0.0, 0.46, 0.54, 0.46, 0.5]],
+        furnish: [
+          { kind: 'ruin', x0: 0.0, z0: 0.0, x1: 0.54, z1: 0.46 },
+          { kind: 'living', x0: 0.0, z0: 0.46, x1: 0.54, z1: 1.0 },
+          { kind: 'storage', x0: 0.54, z0: 0.0, x1: 1.0, z1: 1.0 },
         ],
       },
     ],
   },
   {
-    /**
-     * E2 OVERLOOKS BOMB SITE B: three floors, a stair, and balconies onto the
-     * alley the site sits in.
-     *
-     * Same correction as W1 — this is a PLAYER route. Measured: bots cannot
-     * path from the street into E2 at all (0 waypoints), and cannot climb any
-     * stair in the level. See the note in src/ai/nav.js.
-     *
-     * `stairHoles` are absolute LEVEL coordinates and must land inside the
-     * footprint — E2 is x 6.5..20.5, z -12..2 — and over the stair, which sits
-     * at normalised (0.72, 0.12).
-     */
+    /** E2 — THE B-SIDE INTERIOR ROUTE, mirror of W2, one floor taller so the
+     *  balconies look down into site B's courtyard. */
     id: 'E2',
     x: 13.5,
-    z: -5,
+    z: 4,
     w: 14,
-    d: 14,
+    d: 10,
     floors: 3,
     wallKey: 'plaster_blue',
     streetSide: 3,
-    secondarySide: 2,
+    secondarySide: 1,
     damage: 0.3,
     balconies: 0.7,
-    // Street door plus a back door onto the alley, so the building connects the
-    // two rather than being a dead end off one of them.
-    doorBays: { 3: 2, 2: 1 },
+    doorBays: { 3: 0, 1: 2 },
     enterable: true,
     roofAccess: false,
     roofProps: 5,
     stairFlights: [
-      { floor: 0, x: 0.72, z: 0.12, ry: 0, w: 1.2, railing: 'right' },
-      { floor: 1, x: 0.72, z: 0.12, ry: 0, w: 1.2, railing: 'right' },
+      { floor: 0, x: 0.88, z: 0.08, ry: 0, w: 1.2, railing: 'right' },
+      { floor: 1, x: 0.88, z: 0.08, ry: 0, w: 1.2, railing: 'right' },
     ],
     stairHoles: {
-      1: { x0: 15.7, x1: 17.5, z0: -10.8, z1: -4.9 },
-      2: { x0: 15.7, x1: 17.5, z0: -10.8, z1: -4.9 },
+      1: { x0: 17.8, x1: 19.35, z0: -0.2, z1: 5.95 },
+      2: { x0: 17.8, x1: 19.35, z0: -0.2, z1: 5.95 },
     },
     rooms: [
       {
         walls: [
-          [0.0, 0.44, 0.6, 0.44, 0.34],
-          [0.6, 0.0, 0.6, 0.44, 0.55],
+          [0.5, 0.0, 0.5, 1.0, 0.72],
+          [0.0, 0.45, 0.5, 0.45, 0.3],
         ],
         furnish: [
-          { kind: 'shop', x0: 0.0, z0: 0.44, x1: 0.6, z1: 1.0 },
-          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.6, z1: 0.44 },
-        ],
-      },
-      {
-        walls: [[0.0, 0.46, 0.6, 0.46, 0.72]],
-        furnish: [
-          { kind: 'living', x0: 0.0, z0: 0.46, x1: 0.6, z1: 1.0 },
-          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.6, z1: 0.46 },
+          { kind: 'shop', x0: 0.0, z0: 0.45, x1: 0.5, z1: 1.0 },
+          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.5, z1: 0.45 },
+          { kind: 'living', x0: 0.5, z0: 0.0, x1: 1.0, z1: 1.0 },
         ],
       },
       {
-        // Top floor left mostly open: the balcony angle onto the alley, with
-        // enough clutter to break a silhouette but nothing to hide behind.
-        walls: [[0.55, 0.0, 0.55, 0.6, 0.4]],
+        walls: [[0.52, 0.0, 0.52, 1.0, 0.62]],
         furnish: [
-          { kind: 'ruin', x0: 0.55, z0: 0.0, x1: 1.0, z1: 1.0 },
-          { kind: 'living', x0: 0.0, z0: 0.0, x1: 0.55, z1: 1.0 },
+          { kind: 'living', x0: 0.0, z0: 0.0, x1: 0.52, z1: 1.0 },
+          { kind: 'storage', x0: 0.52, z0: 0.0, x1: 1.0, z1: 1.0 },
+        ],
+      },
+      {
+        walls: [[0.45, 0.0, 0.45, 0.6, 0.4]],
+        furnish: [
+          { kind: 'ruin', x0: 0.0, z0: 0.0, x1: 0.45, z1: 1.0 },
+          { kind: 'living', x0: 0.45, z0: 0.0, x1: 1.0, z1: 1.0 },
         ],
       },
     ],
   },
   {
+    /** E3 — mirror of W3: the long ruined block south of connector 2, with the
+     *  roof down over one end of it. */
     id: 'E3',
-    x: 14,
-    z: -22,
-    w: 15,
-    d: 16,
+    x: 13.5,
+    z: -17,
+    w: 14,
+    d: 18,
     floors: 2,
     wallKey: 'plaster_sand',
     streetSide: 3,
-    secondarySide: 0,
-    damage: 0.75,
+    secondarySide: 1,
+    damage: 0.7,
     ruin: true,
-    ruinSide: 3,
+    ruinSide: 1,
     collapse: true,
-    doorBays: { 3: 1 },
+    doorBays: { 3: 4, 1: 1 },
+    bayKinds: {
+      1: { 0: { 4: { kind: 'window', state: 'open', grille: false, y: 1.8, h: 1.7, w: 1.4 } } },
+    },
     enterable: true,
     roofProps: 2,
+    stairFlights: [{ floor: 0, x: 0.14, z: 0.06, ry: 0, w: 1.15, railing: 'right' }],
+    stairHoles: { 1: { x0: 7.3, x1: 8.9, z0: -25.2, z1: -19.2 } },
     rooms: [
       {
-        walls: [[0.45, 0.0, 0.45, 0.7, 0.4]],
+        walls: [
+          [0.54, 0.0, 0.54, 0.66, 0.4],
+          [0.0, 0.66, 1.0, 0.66, 0.72],
+        ],
         furnish: [
-          { kind: 'ruin', x0: 0.45, z0: 0.0, x1: 1.0, z1: 1.0 },
-          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.45, z1: 0.7 },
-          { kind: 'ruin', x0: 0.0, z0: 0.7, x1: 0.45, z1: 1.0 },
+          { kind: 'ruin', x0: 0.54, z0: 0.0, x1: 1.0, z1: 0.66 },
+          { kind: 'storage', x0: 0.0, z0: 0.0, x1: 0.54, z1: 0.66 },
+          { kind: 'ruin', x0: 0.0, z0: 0.66, x1: 1.0, z1: 1.0 },
         ],
       },
       {
@@ -370,22 +512,91 @@ export const BUILDINGS = [
   },
   {
     id: 'E4',
-    x: 13.5,
-    z: -39,
-    w: 14,
-    d: 14,
+    x: 18.5,
+    z: -40,
+    w: 24,
+    d: 12,
     floors: 3,
     wallKey: 'plaster_pink',
-    streetSide: 3,
-    secondarySide: 2,
+    streetSide: 0,
+    secondarySide: 3,
     damage: 0.35,
     balconies: 0.4,
     arches: true,
-    doorBays: { 3: 2 },
+    doorBays: { 0: 4 },
     roofProps: 4,
   },
 
+  // ------------------------------------------------------- the mid island --
+  /**
+   * K1 and K2 stand in the MIDDLE of the mid street, one inside each connector.
+   *
+   * They are what stops a connector being a fifty-metre firing line from site A
+   * straight into site B: with the island there, crossing the street on a
+   * rotation is a dog-leg, and a defender holding mid has a piece of hard cover
+   * to hold it from rather than a strip of open tarmac. Single storey on
+   * purpose — a two-storey island in the middle of the map would give the mid
+   * player an angle into both lanes at once.
+   */
+  {
+    id: 'K1',
+    x: 0,
+    z: 12,
+    w: 5.4,
+    d: 5.4,
+    floors: 1,
+    groundH: 3.2,
+    wallKey: 'plaster_sand',
+    streetSide: 0,
+    secondarySide: 2,
+    damage: 0.3,
+    doorBays: { 0: 0, 2: 1 },
+    parapetH: 0.6,
+    enterable: true,
+    roofProps: 2,
+    rooms: [
+      {
+        walls: [],
+        furnish: [{ kind: 'shop', x0: 0.0, z0: 0.0, x1: 1.0, z1: 1.0 }],
+      },
+    ],
+  },
+  {
+    id: 'K2',
+    x: -0.4,
+    z: -4.6,
+    w: 5.6,
+    d: 6.2,
+    floors: 1,
+    groundH: 3.3,
+    wallKey: 'plaster_cream',
+    streetSide: 2,
+    secondarySide: 0,
+    damage: 0.45,
+    doorBays: { 2: 1, 0: 0 },
+    parapetH: 0.6,
+    enterable: true,
+    roofProps: 2,
+    rooms: [
+      {
+        walls: [],
+        furnish: [{ kind: 'storage', x0: 0.0, z0: 0.0, x1: 1.0, z1: 1.0 }],
+      },
+    ],
+  },
+
   // ------------------------------------------------- background / infill --
+  /**
+   * The mass BEYOND the lanes. These are the lanes' outer wall as much as they
+   * are skyline: `skipSides` drops the faces nobody can ever see, and the inner
+   * face of each one is the wall you take cover against.
+   */
+  { id: 'BW1', x: -41, z: 22, w: 20, d: 42, floors: 3, wallKey: 'plaster_sand', streetSide: 1, damage: 0.15, skipSides: [3], roofProps: 3 },
+  { id: 'BW2', x: -45, z: -4, w: 18, d: 18, floors: 2, wallKey: 'plaster_cream', streetSide: 1, damage: 0.25, skipSides: [3], roofProps: 2 },
+  { id: 'BW3', x: -41, z: -26, w: 20, d: 36, floors: 2, wallKey: 'plaster_blue', streetSide: 1, damage: 0.2, skipSides: [3], roofProps: 2 },
+  { id: 'BE1', x: 41, z: 22, w: 20, d: 42, floors: 3, wallKey: 'plaster_pink', streetSide: 3, damage: 0.15, skipSides: [1], roofProps: 3 },
+  { id: 'BE2', x: 45, z: -4, w: 18, d: 18, floors: 2, wallKey: 'plaster_sand', streetSide: 3, damage: 0.25, skipSides: [1], roofProps: 2 },
+  { id: 'BE3', x: 41, z: -26, w: 20, d: 36, floors: 2, wallKey: 'plaster_cream', streetSide: 3, damage: 0.2, skipSides: [1], roofProps: 2 },
   /**
    * The mass BEHIND the gate. Only its top four metres and its roofline are
    * visible — through the sliver of sky over the arch spandrel — but that is the
@@ -393,36 +604,31 @@ export const BUILDINGS = [
    * reading as a flat cut-out, and it is offset west so a slice of real sky
    * survives on the east side of the gap.
    */
-  { id: 'BS3', x: -4, z: -53, w: 9, d: 8, floors: 4, wallKey: 'plaster_sand', streetSide: 2, damage: 0.3, balconies: 0.2, roofProps: 4 },
-  { id: 'BW1', x: -30, z: 8, w: 16, d: 22, floors: 3, wallKey: 'plaster_sand', streetSide: 1, damage: 0.15, skipSides: [1], roofProps: 3 },
-  { id: 'BW2', x: -31, z: -18, w: 18, d: 24, floors: 2, wallKey: 'plaster_cream', streetSide: 1, damage: 0.2, skipSides: [1], roofProps: 2 },
-  { id: 'BE1', x: 31, z: 18, w: 18, d: 20, floors: 3, wallKey: 'plaster_pink', streetSide: 3, damage: 0.15, skipSides: [3], roofProps: 3 },
-  { id: 'BE2', x: 32, z: -8, w: 18, d: 20, floors: 2, wallKey: 'plaster_blue', streetSide: 3, damage: 0.2, skipSides: [3], roofProps: 2 },
-  { id: 'BE3', x: 30, z: -34, w: 16, d: 18, floors: 3, wallKey: 'plaster_cream', streetSide: 3, damage: 0.25, skipSides: [3], roofProps: 2 },
-  // BS1/BS2 pulled apart to make room for BS3 in the middle of the far skyline.
-  { id: 'BS1', x: -19, z: -58, w: 20, d: 14, floors: 3, wallKey: 'plaster_sand', streetSide: 2, damage: 0.2, roofProps: 2 },
-  { id: 'BS2', x: 14, z: -60, w: 24, d: 16, floors: 2, wallKey: 'plaster_blue', streetSide: 2, damage: 0.2, roofProps: 2 },
-  { id: 'BN1', x: -16, z: 50, w: 20, d: 14, floors: 2, wallKey: 'plaster_cream', streetSide: 0, damage: 0.15, roofProps: 2 },
-  { id: 'BN2', x: 14, z: 52, w: 22, d: 16, floors: 3, wallKey: 'plaster_pink', streetSide: 0, damage: 0.15, roofProps: 2 },
+  { id: 'BS3', x: -4, z: -61, w: 9, d: 8, floors: 4, wallKey: 'plaster_sand', streetSide: 2, damage: 0.3, balconies: 0.2, roofProps: 4 },
+  { id: 'BS1', x: -19, z: -66, w: 20, d: 14, floors: 3, wallKey: 'plaster_sand', streetSide: 2, damage: 0.2, roofProps: 2 },
+  { id: 'BS2', x: 14, z: -68, w: 24, d: 16, floors: 2, wallKey: 'plaster_blue', streetSide: 2, damage: 0.2, roofProps: 2 },
+  { id: 'BN1', x: -16, z: 54, w: 20, d: 14, floors: 2, wallKey: 'plaster_cream', streetSide: 0, damage: 0.15, roofProps: 2 },
+  { id: 'BN2', x: 14, z: 56, w: 22, d: 16, floors: 3, wallKey: 'plaster_pink', streetSide: 0, damage: 0.15, roofProps: 2 },
 ];
 
 /**
- * The street terminator at the south end of the vista.
+ * The street terminator at the south end of the vista, now standing behind the
+ * defenders' spawn rather than across the middle of the map.
  *
- * This is the surface the eye lands on in eight of the eleven canonical shots,
- * so it is not one flat crenellated slab: it is a mass of four blocks at four
- * different heights, stepped in Z as well as Y, with a pointed archway through
- * the middle and a genuine sliver of sky over the arch that shows the receding
- * roofline of `BS3` behind it. Three planes of depth (bastion / gatehouse /
- * background block) is what makes the alley read as continuing rather than as
- * ending at a wall.
+ * This is the surface the eye lands on looking down the mid street, so it is not
+ * one flat crenellated slab: it is a mass of four blocks at four different
+ * heights, stepped in Z as well as Y, with a pointed archway through the middle
+ * and a genuine sliver of sky over the arch that shows the receding roofline of
+ * `BS3` behind it. Three planes of depth (bastion / gatehouse / background
+ * block) is what makes the street read as continuing rather than as ending at a
+ * wall.
  *
  *   xL0..xL1  the left (west) gatehouse block, lowest of the four
  *   xR0..xR1  the right (east) block
  *   xT0..xT1  the tower/bastion, tallest and standing PROUD in +Z
  */
 export const GATE = {
-  z: -42.5,
+  z: -50.5,
   depth: 3.2,
   span: 5.6,
   height: 4.9,
@@ -452,43 +658,84 @@ export const GATE = {
   towerProud: 1.5,
 };
 
-/** Hand-placed set pieces. Dressing adds the hundreds of small props around these. */
+/**
+ * Hand-placed set pieces. Dressing adds the hundreds of small props around
+ * these.
+ *
+ * The site entries are not decoration. `RULES.plantRadius` is 8 and a plant has
+ * to be makeable from cover and a defuse has to be contestable, so each
+ * courtyard gets a lorry, two sandbag runs, a barrier and a stall — mid-height
+ * mass you can break line of sight behind without being able to hide the C4
+ * where nobody can shoot at it.
+ */
 export const SET_PIECES = {
   /** Market stalls: [x, z, ry, width] */
   stalls: [
-    [-3.2, 6.4, 0.08, 2.4],
-    [-3.0, 2.2, -0.05, 2.2],
-    [3.1, 9.5, 3.2, 2.4],
-    [3.4, 4.0, 3.05, 2.6],
-    [-0.4, 2.6, 1.62, 2.3],
-    [3.0, -9.0, 3.25, 2.2],
-    [-3.3, -14.5, 0.12, 2.4],
-    [2.9, -20.0, 3.0, 2.3],
+    // mid street
+    [-3.2, 20.4, 0.08, 2.4],
+    [3.4, 17.0, 3.05, 2.6],
+    [-3.0, 5.6, -0.05, 2.2],
+    [3.0, -12.0, 3.25, 2.2],
+    [-3.3, -19.5, 0.12, 2.4],
+    [2.9, -30.0, 3.0, 2.3],
+    // site A courtyard
+    [-33.4, -2.2, 1.55, 2.5],
+    [-24.2, -9.4, 0.22, 2.2],
+    // site B courtyard
+    [33.6, -1.0, -1.6, 2.5],
+    [24.0, 1.6, 3.0, 2.2],
+    // connectors
+    [-11.0, 12.6, 1.62, 2.3],
+    [11.4, -5.2, 1.5, 2.3],
   ],
   /** Jersey barriers: [x, z, ry] */
   jerseys: [
-    [-2.6, 17.5, 0.12],
-    [-0.4, 16.2, 1.5],
-    [2.9, 12.0, -0.1],
-    [1.6, -2.5, 1.62],
-    [-2.4, -6.0, 0.05],
-    [3.2, -16.0, 0.1],
+    [-2.6, 29.0, 0.12],
+    [2.9, 26.5, -0.1],
+    [-2.4, 10.6, 0.05],
+    [1.6, -2.0, 1.62],
+    [3.2, -18.0, 0.1],
     [-1.0, -24.0, 1.55],
-    [1.2, -30.0, 0.2],
-    [-3.0, -34.0, 0.0],
+    [1.2, -30.5, 0.2],
+    // sites: a barrier across each courtyard's north mouth
+    [-26.4, 1.4, 0.06],
+    [-22.6, -3.4, 1.57],
+    [26.8, 1.2, -0.05],
+    [22.6, -4.2, 1.57],
+    // lanes: something to break the run
+    [-27.5, 17.0, 1.5],
+    [27.8, 14.0, 1.5],
+    [-25.2, -19.5, 0.1],
+    [25.4, -20.5, 0.1],
   ],
   /** Sandbag emplacements: [x, z, ry, length] */
   sandbagWalls: [
-    [-3.6, 11.0, 0.0, 3.0],
-    [3.6, -2.0, 0.0, 2.6],
-    [-1.6, -18.5, 1.57, 2.4],
-    [3.4, -27.0, 0.0, 3.2],
+    [-3.6, 27.0, 0.0, 3.0],
+    [3.6, -1.6, 0.0, 2.6],
+    [-1.6, -20.5, 1.57, 2.4],
+    [3.4, -29.0, 0.0, 3.2],
+    // site A: one run facing the north mouth, one facing the connector
+    [-30.4, 0.4, 0.0, 3.4],
+    [-23.8, -8.2, 1.57, 3.0],
+    // site B
+    [30.6, -0.2, 0.0, 3.4],
+    [23.6, -8.6, 1.57, 3.0],
+    // the cross streets, where each side steps out of spawn
+    [-16.0, 28.6, 0.0, 3.0],
+    [16.2, -30.4, 0.0, 3.0],
   ],
   /** Burnt-out vehicles: [x, z, ry, rollDeg] */
   wrecks: [
-    [2.5, 0.5, 0.42, 0],
-    [-2.8, -28.5, -2.6, 4],
-    [4.9, 24.0, 1.5, 0],
+    [2.5, 22.0, 0.42, 0],
+    [-2.8, -33.0, -2.6, 4],
+    // the lorry in each site: the biggest single piece of cover on the map, and
+    // the thing that makes a plant behind it survivable. Parked against the
+    // west wall of each courtyard, clear of the KEEPOUT circle.
+    [-32.4, -7.2, 0.28, 0],
+    [32.6, -6.8, -0.34, 2],
+    // one on each lane, blocking the long run
+    [-25.8, 24.0, 1.42, 0],
+    [26.2, 22.5, 1.5, 0],
   ],
   /** Palm trees: [x, z, scale] */
   palms: [
@@ -497,58 +744,85 @@ export const SET_PIECES = {
     [-5.5, -4.5, 0.92],
     [5.6, -20.5, 1.05],
     [-5.5, -32.0, 1.0],
-    [8.5, 5.0, 0.85],
-    [-9.0, -10.2, 0.9],
+    [-22.4, -1.2, 0.95],
+    [22.6, -2.4, 0.9],
+    [-34.6, -8.6, 1.05],
+    [34.4, 1.0, 1.0],
+    [-29.4, 10.0, 0.88],
+    [29.6, 8.0, 0.92],
   ],
   /** Street lamps: [x, z, ry] — ry points the arm across the street. */
   lamps: [
-    [-5.9, 15.0, -Math.PI / 2],
-    [5.9, 3.0, Math.PI / 2],
-    [-5.9, -11.0, -Math.PI / 2],
-    [5.9, -24.0, Math.PI / 2],
+    [-5.9, 27.0, -Math.PI / 2],
+    [5.9, 11.0, Math.PI / 2],
+    [-5.9, -6.0, -Math.PI / 2],
+    [5.9, -22.0, Math.PI / 2],
     [-5.9, -36.0, -Math.PI / 2],
+    [-30.6, -10.4, -Math.PI / 2],
+    [30.8, -10.0, Math.PI / 2],
+    [-30.4, 20.0, -Math.PI / 2],
+    [30.6, 18.0, Math.PI / 2],
   ],
   /** Overhead cable spans: [x0, y0, z0, x1, y1, z1, sag] */
   cables: [
-    [-6.4, 7.2, 10.0, 6.4, 6.6, 12.5, 1.1],
-    [-6.4, 8.4, -2.0, 6.4, 7.9, -0.5, 1.4],
-    [-6.4, 6.2, -16.0, 6.4, 6.6, -14.5, 1.0],
+    [-6.4, 7.2, 21.0, 6.4, 6.6, 23.5, 1.1],
+    [-6.4, 8.4, 4.0, 6.4, 7.9, 5.5, 1.4],
+    [-6.4, 6.2, -18.0, 6.4, 6.6, -16.5, 1.0],
     [-6.4, 7.6, -30.0, 6.4, 7.2, -28.0, 1.2],
-    [-6.4, 5.4, 19.0, -6.4, 5.6, 24.5, 0.6],
-    [6.4, 5.6, 2.0, 6.4, 5.4, 8.0, 0.7],
+    // across each lane, which is what gives a 30 m corridor a ceiling
+    [-20.6, 6.8, 16.0, -30.9, 6.2, 18.0, 1.2],
+    [-20.6, 6.4, -14.0, -30.9, 6.8, -16.5, 1.1],
+    [20.6, 6.6, 14.0, 30.9, 6.2, 16.5, 1.2],
+    [20.6, 6.2, -16.0, 30.9, 6.6, -18.5, 1.1],
+    [-20.6, 5.8, -3.0, -35.9, 5.4, -5.5, 1.6],
+    [20.6, 5.8, -2.0, 35.9, 5.4, -4.5, 1.6],
   ],
   /** Laundry lines with hanging cloth: [x0, y0, z0, x1, y1, z1] */
   laundry: [
     // Kept off the main sightline and up at balcony height: lines that cross the
     // street at eye level clutter the vista and read as floating cards.
-    [6.35, 3.6, 9.0, 6.35, 3.75, 14.2],
-    [-6.35, 3.7, 1.0, -6.35, 3.6, 5.4],
-    [-6.35, 6.6, -20.5, -6.35, 6.4, -15.5],
-    [6.35, 6.5, -6.0, 6.35, 6.7, -1.0],
-    [-6.35, 3.65, -27.0, -6.35, 3.8, -22.0],
-    [6.4, 3.7, 21.0, 6.4, 3.6, 25.5],
+    [6.35, 3.6, 20.0, 6.35, 3.75, 23.5],
+    [-6.35, 3.7, 4.0, -6.35, 3.6, 8.0],
+    [-6.35, 6.6, -22.5, -6.35, 6.4, -17.5],
+    [6.35, 6.5, -20.0, 6.35, 6.7, -15.0],
+    [-20.65, 3.65, 0.0, -20.65, 3.8, 5.0],
+    [20.65, 3.7, 0.5, 20.65, 3.6, 5.5],
+    [-20.65, 6.2, -14.0, -20.65, 6.4, -19.0],
+    [20.65, 6.2, -13.0, 20.65, 6.4, -18.0],
   ],
   /** Hanging rugs / cloth on facades: [x, y, z, ry, w, h] */
   hangings: [
-    [-6.45, 2.6, 8.5, Math.PI / 2, 1.5, 2.1],
-    [-6.45, 2.4, 4.5, Math.PI / 2, 1.2, 1.7],
+    [-6.45, 2.6, 6.5, Math.PI / 2, 1.5, 2.1],
+    [-6.45, 2.4, 20.5, Math.PI / 2, 1.2, 1.7],
     [6.45, 2.7, 6.0, -Math.PI / 2, 1.6, 2.2],
-    [6.45, 2.5, -8.5, -Math.PI / 2, 1.3, 1.9],
-    [-6.45, 2.5, -16.0, Math.PI / 2, 1.4, 2.0],
+    [6.45, 2.5, -18.5, -Math.PI / 2, 1.3, 1.9],
+    [-20.55, 2.5, 2.0, -Math.PI / 2, 1.4, 2.0],
+    [20.55, 2.5, 2.5, Math.PI / 2, 1.4, 2.0],
+    [-20.55, 2.6, -14.5, -Math.PI / 2, 1.3, 1.9],
+    [20.55, 2.6, -15.5, Math.PI / 2, 1.3, 1.9],
   ],
   /** Rubble piles: [x, z, radius, count] */
   rubble: [
-    [-4.2, -20.5, 2.4, 34],
-    [5.0, -14.5, 2.8, 40],
-    [-1.5, -40.0, 2.0, 26],
-    [7.6, -30.5, 2.2, 28],
-    [-5.0, 26.0, 1.6, 18],
+    [-4.2, -22.5, 2.4, 34],
+    [5.0, -16.5, 2.8, 40],
+    [-4.6, -47.5, 2.0, 26],
+    [-5.0, 28.0, 1.6, 18],
+    // sites: a collapsed corner in each, which is cover AND a reason the wall
+    // behind it is broken
+    [-34.6, 1.2, 2.6, 36],
+    [34.8, -9.2, 2.6, 36],
+    [-28.0, -22.0, 2.2, 26],
+    [28.2, -23.0, 2.2, 26],
   ],
   /** Tyre stacks: [x, z, n] */
   tyres: [
-    [-5.2, 12.5, 4],
-    [5.3, -6.0, 3],
+    [-5.2, 14.5, 4],
+    [5.3, -8.0, 3],
     [6.2, 3.0, 5],
-    [-5.4, -28.0, 3],
+    [-5.4, -30.0, 3],
+    [-32.0, -9.4, 4],
+    [32.2, 2.2, 4],
+    [-21.6, 12.0, 3],
+    [21.8, -6.0, 3],
   ],
 };

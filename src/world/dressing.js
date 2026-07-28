@@ -27,7 +27,7 @@ import {
   tubeY,
   fbm3,
 } from './util.js';
-import { STREET, ALLEYS, BUILDINGS, SET_PIECES, GATE } from './layout.js';
+import { STREET, ALLEYS, BUILDINGS, SET_PIECES, GATE, KEEPOUT } from './layout.js';
 
 /**
  * WORLD — set dressing.
@@ -60,6 +60,26 @@ export function inBuilding(x, z, m = 0.3) {
       return true;
   }
   return false;
+}
+
+/**
+ * True where a prop that carries a COLLISION PROXY may stand.
+ *
+ * A proxy is not decoration to the navigation grid: it is the floor of every
+ * cell it covers. `src/ai/nav.js` samples one height per cell and
+ * `src/match/sites.js` resolves a site or a spawn by dropping a ray from 4 m,
+ * so a crate beside an authored point silently moves that point onto a
+ * one-cell island with no route off it. See `KEEPOUT` in layout.js — this is
+ * the test that enforces it. Flat dressing (stains, litter, patches) has no
+ * proxy and is not filtered.
+ */
+export function keepClear(x, z) {
+  for (let i = 0; i < KEEPOUT.length; i++) {
+    const dx = x - KEEPOUT[i][0];
+    const dz = z - KEEPOUT[i][1];
+    if (dx * dx + dz * dz < KEEPOUT[i][2] * KEEPOUT[i][2]) return false;
+  }
+  return true;
 }
 
 /** True on the street, a pavement or an alley — i.e. somewhere props can sit. */
@@ -1278,6 +1298,7 @@ function facadeHangings(A, rng) {
 // --- rubble -----------------------------------------------------------------
 function rubblePiles(A, rng) {
   for (const [x, z, radius, count] of SET_PIECES.rubble) {
+    if (!keepClear(x, z)) continue;
     const y = groundY(x, z);
     rubbleMound(A, rng, x, y, z, radius, count, { key: 'concrete' });
     // dust ring
@@ -1363,14 +1384,36 @@ function tyreStacks(A, rng) {
  */
 function coverClusters(A, rng) {
   const spots = [
-    [0.6, 0.9, 0.35],
-    [-2.2, 8.6, 1.2],
-    [2.6, -6.4, -0.4],
-    [-3.0, -21.5, 0.6],
-    [2.2, -33.0, 1.9],
-    [-2.6, 27.5, 0.2],
+    // mid street
+    [-2.2, 18.6, 1.2],
+    [2.6, -9.4, -0.4],
+    [-3.0, -23.5, 0.6],
+    [2.2, -32.0, 1.9],
+    [-2.6, 29.5, 0.2],
+    // ringing the two bomb sites: cover a plant can be made from and a defuse
+    // can be contested behind, spread so no single angle covers the whole zone
+    // and kept off the plant area itself (see KEEPOUT)
+    [-31.8, -1.0, 0.9],
+    [-33.4, -8.2, 1.7],
+    [-23.6, 0.6, 0.15],
+    [-24.4, -8.8, 1.3],
+    [32.0, -1.6, -0.8],
+    [33.6, -7.8, 1.4],
+    [23.8, 0.2, 0.1],
+    [24.6, -8.4, 1.3],
+    // the lane runs, so a 30 m corridor has something to break it
+    [-26.6, 8.0, 1.5],
+    [26.8, 6.5, 1.5],
+    [-24.8, -16.0, 0.3],
+    [25.0, -17.5, 0.3],
+    // the connector mouths
+    [-14.0, -4.0, 1.55],
+    [14.2, -4.6, 1.55],
+    [-15.5, 12.0, 1.55],
+    [15.7, 11.4, 1.55],
   ];
   for (const [x, z, ry] of spots) {
+    if (!keepClear(x, z)) continue;
     const y = groundY(x, z);
     // six squashed courses ≈ 0.8 m: cover you can shoot over crouched, not standing
     sandbagWall(A, rng, x, z, ry, rng.range(1.8, 2.8), 6);
@@ -1683,13 +1726,18 @@ function dressBuilding(A, rng, info) {
 
 /** Cables and washing lines strung across the alleys between buildings. */
 function alleyLines(A, rng, infos) {
+  // Strung across the CONNECTORS and the lane mouths, which is where a low
+  // horizontal element does the most work: it gives a 30 m corridor a ceiling
+  // and tells you at a glance that this gap in the row is a way through.
   const spans = [
-    [-6.6, 5.0, 21.0, -6.6, 5.4, 24.0],
-    [-6.6, 4.2, -9.0, -6.6, 4.6, -11.5],
-    [7.0, 4.6, 2.5, 7.0, 4.2, 6.6],
-    [7.0, 5.6, -16.0, 7.0, 5.2, -20.0],
-    [-8.0, 6.4, 20.6, -8.0, 6.0, 23.8],
-    [8.6, 6.2, 2.2, 8.6, 5.8, 7.2],
+    [-20.4, 4.6, 10.0, -6.6, 4.2, 13.2], // connector 1, west
+    [6.6, 4.6, 10.4, 20.4, 4.2, 13.6], // connector 1, east
+    [-20.4, 4.4, -6.8, -6.6, 4.8, -3.4], // connector 2, west
+    [6.6, 4.8, -6.4, 20.4, 4.4, -3.0], // connector 2, east
+    [-30.8, 5.0, 6.0, -20.6, 4.6, 8.4], // A lane, north mouth of the site
+    [30.8, 5.0, 5.4, 20.6, 4.6, 7.8], // B lane, north mouth of the site
+    [-30.8, 4.4, -13.0, -20.6, 4.8, -15.4], // A lane, south of the site
+    [30.8, 4.4, -14.0, 20.6, 4.8, -16.4], // B lane, south of the site
   ];
   for (const [x0, y0, z0, x1, y1, z1] of spans) {
     const t = catenaryTube([x0, y0, z0], [x1, y1, z1], 0.5, 0.016, { seg: 10, radial: 4, jitter: 0.04 });
@@ -1775,11 +1823,14 @@ export function scatterDebris(A, rng) {
     );
   }
 
-  // --- alleys: denser, junkier ---
+  // --- alleys and lanes: denser, junkier ---
+  // The scatter is per square metre and the lanes are twenty times the area the
+  // old four-metre alley stubs were, so each rect carries its own density or a
+  // single lane draws six hundred instanced props on its own.
   for (const a of ALLEYS) {
     const [x0, z0, x1, z1] = a.rect;
     const area = (x1 - x0) * (z1 - z0);
-    const n = Math.round(area * 0.85);
+    const n = Math.round(area * (a.density ?? 0.85));
     for (let i = 0; i < n; i++) {
       const x = rng.range(x0 + 0.3, x1 - 0.3);
       const z = rng.range(z0 + 0.3, z1 - 0.3);
@@ -1800,13 +1851,16 @@ export function scatterDebris(A, rng) {
       else if (pick < 0.9) id = rng.pick(['tyre', 'tyre_small']);
       else if (pick < 0.95) id = rng.pick(['box_card_a', 'box_card_b', 'bucket', 'jerry_can']);
       else id = rng.pick(['slab_shard', 'rebar', 'gas_bottle']);
+      // big items get a collision box; scatter does not — and anything that
+      // gets one is barred from the plant areas and the spawn pockets.
+      const solid = id.startsWith('barrel') || id.startsWith('crate');
+      if (solid && !keepClear(x, z)) continue;
       const y = groundY(x, z);
       A.put(id, x, y + 0.015, z, rng.float() * 6.28, rng.range(0.7, 1.2), [
         1,
         rng.range(1.0, 1.5),
         1,
       ]);
-      // big items get a collision box; scatter does not
       if (id.startsWith('barrel')) A.box('metal', x, y + 0.45, z, 0.62, 0.9, 0.62);
       else if (id.startsWith('crate')) A.box('wood', x, y + 0.3, z, 0.62, 0.6, 0.62);
     }
@@ -1814,7 +1868,8 @@ export function scatterDebris(A, rng) {
     if (rng.float() < 0.7) {
       const bx = rng.float() < 0.5 ? x0 + 1.6 : x1 - 1.6;
       const bz = rng.range(z0 + 1.2, z1 - 1.2);
-      if (!inBuilding(bx, bz, 0.4)) rubbleMound(A, rng, bx, groundY(bx, bz), bz, rng.range(0.9, 1.8), rng.int(12, 24));
+      if (!inBuilding(bx, bz, 0.4) && keepClear(bx, bz))
+        rubbleMound(A, rng, bx, groundY(bx, bz), bz, rng.range(0.9, 1.8), rng.int(12, 24));
     }
   }
 

@@ -17,79 +17,88 @@ import * as THREE from 'three';
 import { RULES } from './rules.js';
 
 /**
- * Two flank pockets off the main street, one west one east, roughly 32 m apart.
+ * ONE SITE AT THE END OF EACH OUTER LANE, 56 m apart.
  *
- *   A — the alley between W2 and W3. A 15 x 4 m corridor with one mouth onto
- *       the street and a long approach from the west: cover-heavy, close range.
- *   B — the alley between E2 and E1, opening east off the market. Longer
- *       sightlines, and the balconies on E1 overlook it.
+ * The map is three lanes now (see the diagram at the top of
+ * `src/world/layout.js`): an A lane down the west side, the old market street
+ * as MID, a B lane down the east side, joined by two connectors in the middle.
+ * Each lane bulges into a 15 x 14 m walled courtyard at x ∓28, z -4, which is
+ * where its site sits.
  *
- * `fallback` is a point on the open street used if the primary does not resolve
- * onto walkable ground.
+ * A SITE IS A ZONE, NOT A DOT. `RULES.plantRadius` is 8, so the 16 m circle
+ * centred here covers the whole courtyard and nothing outside it. Each
+ * courtyard has THREE mouths — the lane from the north (the attack's natural
+ * approach), the lane from the south (the defence's), and the connector from
+ * the mid street (either side's, and the one a fake gets punished through) —
+ * plus a lorry, two sandbag runs, a barrier line and a collapsed corner inside
+ * it, so a plant can be made from cover and a defuse can be contested.
+ *
+ * WHAT THESE REPLACE. Both sites used to sit a few metres either side of the
+ * SAME stretch of the one street, at nearly the same z. `tools/lanecheck.mjs`
+ * measured the consequence: 59.3 % of the attack's route to A lay within 6 m of
+ * its route to B, so there was nothing to fake and nothing to rotate between.
+ *
+ * `fallback` is a point further up the same lane, used if the primary does not
+ * resolve onto walkable ground.
  */
 export const SITES = [
   {
     id: 'A',
     name: 'WEST COURTYARD',
+    level: [-28.0, -4.0],
+    fallback: [-25.5, -6.0],
     /**
-     * MOVED OUT OF THE DEAD-END ALLEY. Site A used to sit at level (-12, -10.2)
-     * in the west mid alley, and `tools/navcheck.mjs` measured what that cost:
-     * the attack's shortest real A* route was 49.6 m against the defence's
-     * 23.3 m. Twenty-six metres of head start on a 120 second round is not a
-     * defender advantage, it is an unplayable site — the defence is set before
-     * the attack can see the entrance, every time.
-     *
-     * The courtyard between W2 and BW1 is open on three sides (the street to
-     * the east, the lane north, the wall line west), which is what a bomb site
-     * needs: more than one way in, so a retake and an execute are both possible.
+     * Where defenders set up: on the mouth their own rotation arrives through,
+     * which for both sites is the lane from the south. Open courtyard ground,
+     * NOT inside a building — see groundPoint's roof note.
      */
-    level: [-15.0, 7.6],
-    fallback: [-8.0, 7.6],
-    /** Where defenders set up: on the mouth their own rotation arrives through. */
-    /** Open courtyard ground, NOT inside W2 — see groundPoint's roof note. */
-    holdLevel: [-11.0, 6.2],
+    holdLevel: [-26.0, -9.8],
   },
   {
     id: 'B',
-    name: 'EAST ALLEY',
-    level: [13.0, 4.8],
-    fallback: [7.0, 4.8],
-    /** Open alley ground, NOT inside E2 — see groundPoint's roof note. */
-    holdLevel: [9.5, 4.8],
+    name: 'EAST COURTYARD',
+    level: [28.4, -3.6],
+    fallback: [25.5, -6.0],
+    holdLevel: [26.4, -9.4],
   },
 ];
 
 /**
- * Spawns, `[x, z, yaw]` in level space. Attackers come down the street from the
- * north end; defenders start south of both sites and rotate up to them, which is
- * what gives the defence its three-second head start onto either site.
+ * Spawns, `[x, z, yaw]` in level space.
  *
- * THE SEPARATION IS LOAD-BEARING. This map is one straight street, so the two
- * spawn clusters have a clean line to each other and an actor's view range is
- * 58 m (`Agent.viewRange`). At the first spacing tried — closest pair 51 m —
- * both sides acquired a target on the spawn frame and spent the round trading
- * shots down the middle instead of playing the objective. The closest pair here
- * is 60.5 m, which is past the range at which anybody can see anybody, so the
- * round opens with two teams walking rather than two teams already shooting.
+ * Both clusters sit in the MID lane behind their own cross street — the attack
+ * in the pocket north of W5/E5, the defence in the pocket south of W4/E4 — so
+ * each side steps out of spawn into a full-width cross street and chooses a
+ * lane there. That is what makes all three routes live: from the attack spawn
+ * the A lane, mid and the B lane are 68, 69 and 68 m to their respective
+ * objectives, so no route is the obvious one.
+ *
+ * THE SEPARATION IS LOAD-BEARING. An actor's view range is 58 m
+ * (`Agent.viewRange`). At the first spacing tried on the old map — closest pair
+ * 51 m — both sides acquired a target on the spawn frame and spent the round
+ * trading shots down the middle instead of playing the objective. The closest
+ * pair here is 72 m, and the two cross streets are blind to each other because
+ * the mid street's median (`K1`, `K2`) stands between them, so the round opens
+ * with two teams walking rather than two teams already shooting.
  */
 export const SPAWNS = {
   attack: [
-    [-3.6, 40.0, Math.PI],
-    [0.0, 42.5, Math.PI],
-    [3.6, 40.0, Math.PI],
-    [-2.2, 36.5, Math.PI],
-    [2.2, 36.5, Math.PI],
-    [-4.6, 34.0, Math.PI],
-    [4.6, 34.0, Math.PI],
+    [-3.6, 43.0, Math.PI],
+    [0.0, 44.6, Math.PI],
+    [3.6, 43.0, Math.PI],
+    [-2.2, 39.6, Math.PI],
+    [2.2, 39.6, Math.PI],
+    [-4.6, 36.2, Math.PI],
+    [4.6, 36.2, Math.PI],
   ],
   defend: [
-    [-3.6, -20.0, 0],
-    [0.0, -22.5, 0],
-    [3.6, -20.0, 0],
-    [-2.2, -17.0, 0],
-    [2.2, -17.0, 0],
-    [-4.6, -24.0, 0],
-    [4.6, -24.0, 0],
+    [-3.6, -43.0, 0],
+    [0.0, -44.4, 0],
+    [3.6, -43.0, 0],
+    [-2.2, -39.6, 0],
+    [2.2, -39.6, 0],
+    [-4.6, -36.2, 0],
+    [4.6, -36.2, 0],
   ],
 };
 

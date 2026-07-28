@@ -353,22 +353,33 @@ function buildFacade(A, rng, spec, info, ctx) {
         break;
       }
       case 'window': {
-        const ww = Math.min(room, rng.range(1.05, 1.3));
-        const wh = f === 0 ? 1.62 : 1.48;
-        const o = { x: bx, y: (f === 0 ? 1.05 : 0.95) + wh / 2, w: ww, h: wh, kind };
+        /**
+         * A hand-authored window can override its size, its state and its
+         * grille. That is what a VAULT-IN is: a wide glassless opening with its
+         * sill at 0.95 m, which is under `MOVE.mantle.maxHeight` (1.85) and
+         * therefore a real entry, on a face the lane can see. Left to the dice a
+         * ground-floor window is 1.05-1.3 m wide, barred 55 % of the time and
+         * glazed most of the rest, i.e. never an entry at all.
+         */
+        const ww = forced?.w ?? Math.min(room, rng.range(1.05, 1.3));
+        const wh = forced?.h ?? (f === 0 ? 1.62 : 1.48);
+        const o = { x: bx, y: forced?.y ?? (f === 0 ? 1.05 : 0.95) + wh / 2, w: ww, h: wh, kind };
         openings.push(o);
-        const broken = rng.float() < (spec.damage ?? 0.15) * 1.6;
+        const broken = forced?.state ? forced.state === 'open' : rng.float() < (spec.damage ?? 0.15) * 1.6;
         // One window per bay is not the same window per bay: pick a state so the
         // facade carries open casements, boarded holes, shut louvres, curtains and
         // the occasional lit room instead of one repeated glazed panel.
-        const st = broken ? 'open' : windowState(rng, f, spec.damage ?? 0.15, { allowLit: !openFace || f > 0 });
+        const st =
+          forced?.state ??
+          (broken ? 'open' : windowState(rng, f, spec.damage ?? 0.15, { allowLit: !openFace || f > 0 }));
         deco.push(() =>
           windowUnit(A, pm, o, rng, {
             t,
             broken,
             state: st,
             back: !spec.enterable,
-            grille: f === 0 && st !== 'boarded' && rng.float() < 0.55,
+            grille:
+              forced?.grille ?? (f === 0 && st !== 'boarded' && rng.float() < 0.55),
             shutters: f > 0 && (st === 'shuttered' || rng.float() < 0.4),
             shutterKey: spec.shutterKey ?? rng.pick(['metal_blue', 'metal_green', 'wood_dark']),
             curtain: st === 'curtain' || (st === 'glazed' && rng.float() < 0.25),
