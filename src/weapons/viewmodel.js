@@ -550,6 +550,50 @@ export class Viewmodel {
   }
 
   /**
+   * The SUPPORT hand's equivalent of `debugRefitRight`.
+   *
+   * The support wrists measured 64 to 97 degrees while every fingertip sat
+   * within 0.4 mm of the handguard — the same "contact is not the whole story"
+   * failure the shooting hand had, on the other arm. Debug only; mutates the
+   * authored node, caller restores or reloads.
+   */
+  debugRefitLeft(w, trial) {
+    const g = w.model.nodes.gripL;
+    const hg = w.model.nodes.handguard ?? w.model.nodes.supportCylinder;
+    if (!g || !hg) return null;
+    if (trial.pos) g.pos = trial.pos;
+    if (trial.finger) g.finger = trial.finger;
+    if (trial.back) g.back = trial.back;
+    w.gripL = g;
+    this._fitSupportHand(w);
+    const zHi = Math.max(hg.z0, hg.z1);
+    const zLo = Math.min(hg.z0, hg.z1);
+    let onGrip = 0;
+    for (const c of this.armL.lastFit?.contactPts ?? []) {
+      if (c.z <= zHi + 0.012 && c.z >= zLo - 0.012) onGrip++;
+    }
+    // `_handPosL`/`_handQuatL`, NOT the right hand's scratch — passing
+    // `_handPos` here made the reported wrist a constant 86.8 degrees for every
+    // weapon and every trial, which is what a measurement that isn't measuring
+    // anything looks like.
+    this.armL.solve(this._handPosL, this._handQuatL);
+    const fore = _wv.copy(this.armL.hand.position).sub(this.armL.elbow).normalize();
+    const fwd = _wv2.set(0, 0, -1).applyQuaternion(this.armL.hand.quaternion).normalize();
+    const wrist = (Math.acos(Math.max(-1, Math.min(1, fore.dot(fwd)))) * 180) / Math.PI;
+    /**
+     * REACH. `Arm.solve` clamps the target to 99.5% of (l1 + l2); at the clamp
+     * the elbow locks dead straight and the limb reads as a broomstick. The
+     * wrist-aware search walked the carbine's support hand 0.33 m down the
+     * barrel to straighten the wrist, which put it at 1.011 extension — past the
+     * end of the arm — and the documented "hand covers the muzzle, elbow locks"
+     * defect would have come straight back. So reach is scored too.
+     */
+    const ext = this.armL.hand.position.distanceTo(this.armL.shoulder) /
+      (this.armL.l1 + this.armL.l2);
+    return { gaps: w.fitL?.gaps ?? null, wrist: +wrist.toFixed(1), onGrip, ext: +ext.toFixed(3) };
+  }
+
+  /**
    * RE-RUN the shooting-hand solve with a trial `gripR`, and report the gaps.
    *
    * Authoring a grip by reasoning about the geometry did not converge: the
@@ -607,7 +651,17 @@ export class Viewmodel {
     const fore = _wv.copy(this.armR.hand.position).sub(this.armR.elbow).normalize();
     const fwd = _wv2.set(0, 0, -1).applyQuaternion(this.armR.hand.quaternion).normalize();
     const wrist = (Math.acos(Math.max(-1, Math.min(1, fore.dot(fwd)))) * 180) / Math.PI;
-    return { gaps: w.fitR?.gaps ?? null, wrist: +wrist.toFixed(1), onGrip };
+    /**
+     * REACH. `Arm.solve` clamps the target to 99.5% of (l1 + l2); at the clamp
+     * the elbow locks dead straight and the limb reads as a broomstick. The
+     * wrist-aware search walked the carbine's support hand 0.33 m down the
+     * barrel to straighten the wrist, which put it at 1.011 extension — past the
+     * end of the arm — and the documented "hand covers the muzzle, elbow locks"
+     * defect would have come straight back. So reach is scored too.
+     */
+    const ext = this.armR.hand.position.distanceTo(this.armR.shoulder) /
+      (this.armR.l1 + this.armR.l2);
+    return { gaps: w.fitR?.gaps ?? null, wrist: +wrist.toFixed(1), onGrip, ext: +ext.toFixed(3) };
   }
 
   /**

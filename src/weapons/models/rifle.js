@@ -494,10 +494,27 @@ export function buildRifle() {
        * The per-fingertip solve re-runs against this target at build time and just
        * uses less curl, so the contact is preserved.
        */
+      /**
+       * SEARCHED, wrist- reach- and span-constrained — see tools/gripfit.mjs.
+       *
+       * The fingertips were already on the handguard (0.1-0.4 mm) and the hand
+       * still looked wrong, because the WRIST was at 66.4 degrees. A human
+       * wrist manages ~70 of flexion at the extreme; a support grip lives around
+       * 15-35. Now 28.9 degrees, fingertips within 0.7 mm, still on the
+       * handguard's authored span, and arm extension 0.804 -> 0.911 so the
+       * two-bone solve keeps a visible elbow bend.
+       *
+       * That last number is not decoration. The first wrist-aware search
+       * straightened this wrist by walking the hand 0.33 m down the barrel, to
+       * 1.011 extension — past the end of the arm — where `Arm.solve` clamps,
+       * the elbow locks dead straight and the limb reads as a broomstick. That
+       * is the failure this file already documents twice. Caught by capturing
+       * the frame, not by any of the contact numbers, which were perfect.
+       */
       gripL: {
-        pos: [-0.1, 0.0734, handZ + 0.0252],
-        finger: [0.8977, -0.3267, -0.2955],
-        back: [-0.2784, -0.7648, 0.581],
+        pos: [-0.045, 0.0234, -0.2558],
+        finger: [0.8977, 0.3994, -0.1858],
+        back: [0.1447, -0.9891, 0.0287],
       },
       /**
        * The handguard's collision profile, for the build-time fingertip contact

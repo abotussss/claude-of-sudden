@@ -34,6 +34,8 @@ const args = Object.fromEntries(
 );
 const URL = args.url ?? 'http://127.0.0.1:4173/';
 const ONLY = args.only ? String(args.only).split(',') : ['rifle', 'smg', 'pistol', 'knife'];
+/** Which hand to search: `--side=left` for the support hand. */
+const SIDE = args.side === 'left' ? 'left' : 'right';
 
 const browser = await chromium.launch({
   headless: true,
@@ -45,7 +47,7 @@ page.on('pageerror', (e) => errs.push(String(e.message)));
 await page.goto(URL, { waitUntil: 'domcontentloaded' });
 await page.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
 
-const result = await page.evaluate((ONLY) => {
+const result = await page.evaluate(([ONLY, SIDE]) => {
   const vm = window.__ENGINE__.ctx.peek('weapons').viewmodel;
   const out = [];
 
@@ -97,14 +99,27 @@ const result = await page.evaluate((ONLY) => {
      * finger costs 5 mm of gap, which no wrist improvement can outbid.
      */
     const off = 4 - (r.onGrip ?? 4);
-    return contact + over * 0.00025 + off * 0.005;
+    /**
+     * PAST THE END OF THE ARM IS NOT A POSE. Over ~0.92 extension the two-bone
+     * solve is nearly straight and at 0.995 it clamps and the elbow locks; the
+     * wrist-aware search reached 1.011 on the carbine's support hand by walking
+     * it 0.33 m down the barrel. Steep, because there is no trade here worth
+     * making: 0.08 over budget already costs 20 mm of fingertip gap.
+     */
+    const reach = Math.max(0, (r.ext ?? 0) - 0.92);
+    return contact + over * 0.00025 + off * 0.005 + reach * 0.25;
   };
 
   for (const id of ONLY) {
     const w = vm.weapons.get(id);
-    if (!w?.model?.nodes?.gripR || !w?.model?.nodes?.gripCylinder) continue;
-    const g0 = w.model.nodes.gripR;
-    const before = vm.debugRefitRight(w, {
+    const left = SIDE === 'left';
+    const refit = left ? (x, t) => vm.debugRefitLeft(x, t) : (x, t) => vm.debugRefitRight(x, t);
+    const g0 = left ? w?.model?.nodes?.gripL : w?.model?.nodes?.gripR;
+    const cylNode = left
+      ? (w?.model?.nodes?.handguard ?? w?.model?.nodes?.supportCylinder)
+      : w?.model?.nodes?.gripCylinder;
+    if (!g0 || !cylNode) continue;
+    const before = refit(w, {
       pos: g0.pos.slice(), finger: norm(g0.finger.slice()), back: norm(g0.back.slice()),
     });
 
@@ -130,7 +145,7 @@ const result = await page.evaluate((ONLY) => {
     let pos = g0.pos.slice();
     let finger = seedF;
     let back = seedB;
-    let best = cost(vm.debugRefitRight(w, { pos, finger, back }));
+    let best = cost(refit(w, { pos, finger, back }));
 
     // Coordinate descent. Positions in metres, angles in radians; the ranges
     // shrink each round so the first pass can travel and the last can polish.
@@ -142,7 +157,7 @@ const result = await page.evaluate((ONLY) => {
           for (let k = 1; k <= 4; k++) {
             const t = pos.slice();
             t[axis] += s * dp * k;
-            const c = cost(vm.debugRefitRight(w, { pos: t, finger, back }));
+            const c = cost(refit(w, { pos: t, finger, back }));
             if (c < best - 1e-9) { best = c; pos = t; }
           }
         }
@@ -154,7 +169,7 @@ const result = await page.evaluate((ONLY) => {
         for (const s of [-1, 1]) {
           for (let n = 1; n <= 4; n++) {
             const f = norm(rot(finger, k, s * da * n));
-            const c = cost(vm.debugRefitRight(w, { pos, finger: f, back }));
+            const c = cost(refit(w, { pos, finger: f, back }));
             if (c < best - 1e-9) { best = c; finger = f; }
           }
         }
@@ -162,7 +177,7 @@ const result = await page.evaluate((ONLY) => {
       for (const s of [-1, 1]) {
         for (let n = 1; n <= 4; n++) {
           const b = norm(rot(back, finger, s * da * n));
-          const c = cost(vm.debugRefitRight(w, { pos, finger, back: b }));
+          const c = cost(refit(w, { pos, finger, back: b }));
           if (c < best - 1e-9) { best = c; back = b; }
         }
       }
@@ -171,27 +186,28 @@ const result = await page.evaluate((ONLY) => {
       if (best < bestOverall.cost) bestOverall = { cost: best, pos, finger, back };
     }
     const { pos, finger, back } = bestOverall;
-    const after = vm.debugRefitRight(w, { pos, finger, back });
+    const after = refit(w, { pos, finger, back });
     out.push({
       id,
       before: before?.gaps?.map((v) => +(v * 1000).toFixed(1)),
       after: after?.gaps?.map((v) => +(v * 1000).toFixed(1)),
       wristBefore: before?.wrist, wristAfter: after?.wrist,
       onBefore: before?.onGrip, onAfter: after?.onGrip,
+      extBefore: before?.ext, extAfter: after?.ext,
       pos: pos.map((v) => +v.toFixed(4)),
       finger: finger.map((v) => +v.toFixed(4)),
       back: back.map((v) => +v.toFixed(4)),
     });
   }
   return out;
-}, ONLY);
+}, [ONLY, SIDE]);
 
 for (const r of result) {
   const worst = (a) => Math.max(...a.map(Math.abs)).toFixed(1);
   console.log(`\n${r.id}`);
-  console.log(`  tip gaps before (mm): [${r.before.join(', ')}]  worst ${worst(r.before)}   wrist ${r.wristBefore} deg   onGrip ${r.onBefore}/4`);
-  console.log(`  tip gaps after  (mm): [${r.after.join(', ')}]  worst ${worst(r.after)}   wrist ${r.wristAfter} deg   onGrip ${r.onAfter}/4`);
-  console.log('      gripR: {');
+  console.log(`  tip gaps before (mm): [${r.before.join(', ')}]  worst ${worst(r.before)}   wrist ${r.wristBefore} deg   onGrip ${r.onBefore}/4   ext ${r.extBefore}`);
+  console.log(`  tip gaps after  (mm): [${r.after.join(', ')}]  worst ${worst(r.after)}   wrist ${r.wristAfter} deg   onGrip ${r.onAfter}/4   ext ${r.extAfter}`);
+  console.log(`      grip${SIDE === 'left' ? 'L' : 'R'}: {`);
   console.log(`        pos: [${r.pos.join(', ')}],`);
   console.log(`        finger: [${r.finger.join(', ')}],`);
   console.log(`        back: [${r.back.join(', ')}],`);

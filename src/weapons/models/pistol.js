@@ -353,10 +353,27 @@ export function buildPistol() {
        * in y and 15 mm in z from the old pose — the hand does not move
        * anywhere the camera can notice, it just arrives at something solid.
        */
+      /**
+       * SEARCHED, wrist- reach- and span-constrained — see tools/gripfit.mjs.
+       *
+       * The fingertips were already on the handguard (0.1-0.4 mm) and the hand
+       * still looked wrong, because the WRIST was at 80.1 degrees. A human
+       * wrist manages ~70 of flexion at the extreme; a support grip lives around
+       * 15-35. Now 39.7 degrees, fingertips within 0.7 mm, still on the
+       * handguard's authored span, and arm extension 0.619 -> 0.675 so the
+       * two-bone solve keeps a visible elbow bend.
+       *
+       * That last number is not decoration. The first wrist-aware search
+       * straightened this wrist by walking the hand 0.33 m down the barrel, to
+       * 1.011 extension — past the end of the arm — where `Arm.solve` clamps,
+       * the elbow locks dead straight and the limb reads as a broomstick. That
+       * is the failure this file already documents twice. Caught by capturing
+       * the frame, not by any of the contact numbers, which were perfect.
+       */
       gripL: {
-        pos: [-0.0312, -0.0069, 0.0914],
-        finger: [0.34, -0.28, -0.9],
-        back: [0.15, 0.93, -0.33],
+        pos: [0.0038, -0.0269, 0.0964],
+        finger: [0.3989, 0.442, -0.8034],
+        back: [0.9127, 0.3412, -0.2248],
       },
       /**
        * What the support hand closes on: not the frame — the firing hand.

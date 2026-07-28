@@ -925,10 +925,27 @@ export function buildAk() {
        * with the knuckle contact 8.6 mm off the surface, i.e. a 16 mm half-palm
        * buried ~7 mm, which is what a glove squeezing a handguard does.
        */
+      /**
+       * SEARCHED, wrist- reach- and span-constrained — see tools/gripfit.mjs.
+       *
+       * The fingertips were already on the handguard (0.1-0.4 mm) and the hand
+       * still looked wrong, because the WRIST was at 69.3 degrees. A human
+       * wrist manages ~70 of flexion at the extreme; a support grip lives around
+       * 15-35. Now 29.8 degrees, fingertips within 0.7 mm, still on the
+       * handguard's authored span, and arm extension 0.76 -> 0.833 so the
+       * two-bone solve keeps a visible elbow bend.
+       *
+       * That last number is not decoration. The first wrist-aware search
+       * straightened this wrist by walking the hand 0.33 m down the barrel, to
+       * 1.011 extension — past the end of the arm — where `Arm.solve` clamps,
+       * the elbow locks dead straight and the limb reads as a broomstick. That
+       * is the failure this file already documents twice. Caught by capturing
+       * the frame, not by any of the contact numbers, which were perfect.
+       */
       gripL: {
-        pos: [-0.0977, 0.0648, -0.174],
-        finger: [0.898, -0.3267, -0.2955],
-        back: [-0.2784, -0.7651, 0.581],
+        pos: [-0.0377, 0.0148, -0.184],
+        finger: [0.8978, 0.1449, -0.4159],
+        back: [0.1447, -0.9891, 0.0286],
       },
       /**
        * The handguard's collision profile. The real section is a 46 x 40 mm
