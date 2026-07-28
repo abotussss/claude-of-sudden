@@ -104,11 +104,33 @@ const result = await page.evaluate((ONLY) => {
     const w = vm.weapons.get(id);
     if (!w?.model?.nodes?.gripR || !w?.model?.nodes?.gripCylinder) continue;
     const g0 = w.model.nodes.gripR;
+    const before = vm.debugRefitRight(w, {
+      pos: g0.pos.slice(), finger: norm(g0.finger.slice()), back: norm(g0.back.slice()),
+    });
+
+    /**
+     * MULTI-START, because coordinate descent from the authored pose gets
+     * stuck. The knife's wrist was at 167 degrees — the hand folded back on its
+     * own forearm — and descending from there only reached 155, since escaping
+     * it needs the hand ORIENTATION to flip, and no single-axis step of 20
+     * degrees improves the score on the way. Seeding from the authored finger
+     * rotated a quarter and a half turn about each axis gives the search a start
+     * on the far side of that ridge. The authored pose stays in the set, so this
+     * can never do worse than the single-start version.
+     */
+    const seeds = [[norm(g0.finger.slice()), norm(g0.back.slice())]];
+    for (const k of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
+      for (const a of [Math.PI / 2, -Math.PI / 2, Math.PI]) {
+        seeds.push([norm(rot(g0.finger.slice(), k, a)), norm(rot(g0.back.slice(), k, a))]);
+      }
+    }
+
+    let bestOverall = { cost: Infinity, pos: g0.pos.slice(), finger: seeds[0][0], back: seeds[0][1] };
+    for (const [seedF, seedB] of seeds) {
     let pos = g0.pos.slice();
-    let finger = norm(g0.finger.slice());
-    let back = norm(g0.back.slice());
-    const before = vm.debugRefitRight(w, { pos, finger, back });
-    let best = cost(before);
+    let finger = seedF;
+    let back = seedB;
+    let best = cost(vm.debugRefitRight(w, { pos, finger, back }));
 
     // Coordinate descent. Positions in metres, angles in radians; the ranges
     // shrink each round so the first pass can travel and the last can polish.
@@ -146,6 +168,9 @@ const result = await page.evaluate((ONLY) => {
       }
     }
 
+      if (best < bestOverall.cost) bestOverall = { cost: best, pos, finger, back };
+    }
+    const { pos, finger, back } = bestOverall;
     const after = vm.debugRefitRight(w, { pos, finger, back });
     out.push({
       id,

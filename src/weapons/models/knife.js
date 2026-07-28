@@ -170,10 +170,28 @@ export function buildKnife() {
        * Coordinate descent on the real solve brings all four to
        * [0.4, 0.5, 0.4, 0.2] mm.
        */
+      /**
+       * SEARCHED FROM MULTIPLE SEEDS — see tools/gripfit.mjs.
+       *
+       * This wrist measured 168.6 degrees: the hand folded back onto its own
+       * forearm, which is not a grip, it is a fracture. Descending from the
+       * authored pose could only reach 155, because escaping it needs the hand's
+       * whole ORIENTATION to flip and no single 20-degree step improves the
+       * score on the way over that ridge. Seeding the search from the authored
+       * finger rotated a quarter and a half turn about each axis finds the far
+       * side: 26.1 degrees, with every fingertip within 0.7 mm and on the
+       * handle's authored span.
+       *
+       * `back` comes out negated, i.e. the hand rolled 180 degrees, which is the
+       * whole point — the old pose had the PALM toward the camera. A forward
+       * grip seen from the shooter's own eye shows the back of the fist with the
+       * blade coming out over the index knuckle, and that is what it renders as
+       * now: four knuckle caps facing the viewer, blade above them.
+       */
       gripR: {
-        pos: [-0.0028, 0.1002, 0.0651],
-        finger: [0.464, -0.8415, 0.2767],
-        back: [0.9167, 0.3996, 0],
+        pos: [-0.0038, -0.0613, 0.0511],
+        finger: [-0.4545, 0.8854, -0.0976],
+        back: [-0.9167, -0.3996, 0],
       },
       /**
        * SUPPORT HAND — off the weapon entirely.
