@@ -1212,14 +1212,31 @@ export function glove(nz, wrist, gripAxis, palmNormal, side) {
   transformMesh(palm, m);
   appendMesh(out, palm);
 
-  // finger mass: a tube curling around the grip axis
+  /**
+   * Finger mass: a tube curling around the grip axis, one per digit.
+   *
+   * All four used to be the same length and the same 11.5 mm radius, so the
+   * hand was a mitten with four identical sausages on it. Real digits are
+   * index > middle-ish > ring > little in both reach and thickness — the
+   * staircase down to the little finger is most of what the eye uses to tell a
+   * hand from a paddle at 3 m — and each one is fattest at its proximal knuckle
+   * rather than being a uniform rod.
+   */
+  const FINGER = [
+    //  reach (rad), base radius, tip radius
+    [2.30, 0.0122, 0.0094],
+    [2.36, 0.0126, 0.0096],
+    [2.24, 0.0116, 0.0088],
+    [2.04, 0.0100, 0.0076],
+  ];
   for (let f = 0; f < 4; f++) {
     const t = f / 3;
+    const [reach, rBase, rTip] = FINGER[f];
     const pts = [];
     const startY = 0.052 - t * 0.030;
     for (let i = 0; i <= 4; i++) {
       const u = i / 4;
-      const ang = u * 2.2;
+      const ang = u * reach;
       const r = 0.030 - u * 0.004;
       const p = W.clone()
         .addScaledVector(A, startY - 0.004 + Math.sin(ang) * r * 0.55)
@@ -1227,10 +1244,16 @@ export function glove(nz, wrist, gripAxis, palmNormal, side) {
         .addScaledVector(S, side * (0.020 - t * 0.019));
       pts.push([p.x, p.y, p.z]);
     }
-    const fin = tube(pts, (u) => ellipseProfile(0.0115 - u * 0.002, 0.0105 - u * 0.002, 10), {
-      capStart: true,
-      capEnd: true,
-    });
+    const fin = tube(
+      pts,
+      (u) => {
+        // knuckle at the base, then a taper with a slight swell at the middle
+        // joint — a rod tapered end to end reads as a rod
+        const k = rBase + (rTip - rBase) * u + 0.0016 * Math.exp(-((u - 0.42) ** 2) / 0.020);
+        return ellipseProfile(k, k * 0.90, 10);
+      },
+      { capStart: true, capEnd: true }
+    );
     computeNormals(fin);
     appendMesh(out, fin);
   }
