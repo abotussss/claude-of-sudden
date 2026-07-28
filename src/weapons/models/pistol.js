@@ -313,10 +313,29 @@ export function buildPistol() {
         z0: 0.016,
         z1: 0.016 + 0.113 * Math.sin(gripAngle),
       },
+      /**
+       * SEARCHED with a WRIST CONSTRAINT — see tools/gripfit.mjs.
+       *
+       * The previous values closed every fingertip on the grip and the hand
+       * still looked wrong, because contact says nothing about how the hand
+       * meets the ARM. Measured: this wrist sat at 87.1 degrees. A human
+       * wrist manages about 70 of flexion and 60 of extension at the very
+       * extreme and a firing grip lives around 15-35, so that was not a grip,
+       * it was a fracture — and it is what "意味のわからない手首の曲がり方"
+       * describes.
+       *
+       * Now 43.8 degrees, with every fingertip still within 0.7 mm AND on
+       * the grip's authored Z span. That last clause matters: the solve's own
+       * `gapAt` measures perpendicular distance to an INFINITE cylinder, so the
+       * first wrist-aware search "fixed" the wrist by sliding the hand off the
+       * bottom of the grip into the air under the magwell — all four fingers
+       * reported in contact and the captured frame had no hand on the weapon at
+       * all. The span is part of the score now.
+       */
       gripR: {
-        pos: [0.028, 0.003, 0.07],
-        finger: [0, -0.315, -0.949],
-        back: [0.98, 0, -0.2],
+        pos: [0.033, -0.007, 0.07],
+        finger: [-0.1833, 0.3681, -0.9115],
+        back: [0.9682, -0.0935, -0.2321],
       },
       /**
        * SUPPORT HAND — cups the firing hand, and now actually CLOSES on it.

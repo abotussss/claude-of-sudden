@@ -86,6 +86,10 @@ function shapeMasks(geo, o) {
 }
 
 /** Right-handed hand basis from a finger direction and a back-of-hand direction. */
+/** Scratch for debugRefitRight's wrist measurement. Debug path only. */
+const _wv = new THREE.Vector3();
+const _wv2 = new THREE.Vector3();
+
 function handBasis(out, finger, back) {
   _v.set(-finger[0], -finger[1], -finger[2]).normalize(); // hand +Z
   _v2.set(back[0], back[1], back[2]);
@@ -568,7 +572,42 @@ export class Viewmodel {
     if (trial.back) g.back = trial.back;
     w.gripR = g;
     this._fitShootingHand(w);
-    return w.fitR?.gaps ?? null;
+    /**
+     * The WRIST ANGLE comes back too, because contact alone is not enough.
+     *
+     * Every fingertip can sit 0.3 mm off the handle and the hand still look
+     * broken — the first search closed the carbine's fingers and left the wrist
+     * at 94 degrees, and the knife's at 168, which is the hand folded back onto
+     * its own forearm. That is what "意味のわからない手首の曲がり方" is.
+     *
+     * `Arm.solve` has to be re-run for this: the elbow is computed from the hand
+     * target every frame, so after moving the target the stored elbow is stale
+     * and the angle measured against it is meaningless.
+     */
+    /**
+     * HOW MANY FINGERTIPS ARE ACTUALLY ON THE GRIP, not merely at the right
+     * distance from its axis.
+     *
+     * `Arm.fitToCylinder.gapAt` measures PERPENDICULAR distance to an infinite
+     * cylinder — it has to, the solve only cares about the radial gap. But that
+     * makes the contact test satisfiable by a hand sitting well below the bottom
+     * of a 108 mm pistol grip, out in the air under the magwell, and the first
+     * wrist-aware search did exactly that: it fixed the wrist, reported all four
+     * fingers within 0.8 mm, and the captured frame had no right hand visible on
+     * the weapon at all. So the span has to be part of the score.
+     */
+    const cyl = w.model.nodes.gripCylinder;
+    const zHi = Math.max(cyl.z0, cyl.z1);
+    const zLo = Math.min(cyl.z0, cyl.z1);
+    let onGrip = 0;
+    for (const c of this.armR.lastFit?.contactPts ?? []) {
+      if (c.z <= zHi + 0.012 && c.z >= zLo - 0.012) onGrip++;
+    }
+    this.armR.solve(this._handPos, this._handQuat);
+    const fore = _wv.copy(this.armR.hand.position).sub(this.armR.elbow).normalize();
+    const fwd = _wv2.set(0, 0, -1).applyQuaternion(this.armR.hand.quaternion).normalize();
+    const wrist = (Math.acos(Math.max(-1, Math.min(1, fore.dot(fwd)))) * 180) / Math.PI;
+    return { gaps: w.fitR?.gaps ?? null, wrist: +wrist.toFixed(1), onGrip };
   }
 
   /**

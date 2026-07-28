@@ -81,6 +81,33 @@ for (const id of list) {
      * the middle of the screen — the "mystery ring". Reported for ADS as well as
      * hip because the two poses put the elbows in completely different places.
      */
+    /**
+     * WRIST ANGLE — the thing the contact solve cannot see.
+     *
+     * Every fingertip can be 0.3 mm off the handle and the hand can still look
+     * broken, because "the fingers are touching" says nothing about how the hand
+     * meets the ARM. Reported as "意味のわからない手首の曲がり方". A human wrist
+     * does about 70 deg of flexion and 60 of extension at the extreme, and a
+     * firing grip lives around 15-35; past ~70 the joint is not a wrist any more
+     * and no amount of finger tuning will rescue it.
+     *
+     * Measured as the angle between the FOREARM axis (elbow -> wrist) and the
+     * hand's own forward (-Z of the hand basis, the direction the fingers run).
+     */
+    const wrist = await page.evaluate(() => {
+      const vm = window.__ENGINE__.ctx.peek('weapons').viewmodel;
+      const out = {};
+      for (const [k, arm] of [['R', vm.armR], ['L', vm.armL]]) {
+        if (!arm) continue;
+        const V = arm.elbow.constructor;
+        const fore = arm.hand.position.clone().sub(arm.elbow).normalize();
+        const fwd = new V(0, 0, -1).applyQuaternion(arm.hand.quaternion).normalize();
+        out[k] = +((Math.acos(Math.max(-1, Math.min(1, fore.dot(fwd)))) * 180) / Math.PI).toFixed(1);
+      }
+      return out;
+    });
+    console.log(`             ${kind.padEnd(4)} wrist bend  R=${wrist.R} deg  L=${wrist.L} deg` +
+      (Math.max(wrist.R ?? 0, wrist.L ?? 0) > 70 ? '   <-- BEYOND A HUMAN WRIST' : ''));
     const elb = await page.evaluate(() => {
       const vm = window.__ENGINE__.ctx.peek('weapons').viewmodel;
       const cam = window.__ENGINE__.ctx.viewCamera ?? window.__ENGINE__.ctx.camera;

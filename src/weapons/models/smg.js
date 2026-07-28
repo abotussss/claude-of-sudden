@@ -355,10 +355,29 @@ export function buildSmg() {
         z0: 0.018,
         z1: 0.018 + 0.102 * Math.sin(0.36),
       },
+      /**
+       * SEARCHED with a WRIST CONSTRAINT — see tools/gripfit.mjs.
+       *
+       * The previous values closed every fingertip on the grip and the hand
+       * still looked wrong, because contact says nothing about how the hand
+       * meets the ARM. Measured: this wrist sat at 94.2 degrees. A human
+       * wrist manages about 70 of flexion and 60 of extension at the very
+       * extreme and a firing grip lives around 15-35, so that was not a grip,
+       * it was a fracture — and it is what "意味のわからない手首の曲がり方"
+       * describes.
+       *
+       * Now 40.2 degrees, with every fingertip still within 0.7 mm AND on
+       * the grip's authored Z span. That last clause matters: the solve's own
+       * `gapAt` measures perpendicular distance to an INFINITE cylinder, so the
+       * first wrist-aware search "fixed" the wrist by sliding the hand off the
+       * bottom of the grip into the air under the magwell — all four fingers
+       * reported in contact and the captured frame had no hand on the weapon at
+       * all. The span is part of the score now.
+       */
       gripR: {
-        pos: [0.024, 0.028, 0.064],
-        finger: [-0.05, -0.4, -0.915],
-        back: [0.97, -0.05, -0.22],
+        pos: [0.0435, -0.032, 0.084],
+        finger: [-0.1814, 0.3494, -0.9192],
+        back: [0.9568, -0.1433, -0.2529],
       },
       /** Support hand on the vertical foregrip: metacarpals run forward around
        *  the front of the post, palm facing inboard. */

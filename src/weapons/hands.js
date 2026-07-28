@@ -1095,7 +1095,7 @@ export class Arm {
     this.poses[poseName] = { fingers, thumb, thumbBase };
     this.pose = poseName;
     /** Diagnostic only — never read by the runtime. @see tools/handshot.mjs */
-    this.lastFit = { pose: poseName, base: src, radius, gaps };
+    this.lastFit = { pose: poseName, base: src, radius, gaps, contactPts: contacts };
     return contacts;
   }
 

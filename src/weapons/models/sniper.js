@@ -637,9 +637,28 @@ export function buildSniper() {
        * than by derivation; the same search closes this one to
        * [0.3, 0.4, 0.4, 0.4] mm.
        */
+      /**
+       * SEARCHED with a WRIST CONSTRAINT — see tools/gripfit.mjs.
+       *
+       * The previous values closed every fingertip on the grip and the hand
+       * still looked wrong, because contact says nothing about how the hand
+       * meets the ARM. Measured: this wrist sat at 59.7 degrees. A human
+       * wrist manages about 70 of flexion and 60 of extension at the very
+       * extreme and a firing grip lives around 15-35, so that was not a grip,
+       * it was a fracture — and it is what "意味のわからない手首の曲がり方"
+       * describes.
+       *
+       * Now 40.3 degrees, with every fingertip still within 0.7 mm AND on
+       * the grip's authored Z span. That last clause matters: the solve's own
+       * `gapAt` measures perpendicular distance to an INFINITE cylinder, so the
+       * first wrist-aware search "fixed" the wrist by sliding the hand off the
+       * bottom of the grip into the air under the magwell — all four fingers
+       * reported in contact and the captured frame had no hand on the weapon at
+       * all. The span is part of the score now.
+       */
       gripR: {
-        pos: [0.0456, 0.0007, 0.1022],
-        finger: [0.05, 0.2534, -0.9661],
+        pos: [0.0556, -0.0493, 0.1022],
+        finger: [-0.2469, 0.2579, -0.9341],
         back: [0.9988, 0.0284, 0.0411],
       },
       /**

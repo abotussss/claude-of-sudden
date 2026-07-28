@@ -70,8 +70,35 @@ const result = await page.evaluate((ONLY) => {
    * is penalised eight times as hard as leaving it proud, matching the solve's
    * own cost so the search cannot win by driving fingers through the handle.
    */
-  const cost = (gaps) =>
-    !gaps ? 1e9 : gaps.reduce((s, g) => s + (g < -0.0015 ? (-g - 0.0015) * 8 : Math.abs(g - 0.0005)), 0);
+  /**
+   * Cost: contact PLUS a wrist that a human could actually have.
+   *
+   * The contact-only version of this search worked — it closed every finger on
+   * the handle — and the hands still looked wrong, because it had no opinion
+   * about how the hand meets the arm. It left the carbine's right wrist at 94
+   * degrees and the knife's at 168, i.e. the hand folded back onto its own
+   * forearm. A wrist does ~70 of flexion and ~60 of extension at the very
+   * extreme and a firing grip lives around 15-35, so anything past 40 is
+   * penalised and it climbs steeply: 1 degree over budget costs the same as
+   * 0.25 mm of fingertip gap, so 60 degrees of overbend outweighs any grip the
+   * search could buy with it.
+   */
+  const WRIST_BUDGET = 40;
+  const cost = (r) => {
+    if (!r?.gaps) return 1e9;
+    const contact = r.gaps.reduce(
+      (s, g) => s + (g < -0.0015 ? (-g - 0.0015) * 8 : Math.abs(g - 0.0005)), 0);
+    const over = Math.max(0, (r.wrist ?? 0) - WRIST_BUDGET);
+    /**
+     * OFF THE END OF THE GRIP IS NOT A GRIP. `onGrip` counts the fingertips
+     * whose contact point lies within the handle's authored Z span; the radial
+     * test alone is happy with a hand hanging in the air below the magwell, and
+     * that is what the wrist-only version of this search produced. Each missing
+     * finger costs 5 mm of gap, which no wrist improvement can outbid.
+     */
+    const off = 4 - (r.onGrip ?? 4);
+    return contact + over * 0.00025 + off * 0.005;
+  };
 
   for (const id of ONLY) {
     const w = vm.weapons.get(id);
@@ -122,8 +149,10 @@ const result = await page.evaluate((ONLY) => {
     const after = vm.debugRefitRight(w, { pos, finger, back });
     out.push({
       id,
-      before: before?.map((v) => +(v * 1000).toFixed(1)),
-      after: after?.map((v) => +(v * 1000).toFixed(1)),
+      before: before?.gaps?.map((v) => +(v * 1000).toFixed(1)),
+      after: after?.gaps?.map((v) => +(v * 1000).toFixed(1)),
+      wristBefore: before?.wrist, wristAfter: after?.wrist,
+      onBefore: before?.onGrip, onAfter: after?.onGrip,
       pos: pos.map((v) => +v.toFixed(4)),
       finger: finger.map((v) => +v.toFixed(4)),
       back: back.map((v) => +v.toFixed(4)),
@@ -135,8 +164,8 @@ const result = await page.evaluate((ONLY) => {
 for (const r of result) {
   const worst = (a) => Math.max(...a.map(Math.abs)).toFixed(1);
   console.log(`\n${r.id}`);
-  console.log(`  tip gaps before (mm): [${r.before.join(', ')}]  worst ${worst(r.before)}`);
-  console.log(`  tip gaps after  (mm): [${r.after.join(', ')}]  worst ${worst(r.after)}`);
+  console.log(`  tip gaps before (mm): [${r.before.join(', ')}]  worst ${worst(r.before)}   wrist ${r.wristBefore} deg   onGrip ${r.onBefore}/4`);
+  console.log(`  tip gaps after  (mm): [${r.after.join(', ')}]  worst ${worst(r.after)}   wrist ${r.wristAfter} deg   onGrip ${r.onAfter}/4`);
   console.log('      gripR: {');
   console.log(`        pos: [${r.pos.join(', ')}],`);
   console.log(`        finger: [${r.finger.join(', ')}],`);

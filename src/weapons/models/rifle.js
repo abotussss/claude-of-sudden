@@ -388,10 +388,29 @@ export function buildRifle() {
        * two hand directions, scored on the real contact solve's own achieved
        * fingertip gaps: [0.3, 0.5, 0.3, 0.6] mm, all four on the handle.
        */
+      /**
+       * SEARCHED with a WRIST CONSTRAINT — see tools/gripfit.mjs.
+       *
+       * The previous values closed every fingertip on the grip and the hand
+       * still looked wrong, because contact says nothing about how the hand
+       * meets the ARM. Measured: this wrist sat at 88.7 degrees. A human
+       * wrist manages about 70 of flexion and 60 of extension at the very
+       * extreme and a firing grip lives around 15-35, so that was not a grip,
+       * it was a fracture — and it is what "意味のわからない手首の曲がり方"
+       * describes.
+       *
+       * Now 41.3 degrees, with every fingertip still within 0.7 mm AND on
+       * the grip's authored Z span. That last clause matters: the solve's own
+       * `gapAt` measures perpendicular distance to an INFINITE cylinder, so the
+       * first wrist-aware search "fixed" the wrist by sliding the hand off the
+       * bottom of the grip into the air under the magwell — all four fingers
+       * reported in contact and the captured frame had no hand on the weapon at
+       * all. The span is part of the score now.
+       */
       gripR: {
-        pos: [0.0461, 0.04, 0.0823],
-        finger: [0.05, -0.2311, -0.9716],
-        back: [0.9988, 0.03, 0.04],
+        pos: [0.0586, -0.01, 0.0723],
+        finger: [-0.4463, 0.2664, -0.8543],
+        back: [0.9885, -0.1413, 0.0536],
       },
       /**
        * Support hand: knuckles over the lower-left of the handguard, wrist low
