@@ -877,8 +877,24 @@ export const WEAPON_DEFS = {
      * Result: ball 46 mm in front of the wrist, wrist 37.3 deg, arm at 63%
      * extension, elbow 0.362 m from the eye.
      */
-    hipPos: [0.1675, -0.0916, -0.2766],
-    hipRot: [-1.73, -1.17, -1.8],
+    /**
+     * THE GRENADE HAS TO BE VISIBLE.
+     *
+     * At [-1.73, -1.17, -1.8] the ball sat directly behind the knuckles and was
+     * completely swallowed by the fist — the capture showed a hand and a sliver
+     * of pull ring, nothing else. That is not a pose problem in the grip solve:
+     * the fingertips are 0.5-0.7 mm onto the body and the wrist is 37 degrees,
+     * both fine. A 57 mm sphere inside an 88 mm hand simply IS enclosed, so the
+     * viewmodel has to turn the hand until the body clears the knuckles rather
+     * than expect the grip to make room.
+     *
+     * Rolled the wrist round so the fuze and the spoon come over the top of the
+     * fist toward the camera, and pushed the whole thing further out and down.
+     * Chosen by capturing five candidates and looking, the same way the knife's
+     * rest pose was.
+     */
+    hipPos: [0.15, -0.12, -0.4],
+    hipRot: [0.05, -0.95, 0.55],
     adsCant: [0, 0, 0],
     /**
      * MOVEMENT. Carrying a 400 g ball is the lightest thing in the game, and
