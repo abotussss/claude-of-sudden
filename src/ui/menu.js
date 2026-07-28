@@ -37,6 +37,23 @@ export class PauseMenu {
       this.qBtns.push(b);
     }
 
+    /**
+     * ---- LOADOUT ----------------------------------------------------------
+     *
+     * A weapon picker, because there was not one. Weapons could only be changed
+     * with 1/2/3 and the mouse wheel while playing, and the freeze phase was
+     * even documented as "where you change loadout" when no such screen
+     * existed. Sudden Attack picks a loadout before the round; this is the
+     * closest thing this build has to that screen.
+     *
+     * Rows are built from `weapons.weaponIds`, so a new weapon appears here the
+     * moment it is registered — nothing to keep in sync.
+     */
+    this.wBtns = [];
+    const wRow = this._row('Weapon');
+    this.wSeg = el('div', 'ow-seg', wRow);
+    this._buildWeaponRow();
+
     // ---- sensitivity -----------------------------------------------------
     this.sens = this._slider('Mouse Sensitivity', 0.2, 3.0, 0.01, (v) => {
       this.ctx.config.sensitivity = 0.0022 * v;
@@ -93,6 +110,43 @@ export class PauseMenu {
     this.shown = 0;
     setStyle(this.root, 'display', 'none');
     setStyle(this.root, 'cursor', 'default');
+    this.syncFromConfig();
+  }
+
+  /**
+   * Fill the weapon segment from whatever `weapons` has registered. Deferred to
+   * the first `show()` as well as run at build time, because `ui` may init
+   * before `weapons` and the list would otherwise be empty for the session.
+   */
+  _buildWeaponRow() {
+    const wp = this.ctx.peek('weapons');
+    const ids = wp?.weaponIds ?? [];
+    if (!this.wSeg || ids.length === this.wBtns.length) return;
+    this.wSeg.textContent = '';
+    this.wBtns.length = 0;
+    for (const id of ids) {
+      const def = wp.states?.get?.(id)?.def;
+      const b = el('button', null, this.wSeg, (def?.label ?? id).toUpperCase());
+      b.type = 'button';
+      b.dataset.wid = id;
+      b.addEventListener('click', () => this.setWeapon(id));
+      this.wBtns.push(b);
+    }
+  }
+
+  /**
+   * Switch weapon from the menu. Uses the animated `setWeapon` so it behaves
+   * exactly like pressing 1/2/3 — no instant swap that the viewmodel has to
+   * catch up with.
+   */
+  setWeapon(id) {
+    const wp = this.ctx.peek('weapons');
+    if (!wp) return;
+    // A holster/draw cannot play while the trigger is locked and the game is
+    // paused, so swap immediately and let the draw play on resume.
+    if (typeof wp.setWeaponImmediate === 'function') wp.setWeaponImmediate(id);
+    else wp.setWeapon?.(id);
+    this.ctx.events.emit('ui:setting', { key: 'weapon', value: id });
     this.syncFromConfig();
   }
 
@@ -167,6 +221,9 @@ export class PauseMenu {
 
   syncFromConfig() {
     const cfg = this.ctx.config;
+    this._buildWeaponRow();
+    const active = this.ctx.peek('weapons')?.activeId;
+    for (const b of this.wBtns) b.classList.toggle('on', b.dataset.wid === active);
     for (let i = 0; i < this.qBtns.length; i++)
       this.qBtns[i].classList.toggle('on', PRESETS[i] === cfg.quality);
     for (const [b, v] of this.invBtns) b.classList.toggle('on', !!cfg.invertY === v);
