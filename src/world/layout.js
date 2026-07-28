@@ -107,6 +107,74 @@ export const FLAT = [
 ];
 
 /**
+ * RELIEF — the map's height variation, and the reason it is shaped like this.
+ *
+ * The play box is flat because `FLAT` above flattens it, and that was right: a
+ * dune under a lane you fight down is a lane where your crosshair sits on a
+ * hill. But flat ground everywhere means every duel on the map is fought
+ * between two people at exactly the same height, which is what "もっと高低差など
+ * をつけて" is about. So the height is put back ON TOP of the flat ground, as
+ * authored structure, where it can be shaped instead of noised.
+ *
+ * `src/ai/nav.js` is a 2.5D height field with ONE floor per cell, so this
+ * splits in two and the split is not cosmetic:
+ *
+ *   TERRACES are ground. Ramped at both ends at 1.15 m over 4 m — 0.23 m of
+ *   rise per 0.8 m nav cell against a 0.45 m `maxStep` — so BOTS USE THEM. Each
+ *   one takes the outer 5 m of a 10.5 m lane, leaving the inner half flat, so a
+ *   lane now has a high side and a low side and the fight down it has a choice
+ *   in it that it did not have before.
+ *
+ *   DECKS and BLOCKS are PLAYER ONLY, because anything stacked overwrites the
+ *   nav cell under it. The decks run over the 2 m strip against each site
+ *   courtyard's perimeter wall — deliberately the one strip no bot route wants
+ *   — and look down onto the plant spot from 2.9 m. The blocks are the mantle
+ *   chain that gets you up: 1.5 m from the ground (under the 1.85 m mantle
+ *   ceiling), then 1.4 m from there to the deck. The pair beside K1 is the same
+ *   idea in three steps onto the mid island's roof, which overlooks connector 1
+ *   both ways.
+ *
+ * `src/world/relief.js` builds all of it and `reliefY()` is the analytic height
+ * the set dressing follows, so props on a terrace stand on it rather than in
+ * it. Re-run `navcheck` after touching any number here.
+ */
+export const RELIEF = {
+  /** Raised ground, ramped at both ends. Bot-usable. */
+  terraces: [
+    {
+      id: 'A-lane terrace',
+      rect: [-31, 9, -26, 17],
+      h: 1.15,
+      ramps: [
+        { side: 0, len: 4 },
+        { side: 2, len: 4 },
+      ],
+    },
+    {
+      id: 'B-lane terrace',
+      rect: [26, 7, 31, 15],
+      h: 1.15,
+      ramps: [
+        { side: 0, len: 4 },
+        { side: 2, len: 4 },
+      ],
+    },
+  ],
+  /** Catwalks over the outer strip of each site courtyard. Player only. */
+  decks: [
+    { id: 'A-deck', rect: [-36, -9.5, -34, -2.2], y: 2.9, railSide: 1 },
+    { id: 'B-deck', rect: [34, -6, 36, 0.6], y: 2.9, railSide: 3 },
+  ],
+  /** Containers and crates to mantle off. `base` stacks one on another. */
+  blocks: [
+    { id: 'A-deck step', rect: [-34, -4.5, -32, -2.5], h: 1.5, key: 'metal_green' },
+    { id: 'B-deck step', rect: [32, -5.5, 34, -3.5], h: 1.5, key: 'metal_blue' },
+    { id: 'K1 step 1', rect: [-1, 16.05, 1, 17.65], h: 1.4, key: 'metal_blue' },
+    { id: 'K1 step 2', rect: [-0.9, 14.75, 0.9, 16.05], h: 2.6, key: 'metal_green' },
+  ],
+};
+
+/**
  * GROUND THAT MUST STAY WALKABLE — [x, z, radius] in level space.
  *
  * This is not a style rule, it is a nav rule, and it cost two debugging runs to
@@ -773,7 +841,7 @@ export const SET_PIECES = {
     [-22.4, 3.4, 1.5, 2.4],
     [22.6, 5.0, -1.6, 2.4],
     [-29.6, 14.5, -1.6, 2.2],
-    [29.8, 16.5, 1.5, 2.2],
+    [29.8, 21.0, 1.5, 2.2], // was on the B-lane terrace's north ramp
   ],
   /** Jersey barriers: [x, z, ry] */
   jerseys: [
@@ -790,7 +858,7 @@ export const SET_PIECES = {
     [26.8, 1.2, -0.05],
     [22.6, -4.2, 1.57],
     // lanes: something to break the run
-    [-27.5, 17.0, 1.5],
+    [-27.5, 17.0, 1.5], // stands on the A-lane terrace's north lip
     [27.8, 14.0, 1.5],
     [-25.2, -19.5, 0.1],
     [25.4, -20.5, 0.1],
@@ -838,10 +906,10 @@ export const SET_PIECES = {
     [-5.5, -32.0, 1.0],
     [-22.4, -1.2, 0.95],
     [22.6, -2.4, 0.9],
-    [-34.6, -8.6, 1.05],
+    [-33.4, -10.4, 1.05], // was under the site A deck
     [34.4, 1.0, 1.0],
-    [-29.4, 10.0, 0.88],
-    [29.6, 8.0, 0.92],
+    [-29.4, 10.0, 0.88], // stands ON the A-lane terrace
+    [29.6, 8.0, 0.92], // stands ON the B-lane terrace
   ],
   /** Street lamps: [x, z, ry] — ry points the arm across the street. */
   lamps: [
@@ -909,7 +977,7 @@ export const SET_PIECES = {
     [34.8, -9.2, 2.6, 36],
     [-28.0, -22.0, 2.2, 26],
     [28.2, -23.0, 2.2, 26],
-    [-29.4, 20.5, 2.4, 30],
+    [-29.4, 24.5, 2.4, 30], // clear of the A-lane terrace's north ramp
     [29.6, 21.5, 2.4, 30],
   ],
   /** Tyre stacks: [x, z, n] */

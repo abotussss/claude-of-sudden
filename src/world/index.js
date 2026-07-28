@@ -3,6 +3,7 @@ import { Assembler } from './builder.js';
 import { BUILDINGS, STREET, SET_PIECES, GATE } from './layout.js';
 import { buildGround } from './ground.js';
 import { buildBuilding, collapseRoof } from './buildings.js';
+import { buildRelief } from './relief.js';
 import { registerProps } from './props.js';
 import {
   registerDressingProps,
@@ -134,6 +135,9 @@ export class WorldSystem {
 
     buildGate(A, rng);
     buildPerimeter(A, rng);
+    // Height goes in BEFORE the dressing, because `groundY` reads it and every
+    // scattered prop, stain and skirt is placed off `groundY`.
+    buildRelief(A, rng);
     dressStreet(A, rng);
     dressBuildings(A, rng, infos);
     scatterDebris(A, rng);

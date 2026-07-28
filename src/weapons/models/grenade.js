@@ -335,13 +335,19 @@ export function buildGrenade() {
        * inherited target measured a 101.5-degree wrist and 0.913 extension —
        * an arm reaching out straight with the hand folded back on it. Solved
        * against wrist bend, reach and where the hand lands in camera space:
-       * 32.7 degrees, 35% extension, elbow 0.417 m from the eye, and the hand
-       * itself at camera (-0.308, -0.370, -0.088), i.e. below the frame with
+       * 29.5 degrees, 30% extension, elbow 0.426 m from the eye, and the hand
+       * itself at camera (-0.301, -0.346, -0.070), i.e. below the frame with
        * only the forearm entering from the lower left.
+       *
+       * Each trial is settled over real FRAMES, not by calling the rig's update
+       * in a loop: the composed rest pose damps toward its target, so a search
+       * that measures three ticks after moving the node scores a hand that is
+       * still on its way there. That version returned 32.7 degrees and the same
+       * node measured 81.5 in the capture harness.
        */
       gripL: {
-        pos: [0.2404, -0.4233, 0.3198],
-        finger: [0.7735, -0.3574, -0.5234],
+        pos: [0.2534, -0.3983, 0.3198],
+        finger: [0.715, -0.6219, 0.3195],
         back: [0.208, 0.8578, -0.4701],
       },
       lhandPose: 'open',

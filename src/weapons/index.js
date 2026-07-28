@@ -578,10 +578,18 @@ export class WeaponSystem {
       s.chambered = true;
       s.reserve = s.def.reserve;
     }
-    // A round boundary is not a place to be holding a lit grenade.
+    // A round boundary is not a place to be holding a lit grenade. The model
+    // is hidden between the release beat and the end of the throw clip, so if
+    // the round turns over inside that window the visibility has to be put
+    // back here — otherwise the player draws a full pouch and holds nothing.
     this._cooking = false;
     this._throwing = false;
     this.thrown?.clear();
+    const gren = this.viewmodel?.weapons?.get('grenade');
+    if (gren) {
+      gren.group.visible = this.activeId === 'grenade';
+      if (gren.parts.pin) gren.parts.pin.visible = true;
+    }
     this._burstLeft = 0;
     this._burstCooldown = 0;
     this._fireTimer = 0;

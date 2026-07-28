@@ -40,6 +40,7 @@ export class ThrownGrenades {
     this._v2 = new THREE.Vector3();
     this._seg = new THREE.Vector3();
     this._pt = new THREE.Vector3();
+    this._pt2 = new THREE.Vector3();
     this._blast = {
       position: new THREE.Vector3(),
       radius: 7.5,
@@ -71,7 +72,9 @@ export class ThrownGrenades {
     };
     /** Distinct actors found inside one blast. Preallocated; never grows. */
     this._hits = [];
-    for (let i = 0; i < 24; i++) this._hits.push({ owner: null, d: 0, x: 0, y: 0, z: 0 });
+    for (let i = 0; i < 24; i++) {
+      this._hits.push({ owner: null, d: 0, x: 0, y: 0, z: 0, mx: 0, my: 0, mz: 0 });
+    }
     this.stats = { thrown: 0, detonated: 0, live: 0 };
     /**
      * The bounce is audible: the `impact` voice with a metal surface is the
@@ -172,7 +175,18 @@ export class ThrownGrenades {
     const radius = def?.blastRadius ?? 7.5;
     const damage = def?.blastDamage ?? 165;
     const b = this._blast;
+    /**
+     * LIFTED OFF THE DECK, exactly as the C4 lifts its own charge (bomb.js:
+     * `position.y + 0.2`). A grenade at rest has its centre 28 mm above the
+     * floor, and a blast fired from there is a fireball half buried in the
+     * ground AND — the part that actually broke — an occlusion ray that grazes
+     * the floor triangle it is sitting on. Measured: the player 2.4 m away took
+     * 85 damage and a bot at the same distance took none, because every ray to
+     * a standing man's feet started inside the floor.
+     */
     b.position.copy(position);
+    b.position.y += 0.14;
+    position = b.position;
     b.radius = radius;
     b.damage = 0;
     b.impulse = damage * 0.9;
@@ -211,6 +225,10 @@ export class ThrownGrenades {
       this._nearest(c, position, this._pt);
       const d = this._pt.distanceTo(position);
       if (d > radius) continue;
+      // The point the OCCLUSION ray aims at is the hitbox's own middle, not
+      // its nearest surface: `ai` tests the blast against `a.eye` for the same
+      // reason, and a ray aimed at a boot travels along the floor.
+      this._mid(c, this._pt2);
       // One entry per ACTOR, keeping whichever hitbox is closest.
       let slot = -1;
       for (let k = 0; k < n; k++) if (hits[k].owner === c.owner) { slot = k; break; }
@@ -225,13 +243,17 @@ export class ThrownGrenades {
         hits[slot].x = this._pt.x;
         hits[slot].y = this._pt.y;
         hits[slot].z = this._pt.z;
+        hits[slot].mx = this._pt2.x;
+        hits[slot].my = this._pt2.y;
+        hits[slot].mz = this._pt2.z;
       }
     }
     const player = this.ctx.peek('player') ?? 'player';
     for (let k = 0; k < n; k++) {
       const h = hits[k];
       this._pt.set(h.x, h.y, h.z);
-      if (phys.lineOfSight && !phys.lineOfSight(position, this._pt, phys.MASK.EXPLOSION)) continue;
+      this._pt2.set(h.mx, h.my, h.mz);
+      if (phys.lineOfSight && !phys.lineOfSight(position, this._pt2, phys.MASK.EXPLOSION)) continue;
       const f = 1 - h.d / radius;
       const p = this._dmg;
       p.target = h.owner;
@@ -244,6 +266,14 @@ export class ThrownGrenades {
       this.ctx.events.emit('damage:dealt', p);
     }
     for (let k = 0; k < n; k++) hits[k].owner = null;
+  }
+
+  /** Middle of a collider — the point an occlusion ray should aim at. */
+  _mid(c, out) {
+    if (c.shape === 'capsule') {
+      return out.set((c.ax + c.bx) * 0.5, (c.ay + c.by) * 0.5, (c.az + c.bz) * 0.5);
+    }
+    return out.set(c.ax, c.ay, c.az);
   }
 
   /** Nearest point on a collider (capsule segment, sphere or box centre). */

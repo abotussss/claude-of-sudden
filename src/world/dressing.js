@@ -28,6 +28,7 @@ import {
   fbm3,
 } from './util.js';
 import { STREET, ALLEYS, BUILDINGS, SET_PIECES, GATE, KEEPOUT } from './layout.js';
+import { reliefY, inRelief } from './relief.js';
 
 /**
  * WORLD — set dressing.
@@ -118,6 +119,13 @@ export function setDoorways(infos, specs) {
 /** True on the street, a pavement or an alley — i.e. somewhere props can sit. */
 export function isOpen(x, z, m = 0.3) {
   if (inBuilding(x, z, m)) return false;
+  /**
+   * Under a catwalk or on a container is not a place to scatter debris: the
+   * scatter is placed at `groundY`, so a crate dropped under the site A deck
+   * ends up standing in the ground below 2.9 m of steel with the deck's legs
+   * through it, and one dropped on a container floats a metre and a half up.
+   */
+  if (inRelief(x, z, m)) return false;
   if (Math.abs(x) < STREET.kerb - 0.1 && z > STREET.zMin && z < STREET.zMax) return true;
   for (const a of ALLEYS) {
     const [x0, z0, x1, z1] = a.rect;
@@ -128,6 +136,14 @@ export function isOpen(x, z, m = 0.3) {
 
 /** Ground height for a prop: pavement slabs sit a kerb above the road. */
 export function groundY(x, z) {
+  /**
+   * Authored relief first — a terrace is 1.15 m of ground and everything the
+   * dressing pass drops on one has to stand ON it. `reliefY` reads the same
+   * `RELIEF` numbers `src/world/relief.js` builds the geometry from, so the two
+   * cannot drift apart unless one is edited alone.
+   */
+  const r = reliefY(x, z);
+  if (r > 0) return r + 0.02;
   // The road is cambered; props placed at y=0 sink into the crown by 5 cm.
   if (Math.abs(x) < STREET.halfWidth)
     return (1 - (x / STREET.halfWidth) ** 2) * 0.055 + 0.004;
