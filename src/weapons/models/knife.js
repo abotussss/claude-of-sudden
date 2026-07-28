@@ -75,6 +75,31 @@ export function buildKnife() {
       muzzle: blade.tip,
       edgeMid: blade.edgeMid,
       /**
+       * THE HANDLE, AS A CYLINDER — and its absence is why the knife hand was a
+       * fan of open fingers beside the grip instead of a fist around it.
+       *
+       * `Viewmodel._fitShootingHand` is the per-fingertip solve that closes a
+       * hand on a round thing, and its first line is
+       * `if (!cyl || !gR) return;`. `gripR` was authored here; `gripCylinder`
+       * was not, so the whole solve returned immediately and the knife fell
+       * back to the raw `grip` pose — which is authored for a PISTOL grip. That
+       * pose's own comment says it closes ~170 deg on a 34 mm section, and a
+       * knife handle is 21 x 27 mm, so nothing ever met the handle.
+       *
+       * Taken straight from the geometry at the top of this file: the handle
+       * runs along Z at y = 0 from z = +0.093 to z = -0.008, and its section is
+       * 21 x 27 mm, so a 12.5 mm radius is the round approximation the solve
+       * wants. `axis` is a POINT on the axis (the handle's midpoint), `dir` is
+       * the axis direction — the same shape `handguard` has on the carbines.
+       */
+      gripCylinder: {
+        axis: [0, 0, 0.0425],
+        dir: [0, 0, 1],
+        r: 0.0125,
+        z0: 0.093,
+        z1: -0.008,
+      },
+      /**
        * SHOOTING HAND — a hammer grip, solved the same way the guns' are: the
        * targets the rig consumes are WRISTS, derived as
        * `knuckleContact - 0.098 * fingerDir` (see models/rifle.js).
