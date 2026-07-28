@@ -381,10 +381,44 @@ export function buildSmg() {
       },
       /** Support hand on the vertical foregrip: metacarpals run forward around
        *  the front of the post, palm facing inboard. */
+      /**
+       * WHAT THE SUPPORT HAND CLOSES ON: the VERTICAL FOREGRIP, not a handguard.
+       *
+       * This model declared neither `handguard` nor `supportCylinder`, so
+       * `Viewmodel._fitSupportHand` returned at its first guard and the SMG's
+       * left hand was the only one in the directory that was never solved — it
+       * wore a bare authored `clamp` over whatever geometry happened to be
+       * under it. `tools/handshot.mjs` shows it as `lhand=clamp` with no `:smg`
+       * suffix, which is the tell.
+       *
+       * Derived from the `addForeGrip` call above rather than typed in: the post
+       * hangs from (0, bore - hgR - 0.004, -0.208) and is added with `rx: +0.2`,
+       * so straight down the post is (0, -cos 0.2, -sin 0.2) — it rakes FORWARD
+       * at the bottom, opposite to a pistol grip's rearward rake. The blobs are
+       * 26 mm across tapering to 23, over a rubber rib strip, so 15 mm is the
+       * radius a hand actually closes on.
+       */
+      supportCylinder: {
+        axis: [0, bore - hgR - 0.004, -0.208],
+        dir: [0, -Math.cos(0.2), -Math.sin(0.2)],
+        r: 0.015,
+        z0: -0.208,
+        z1: -0.208 - 0.058 * Math.sin(0.2),
+      },
+      /**
+       * SEARCHED against `supportCylinder` above — see tools/gripfit.mjs.
+       *
+       * These were authored blind, because until the cylinder existed nothing
+       * ever solved this hand. Measured on the new cylinder they were 1.0 mm at
+       * worst with only THREE of four fingertips inside the post's span — one
+       * finger was closing on air past the bottom of the grip — at 47 degrees of
+       * wrist. Now 0.4 mm, all four on the post, 36.4 degrees, and the arm holds
+       * a bend at 0.757 extension.
+       */
       gripL: {
-        pos: [-0.056, 0.015, -0.153],
-        finger: [0.45, 0.05, -0.89],
-        back: [-0.88, -0.05, -0.45],
+        pos: [-0.076, -0.045, -0.153],
+        finger: [0.4062, 0.2016, -0.8913],
+        back: [-0.7876, -0.3821, -0.4834],
       },
       magSeat: { pos: [0, bore - 0.02, magZ], rot: [magTilt, 0, 0] },
       magDrop: [0, -0.4, 0.02],
