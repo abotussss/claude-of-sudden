@@ -862,8 +862,25 @@ export class Arm {
         const a = lo + ((hi - lo) * i) / 48;
         joint.rotation.x = a;
         const g = gapAt(joint, local[0], local[1], local[2]) - standoff;
-        // Target: on the surface, up to `clearance` proud, at most 1.5 mm buried.
-        const cost = Math.abs(g - clearance * 0.5) + (g < -0.0015 ? (-g - 0.0015) * 8 : 0);
+        /**
+         * Target: on the surface, up to `clearance` proud, at most 1.5 mm buried
+         * — PLUS a preference for the more flexed of two solutions that both
+         * touch.
+         *
+         * Without that last term the support hand on a carbine came out with
+         * four nearly straight fingers laid along the SIDE of the handguard,
+         * which is what "the hand does not hold the rifle" looks like in a
+         * capture. The cause is that touching is not wrapping: with the hand
+         * placed beside a 30 mm tube, an almost straight finger already grazes
+         * the flank and satisfies the surface test, so the scan is free to stop
+         * there. Flexion is negative here, so `a * 0.004` is a small negative
+         * (i.e. lower cost) the more the joint curls — worth about 1.5 mm of
+         * gap across the whole anatomical range, so it can only ever choose
+         * between solutions that already sit on the surface. It cannot bury a
+         * fingertip: the 8x penalty below still dominates.
+         */
+        const cost = Math.abs(g - clearance * 0.5) + (g < -0.0015 ? (-g - 0.0015) * 8 : 0)
+          + a * 0.004;
         if (cost < bestCost) {
           bestCost = cost;
           best = a;
