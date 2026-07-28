@@ -14,6 +14,7 @@
  */
 
 import * as THREE from 'three';
+import { RULES } from './rules.js';
 
 /**
  * Two flank pockets off the main street, one west one east, roughly 32 m apart.
@@ -44,7 +45,6 @@ export const SITES = [
      */
     level: [-15.0, 7.6],
     fallback: [-8.0, 7.6],
-    radius: 5.5,
     /** Where defenders set up: on the mouth their own rotation arrives through. */
     /** Open courtyard ground, NOT inside W2 — see groundPoint's roof note. */
     holdLevel: [-11.0, 6.2],
@@ -54,7 +54,6 @@ export const SITES = [
     name: 'EAST ALLEY',
     level: [13.0, 4.8],
     fallback: [7.0, 4.8],
-    radius: 5.5,
     /** Open alley ground, NOT inside E2 — see groundPoint's roof note. */
     holdLevel: [9.5, 4.8],
   },
@@ -145,7 +144,8 @@ export function resolveLayout(world, ai) {
     return {
       id: s.id,
       name: s.name,
-      radius: s.radius,
+      // No per-site override authored: the default lives in rules.js.
+      radius: s.radius ?? RULES.plantRadius,
       position,
       hold: holdOk ? hold : position.clone(),
       /** Filled in by the match each round. */

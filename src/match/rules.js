@@ -34,7 +34,14 @@ export const RULES = {
   /* ---- clocks (seconds) ---- */
   /** One-off, before the first round: lets the level finish streaming in. */
   warmup: 5,
-  /** Weapons locked, movement free. This is where you change loadout (B). */
+  /**
+   * Weapons locked and FEET locked (see `Agent._advance` and
+   * `player.movementLocked`) — both sides hold at spawn.
+   *
+   * This comment used to say "this is where you change loadout (B)". There is
+   * no loadout screen and B is the fire-mode toggle; the claim was wrong and is
+   * removed rather than left to mislead.
+   */
   freeze: 10,
   /** Round clock. Runs out ⇒ defenders win, exactly as SA scores it. */
   roundTime: 120,
@@ -47,8 +54,24 @@ export const RULES = {
   matchOverTime: 16,
 
   /* ---- bomb ---- */
-  /** How close to a site's centre the carrier has to be to start planting. */
-  plantRadius: 4.5,
+  /**
+   * DEFAULT SITE RADIUS, and the only place it is written down.
+   *
+   * This used to be dead. `MatchSystem._siteAt` tested against a per-site
+   * `radius` authored separately in sites.js, so the knob documented here as
+   * "how close the carrier has to be to plant" did nothing at all and the real
+   * number lived in two other places — while this file's header claims nothing
+   * else hardcodes a duration or a count. sites.js reads this now, and a site
+   * may still override it.
+   *
+   * WIDENED from 4.5 to 8. A bomb site is a ZONE you fight over, not a dot you
+   * stand on: at 4.5 m the plantable area was smaller than the courtyard it sat
+   * in, so the carrier had to walk to a specific spot with no marking on the
+   * ground telling them where it was. 8 m makes each site a 16 m circle, which
+   * is the scale Sudden Attack and Counter-Strike sites actually are, and means
+   * a plant can be made from cover rather than only from the middle.
+   */
+  plantRadius: 8,
   /** How close a defender has to be to work on the C4. */
   defuseRadius: 1.8,
   /** Planting or defusing breaks if you leave the radius or take your finger off. */
