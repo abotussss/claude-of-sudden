@@ -100,27 +100,146 @@ export function resolveLayout(world, ai) {
     return walkable(ai, alt) ? alt : primary;
   };
 
-  const sites = SITES.map((s) => {
-    const position = snap(s.level[0], s.level[1], s.fallback[0], s.fallback[1], `site ${s.id}`);
-    const hold = groundPoint(world, ai, s.holdLevel[0], s.holdLevel[1]);
-    return {
-      id: s.id,
-      name: s.name,
-      radius: s.radius,
-      position,
-      hold: walkable(ai, hold) ? hold : position.clone(),
-      /** Filled in by the match each round. */
-      defenders: [],
-    };
-  });
-
   const bake = (list) =>
     list.map(([x, z, yaw]) => ({
       position: groundPoint(world, ai, x, z),
       yaw: yaw + (world?.levelYaw ?? 0),
     }));
+  const spawns = { attack: bake(SPAWNS.attack), defend: bake(SPAWNS.defend) };
+  for (const k of ['attack', 'defend']) for (const sp of spawns[k]) walkable(ai, sp.position);
 
-  return { sites, spawns: { attack: bake(SPAWNS.attack), defend: bake(SPAWNS.defend) } };
+  const sites = SITES.map((s) => {
+    const position = snap(s.level[0], s.level[1], s.fallback[0], s.fallback[1], `site ${s.id}`);
+    ensureReachable(ai, position, spawns, ['attack', 'defend'], `site ${s.id}`, false);
+    const hold = groundPoint(world, ai, s.holdLevel[0], s.holdLevel[1]);
+    // A hold point only ever has defenders sent to it, so it only has to be
+    // reachable from THEIR spawns — but it absolutely has to be, because
+    // `match` hands it out every single round.
+    const holdOk =
+      walkable(ai, hold) &&
+      ensureReachable(ai, hold, spawns, ['defend'], `site ${s.id} hold`, false);
+    return {
+      id: s.id,
+      name: s.name,
+      radius: s.radius,
+      position,
+      hold: holdOk ? hold : position.clone(),
+      /** Filled in by the match each round. */
+      defenders: [],
+    };
+  });
+
+  // A SPAWN THAT CANNOT REACH THE OBJECTIVE IS A DEAD MAN. Sites are placed
+  // first, then every spawn is proved against them and moved if it fails —
+  // navcheck measured two defender spawns sitting in pockets with no route to
+  // either site, which is two of seven men standing still all round.
+  for (const kind of ['attack', 'defend']) {
+    for (let i = 0; i < spawns[kind].length; i++) {
+      const sp = spawns[kind][i];
+      if (sitesReachableFrom(ai, sp.position, sites)) continue;
+      if (!relocateSpawn(ai, sp.position, sites, `${kind} spawn ${i}`)) {
+        console.error(`[match] ${kind} spawn ${i}: no nearby ground reaches the sites`);
+      }
+    }
+  }
+
+  return { sites, spawns };
+}
+
+/** True when `p` has an A* route to every bomb site. */
+function sitesReachableFrom(ai, p, sites) {
+  const g = ai?.grid;
+  if (!g) return true;
+  const path = [];
+  for (const s of sites) if (g.findPath(p, s.position, path) <= 0) return false;
+  return true;
+}
+
+/** Walk outward until the spawn can reach every site. Mutates `p`. */
+function relocateSpawn(ai, p, sites, tag) {
+  const probe = new THREE.Vector3();
+  for (let ring = 1; ring <= 16; ring++) {
+    const r = ring * 2.2;
+    for (let a = 0; a < 12; a++) {
+      const th = (a / 12) * Math.PI * 2 + ring * 0.55;
+      probe.set(p.x + Math.cos(th) * r, p.y, p.z + Math.sin(th) * r);
+      if (!walkable(ai, probe) || !sitesReachableFrom(ai, probe, sites)) continue;
+      console.warn(
+        `[match] ${tag}: no route to the sites — moved ${r.toFixed(1)} m to ` +
+          `${probe.x.toFixed(1)}, ${probe.z.toFixed(1)}`
+      );
+      p.copy(probe);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * WALKABLE IS NOT REACHABLE, and the difference is worth a whole team.
+ *
+ * `walkable()` only asks whether the nav grid has a standable cell near a
+ * point. A sealed courtyard, a first-floor room, the inside of a shop — all of
+ * them are full of walkable cells and connected to nothing you can get to. When
+ * this was not checked, both `hold` points resolved onto walkable ground that
+ * NO defender spawn had a route to, so every round `match` sent seven men to an
+ * objective A* could not path to and `Agent._advance` did as it was told and
+ * stood still. From outside that reads as "the AI went brain-dead".
+ *
+ * `tools/navcheck.mjs` asserts this same invariant from the outside and is what
+ * caught it. This is the in-engine half: prove it at boot, and if the authored
+ * point fails, walk outward in rings until one passes, so a layout change can
+ * degrade the design intent but can never break the mode.
+ *
+ * @param {string[]} teams which spawn clusters must be able to get here
+ * @returns {boolean} true if `p` ended up reachable (mutated in place if moved)
+ */
+function ensureReachable(ai, p, spawns, teams, tag, all = true) {
+  const g = ai?.grid;
+  if (!g) return true;
+  const path = [];
+  /**
+   * `all` picks the strictness. Sites are anchored with `all = false` — one
+   * spawn per team is enough to prove the area is part of the playable map —
+   * and the individual spawns are then proved against the sites afterwards and
+   * moved if they fail. Doing it the other way round makes the two constraints
+   * chase each other.
+   */
+  const connected = (q) => {
+    for (const kind of teams) {
+      let any = false;
+      for (const sp of spawns[kind]) {
+        const ok = g.findPath(sp.position, q, path) > 0;
+        if (!ok && all) return false;
+        if (ok) any = true;
+      }
+      if (!any) return false;
+    }
+    return true;
+  };
+  if (connected(p)) return true;
+
+  const probe = new THREE.Vector3();
+  for (let ring = 1; ring <= 16; ring++) {
+    const r = ring * 2.2;
+    for (let a = 0; a < 12; a++) {
+      const th = (a / 12) * Math.PI * 2 + ring * 0.4;
+      probe.set(p.x + Math.cos(th) * r, p.y, p.z + Math.sin(th) * r);
+      if (!walkable(ai, probe) || !connected(probe)) continue;
+      console.warn(
+        `[match] ${tag}: authored point is walkable but NOT reachable from every ` +
+          `${teams.join('/')} spawn — moved ${r.toFixed(1)} m to ` +
+          `${probe.x.toFixed(1)}, ${probe.z.toFixed(1)}`
+      );
+      p.copy(probe);
+      return true;
+    }
+  }
+  console.error(
+    `[match] ${tag}: nothing within 35 m is reachable from every ${teams.join('/')} ` +
+      'spawn. The level has sealed this area off; bots sent here will have nowhere to walk.'
+  );
+  return false;
 }
 
 /** Level (x, z) -> a world point sitting on the floor. */
