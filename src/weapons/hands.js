@@ -495,7 +495,17 @@ function buildSleeve(material, len, r0, r1, opts = {}) {
     const j = Math.sin(i * 2.399 + 0.7) * 0.5 + Math.sin(i * 5.13) * 0.25;
     const r = (r0 + (r1 - r0) * t) * (1 + j * 0.06);
     const f = ring(r * 0.985, r * (0.085 + j * 0.03), 24, 6);
-    f.rotateX(Math.PI / 2);
+    /**
+     * NO rotateX HERE. `ring()` is a THREE.TorusGeometry, whose hole is already
+     * on +Z — the same axis the sleeve runs down. The `rotateX(PI/2)` that used
+     * to be here stood every fold ring on edge, so instead of a crease around
+     * the forearm you got a hoop sticking out THROUGH it. At ADS, with the
+     * hands 0.3 m from the eye, those hoops are 7 cm across and land in the
+     * middle of the frame: this is the "mystery ring" that appears when the
+     * pistol comes up. A tilt of a few degrees is what a real fold has; ninety
+     * is a bug.
+     */
+    f.rotateX(j * 0.05);
     f.rotateY(j * 0.12);
     f.scale(1, 0.93, 1);
     f.translate(0, 0, len * t + j * 0.004);
