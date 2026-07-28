@@ -76,6 +76,7 @@ Click the canvas to lock the cursor.
 | **F (hold)** | **plant or defuse the C4**, pick a dropped charge back up |
 | **Tab (hold)** | **scoreboard** |
 | R · Shift · Ctrl · Space | reload · sprint · crouch · jump |
+| **run at a window** | **vault through it.** Ground-floor sills are 1.05 m and the mantle reaches 1.85 m, so any window on an enterable building is a way in — measured: street level to inside, climbing 1 m, no key but forward |
 | 1 / 2 / 3 · wheel | rifle / SMG / pistol |
 | Q / E | lean |
 | Esc | release the cursor |
@@ -94,7 +95,7 @@ The engine is upstream's, untouched:
 | `render` | HDR pipeline, cascaded shadow maps in a `sampler2DArray` with texel snapping and PCSS contact hardening, MRT depth/normal/velocity prepass, GTAO, TAA with YCoCg variance clipping, tile-dilated motion blur, Karis bloom pyramid, GPU EV100 metering, procedural 33³ grade LUT, AgX composite |
 | `materials` | GPU texture forge: 19 procedural surfaces, periodic noise so everything tiles seamlessly, Sobel height→normal, parallax occlusion mapping, triplanar projection, curvature-driven edge wear |
 | `sky` | Atmospheric scattering, time of day, PMREM environment generation, volumetric fog and light shafts |
-| `world` | ~120×120 m market street: modular building kit with real wall thickness, enterable interiors, several hundred instanced props |
+| `world` | ~120×120 m market street: modular building kit with real wall thickness, enterable interiors, several hundred instanced props. **W1 and E2 opened up** so both bomb sites have a building overlooking them |
 | `physics` | Written from scratch, no library. Binned-SAH BVH, swept-capsule character controller, impulse rigid bodies with CCD, PBD ragdolls, multi-layer bullet penetration |
 | `fx` | GPU particles, decals, tracers, muzzle flash, explosions |
 | `audio` | Web Audio synthesis — no sound files. Layered weapon fire, convolution reverb, HRTF spatialisation, occlusion |
