@@ -74,6 +74,26 @@ for (const id of list) {
       [id, kind]
     );
     await settle();
+    /**
+     * How close the elbow gets to the EYE, measured in world space after the
+     * rig transform. A forearm sleeve is 68 mm across, so an elbow inside about
+     * 0.25 m projects its rear end cap as a disc tens of pixels wide sitting in
+     * the middle of the screen — the "mystery ring". Reported for ADS as well as
+     * hip because the two poses put the elbows in completely different places.
+     */
+    const elb = await page.evaluate(() => {
+      const vm = window.__ENGINE__.ctx.peek('weapons').viewmodel;
+      const cam = window.__ENGINE__.ctx.viewCamera ?? window.__ENGINE__.ctx.camera;
+      const out = {};
+      for (const [k, arm] of [['R', vm.armR], ['L', vm.armL]]) {
+        if (!arm || !cam) continue;
+        const p = arm.elbow.clone().applyMatrix4(arm.root.matrixWorld);
+        out[k] = +p.distanceTo(cam.getWorldPosition(new (p.constructor)())).toFixed(3);
+      }
+      return out;
+    });
+    console.log(`             ${kind.padEnd(4)} elbow->eye  R=${elb.R} m  L=${elb.L} m` +
+      (Math.min(elb.R ?? 9, elb.L ?? 9) < 0.25 ? '   <-- sleeve end cap will show as a ring' : ''));
     const file = `${OUT}/${id}-${kind}.png`;
     await page.screenshot({ path: file, clip: { x: 500, y: 300, width: 1000, height: 560 } });
     if (kind === 'idle') {

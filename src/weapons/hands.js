@@ -666,6 +666,8 @@ export class Arm {
      * always, exactly as they do on a real shooter.
      */
     this.pole = new THREE.Vector3(side * 0.46, -0.86, 0.22).normalize();
+    /** Where the two-bone solve last put the elbow. @see solve() */
+    this.elbow = new THREE.Vector3();
     /** The authored default, so `setElbowPole` can always get back to it. */
     this._poleDefault = this.pole.clone();
 
@@ -1256,6 +1258,15 @@ export class Arm {
     }
     _perp.normalize();
     _elbow.copy(this.shoulder).addScaledVector(_dir, a).addScaledVector(_perp, h);
+
+    /**
+     * Kept for diagnosis. The pistol's ADS pose put both elbows about 135 mm
+     * from the eye — inside the head — and what the player saw was the two flat
+     * end caps of the forearm sleeves filling the bottom of the screen, which is
+     * the "mystery ring" complaint. Nothing in the solve's own output said so;
+     * the elbow was a local temporary and was never looked at.
+     */
+    this.elbow.copy(_elbow);
 
     // Upper arm: shoulder -> elbow. The elbow pad sits on the bone's +Y, which
     // must end up on the OUTSIDE of the bend — that is the pole side.
