@@ -724,12 +724,18 @@ export class AudioSystem {
     if (!this.running || !p?.position) return;
     const pos = p.position;
     const dist = this.field.distanceTo(pos.x, pos.y, pos.z);
-    this._playAt('explosion', pos.x, pos.y, pos.z, {
-      radius: p.radius ?? 6, level: 1, send: 1.0,
-    }, 'weapons', 1);
-    this.mixer.duck(0.85, 0.35);
-    // Concussion: total inside ~4 m, nothing past ~22 m.
-    const near = clamp(1 - dist / 22, 0, 1);
+    const radius = p.radius ?? 6;
+    /**
+     * A BLAST'S WEIGHT SCALES WITH ITS BLAST. `level` was a flat 1, so a 6 m
+     * grenade and the 22 m C4 detonation that ends a round sounded the same
+     * size. They are not the same event: one is a frag going off down the
+     * street, the other is the round ending three metres from your face.
+     */
+    const level = clamp(0.85 + radius / 26, 0.85, 1.8);
+    this._playAt('explosion', pos.x, pos.y, pos.z, { radius, level, send: 1.0 }, 'weapons', 1);
+    this.mixer.duck(clamp(0.8 + radius / 90, 0.8, 0.95), 0.35);
+    // Concussion reaches as far as the blast does, rather than a fixed 22 m.
+    const near = clamp(1 - dist / Math.max(12, radius * 1.3), 0, 1);
     if (near > 0.1) this.mixer.concuss(Math.pow(near, 1.4));
   }
 

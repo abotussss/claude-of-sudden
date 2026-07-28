@@ -24,12 +24,36 @@
 import { biquad, gain, limiterCurve, shaper, clamp, osc } from './dsp.js';
 import { IR_SPECS, generateIR } from './ir.js';
 
+/**
+ * BUS BALANCE.
+ *
+ * Retuned for a competitive round-based mode rather than for atmosphere. In a
+ * demolition round with no respawn, the sounds that carry INFORMATION — a
+ * footstep on the floor above, a rifle two rooms over, a team-mate calling a
+ * contact — are the ones you play off. Ambience is the bed they sit on, and it
+ * was mixed loud enough to sit on top of them instead.
+ *
+ * Deltas from the values this repo shipped with, in dB:
+ *
+ *   ambience   0.50 -> 0.20   -8.0 dB   the bed drops right back
+ *   foley      0.90 -> 1.20   +2.5 dB   footsteps, impacts, brass, bodyfall
+ *   voice      0.85 -> 1.15   +2.6 dB   call-outs and grunts
+ *   weapons    0.95 -> 1.10   +1.3 dB   gunfire and explosions
+ *   ui         1.60 -> 1.30   -1.8 dB   it was the loudest thing in the game
+ *
+ * Footsteps therefore sit 10.5 dB further above the ambience than they did.
+ *
+ * THIS IS A MIX DECISION AND I CANNOT HEAR IT. The numbers are chosen from the
+ * roles above, not from listening, so they are a starting point: every one is
+ * live-tunable without a reload via `audio.setBusVolume('ambience', 0.3)` etc.
+ * If the bed now feels too thin, that is the knob.
+ */
 const BUS_DEFS = {
-  weapons:  { trim: 0.95, comp: { threshold: -7, knee: 8, ratio: 2.6, attack: 0.003, release: 0.16 } },
-  foley:    { trim: 0.9, comp: { threshold: -14, knee: 10, ratio: 2.0, attack: 0.004, release: 0.2 } },
-  ambience: { trim: 0.5,  comp: { threshold: -24, knee: 12, ratio: 2.0, attack: 0.05, release: 0.5 } },
-  voice:    { trim: 0.85, comp: { threshold: -18, knee: 8, ratio: 3.0, attack: 0.006, release: 0.22 } },
-  ui:       { trim: 1.6,  comp: null },
+  weapons:  { trim: 1.1, comp: { threshold: -7, knee: 8, ratio: 2.6, attack: 0.003, release: 0.16 } },
+  foley:    { trim: 1.2, comp: { threshold: -14, knee: 10, ratio: 2.0, attack: 0.004, release: 0.2 } },
+  ambience: { trim: 0.2,  comp: { threshold: -24, knee: 12, ratio: 2.0, attack: 0.05, release: 0.5 } },
+  voice:    { trim: 1.15, comp: { threshold: -18, knee: 8, ratio: 3.0, attack: 0.006, release: 0.22 } },
+  ui:       { trim: 1.3,  comp: null },
 };
 
 export class Mixer {
