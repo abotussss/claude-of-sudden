@@ -858,6 +858,13 @@ export class Arm {
     const fitJoint = (joint, local, lo, hi, standoff = 0) => {
       let best = joint.rotation.x;
       let bestCost = Infinity;
+      /**
+       * The most FLEXED angle that legitimately contacts, tracked separately
+       * from the cheapest one. See the pick at the bottom of this function.
+       */
+      let wrapped = null;
+      /** How far off the target gap still counts as contact: half a millimetre. */
+      const CONTACT_TOL = 0.0005;
       for (let i = 0; i <= 48; i++) {
         const a = lo + ((hi - lo) * i) / 48;
         joint.rotation.x = a;
@@ -879,15 +886,45 @@ export class Arm {
          * between solutions that already sit on the surface. It cannot bury a
          * fingertip: the 8x penalty below still dominates.
          */
-        const cost = Math.abs(g - clearance * 0.5) + (g < -0.0015 ? (-g - 0.0015) * 8 : 0)
-          + a * 0.004;
+        const err = g - clearance * 0.5;
+        /**
+         * CONTACT IS A CONSTRAINT, NOT A COST — this replaces `+ a * 0.004`.
+         *
+         * That term was a linear nudge toward flexion worth about 1.5 mm of gap
+         * across the whole anatomical range, and it was not enough: the support
+         * hand on the carbine still came out with four nearly straight fingers
+         * laid along the flank of the handguard, and the knife came out held in
+         * a fanned-open fist. Both were photographed, both times after the solve
+         * reported that every fingertip was on the surface. It was telling the
+         * truth — touching simply is not wrapping. With the hand beside a 30 mm
+         * tube an almost straight finger already grazes it, so the scan is free
+         * to stop at the FIRST contact it meets on the way in, and the first one
+         * it meets is always the least curled.
+         *
+         * Weighting it harder is the wrong shape of fix: any weight big enough
+         * to beat a grazing solution is also big enough to drag a fingertip
+         * through the surface on the geometries where the mild answer was right.
+         *
+         * So: collect every angle that actually contacts, then take the most
+         * flexed of them. Flexion is negative here, so that is the SMALLEST `a`.
+         * A grazing solution and a wrapping solution are now both legal and the
+         * wrapping one always wins, while a solution that buries the tip is not
+         * legal at all and can never be picked. The `bestCost` scan below still
+         * runs and is used unchanged when nothing contacts — a hand that cannot
+         * reach the handle should still close as far as it can rather than snap.
+         */
+        if (Math.abs(err) <= CONTACT_TOL && g >= -0.0015 && (wrapped === null || a < wrapped)) {
+          wrapped = a;
+        }
+        const cost = Math.abs(err) + (g < -0.0015 ? (-g - 0.0015) * 8 : 0);
         if (cost < bestCost) {
           bestCost = cost;
           best = a;
         }
       }
-      joint.rotation.x = best;
-      return best;
+      const pick = wrapped ?? best;
+      joint.rotation.x = pick;
+      return pick;
     };
 
     /**
@@ -903,6 +940,8 @@ export class Arm {
      */
     const fingers = [];
     const contacts = [];
+    /** @see the `achieved` comment below — per-fingertip gap to the surface. */
+    const gaps = [];
     for (let i = 0; i < 4; i++) {
       const f = this.fingers[i];
       const curl = base.fingers[i].slice();
@@ -923,7 +962,17 @@ export class Arm {
       curl[2] = -a2;
       fingers.push(curl);
       const p = new THREE.Vector3();
-      gapAt(f.joints[2], local[0], local[1], local[2], p);
+      /**
+       * The ACHIEVED gap, kept for diagnosis. A solve that reports success and
+       * still photographs as an open hand has exactly two explanations — the
+       * fingers found the surface and stopped at a grazing angle, or they never
+       * found it at all and every joint fell back to "as close as I could get".
+       * Those need opposite fixes and are indistinguishable from the outside, so
+       * the number is recorded rather than inferred. `tools/handshot.mjs` prints
+       * it.
+       */
+      const achieved = gapAt(f.joints[2], local[0], local[1], local[2], p);
+      gaps.push(+achieved.toFixed(4));
       contacts.push(p);
     }
 
@@ -1015,6 +1064,8 @@ export class Arm {
 
     this.poses[poseName] = { fingers, thumb, thumbBase };
     this.pose = poseName;
+    /** Diagnostic only — never read by the runtime. @see tools/handshot.mjs */
+    this.lastFit = { pose: poseName, base: src, radius, gaps };
     return contacts;
   }
 
@@ -1252,6 +1303,31 @@ export const HAND_POSES = {
     ],
     thumb: [0.5, 0.34],
     thumbBase: [0.15, -1.02, -0.62],
+  },
+  /**
+   * HAMMER GRIP on a thin handle — a knife, a bat, a pistol's backstrap.
+   *
+   * Why this exists rather than fitting: `fitToCylinder` searches each joint for
+   * the angle that puts the fingertip ON the surface, and on a 25 mm handle an
+   * almost straight finger already grazes it, so the search legitimately stops
+   * at nearly open. Isolated by hiding the left arm — the fanned-out hand on the
+   * knife was the RIGHT one, i.e. the one holding it.
+   *
+   * A hammer grip has no per-finger variation worth solving: every finger wraps
+   * 200 degrees plus, the fingertips end up pressed into the palm heel, and the
+   * thumb folds over the middle phalanges. So it is authored, not fitted.
+   * Curls are ~1.55 / 1.5 / 0.85 rad, well past the `wrap` pose below, which is
+   * sized for a 35 mm handguard.
+   */
+  hammer: {
+    fingers: [
+      [1.5, 1.45, 0.8],
+      [1.58, 1.52, 0.88],
+      [1.6, 1.54, 0.9],
+      [1.56, 1.5, 0.86],
+    ],
+    thumb: [0.72, 0.66],
+    thumbBase: [0.2, -0.86, -0.5],
   },
   /** Support hand wrapped around a handguard. */
   wrap: {

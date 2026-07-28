@@ -345,10 +345,53 @@ export function buildRifle() {
        * what wraps the fingertips around onto the far side where the camera can
        * see them.
        */
+      /**
+       * THE PISTOL GRIP AS A CYLINDER, so the fingertip contact solve actually
+       * runs on the SHOOTING hand.
+       *
+       * `Viewmodel._fitShootingHand` bails at `if (!cyl || !gR) return;`, and
+       * until now the knife was the only model that declared one. So on every
+       * firearm the right hand was never solved at all: it wore the static
+       * `HAND_POSES.grip` curls whatever the geometry underneath them happened
+       * to be, which is why the hand read as bent at an angle that belongs to no
+       * grip in particular.
+       *
+       * Derived from the arguments passed to `addPistolGrip` above rather than
+       * typed in, so it cannot drift out of sync with the mesh:
+       *   axis  the top of the grip centreline, at (oy, oz)
+       *   dir   straight down the grip, raked rearward by `angle` — the part
+       *         rotates by `rx: -angle`, so down maps to (0, -cos, +sin)
+       *   r     half the front-strap-to-back-strap depth of the extruded
+       *         profile, plus the rubber over-mould the fingers actually touch
+       *   z0/z1 the Z span the grip occupies, which is what filters the baked
+       *         contact points
+       */
+      gripCylinder: {
+        axis: [0, 0.035, 0.015],
+        dir: [0, -Math.cos(0.38), Math.sin(0.38)],
+        r: 0.017,
+        z0: 0.015,
+        z1: 0.015 + 0.108 * Math.sin(0.38),
+      },
+      /**
+       * SEARCHED, not derived — see tools/gripfit.mjs.
+       *
+       * The previous numbers were reasoned out from the grip's rake and a palm
+       * thickness, and re-reasoned twice more. They were wrong every time: the
+       * solve reported the index fingertip 0.1 mm off the grip and the other
+       * three 14.7, 17.2 and 23.8 mm away from it, which is a hand resting one
+       * finger on the gun and holding the rest in the air. The pictures showed
+       * exactly that, and no version of the derivation predicted a spread that
+       * large, so the derivation was the thing that was broken.
+       *
+       * These come from a coordinate descent over the wrist position and the
+       * two hand directions, scored on the real contact solve's own achieved
+       * fingertip gaps: [0.3, 0.5, 0.3, 0.6] mm, all four on the handle.
+       */
       gripR: {
-        pos: [0.0251, 0.06, 0.1223],
-        finger: [0.05, -0.55, -0.833],
-        back: [1, 0.03, 0.04],
+        pos: [0.0461, 0.04, 0.0823],
+        finger: [0.05, -0.2311, -0.9716],
+        back: [0.9988, 0.03, 0.04],
       },
       /**
        * Support hand: knuckles over the lower-left of the handguard, wrist low

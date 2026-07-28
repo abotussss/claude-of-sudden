@@ -471,7 +471,12 @@ export class Viewmodel {
        * same curls leave every fingertip 6-9 mm inside the handle. See
        * _fitShootingHand.
        */
-      rhandPose: 'grip',
+      /**
+       * From the MODEL, like `lhandPose` on the line above. This was a hardcoded
+       * 'grip' — a pistol grip — so a model asking for a different shooting hand
+       * was ignored and the knife's authored hammer grip never reached the arm.
+       */
+      rhandPose: model.nodes.rhandPose ?? 'grip',
       /** No trigger group => nothing for setTrigger to drive. */
       hasTrigger: !!parts.trigger,
     };
@@ -528,6 +533,8 @@ export class Viewmodel {
       { clearance: 0.001, poseName, base: basePose }
     );
     w.lhandPose = poseName;
+    /** @see the `fitR` note in _fitShootingHand. */
+    w.fitL = this.armL.lastFit;
     // Only keep contacts that actually landed on the handguard's own extent —
     // a fingertip that overshot past the end cap must not paint AO on the barrel.
     const z0 = Math.max(hg.z0, hg.z1);
@@ -536,6 +543,32 @@ export class Viewmodel {
     this.armL.bakeContactAO(kept, 0.012, 0.7);
     this._bakeContactAOOnWeapon(w, kept, 0.012, 0.9);
     this.armL.setPose(poseName);
+  }
+
+  /**
+   * RE-RUN the shooting-hand solve with a trial `gripR`, and report the gaps.
+   *
+   * Authoring a grip by reasoning about the geometry did not converge: the
+   * carbine's right hand touched with the index finger and missed with the
+   * other three by 15, 17 and 24 mm, and no amount of deriving the knuckle row
+   * from the grip's rake explained a spread that large. This makes the pose a
+   * thing that can be SEARCHED instead of argued about — `tools/gripfit.mjs`
+   * scans offsets and directions and keeps whichever one actually closes all
+   * four fingers.
+   *
+   * Debug only, never called by the runtime. It mutates the authored node, so
+   * the caller is responsible for putting it back (or reloading, which is what
+   * the tool does between weapons).
+   */
+  debugRefitRight(w, trial) {
+    const g = w.model.nodes.gripR;
+    if (!g) return null;
+    if (trial.pos) g.pos = trial.pos;
+    if (trial.finger) g.finger = trial.finger;
+    if (trial.back) g.back = trial.back;
+    w.gripR = g;
+    this._fitShootingHand(w);
+    return w.fitR?.gaps ?? null;
   }
 
   /**
@@ -555,17 +588,26 @@ export class Viewmodel {
     if (!cyl || !gR) return;
     this._handPos.fromArray(gR.pos);
     handBasis(this._handQuat, gR.finger ?? [0, -0.35, -0.94], gR.back ?? [0.95, 0.25, 0.18]);
-    const poseName = `grip:${w.id}`;
-    this.armR.setPose('grip');
+    /**
+     * The BASE pose comes from the model now, not a hardcoded 'grip'. A pistol
+     * grip and a knife handle need different starting hands, and starting a
+     * knife from the pistol pose is why the fit had nothing to work with.
+     */
+    const basePose = w.rhandPose ?? 'grip';
+    const poseName = `${basePose}:${w.id}`;
+    this.armR.setPose(basePose);
     const contacts = this.armR.fitToCylinder(
       this._handPos,
       this._handQuat,
       cyl.axis,
       cyl.dir,
       cyl.r,
-      { clearance: 0.001, poseName, base: 'grip' }
+      { clearance: 0.001, poseName, base: basePose }
     );
     w.rhandPose = poseName;
+    /** Per-weapon copy of the solve's own report — `Arm.lastFit` is overwritten
+     *  by the next weapon built, so it cannot be read after boot. Diagnostic. */
+    w.fitR = this.armR.lastFit;
     const z0 = Math.max(cyl.z0, cyl.z1);
     const z1 = Math.min(cyl.z0, cyl.z1);
     const kept = contacts.filter((p) => p.z <= z0 + 0.012 && p.z >= z1 - 0.012);

@@ -1,0 +1,147 @@
+/**
+ * GRIP SEARCH — find a shooting-hand target that actually closes all four
+ * fingers on the handle.
+ *
+ *   node tools/gripfit.mjs [--url=…] [--only=rifle,knife]
+ *
+ * WHY THIS EXISTS. The right hand on the carbine touched the grip with the
+ * index finger and missed with the other three by 14.7, 17.2 and 23.8 mm; the
+ * knife missed with all four by up to 17.9 mm. Both were authored by reasoning
+ * about the geometry — deriving the knuckle row from the grip's rake, placing
+ * the wrist a palm-thickness off the surface — and the reasoning did not
+ * survive contact with the actual solve. Three separate attempts at deriving
+ * the carbine's numbers produced three different answers and none of them
+ * closed the hand.
+ *
+ * So stop arguing and search. `Viewmodel.debugRefitRight` re-runs the real
+ * contact solve for a trial target and reports the achieved fingertip gaps, and
+ * this walks the five degrees of freedom (wrist position, plus the finger and
+ * dorsal directions) by coordinate descent until every fingertip is on the
+ * handle. It prints numbers to paste back into the model.
+ *
+ * It does NOT judge how the result LOOKS — four fingertips on a cylinder can
+ * still be a hand at an absurd wrist angle. Always follow with
+ * `tools/handshot.mjs` and look at the pictures.
+ */
+
+import { chromium } from 'playwright';
+
+const args = Object.fromEntries(
+  process.argv.slice(2).map((a) => {
+    const [k, v] = a.replace(/^--/, '').split('=');
+    return [k, v ?? true];
+  })
+);
+const URL = args.url ?? 'http://127.0.0.1:4173/';
+const ONLY = args.only ? String(args.only).split(',') : ['rifle', 'smg', 'pistol', 'knife'];
+
+const browser = await chromium.launch({
+  headless: true,
+  args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--mute-audio'],
+});
+const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+const errs = [];
+page.on('pageerror', (e) => errs.push(String(e.message)));
+await page.goto(URL, { waitUntil: 'domcontentloaded' });
+await page.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
+
+const result = await page.evaluate((ONLY) => {
+  const vm = window.__ENGINE__.ctx.peek('weapons').viewmodel;
+  const out = [];
+
+  const norm = (v) => {
+    const l = Math.hypot(v[0], v[1], v[2]) || 1;
+    return [v[0] / l, v[1] / l, v[2] / l];
+  };
+  /** Rotate `v` about unit axis `k` by `a` radians (Rodrigues). */
+  const rot = (v, k, a) => {
+    const c = Math.cos(a), s = Math.sin(a);
+    const d = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+    const cx = [k[1] * v[2] - k[2] * v[1], k[2] * v[0] - k[0] * v[2], k[0] * v[1] - k[1] * v[0]];
+    return [
+      v[0] * c + cx[0] * s + k[0] * d * (1 - c),
+      v[1] * c + cx[1] * s + k[1] * d * (1 - c),
+      v[2] * c + cx[2] * s + k[2] * d * (1 - c),
+    ];
+  };
+
+  /**
+   * Cost: every fingertip wants to sit ~0.5 mm off the surface. Burying a tip
+   * is penalised eight times as hard as leaving it proud, matching the solve's
+   * own cost so the search cannot win by driving fingers through the handle.
+   */
+  const cost = (gaps) =>
+    !gaps ? 1e9 : gaps.reduce((s, g) => s + (g < -0.0015 ? (-g - 0.0015) * 8 : Math.abs(g - 0.0005)), 0);
+
+  for (const id of ONLY) {
+    const w = vm.weapons.get(id);
+    if (!w?.model?.nodes?.gripR || !w?.model?.nodes?.gripCylinder) continue;
+    const g0 = w.model.nodes.gripR;
+    let pos = g0.pos.slice();
+    let finger = norm(g0.finger.slice());
+    let back = norm(g0.back.slice());
+    const before = vm.debugRefitRight(w, { pos, finger, back });
+    let best = cost(before);
+
+    // Coordinate descent. Positions in metres, angles in radians; the ranges
+    // shrink each round so the first pass can travel and the last can polish.
+    for (let round = 0; round < 5; round++) {
+      const dp = [0.02, 0.01, 0.005, 0.0025, 0.001][round];
+      const da = [0.35, 0.2, 0.1, 0.05, 0.025][round];
+      for (let axis = 0; axis < 3; axis++) {
+        for (const s of [-1, 1]) {
+          for (let k = 1; k <= 4; k++) {
+            const t = pos.slice();
+            t[axis] += s * dp * k;
+            const c = cost(vm.debugRefitRight(w, { pos: t, finger, back }));
+            if (c < best - 1e-9) { best = c; pos = t; }
+          }
+        }
+      }
+      // Direction search: swing `finger` about each world axis, and roll `back`
+      // about `finger` (which is the wrist roll — the thing that decides which
+      // way the knuckles face).
+      for (const k of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
+        for (const s of [-1, 1]) {
+          for (let n = 1; n <= 4; n++) {
+            const f = norm(rot(finger, k, s * da * n));
+            const c = cost(vm.debugRefitRight(w, { pos, finger: f, back }));
+            if (c < best - 1e-9) { best = c; finger = f; }
+          }
+        }
+      }
+      for (const s of [-1, 1]) {
+        for (let n = 1; n <= 4; n++) {
+          const b = norm(rot(back, finger, s * da * n));
+          const c = cost(vm.debugRefitRight(w, { pos, finger, back: b }));
+          if (c < best - 1e-9) { best = c; back = b; }
+        }
+      }
+    }
+
+    const after = vm.debugRefitRight(w, { pos, finger, back });
+    out.push({
+      id,
+      before: before?.map((v) => +(v * 1000).toFixed(1)),
+      after: after?.map((v) => +(v * 1000).toFixed(1)),
+      pos: pos.map((v) => +v.toFixed(4)),
+      finger: finger.map((v) => +v.toFixed(4)),
+      back: back.map((v) => +v.toFixed(4)),
+    });
+  }
+  return out;
+}, ONLY);
+
+for (const r of result) {
+  const worst = (a) => Math.max(...a.map(Math.abs)).toFixed(1);
+  console.log(`\n${r.id}`);
+  console.log(`  tip gaps before (mm): [${r.before.join(', ')}]  worst ${worst(r.before)}`);
+  console.log(`  tip gaps after  (mm): [${r.after.join(', ')}]  worst ${worst(r.after)}`);
+  console.log('      gripR: {');
+  console.log(`        pos: [${r.pos.join(', ')}],`);
+  console.log(`        finger: [${r.finger.join(', ')}],`);
+  console.log(`        back: [${r.back.join(', ')}],`);
+  console.log('      },');
+}
+if (errs.length) console.log('\n[gripfit] page errors:', errs.slice(0, 5));
+await browser.close();

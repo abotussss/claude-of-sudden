@@ -930,7 +930,13 @@ export class WeaponSystem {
   debugPose(kind = 'idle', opts = {}) {
     const vm = this.viewmodel;
     this.debugMode = kind;
-    this.setWeaponImmediate('rifle');
+    /**
+     * `opts.weapon`, because this used to be a hardcoded 'rifle' and it silently
+     * invalidated capture work: a "pistol ADS" grab taken through this function
+     * was a photograph of the carbine. The default stays 'rifle' so the existing
+     * shot harness is unchanged.
+     */
+    this.setWeaponImmediate(opts.weapon ?? 'rifle');
     vm.stopClip();
     vm.recPos.reset();
     vm.recRot.reset();

@@ -327,6 +327,34 @@ export function buildSmg() {
       ironSight: [0, railTop + 0.024, 0.042],
       // Wrist targets, derived the same way as the rifle's (see models/rifle.js):
       // knuckle/grip contact point minus the palm offset along the hand axis.
+      /**
+       * THE PISTOL GRIP AS A CYLINDER, so the fingertip contact solve actually
+       * runs on the SHOOTING hand.
+       *
+       * `Viewmodel._fitShootingHand` bails at `if (!cyl || !gR) return;`, and
+       * until now the knife was the only model that declared one. So on every
+       * firearm the right hand was never solved at all: it wore the static
+       * `HAND_POSES.grip` curls whatever the geometry underneath them happened
+       * to be, which is why the hand read as bent at an angle that belongs to no
+       * grip in particular.
+       *
+       * Derived from the arguments passed to `addPistolGrip` above rather than
+       * typed in, so it cannot drift out of sync with the mesh:
+       *   axis  the top of the grip centreline, at (oy, oz)
+       *   dir   straight down the grip, raked rearward by `angle` — the part
+       *         rotates by `rx: -angle`, so down maps to (0, -cos, +sin)
+       *   r     half the front-strap-to-back-strap depth of the extruded
+       *         profile, plus the rubber over-mould the fingers actually touch
+       *   z0/z1 the Z span the grip occupies, which is what filters the baked
+       *         contact points
+       */
+      gripCylinder: {
+        axis: [0, 0.033, 0.018],
+        dir: [0, -Math.cos(0.36), Math.sin(0.36)],
+        r: 0.0165,
+        z0: 0.018,
+        z1: 0.018 + 0.102 * Math.sin(0.36),
+      },
       gripR: {
         pos: [0.024, 0.028, 0.064],
         finger: [-0.05, -0.4, -0.915],

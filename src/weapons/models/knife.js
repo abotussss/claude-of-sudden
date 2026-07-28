@@ -137,9 +137,23 @@ export function buildKnife() {
        * The distal joints are then fitted per fingertip against the handle
        * cylinder at build time; see Viewmodel._fitShootingHand.
        */
+      /**
+       * SEARCHED, not derived — see tools/gripfit.mjs.
+       *
+       * Adding `gripCylinder` made the solve RUN, and the hand still
+       * photographed fanned open; hiding the left arm proved the open hand was
+       * this one. The measurement said why: all four fingertips were 12.8, 17.6,
+       * 17.9 and 5.3 mm off a 25 mm handle. Not a curl problem at all — the hand
+       * was never near the handle, so no amount of flexion could ever have
+       * closed it, and every previous attempt to fix this by tuning curl was
+       * aimed at the wrong thing.
+       *
+       * Coordinate descent on the real solve brings all four to
+       * [0.4, 0.5, 0.4, 0.2] mm.
+       */
       gripR: {
-        pos: [-0.0253, 0.0802, 0.0651],
-        finger: [0.341, -0.7822, -0.5215],
+        pos: [-0.0028, 0.1002, 0.0651],
+        finger: [0.464, -0.8415, 0.2767],
         back: [0.9167, 0.3996, 0],
       },
       /**
@@ -167,6 +181,12 @@ export function buildKnife() {
       },
       /** Relaxed, not clamped: there is nothing under this hand to close on. */
       lhandPose: 'open',
+      /**
+       * Hammer grip, authored rather than fitted — see HAND_POSES.hammer. The
+       * default 'grip' is a PISTOL grip and leaves the fingers open on a 25 mm
+       * knife handle.
+       */
+      rhandPose: 'hammer',
       /**
        * The handle's collision profile, for the build-time fingertip solve
        * (Arm.fitToCylinder). The handle is an ELLIPSE, 10.5 x 13.6 mm, and the

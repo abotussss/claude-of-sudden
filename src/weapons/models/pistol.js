@@ -285,6 +285,34 @@ export function buildPistol() {
       /** Rear notch to front post: the sight radius the picture is scaled by. */
       sightRadius: (zSlideRear - 0.012) - (zSlideFront + 0.014),
       // Wrist targets (see models/rifle.js for the derivation).
+      /**
+       * THE PISTOL GRIP AS A CYLINDER, so the fingertip contact solve actually
+       * runs on the SHOOTING hand.
+       *
+       * `Viewmodel._fitShootingHand` bails at `if (!cyl || !gR) return;`, and
+       * until now the knife was the only model that declared one. So on every
+       * firearm the right hand was never solved at all: it wore the static
+       * `HAND_POSES.grip` curls whatever the geometry underneath them happened
+       * to be, which is why the hand read as bent at an angle that belongs to no
+       * grip in particular.
+       *
+       * Derived from the arguments passed to `addPistolGrip` above rather than
+       * typed in, so it cannot drift out of sync with the mesh:
+       *   axis  the top of the grip centreline, at (oy, oz)
+       *   dir   straight down the grip, raked rearward by `angle` — the part
+       *         rotates by `rx: -angle`, so down maps to (0, -cos, +sin)
+       *   r     half the front-strap-to-back-strap depth of the extruded
+       *         profile, plus the rubber over-mould the fingers actually touch
+       *   z0/z1 the Z span the grip occupies, which is what filters the baked
+       *         contact points
+       */
+      gripCylinder: {
+        axis: [0, bore - 0.014, 0.016],
+        dir: [0, -Math.cos(gripAngle), Math.sin(gripAngle)],
+        r: 0.0168,
+        z0: 0.016,
+        z1: 0.016 + 0.113 * Math.sin(gripAngle),
+      },
       gripR: {
         pos: [0.028, 0.003, 0.07],
         finger: [0, -0.315, -0.949],
