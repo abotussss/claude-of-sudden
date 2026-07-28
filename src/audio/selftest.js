@@ -22,10 +22,10 @@
 import { Rng } from '../core/rng.js';
 import { NoiseBank } from './dsp.js';
 import { Mixer } from './mixer.js';
-import { WEAPON_PROFILES, weaponShot, bulletWhizz, dryFire } from './weapons.js';
+import { WEAPON_PROFILES, weaponShot, bulletWhizz, dryFire, boltCycle } from './weapons.js';
 import {
   surfaceImpact, footstep, shellCasing, reloadPhase, explosion, bodyFall, uiSound,
-  heartbeat, cloth,
+  heartbeat, cloth, meleeSwing, meleeHit,
 } from './foley.js';
 import { bark, BARKS } from './vox.js';
 import { ambientOneShot, ONE_SHOTS } from './ambience.js';
@@ -158,9 +158,30 @@ export async function runAudioSelfTest(opts = {}) {
   await push('shell:dirt', 3, ({ bank, rng, mixer, t }) => {
     route(mixer, shellCasing(mixer.actx, bank, rng, { when: t, surface: 'dirt' }), 'foley');
   });
-  for (const phase of ['start', 'magout', 'magin', 'end']) {
-    await push(`reload:${phase}`, 2.5, ({ bank, rng, mixer, t }) => {
-      route(mixer, reloadPhase(mixer.actx, bank, rng, phase, { when: t }), 'foley');
+  // Every phase of every ACTION type, not just the AR's: an AK rocks a steel
+  // magazine and charges off the handle, a bolt gun charges nothing at all.
+  for (const action of ['ar', 'ak', 'bolt', 'heavy']) {
+    for (const phase of ['start', 'magout', 'magin', 'end']) {
+      await push(`reload:${action}:${phase}`, 2.5, ({ bank, rng, mixer, t }) => {
+        route(mixer, reloadPhase(mixer.actx, bank, rng, phase, { when: t, action }), 'foley');
+      });
+    }
+  }
+  for (const fp of [true, false]) {
+    await push(`bolt:${fp ? 'fp' : '12m'}`, 2.5, ({ bank, rng, mixer, t }) => {
+      route(mixer, boltCycle(mixer.actx, bank, rng, {
+        when: t, dur: 0.78, firstPerson: fp, distance: fp ? 0 : 12,
+      }), 'foley');
+    });
+  }
+  for (const kind of ['slash', 'stab']) {
+    await push(`melee:swing:${kind}`, 1.5, ({ bank, rng, mixer, t }) => {
+      route(mixer, meleeSwing(mixer.actx, bank, rng, { when: t, kind }), 'foley');
+    });
+  }
+  for (const surface of ['flesh', 'concrete', 'metal', 'wood', 'glass', 'plaster', 'sand', 'rubber']) {
+    await push(`melee:hit:${surface}`, 2, ({ bank, rng, mixer, t }) => {
+      route(mixer, meleeHit(mixer.actx, bank, rng, { when: t, surface }), 'foley');
     });
   }
   await push('explosion@5m', 6, ({ bank, rng, mixer, t }) => {

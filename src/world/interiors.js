@@ -13,6 +13,37 @@ import { clothGeometry, patchGeometry, chamferBox, fillMasks } from './util.js';
  * ceiling.
  */
 
+/**
+ * True where a piece of clutter that carries a COLLISION PROXY must not stand.
+ *
+ * `r.doorways` is the set of circles just inside this building's exterior doors
+ * (see `buildInterior`). A crate stack or an oil drum dropped there is not
+ * dressing, it is a locked door: E3's side-3 and K2's side-2 openings were both
+ * blocked down to a 0.3 m slot, and the player capsule is 0.64 m across. Flat
+ * dressing — patches, litter, stains — has no proxy and is not filtered, which
+ * is the same rule `KEEPOUT` applies outdoors.
+ */
+function inDoorway(r, x, z) {
+  const ds = r.doorways;
+  if (!ds) return false;
+  for (let i = 0; i < ds.length; i++) {
+    const dx = x - ds[i].x;
+    const dz = z - ds[i].z;
+    if (dx * dx + dz * dz < ds[i].r * ds[i].r) return true;
+  }
+  return false;
+}
+
+/** A spot for a collision-bearing prop, resampled off the doorways. */
+function clearSpot(rng, r, x0, z0, x1, z1) {
+  for (let i = 0; i < 8; i++) {
+    const x = rng.range(x0, x1);
+    const z = rng.range(z0, z1);
+    if (!inDoorway(r, x, z)) return [x, z];
+  }
+  return null; // room is mostly threshold — leave it empty rather than block it
+}
+
 /** Furnish one room. Rect is in level space; y is the floor surface. */
 export function furnishRoom(A, rng, r) {
   const { kind, x0, z0, x1, z1, y, h } = r;
@@ -526,8 +557,9 @@ function furnishStorage(A, rng, r, cx, cz, w, d, m) {
   const { x0, z0, x1, z1, y } = r;
   const spots = rng.int(4, 7);
   for (let i = 0; i < spots; i++) {
-    const sx = rng.range(x0 + 0.6, x1 - 0.6);
-    const sz = rng.range(z0 + 0.6, z1 - 0.6);
+    const spot = clearSpot(rng, r, x0 + 0.6, z0 + 0.6, x1 - 0.6, z1 - 0.6);
+    if (!spot) continue;
+    const [sx, sz] = spot;
     const pick = rng.float();
     if (pick < 0.35) stackCrates(A, rng, sx, y, sz, rng.int(2, 5));
     else if (pick < 0.55) {

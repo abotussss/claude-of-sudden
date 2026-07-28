@@ -79,7 +79,40 @@ export function keepClear(x, z) {
     const dz = z - KEEPOUT[i][1];
     if (dx * dx + dz * dz < KEEPOUT[i][2] * KEEPOUT[i][2]) return false;
   }
+  for (let i = 0; i < DOORWAYS.length; i++) {
+    const dx = x - DOORWAYS[i][0];
+    const dz = z - DOORWAYS[i][1];
+    if (dx * dx + dz * dz < DOORWAYS[i][2] * DOORWAYS[i][2]) return false;
+  }
   return true;
+}
+
+/**
+ * THE APPROACH TO EVERY DOOR — the same rule as `KEEPOUT`, for the same reason,
+ * but derived rather than authored.
+ *
+ * A prop carrying a collision proxy parked on a threshold is a locked door, and
+ * two were: W2's side-3 opening had a wooden pallet 2.4 m outside it and W3's
+ * side-1 opening a concrete block 0.5 m outside. Both stand about 0.9 m against
+ * a 0.42 m step height, so the doorway behind them might as well have been
+ * bricked up — and a raycast through the opening says it is perfectly clear,
+ * which is why this survived until a player was driven at it.
+ *
+ * The circles cannot be authored in layout.js because a door's position is
+ * decided by the bay solver in `buildFacade`, so `WorldSystem` fills them in
+ * from the facades it just cut, before any prop is placed.
+ */
+const DOORWAYS = [];
+export function setDoorways(infos, specs) {
+  DOORWAYS.length = 0;
+  const OUT = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  for (let i = 0; i < infos.length; i++) {
+    if (!specs[i]?.enterable) continue; // a decorative door blocks nothing
+    for (const d of infos[i]?.doors ?? []) {
+      const o = OUT[d.side];
+      DOORWAYS.push([d.wp[0] + o[0] * 1.15, d.wp[2] + o[1] * 1.15, 1.5]);
+    }
+  }
 }
 
 /** True on the street, a pavement or an alley — i.e. somewhere props can sit. */
@@ -1454,8 +1487,10 @@ function tyreStacks(A, rng) {
  */
 function coverClusters(A, rng) {
   const spots = [
-    // mid street
-    [-2.2, 18.6, 1.2],
+    // mid street. The first one is pushed out to x -4.6: a 2.8 m sandbag run
+    // centred at -2.2 reached its far end into K1's side-2 doorway, and
+    // `keepClear` only sees a run's centre, not its length.
+    [-4.6, 18.6, 1.2],
     [2.6, -9.4, -0.4],
     [-3.0, -23.5, 0.6],
     [2.2, -32.0, 1.9],

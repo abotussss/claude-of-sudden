@@ -700,8 +700,10 @@ export const SET_PIECES = {
     // connectors
     [-11.0, 12.6, 1.62, 2.3],
     [11.4, -5.2, 1.5, 2.3],
-    // the lane north runs
-    [-22.4, 8.0, 1.5, 2.4],
+    // the lane north runs. Kept south of z 5: at z 8 this stall stood squarely
+    // across W2's side-3 doorway — 2.4 m of market stall, 0.9 m tall, 2.4 m out
+    // from an opening the player is meant to come through.
+    [-22.4, 3.4, 1.5, 2.4],
     [22.6, 5.0, -1.6, 2.4],
     [-29.6, 14.5, -1.6, 2.2],
     [29.8, 16.5, 1.5, 2.2],
@@ -826,7 +828,11 @@ export const SET_PIECES = {
   ],
   /** Rubble piles: [x, z, radius, count] */
   rubble: [
-    [-4.2, -22.5, 2.4, 34],
+    // Pulled south-east off W3's side-1 doorway: a 2.4 m mound centred 2.1 m
+    // from the opening spilled concrete right across the threshold. `keepClear`
+    // only tests a pile's CENTRE, so a mound can still reach into a doorway the
+    // test says it is clear of — give the authored ones room.
+    [-3.4, -25.4, 2.4, 34],
     [5.0, -16.5, 2.8, 40],
     [-4.6, -47.5, 2.0, 26],
     [-5.0, 28.0, 1.6, 18],

@@ -13,6 +13,7 @@ import {
   buildPerimeter,
   groundY,
   isOpen,
+  setDoorways,
 } from './dressing.js';
 
 /**
@@ -127,6 +128,9 @@ export class WorldSystem {
       }
     }
     this.buildings = infos;
+    // The doors are cut; keep every prop with a collision proxy off their
+    // approaches before a single one is placed. See `setDoorways`.
+    setDoorways(infos, BUILDINGS);
 
     buildGate(A, rng);
     buildPerimeter(A, rng);

@@ -61,10 +61,18 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  *   weapon:fire    { weapon, origin, dir, seed }
  *   weapon:shell   { position, velocity }
  *   weapon:reload  { weapon, phase: 'start'|'magout'|'magin'|'end' }
+ *   weapon:bolt    { weapon, duration }               manual actions only
+ *   weapon:melee   { weapon, phase, kind, surface, position }   the blade
  *   bullet:tracer  { from, to, speed }
  * `bullet:impact` comes from physics, because physics owns penetration.
  * Anything else (ammo counts, fire mode, the current weapon) is a getter on
- * this object rather than an event, so no new event types are introduced.
+ * this object rather than an event.
+ *
+ * `weapon:bolt` and `weapon:melee` exist because two things the player does
+ * make a sound and produce NO other event: working a bolt (the whole 1.25 s
+ * cycle is expressed as fire-control timing, which nothing can hear) and
+ * swinging a knife at a wall or at air (no `damage:dealt`, so audio never knew
+ * it happened). Both are rows in ARCHITECTURE.md.
  */
 /**
  * Registration order, which is also the order 1/2/3... and `nextWeapon` cycle
@@ -137,6 +145,29 @@ export class WeaponSystem {
       target: null, amount: 0, headshot: false, part: 'torso',
       killed: false, point: null, source: null,
     };
+    /**
+     * `weapon:melee` — what the blade DID, which `damage:dealt` cannot carry.
+     * A whiff deals no damage and a knife into a wall deals no damage, and both
+     * have to be audible: `phase:'swing'` on every attack, `phase:'hit'` with a
+     * surface only when the edge reached something.
+     */
+    this._meleeSound = {
+      weapon: null, phase: 'swing', kind: 'slash', surface: 'flesh',
+      position: null, at: new THREE.Vector3(),
+    };
+    /**
+     * `weapon:bolt` — a MANUALLY cycled action, queued after the shot.
+     *
+     * The bolt gun is expressed entirely in the fire-control system that already
+     * exists (defs.js: 48 rpm and one fire mode IS the 1.25 s bolt throw), and
+     * that was right for gameplay and silent for audio: the only action noise a
+     * shot makes is `weaponShot`'s MECH layer, which is a self-loader's carrier
+     * bouncing 30 ms after the round leaves. A bolt gun's throw is a separate,
+     * unhurried, half-second EVENT the shooter performs, and hearing it is how
+     * you know he cannot answer you yet.
+     */
+    this._boltTimer = -1;
+    this._boltPayload = { weapon: null, duration: 0.78 };
 
     // Deferred shell ejections (a case leaves the port a few ms after the shot).
     this._shellQueue = [];
@@ -439,6 +470,9 @@ export class WeaponSystem {
     this._shotIndex = 0;
     this._spread = 0;
     this._pendingShots = 0;
+    // Swapping weapons cancels a queued bolt throw; the rifle is not in his
+    // hands any more and the sound would come from nowhere.
+    this._boltTimer = -1;
     this.viewmodel?.stopClip();
     this.viewmodel.boltHold = 0;
     this.viewmodel?.play('draw');
@@ -545,6 +579,18 @@ export class WeaponSystem {
 
     // Shell leaves the port shortly after the shot, once the bolt is back.
     this._queueShell(Math.min(0.05, this._fireTimer * 0.45));
+
+    /**
+     * A manually cycled action does NOT start with the shot: the shooter has to
+     * come off the recoil first. 180 ms of dwell, then the throw runs over 62%
+     * of the cycle — the same fraction `viewmodel.boltCycle` animates it over
+     * (see the bolt/slide block in viewmodel.js), so the sound and the moving
+     * part are the same event rather than two events that happen to overlap.
+     */
+    if (def.boltAction) {
+      this._boltTimer = 0.18;
+      this._boltPayload.duration = Math.max(0.2, this._fireTimer * 0.62);
+    }
     return true;
   }
 
@@ -581,7 +627,21 @@ export class WeaponSystem {
     this._meleeKind = kind;
     this._meleeCooldown = spec.cycle;
     this.viewmodel.play(kind);
+    this._emitMelee('swing', null, null);
     return true;
+  }
+
+  /** One preallocated payload for both melee beats. `point` may be null. */
+  _emitMelee(phase, surface, point) {
+    const m = this._meleeSound;
+    m.weapon = this.current;
+    m.phase = phase;
+    m.kind = this._meleeKind;
+    m.surface = surface ?? 'flesh';
+    // A swing is our own arm and is head-locked; a hit happened somewhere.
+    if (point) m.position = m.at.copy(point);
+    else m.position = null;
+    this.ctx.events.emit('weapon:melee', m);
   }
 
   get swinging() {
@@ -642,7 +702,17 @@ export class WeaponSystem {
       this._meleePoint.copy(h.point);
       this._meleePart = h.part;
     }
-    if (!best) return false;
+    if (!best) {
+      // Nothing alive in reach. If the blade reached a WALL it still made a
+      // noise, and which wall decides what noise — `physics` has already tagged
+      // the collider (ARCHITECTURE.md, surface types). A clean whiff makes none.
+      if (wall.hit && wall.distance <= spec.reach) {
+        this._tmp.copy(origin).addScaledVector(dir, wall.distance);
+        this._emitMelee('hit', wall.surface ?? 'concrete', this._tmp);
+      }
+      return false;
+    }
+    this._emitMelee('hit', 'flesh', this._meleePoint);
 
     const p = this._meleePayload;
     p.target = best;
@@ -942,6 +1012,16 @@ export class WeaponSystem {
       }
       this._pendingShots = 0;
       this._pendingFirst = false;
+    }
+
+    // ---- deferred bolt throw (manual actions only) ----------------------
+    if (this._boltTimer >= 0) {
+      this._boltTimer -= dt;
+      if (this._boltTimer <= 0) {
+        this._boltTimer = -1;
+        this._boltPayload.weapon = this.current;
+        ctx.events.emit('weapon:bolt', this._boltPayload);
+      }
     }
 
     // ---- deferred shell ejection ---------------------------------------

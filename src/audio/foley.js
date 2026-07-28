@@ -365,6 +365,177 @@ export function cloth(actx, bank, rng, o = {}) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Melee                                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * KNIFE SWING — the whoosh, which is not one sound either.
+ *
+ * A blade moving past the ear is a narrow band of turbulence whose centre
+ * frequency tracks the tip's speed, so the band RISES into the fastest part of
+ * the arc and falls out of it. That Doppler-ish sweep is the entire cue; a flat
+ * noise burst reads as a bag of sand, not as an edge. Under it goes the sleeve
+ * and the sling, which is what tells you a body did this rather than a machine.
+ *
+ * `kind` — 'slash' is fast, wide, bright; 'stab' is slower, shorter travel,
+ * darker, and much quieter, because a thrust barely moves any air.
+ *
+ * @param {object} o { when, kind, level }
+ */
+export function meleeSwing(actx, bank, rng, o = {}) {
+  const t0 = o.when ?? actx.currentTime;
+  const stab = o.kind === 'stab';
+  const lvl = (o.level ?? 1) * (stab ? 0.62 : 1);
+  const out = gain(actx, 1.4); // VOICE TRIM
+  const dur = (stab ? 0.15 : 0.2) * rng.range(0.9, 1.12);
+
+  // The blade. Bandpass up and back down over the arc; Q is high enough that it
+  // is a *tone* rather than a hiss, which is what makes it read as steel.
+  const src = bank.source('white', rng, rng.range(0.85, 1.25));
+  const bp = biquad(actx, 'bandpass', 900, 2.6);
+  const g = gain(actx, 0);
+  series(src, bp, g).connect(out);
+  const peak = (stab ? rng.range(1900, 2600) : rng.range(3100, 4400));
+  bp.frequency.setValueAtTime(peak * 0.4, t0);
+  bp.frequency.exponentialRampToValueAtTime(peak, t0 + dur * 0.55);
+  bp.frequency.exponentialRampToValueAtTime(peak * 0.45, t0 + dur);
+  // Asymmetric envelope: air builds slowly and stops the instant the arm does.
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(0.85 * lvl, t0 + dur * 0.6);
+  g.gain.exponentialRampToValueAtTime(0.0008, t0 + dur * 1.15);
+  src.start(t0, src._offset, dur * 1.4 + 0.05);
+
+  // Sleeve/harness. Broader, lower, and it starts BEFORE the blade because the
+  // shoulder moves before the tip does.
+  const cs = bank.source('pink', rng, rng.range(0.7, 1.1));
+  const cbp = biquad(actx, 'bandpass', rng.range(700, 1250), 0.7);
+  const cg = gain(actx, 0);
+  series(cs, cbp, cg).connect(out);
+  ad(cg.gain, t0, 0.22 * lvl, 0.03, dur * 0.9);
+  cs.start(t0, cs._offset, dur * 2);
+
+  return { node: out, end: t0 + dur * 1.5 + 0.05, send: 0.14 };
+}
+
+/**
+ * KNIFE IMPACT. Two completely different events sharing one entry point,
+ * because what the blade hits is the only thing that decides what it sounds
+ * like — and getting a wall to sound like a torso is the classic melee bug.
+ *
+ *  FLESH  — a damped low thump (the body absorbing the arm behind the blade),
+ *           a wet mid burst that dies fast because tissue has no ring at all,
+ *           and a short high "shhk" of the edge parting fabric on the way in.
+ *           NOTHING resonates.
+ *  HARD   — the opposite: almost no body, a violent bright transient, a ringing
+ *           high partial as the blade rebounds, and a scrape as it skates off.
+ *           Concrete grits, metal rings, wood knocks.
+ *
+ * @param {object} o { when, surface, level, kind }
+ */
+export function meleeHit(actx, bank, rng, o = {}) {
+  const t0 = o.when ?? actx.currentTime;
+  const surface = o.surface ?? 'flesh';
+  const lvl = o.level ?? 1;
+  // VOICE TRIM. Flesh is all sub and hard surfaces are all top, so one trim
+  // cannot serve both: measured through the offline render, a single 1.5 put a
+  // knife into a torso at peak 0.70 — LOUDER than a rifle at two metres (0.45)
+  // — while the same trim left concrete at 0.14.
+  const out = gain(actx, surface === 'flesh' ? 1.0 : 2.4);
+  let end = t0 + 0.25;
+
+  if (surface === 'flesh') {
+    // 1 — the thump. A body is a bag of water: it takes the energy and gives
+    // nothing back, so this is a fast sine drop with no tail.
+    const b = osc(actx, 'sine', 168);
+    const bg = gain(actx, 0);
+    const drv = shaper(actx, saturationCurve(3.5, 0.45), '2x');
+    b.connect(bg);
+    series(bg, drv).connect(out);
+    sweep(b.frequency, t0, 210 * semis(rng.range(-2, 2)), 74, 0.07);
+    ad(bg.gain, t0, 0.62 * lvl, 0.0015, 0.075);
+    b.start(t0); b.stop(t0 + 0.2);
+
+    // 2 — the wet mid. Lowpassed noise falling hard; the sweep is what makes it
+    // sound saturated with fluid rather than dusty.
+    const s = bank.source('pink', rng, rng.range(0.8, 1.2));
+    const lp = biquad(actx, 'lowpass', 1500, 1.1);
+    const g = gain(actx, 0);
+    series(s, lp, g).connect(out);
+    sweep(lp.frequency, t0, rng.range(1500, 2100), 340, 0.09);
+    ad(g.gain, t0, 0.55 * lvl, 0.0018, 0.085);
+    s.start(t0, s._offset, 0.28);
+
+    // 3 — the edge through cloth and skin. Brief, bright, and slightly late.
+    const et = t0 + rng.range(0.004, 0.014);
+    const es = bank.source('white', rng, rng.range(0.9, 1.35));
+    const ebp = biquad(actx, 'bandpass', rng.range(3400, 5200), 1.5);
+    const eg = gain(actx, 0);
+    series(es, ebp, eg).connect(out);
+    sweep(ebp.frequency, et, rng.range(4600, 6200), rng.range(2200, 3000), 0.055);
+    ad(eg.gain, et, 0.3 * lvl, 0.003, 0.05);
+    es.start(et, es._offset, 0.16);
+    end = t0 + 0.32;
+    return { node: out, end, send: 0.22 };
+  }
+
+  // ---- hard surfaces ------------------------------------------------------
+  // Per-surface partials for the rebound ring, and how much of it survives.
+  const RING = {
+    metal: { f: [2900, 5400, 8300], q: 40, decay: 0.34, ring: 1.0, grit: 0.45, thump: 0.28 },
+    concrete: { f: [1900, 3600, 6100], q: 12, decay: 0.055, ring: 0.5, grit: 1.0, thump: 0.5 },
+    plaster: { f: [1500, 2800, 4600], q: 8, decay: 0.04, ring: 0.32, grit: 0.85, thump: 0.55 },
+    glass: { f: [3600, 6400, 9200], q: 34, decay: 0.2, ring: 0.9, grit: 0.5, thump: 0.2 },
+    wood: { f: [900, 1750, 3100], q: 11, decay: 0.075, ring: 0.6, grit: 0.5, thump: 0.7 },
+    rubber: { f: [520, 1100, 1900], q: 6, decay: 0.03, ring: 0.16, grit: 0.3, thump: 0.85 },
+    fabric: { f: [700, 1400, 2400], q: 5, decay: 0.025, ring: 0.1, grit: 0.35, thump: 0.7 },
+    dirt: { f: [600, 1200, 2100], q: 5, decay: 0.03, ring: 0.08, grit: 0.9, thump: 0.75 },
+    sand: { f: [700, 1300, 2200], q: 4, decay: 0.025, ring: 0.06, grit: 1.0, thump: 0.6 },
+    foliage: { f: [1800, 3200, 5400], q: 6, decay: 0.04, ring: 0.12, grit: 1.1, thump: 0.25 },
+    water: { f: [500, 1000, 1800], q: 5, decay: 0.03, ring: 0.1, grit: 0.8, thump: 0.45 },
+  };
+  const R = RING[surface] ?? RING.concrete;
+
+  // 1 — the strike itself: a hard transient with the blade's own pitch in it.
+  const s = bank.source('white', rng, rng.range(0.9, 1.4));
+  const hp = biquad(actx, 'highpass', 1400, 0.7);
+  const g = gain(actx, 0);
+  series(s, hp, g).connect(out);
+  hit(g.gain, t0, 0.95 * lvl, 0.009);
+  s.start(t0, s._offset, 0.06);
+
+  // 2 — the rebound ring. This is the whole difference between surfaces.
+  const jitter = semis(rng.range(-1.5, 1.5));
+  struckResonator(actx, bank, rng, t0, [
+    { f: R.f[0] * jitter, q: R.q, g: 0.55 * lvl * R.ring, decay: R.decay },
+    { f: R.f[1] * jitter, q: R.q * 0.8, g: 0.3 * lvl * R.ring, decay: R.decay * 0.6 },
+    { f: R.f[2] * jitter, q: R.q * 0.55, g: 0.14 * lvl * R.ring, decay: R.decay * 0.35 },
+  ], 0.0025).connect(out);
+
+  // 3 — body: the mass behind the arm arriving. Small, but its absence is what
+  // makes a knife on a wall sound like a coin on a table.
+  const b = osc(actx, 'sine', 210 * jitter);
+  const bg = gain(actx, 0);
+  b.connect(bg); bg.connect(out);
+  sweep(b.frequency, t0, 260 * jitter, 110, 0.05);
+  ad(bg.gain, t0, 0.42 * lvl * R.thump, 0.0015, 0.05);
+  b.start(t0); b.stop(t0 + 0.14);
+
+  // 4 — the skate. The edge does not stop where it lands; it slides, and the
+  // band falls as it loses speed.
+  const gt = t0 + rng.range(0.006, 0.018);
+  const gs = bank.source('white', rng, rng.range(0.8, 1.3));
+  const gbp = biquad(actx, 'bandpass', 4200, 1.2);
+  const gg = gain(actx, 0);
+  series(gs, gbp, gg).connect(out);
+  const gd = rng.range(0.05, 0.11);
+  sweep(gbp.frequency, gt, rng.range(4800, 7000), rng.range(1600, 2600), gd);
+  ad(gg.gain, gt, 0.26 * lvl * R.grit, 0.004, gd);
+  gs.start(gt, gs._offset, gd * 2 + 0.05);
+
+  return { node: out, end: t0 + Math.max(0.3, R.decay * 3), send: 0.4 };
+}
+
+/* ------------------------------------------------------------------ */
 /* Shell casings                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -424,9 +595,37 @@ export function shellCasing(actx, bank, rng, o = {}) {
 /** The four phases are wildly different in energy; level them per phase. */
 const RELOAD_TRIM = { start: 3.2, magout: 3.0, magin: 1.0, end: 1.5 };
 
+/**
+ * ACTION TYPE, and the reason it exists: every gun in the game reloaded with
+ * one recipe scaled by a `heavy` multiplier, so an AKM and an M4A1 were the
+ * same sound played 0% louder.
+ *
+ * They are not the same mechanism. An AR magazine goes STRAIGHT UP into the
+ * well and the bolt catch drops the carrier with a paddle. An AK magazine
+ * ROCKS: the front lug goes in first, then the body swings back until the catch
+ * behind it snaps over — two distinct clacks with a gap, not one — the body is
+ * stamped steel rather than polymer so it RINGS, and there is no bolt catch at
+ * all, so an empty reload ends with the charging handle dragged all the way to
+ * the rear and let go. A bolt gun's 5-round steel box is a fraction of the
+ * mass, seats with a small click, and needs no charging handle whatsoever
+ * because the bolt was closed the whole time.
+ *
+ *   mag   0 = polymer (thunk, dead), 1 = stamped steel (ring)
+ *   rock  seconds between the front lug and the rear catch; 0 = straight insert
+ *   charge  what the 'end' phase is: 'paddle' | 'handle' | 'none'
+ *   mass  scales the low end of every seat/stop, the old `heavy`
+ */
+const RELOAD_ACTION = {
+  ar: { mag: 0.15, rock: 0, charge: 'paddle', mass: 1 },
+  ak: { mag: 0.9, rock: 0.115, charge: 'handle', mass: 1.12 },
+  bolt: { mag: 0.75, rock: 0, charge: 'none', mass: 0.6 },
+  heavy: { mag: 0.4, rock: 0, charge: 'paddle', mass: 1.35 },
+};
+
 export function reloadPhase(actx, bank, rng, phase, o = {}) {
   const t0 = o.when ?? actx.currentTime;
-  const heavy = o.heavy ?? 1; // LMG/shotgun = heavier hardware
+  const A = RELOAD_ACTION[o.action] ?? RELOAD_ACTION.ar;
+  const heavy = (o.heavy ?? 1) * A.mass; // LMG/shotgun = heavier hardware
   const out = gain(actx, 0.42 * (RELOAD_TRIM[phase] ?? 1.5)); // VOICE TRIM
   let end = t0 + 0.3;
   const metal = (t, parts, exc = 0.0025) => {
@@ -468,13 +667,32 @@ export function reloadPhase(actx, bank, rng, phase, o = {}) {
       sweep(bp.frequency, st, 4200, 1600, 0.12);
       ad(g.gain, st, 0.2, 0.01, 0.12);
       src.start(st, src._offset, 0.3);
-      // Empty magazine hitting the ground — polymer, not metal.
+      // An AK magazine does not drop free: the catch is behind it, so the body
+      // is rocked FORWARD off the lug first. That is an extra clack before the
+      // mag ever leaves the well, and it is the most recognisable part.
+      if (A.rock > 0) {
+        metal(t0 + A.rock * 0.45, [
+          { f: 1980 * semis(rng.range(-2, 2)), q: 18, g: 0.4 * heavy, decay: 0.035 },
+          { f: 4200, q: 12, g: 0.16, decay: 0.018 },
+        ], 0.003);
+      }
+      // Empty magazine hitting the deck. Polymer is a dead thunk; stamped steel
+      // rings for a fifth of a second and is the AK's signature.
       const dt = t0 + rng.range(0.16, 0.3);
+      const ring = A.mag;
       metal(dt, [
-        { f: 480 * semis(rng.range(-3, 3)), q: 9, g: 0.2, decay: 0.05 },
-        { f: 1180, q: 7, g: 0.11, decay: 0.03 },
-        { f: 2600, q: 5, g: 0.05, decay: 0.015 },
+        { f: 480 * semis(rng.range(-3, 3)), q: 9 + ring * 16, g: 0.2, decay: 0.05 + ring * 0.06 },
+        { f: 1180, q: 7 + ring * 20, g: 0.11 + ring * 0.1, decay: 0.03 + ring * 0.1 },
+        { f: 2600, q: 5 + ring * 34, g: 0.05 + ring * 0.11, decay: 0.015 + ring * 0.16 },
       ], 0.004);
+      if (ring > 0.4) {
+        // the sheet-steel body itself, high and long — pure AK
+        metal(dt + 0.006, [
+          { f: 4900 * semis(rng.range(-3, 3)), q: 54, g: 0.09 * ring, decay: 0.26 * ring },
+          { f: 7300, q: 40, g: 0.05 * ring, decay: 0.17 * ring },
+        ], 0.002);
+        end = Math.max(end, dt + 0.45);
+      }
       end = Math.max(end, dt + 0.3);
       break;
     }
@@ -500,14 +718,64 @@ export function reloadPhase(actx, bank, rng, phase, o = {}) {
         { f: 3600, q: 34, g: 0.16, decay: 0.02 },
         { f: 7400, q: 20, g: 0.07, decay: 0.01 },
       ], 0.0015);
+      // THE ROCK. On an AK the front lug goes in, the body swings back, and the
+      // catch snaps over it — a second, harder, LOWER clack `A.rock` later. On
+      // an AR there is nothing here at all, and that gap is the whole tell.
+      if (A.rock > 0) {
+        const rt = it + A.rock * rng.range(0.9, 1.15);
+        metal(rt, [
+          { f: 960 * semis(rng.range(-1.5, 1.5)), q: 15, g: 0.5 * heavy, decay: 0.07 },
+          { f: 2150, q: 22, g: 0.28 * heavy, decay: 0.035 },
+          { f: 5200, q: 30, g: 0.09, decay: 0.02 },
+        ], 0.004);
+        const rb = osc(actx, 'sine', 150);
+        const rg = gain(actx, 0);
+        rb.connect(rg); rg.connect(out);
+        sweep(rb.frequency, rt, 185, 92, 0.05);
+        ad(rg.gain, rt, 0.3 * heavy, 0.0015, 0.05);
+        rb.start(rt); rb.stop(rt + 0.14);
+        end = Math.max(end, rt + 0.35);
+      }
       break;
     }
 
     case 'end':
     default: {
-      // Charging handle: scrape, hard rearward stop, spring-driven return, and
-      // the bolt slamming into battery.
+      /**
+       * What ENDS a reload is a property of the action, not a volume knob.
+       *
+       *  paddle  AR: thumb hits the bolt release and the carrier is thrown
+       *          forward by the spring. One short scrape, one slam.
+       *  handle  AK: no bolt catch exists, so the handle is dragged the full
+       *          length of the receiver and released — a LONG scrape, a hard
+       *          rearward stop, then the slam. Twice the sound of a paddle.
+       *  none    bolt gun: the bolt was closed the whole time. There is nothing
+       *          to charge, so this is a hand settling back onto the grip.
+       */
+      if (A.charge === 'none') {
+        rustle(t0, 0.16, 0.15, rng.range(900, 1600));
+        metal(t0 + rng.range(0.05, 0.09), [
+          { f: 1350 * semis(rng.range(-2, 2)), q: 14, g: 0.16 * heavy, decay: 0.035 },
+          { f: 3050, q: 10, g: 0.07, decay: 0.018 },
+        ], 0.0025);
+        break;
+      }
       const st = t0;
+      if (A.charge === 'handle') {
+        // the full rearward drag, and the bolt hitting the back of the receiver
+        const hs = bank.source('white', rng, rng.range(0.85, 1.2));
+        const hbp = biquad(actx, 'bandpass', 2000, 2.0);
+        const hg = gain(actx, 0);
+        series(hs, hbp, hg).connect(out);
+        sweep(hbp.frequency, st, 3000, 1500, 0.13);
+        ad(hg.gain, st, 0.3, 0.012, 0.13);
+        hs.start(st, hs._offset, 0.35);
+        metal(st + 0.13, [
+          { f: 1520 * semis(rng.range(-2, 2)), q: 20, g: 0.5 * heavy, decay: 0.05 },
+          { f: 3400, q: 14, g: 0.2, decay: 0.022 },
+          { f: 690, q: 8, g: 0.26 * heavy, decay: 0.06 },
+        ], 0.004);
+      }
       const src = bank.source('white', rng, rng.range(0.9, 1.25));
       const bp = biquad(actx, 'bandpass', 2600, 1.6);
       const g = gain(actx, 0);
@@ -524,7 +792,7 @@ export function reloadPhase(actx, bank, rng, phase, o = {}) {
         { f: 4900 * semis(rng.range(-3, 3)), q: 46, g: 0.09, decay: 0.16 },
         { f: 7200, q: 38, g: 0.05, decay: 0.1 },
       ], 0.002);
-      const bt = st + rng.range(0.1, 0.15);
+      const bt = st + (A.charge === 'handle' ? 0.17 : 0) + rng.range(0.1, 0.15);
       const b = osc(actx, 'sine', 150 * heavy);
       const bg = gain(actx, 0);
       b.connect(bg); bg.connect(out);

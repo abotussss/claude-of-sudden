@@ -23,20 +23,22 @@
  * never have to check whether audio started.
  *
  * Driven off the canonical events in ARCHITECTURE.md: weapon:fire,
- * weapon:reload, weapon:shell, bullet:impact, bullet:tracer, damage:dealt,
- * damage:taken, actor:death, player:land, player:footstep, player:state,
- * explosion. If `ai` emits the optional `ai:bark {kind, position, voice}` it is
- * picked up as well.
+ * weapon:reload, weapon:bolt, weapon:melee, weapon:shell, bullet:impact,
+ * bullet:tracer, damage:dealt, damage:taken, actor:death, player:land,
+ * player:footstep, player:state, explosion. If `ai` emits the optional
+ * `ai:bark {kind, position, voice}` it is picked up as well.
  */
 
 import { NoiseBank, SPEED_OF_SOUND, clamp, gain as mkGain } from './dsp.js';
 import { Mixer } from './mixer.js';
 import { SpatialField } from './spatial.js';
 import { Ambience, ambientOneShot, ONE_SHOTS } from './ambience.js';
-import { WEAPON_PROFILES, resolveProfile, weaponShot, bulletWhizz, dryFire } from './weapons.js';
+import {
+  WEAPON_PROFILES, resolveProfile, weaponShot, bulletWhizz, dryFire, boltCycle,
+} from './weapons.js';
 import {
   surfaceImpact, footstep, shellCasing, reloadPhase, explosion, bodyFall, uiSound,
-  heartbeat, cloth,
+  heartbeat, cloth, meleeSwing, meleeHit,
 } from './foley.js';
 import { bark as voxBark, barkFor } from './vox.js';
 import { classifySpace } from './ir.js';
@@ -397,7 +399,12 @@ export class AudioSystem {
       case 'impact': return surfaceImpact(actx, bank, rng, { when, surface: o.surface, energy: o.energy });
       case 'step': return footstep(actx, bank, rng, { when, surface: o.surface, gait: o.gait, level: o.level, gear: o.gear });
       case 'shell': return shellCasing(actx, bank, rng, { when, surface: o.surface, level: o.level, flight: o.flight });
-      case 'reload': return reloadPhase(actx, bank, rng, o.phase, { when, heavy: o.heavy });
+      case 'reload':
+        return reloadPhase(actx, bank, rng, o.phase, { when, heavy: o.heavy, action: o.action });
+      case 'bolt':
+        return boltCycle(actx, bank, rng, { when, dur: o.dur, distance: dist, firstPerson: o.firstPerson });
+      case 'swing': return meleeSwing(actx, bank, rng, { when, kind: o.kind, level: o.level });
+      case 'melee': return meleeHit(actx, bank, rng, { when, surface: o.surface, level: o.level });
       case 'explosion': return explosion(actx, bank, rng, { when, distance: dist, radius: o.radius, level: o.level });
       case 'bodyfall': return bodyFall(actx, bank, rng, { when, level: o.level });
       case 'cloth': return cloth(actx, bank, rng, { when, level: o.level });
@@ -569,6 +576,8 @@ export class AudioSystem {
 
     on('weapon:fire', (p) => this._onFire(p));
     on('weapon:reload', (p) => this._onReload(p));
+    on('weapon:bolt', (p) => this._onBolt(p));
+    on('weapon:melee', (p) => this._onMelee(p));
     on('weapon:shell', (p) => this._onShell(p));
     on('bullet:impact', (p) => this._onImpact(p));
     on('bullet:tracer', (p) => this._onTracer(p));
@@ -648,18 +657,76 @@ export class AudioSystem {
     }
   }
 
+  /**
+   * Which reload MECHANISM a weapon has. `reloadPhase` needs this, not a volume
+   * scalar: an AK rocks a steel magazine in and charges off the handle, a bolt
+   * gun seats a 5-round steel box and charges nothing at all. See RELOAD_ACTION.
+   */
+  _reloadAction(name) {
+    const k = String(name ?? '').toLowerCase();
+    if (/ak|akm|7\.?62x39|rpk|galil|vz58/.test(k)) return 'ak';
+    if (/snip|bolt|awp|m91|kar|mosin|marksman/.test(k)) return 'bolt';
+    if (/lmg|shot|m249|pkm|saw|pump|12g/.test(k)) return 'heavy';
+    return 'ar';
+  }
+
   _onReload(p) {
     if (!this.running) return;
     const w = p?.weapon;
     const name = typeof w === 'string' ? w : (w?.audio ?? w?.id ?? w?.name);
-    const heavy = /lmg|shot|snip|m249|pkm/i.test(String(name ?? '')) ? 1.35 : 1;
+    const action = this._reloadAction(name);
+    const heavy = action === 'heavy' ? 1.35 : 1;
     const phase = p?.phase ?? 'end';
     if (p?.position) {
       if (!this._allow('reload')) return;
-      this._playAt('reload', p.position.x, p.position.y, p.position.z, { phase, heavy }, 'foley', 0.6);
+      this._playAt('reload', p.position.x, p.position.y, p.position.z,
+        { phase, heavy, action }, 'foley', 0.6);
     } else {
-      this._playDry('reload', { phase, heavy }, 'foley', 0.22);
+      this._playDry('reload', { phase, heavy, action }, 'foley', 0.22);
     }
+  }
+
+  /**
+   * `weapon:bolt` — a manually cycled action. Never rate-limited and never
+   * dropped for the local player: this is the sound that tells you the rifle is
+   * not ready, and a bolt gun with a silent bolt is a semi-auto that happens to
+   * be slow.
+   */
+  _onBolt(p) {
+    if (!this.running) return;
+    const pos = p?.position;
+    const dur = p?.duration ?? 0.78;
+    if (isVec(pos)) {
+      const dist = this.field.distanceTo(pos.x, pos.y, pos.z);
+      if (dist > 26) return;
+      this._playAt('bolt', pos.x, pos.y, pos.z, { dur, firstPerson: false }, 'foley', 0.62);
+    } else {
+      this._playDry('bolt', { dur, firstPerson: true }, 'foley', 0.2);
+    }
+  }
+
+  /**
+   * `weapon:melee` — the knife. `phase: 'swing'` on every attack, `'hit'` only
+   * when the blade reached something, with the surface it reached: `flesh` for a
+   * body, whatever `physics` tagged the collider for a wall. A whiff is a swing
+   * with no hit, which is exactly what it should sound like.
+   */
+  _onMelee(p) {
+    if (!this.running || !p) return;
+    const pos = p.position;
+    const remote = isVec(pos) && this.field.distanceTo(pos.x, pos.y, pos.z) > 2.6;
+    if (p.phase === 'swing') {
+      const o = { kind: p.kind ?? 'slash', level: remote ? 0.7 : 1 };
+      if (remote) this._playAt('swing', pos.x, pos.y, pos.z, o, 'foley', 0.45);
+      else this._playDry('swing', o, 'foley', 0.12);
+      return;
+    }
+    const o = { surface: p.surface ?? 'flesh', level: 1 };
+    // The hit is placed in the world even for the local player — a knife lands
+    // 1.5 m in front of your face, not inside your head, and the reverb send is
+    // what sells a blade hitting a wall in a stairwell.
+    if (isVec(pos)) this._playAt('melee', pos.x, pos.y, pos.z, o, 'foley', 0.8);
+    else this._playDry('melee', o, 'foley', 0.3);
   }
 
   _onShell(p) {
@@ -908,7 +975,19 @@ export class AudioSystem {
       ev.emit('player:footstep', { position: at(0, -1.6, 0), surface: s, running: true });
     }
     ev.emit('weapon:shell', { position: at(0.3, -0.2, -0.2), velocity: { x: 1, y: 1, z: 0 } });
-    for (const ph of ['start', 'magout', 'magin', 'end']) ev.emit('weapon:reload', { weapon: 'rifle', phase: ph });
+    // Every action type, because they were one sound with a volume knob until
+    // an AKM and a bolt gun joined the loadout.
+    for (const w of ['rifle', 'ak', 'sniper', 'shotgun']) {
+      for (const ph of ['start', 'magout', 'magin', 'end']) ev.emit('weapon:reload', { weapon: w, phase: ph });
+    }
+    ev.emit('weapon:bolt', { weapon: 'sniper', duration: 0.78 });
+    ev.emit('weapon:bolt', { weapon: 'sniper', duration: 0.78, position: at(11, 0, -6) });
+    ev.emit('weapon:melee', { weapon: 'knife', phase: 'swing', kind: 'slash' });
+    ev.emit('weapon:melee', { weapon: 'knife', phase: 'swing', kind: 'stab' });
+    ev.emit('weapon:melee', { weapon: 'knife', phase: 'hit', surface: 'flesh', position: at(0.4, 0, -1.4) });
+    for (const s of ['concrete', 'metal', 'wood', 'glass', 'sand']) {
+      ev.emit('weapon:melee', { weapon: 'knife', phase: 'hit', surface: s, position: at(0.4, 0, -1.5) });
+    }
     ev.emit('bullet:tracer', { from: at(-30, 0, -30), to: at(2, 0, 2), speed: 880 });
     ev.emit('player:land', { velocity: 9, surface: 'concrete' });
     ev.emit('player:state', { stance: 'crouch', sprinting: false, sliding: false, ads: true });

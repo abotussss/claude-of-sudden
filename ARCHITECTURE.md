@@ -109,6 +109,10 @@ Emit and listen via `ctx.events`. Payloads are plain objects. The canonical set:
 |---|---|---|
 | `weapon:fire` | `{ weapon, origin: Vector3, dir: Vector3, seed }` | weapons |
 | `weapon:reload` | `{ weapon, phase: 'start'\|'magout'\|'magin'\|'end' }` | weapons |
+| `weapon:bolt` | `{ weapon, duration }` | weapons |
+| ↳ | a MANUALLY cycled action being worked, emitted 180 ms after the shot. `duration` is how long the throw takes. Only weapons whose def sets `boltAction` emit it; a self-loader's action noise is a layer inside the gunshot instead. | |
+| `weapon:melee` | `{ weapon, phase: 'swing'\|'hit', kind: 'slash'\|'stab', surface, position }` | weapons |
+| ↳ | `swing` on every attack with `position: null` (it is the player's own arm, head-locked). `hit` only when the blade reached something, with a surface from the table below — `flesh` for a body, the collider's tag for a wall. A whiff emits `swing` and nothing else. | |
 | `weapon:shell` | `{ position, velocity }` | weapons |
 | `bullet:impact` | `{ point, normal, surface, incident, damage }` | physics |
 | `bullet:tracer` | `{ from, to, speed }` | weapons |

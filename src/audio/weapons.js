@@ -348,6 +348,108 @@ export function bulletWhizz(actx, bank, rng, o = {}) {
   return { node: out, end: t0 + dur * 2 + 0.05, send: 0.25 };
 }
 
+/**
+ * THE BOLT THROW — a manually cycled action, which the shot layer cannot carry.
+ *
+ * `weaponShot`'s MECH layer is a self-loading action: two clacks 30-40 ms apart,
+ * done before the muzzle has stopped moving. A bolt gun is nothing like that.
+ * It is a second, separate, unhurried EVENT — the shooter lifts the handle,
+ * drags the bolt back against the extractor, the case tumbles out, he shoves it
+ * forward stripping a round off the stack and rotates the handle down onto the
+ * lug. M91-SR's is 1.25 s end to end (defs.js: 48 rpm), and the whole feel of
+ * the weapon is that you hear it happen and cannot shoot while it does.
+ *
+ * Six beats, in the order the hand makes them. Times are FRACTIONS of `dur` so
+ * a different bolt gun scales without retuning.
+ *
+ * @param {object} o { when, dur, distance, firstPerson, level }
+ */
+export function boltCycle(actx, bank, rng, o = {}) {
+  const t0 = o.when ?? actx.currentTime;
+  const dur = o.dur ?? 0.78;
+  const dist = Math.max(0, o.distance ?? 0);
+  const fp = !!o.firstPerson;
+  // Action noise is a metre from your face in first person and a rumour at 30.
+  const lvl = (o.level ?? 1) * (fp ? 1 : 0.55) * clamp(1 - dist / 26, 0, 1);
+  const out = gain(actx, 1.15); // VOICE TRIM
+  if (lvl < 0.02) return { node: out, end: t0 + 0.05, send: 0.2 };
+
+  const metal = (t, partials, exc = 0.003) =>
+    struckResonator(actx, bank, rng, t, partials, exc).connect(out);
+  /** Steel dragging in a steel raceway: filtered noise with a moving band. */
+  const scrape = (t, len, f0, f1, g0) => {
+    const src = bank.source('white', rng, rng.range(0.8, 1.25));
+    const bp = biquad(actx, 'bandpass', f0, 2.4);
+    const g = gain(actx, 0);
+    series(src, bp, g).connect(out);
+    sweep(bp.frequency, t, f0, f1, len);
+    ad(g.gain, t, g0 * lvl, len * 0.25, len);
+    src.start(t, src._offset, len * 2 + 0.05);
+  };
+
+  // 1 — handle lifted off the lug: a short, hard, high tick as the cam unseats.
+  metal(t0, [
+    { f: 3050 * semis(rng.range(-2, 2)), q: 30, g: 0.5 * lvl, decay: 0.022 },
+    { f: 5600, q: 20, g: 0.2 * lvl, decay: 0.012 },
+    { f: 1180, q: 12, g: 0.28 * lvl, decay: 0.035 },
+  ], 0.002);
+
+  // 2 — rearward stroke. The primary extraction is stiff at the start and then
+  // the bolt runs free, so the band falls as the drag comes off.
+  const backT = t0 + dur * 0.09;
+  const backLen = dur * 0.3;
+  scrape(backT, backLen, 3400, 1500, 0.34);
+
+  // 3 — the case clears the port. Brass on steel, then brass in the air: bright,
+  // short, and slightly late so it reads as a separate object leaving.
+  const caseT = backT + backLen * 0.72;
+  metal(caseT, [
+    { f: 5200 * semis(rng.range(-3, 3)), q: 26, g: 0.24 * lvl, decay: 0.03 },
+    { f: 8100, q: 18, g: 0.12 * lvl, decay: 0.014 },
+  ], 0.0015);
+
+  // 4 — bolt hits the rear stop. This is the loudest beat and the one that says
+  // "the action is open".
+  const stopT = backT + backLen;
+  metal(stopT, [
+    { f: 1620 * semis(rng.range(-1.5, 1.5)), q: 22, g: 0.72 * lvl, decay: 0.055 },
+    { f: 3350, q: 16, g: 0.3 * lvl, decay: 0.026 },
+    { f: 720, q: 9, g: 0.34 * lvl, decay: 0.07 },
+  ], 0.004);
+
+  // 5 — forward stroke, stripping a round off the stack. The band RISES: the
+  // round noses into the chamber and the fit tightens.
+  const fwdT = t0 + dur * 0.52;
+  const fwdLen = dur * 0.26;
+  scrape(fwdT, fwdLen, 1700, 3600, 0.28);
+  // the cartridge rim snapping under the extractor claw, mid-stroke
+  metal(fwdT + fwdLen * 0.6, [
+    { f: 4300 * semis(rng.range(-2, 2)), q: 24, g: 0.16 * lvl, decay: 0.018 },
+  ], 0.0015);
+
+  // 6 — bolt into battery, then the handle rotating down onto the lug: two
+  // clacks a beat apart, the second lower and deader because it is steel wedged
+  // into steel rather than steel hitting steel.
+  const inT = fwdT + fwdLen;
+  metal(inT, [
+    { f: 1980 * semis(rng.range(-1.5, 1.5)), q: 20, g: 0.6 * lvl, decay: 0.05 },
+    { f: 4100, q: 15, g: 0.24 * lvl, decay: 0.02 },
+    { f: 860, q: 8, g: 0.3 * lvl, decay: 0.06 },
+  ], 0.0035);
+  const lockT = inT + dur * 0.1;
+  metal(lockT, [
+    { f: 1180 * semis(rng.range(-1.5, 1.5)), q: 13, g: 0.55 * lvl, decay: 0.07 },
+    { f: 2450, q: 10, g: 0.2 * lvl, decay: 0.03 },
+    { f: 470, q: 6, g: 0.32 * lvl, decay: 0.09 },
+  ], 0.005);
+  // A 7.62 receiver rings for a moment after that: high, quiet, long.
+  metal(lockT + 0.004, [
+    { f: 6300 * semis(rng.range(-2, 2)), q: 52, g: 0.06 * lvl, decay: 0.2 },
+  ], 0.0015);
+
+  return { node: out, end: lockT + 0.3, send: 0.34 };
+}
+
 /** Dry-fire click when the magazine is empty. */
 export function dryFire(actx, bank, rng, o = {}) {
   const t0 = o.when ?? actx.currentTime;

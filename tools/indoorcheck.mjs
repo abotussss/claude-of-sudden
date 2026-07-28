@@ -162,9 +162,23 @@ async function walk(b, door) {
      * lives, and convert to world exactly once at the end.
      */
     const dl = new V(door.wp[0], door.wp[1], door.wp[2]);
-    const outL = dl.clone().sub(new V(b.x, 0, b.z)).setY(0).normalize().multiplyScalar(3).add(dl);
+    /**
+     * Approach along the FACE NORMAL, square to the door.
+     *
+     * Standing off on the line from the building centroid instead means that
+     * every door which is not dead centre of its face is approached at an
+     * angle — W2's side-3 door is bay 0 of three, so that line crosses the
+     * threshold at about 25°. A 1.12 m opening in a 0.34 m thick wall presents
+     * about 1.0 m at that incidence and the capsule catches a jamb and slides
+     * along the facade, which scored a perfectly good door as sealed. A player
+     * walks AT a door, not at the middle of the building, so square is both the
+     * fairer test and the more realistic one. The result is still the real
+     * controller going through the real opening and having to finish inside.
+     */
+    const OUT = [[0, -1], [1, 0], [0, 1], [-1, 0]][door.side];
+    const outL = new V(dl.x + OUT[0] * 3, 0, dl.z + OUT[1] * 3);
     const wantW = w.levelToWorld(outL.x, dl.y + 0.2, outL.z, new V());
-    const centreW = w.levelToWorld(b.x, 0, b.z, new V());
+    const centreW = w.levelToWorld(dl.x, 0, dl.z, new V()); // aim through the door
     pl.respawnAt({ x: wantW.x, y: wantW.y, z: wantW.z });
     // movement.yaw is the basis; forward is (-sin yaw, -cos yaw). There is no
     // setYaw() — writing player.yaw alone does nothing, which is what made the
@@ -257,10 +271,12 @@ async function walk(b, door) {
 const rows = [];
 for (const b of list) {
   const tries = [];
+  // Every door, not just until one works. A building with a usable back door
+  // still passes, but a front door nobody can walk through is a map defect and
+  // stopping early hid four of them.
   for (const door of b.doors) {
     const r = await walk(b, door);
     tries.push({ ...r, side: door.side });
-    if (r.everIn) break;
   }
   rows.push({ id: b.id, doors: b.doors.length, entered: tries.some((t) => t.everIn),
               tries, centre: [b.x, b.z] });
@@ -285,6 +301,9 @@ for (const r of rows) {
   }
   if (!r.entered) console.log(`  ${' '.repeat(9)}      ^ CANNOT GET IN — centre ${r.centre}, ${r.doors} door(s)`);
 }
+const doorsTotal = rows.reduce((n, r) => n + r.tries.length, 0);
+const doorsShut = rows.reduce((n, r) => n + r.tries.filter((t) => !t.everIn).length, 0);
+console.log(`\n  doors that pass a player: ${doorsTotal - doorsShut}/${doorsTotal}`);
 if (VERBOSE) console.log('\n[indoorcheck] raw', JSON.stringify(rows, null, 1));
 if (errs.length) console.log('\n[indoorcheck] page errors', errs.slice(0, 4));
 if (ports) console.log(`\n[indoorcheck] ${ports} walk(s) TELEPORTED — results untrustworthy, fix the harness`);

@@ -285,6 +285,13 @@ export const WEAPON_DEFS = {
     burstCount: 1,
     burstRpm: 48,
     burstDelay: 1.25,
+    /**
+     * The gameplay above already IS the bolt throw, but nothing could HEAR it:
+     * `weaponShot`'s mech layer is a self-loader's carrier bouncing 30 ms after
+     * the round leaves, and this rifle has no carrier. This flag is the one bit
+     * that says "the shooter works the action by hand", and `weapons` turns it
+     * into a `weapon:bolt` 180 ms after the shot. Nothing else reads it. */
+    boltAction: true,
     /* --- ammunition --- */
     magSize: 5,
     reserve: 40,

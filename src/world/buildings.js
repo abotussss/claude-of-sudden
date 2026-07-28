@@ -724,6 +724,52 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
   const it = 0.16; // partition thickness
   const g0 = floorSpec(spec, 0);
 
+  /**
+   * KEEP THE DOORWAYS CLEAR.
+   *
+   * A door is only a way in if the first stride past it is walkable, and two
+   * things were standing in it. The inward normal of each face, used by both:
+   * side 0 is the -Z wall, so inward is +Z, and so on round.
+   */
+  const IN = [[0, 1], [-1, 0], [0, -1], [1, 0]];
+  /** Circles just inside each door that collision-bearing clutter must avoid. */
+  const doorSpots = info.doors.map((dr) => {
+    const [nx, nz] = IN[dr.side];
+    return { x: dr.wp[0] + nx * 1.0, z: dr.wp[2] + nz * 1.0, r: 1.15 };
+  });
+
+  /**
+   * Pull a partition back if it runs into an exterior doorway.
+   *
+   * W1's plan puts a wall at z-fraction 0.5 running out to x-fraction 1.0, and
+   * the side-1 door is bay 1 of a three-bay face — dead centre, z-fraction 0.5.
+   * The partition therefore ended exactly in the middle of its own front door
+   * and split the 1.12 m opening into two 0.48 m slots, neither of which passes
+   * a 0.64 m capsule. E1 had the same collision. Trimming is done here rather
+   * than by hand in layout.js so a future room plan cannot reintroduce it.
+   */
+  const clearOfDoors = (ax, az, bx, bz) => {
+    const CLEAR = 1.35; // door half-width, plus a capsule, plus the reveal
+    let x0 = ax, z0 = az, x1 = bx, z1 = bz;
+    for (const dr of info.doors) {
+      const vx = x1 - x0, vz = z1 - z0;
+      const len = Math.hypot(vx, vz);
+      if (len < 0.4) break;
+      const ux = vx / len, uz = vz / len;
+      // perpendicular distance from the door to this wall's line
+      if (Math.abs((dr.wp[0] - x0) * uz - (dr.wp[2] - z0) * ux) > 0.6) continue;
+      const along = (dr.wp[0] - x0) * ux + (dr.wp[2] - z0) * uz;
+      if (along < len / 2) {
+        const cut = along + CLEAR; // door is off the near end
+        if (cut > 0) { x0 += ux * cut; z0 += uz * cut; }
+      } else {
+        const cut = along - CLEAR; // door is off the far end
+        if (cut < len) { x1 = x0 + ux * cut; z1 = z0 + uz * cut; }
+      }
+    }
+    return [x0, z0, x1, z1];
+  };
+
   // Ground slab, a step up from the street. It runs the FULL footprint (and the
   // 0.07 the base course stands proud) rather than stopping two wall-thicknesses
   // short: the old inset left a 0.5 m ring with no floor between the slab edge
@@ -749,11 +795,13 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
     if (plan) {
       for (const wall of plan.walls) {
         const [ax, az, bx, bz, doorAt] = wall;
-        const wx0 = x0 + ax * iw;
-        const wz0 = z0 + az * id;
-        const wx1 = x0 + bx * iw;
-        const wz1 = z0 + bz * id;
+        // Only the ground floor meets the exterior doors; upper floors are free.
+        const [wx0, wz0, wx1, wz1] =
+          f === 0
+            ? clearOfDoors(x0 + ax * iw, z0 + az * id, x0 + bx * iw, z0 + bz * id)
+            : [x0 + ax * iw, z0 + az * id, x0 + bx * iw, z0 + bz * id];
         const len = Math.hypot(wx1 - wx0, wz1 - wz0);
+        if (len < 0.5) continue; // trimmed away to nothing
         const ry = Math.atan2(wx1 - wx0, wz1 - wz0) - Math.PI / 2;
         _e.set(0, ry, 0);
         _q.setFromEuler(_e);
@@ -826,6 +874,10 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
           y: fy,
           h: fh,
           spec,
+          // Ground-floor clutter carries a collision proxy, so a crate stack or
+          // an oil drum rolled in front of a door is a locked door. E3's side-3
+          // and K2's side-2 openings were both blocked down to a 0.3 m slot.
+          doorways: f === 0 ? doorSpots : null,
         });
       }
     }
