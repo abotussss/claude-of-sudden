@@ -32,18 +32,31 @@ export class SiteMarks {
     this._geos = [];
 
     /**
-     * Hazard yellow, unlit enough to read in the shadowed alley site B sits in.
-     * `emissiveIntensity` is deliberately low — this is painted concrete, not a
-     * light source, and anything higher blooms and reads as UI stuck to the
-     * floor.
+     * PAINTED CONCRETE, from the shared library — not a bare
+     * MeshStandardMaterial.
+     *
+     * The first version was a flat `MeshStandardMaterial` in saturated yellow,
+     * and standing on it at eye level it read as a sheet of coloured plastic
+     * laid on the road. ARCHITECTURE.md's quality bar forbids exactly that:
+     * "No flat/untextured surfaces. Every material needs albedo variation, a
+     * normal map, roughness variation, and a detail layer visible at 0.5 m."
+     * Road paint is the easiest thing in the world to get wrong that way, and I
+     * only caught it because I finally looked from a standing eye rather than
+     * from directly overhead — the one view that flatters flat geometry.
+     *
+     * Taking `concrete_floor` and tinting it keeps the surface's own grain,
+     * wear and normal map underneath the colour, which is what worn line
+     * marking actually looks like.
      */
-    this.paint = new THREE.MeshStandardMaterial({
-      color: 0xc8a01c,
-      roughness: 0.82,
-      metalness: 0.0,
-      emissive: 0x2a2205,
-      emissiveIntensity: 1,
-    });
+    const lib = ctx.peek('materials');
+    this.paint =
+      lib?.get?.('concrete_floor', {
+        tint: 0xd8ad22,
+        roughness: [0.74, 0.16, 0.4],
+        wear: [0.42, 0.8, 0.6, 0],
+      }) ??
+      new THREE.MeshStandardMaterial({ color: 0xc8a01c, roughness: 0.82 });
+    this._ownMaterial = !lib?.get;
 
     for (const s of sites) this._buildOne(s);
     ctx.scene.add(this.group);
@@ -83,12 +96,20 @@ export class SiteMarks {
     }
 
     // --- the letter, lying on the ground at the centre ---------------------
-    // 4.5 m tall. At 2.6 m, seen from a standing eye height on a 16 m circle,
-    // the glyph foreshortened into an unreadable smear — measured from a
-    // top-down capture, which flatters it, and it was still marginal there.
-    for (const g of letterStrokes(site.id, 4.5)) {
+    /**
+     * 2.6 m, and OFF CENTRE.
+     *
+     * It was 4.5 m in the middle of the circle, sized from a top-down capture.
+     * From a standing eye, on the site, that is not a letter — it is one
+     * enormous yellow shape under your feet that you cannot read at all. A
+     * ground glyph is read from a DISTANCE and at a shallow angle, so it wants
+     * to be modest and set back toward the edge where the approach sees it,
+     * not sat on.
+     */
+    const off = r * 0.45;
+    for (const g of letterStrokes(site.id, 2.6)) {
       g.rotateX(-Math.PI / 2);
-      this._add(g, site.position.x, y + 0.004, site.position.z);
+      this._add(g, site.position.x, y + 0.004, site.position.z - off);
     }
   }
 
@@ -108,7 +129,8 @@ export class SiteMarks {
     this.group.parent?.remove(this.group);
     for (const g of this._geos) g.dispose();
     this._geos.length = 0;
-    this.paint.dispose();
+    // Library materials are shared and owned by `materials`; only free our own.
+    if (this._ownMaterial) this.paint.dispose();
   }
 }
 
