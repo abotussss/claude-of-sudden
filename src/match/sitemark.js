@@ -118,9 +118,25 @@ export class SiteMarks {
     const m = new THREE.Mesh(geo, this.paint);
     m.receiveShadow = true;
     m.castShadow = false;
-    // Paint on a road is not a shadow caster and not worth a prepass slot.
+    /**
+     * NO SHADOW, BUT IT MUST BE IN THE PREPASS.
+     *
+     * `owNoShadow` is right — flat paint on a road casts nothing, and keeping it
+     * out of four cascades is free.
+     *
+     * `owNoPrepass` was WRONG and I shipped it as an "optimisation". The MRT
+     * prepass is what feeds TAA's velocity buffer, GTAO and SSR; geometry
+     * excluded from it has no depth, no normal and no motion vector, so TAA
+     * reprojects last frame's ground over it and the ambient occlusion samples
+     * straight through. On screen the paint came out ghosted and
+     * semi-transparent, with a smeared translucent rectangle dragging behind it
+     * as the camera moved. Two dozen flat quads cost nothing in the prepass and
+     * this is what they buy.
+     *
+     * Caught only by standing on the site and looking down. The top-down
+     * capture, and every headless number, showed nothing.
+     */
     m.userData.owNoShadow = true;
-    m.userData.owNoPrepass = true;
     this.group.add(m);
     this._geos.push(geo);
   }
