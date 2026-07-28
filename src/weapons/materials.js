@@ -475,6 +475,60 @@ export const WEAPON_MATERIALS = {
     },
   ],
 
+  /**
+   * MATERIAL CLASS 4 — BLACK ENAMEL OVER SHEET STEEL, which is what a stamped
+   * Kalashnikov receiver is actually finished in, and the only material in this
+   * file that exists because of a measured render defect.
+   *
+   * The AK's receiver is a 206 x 44 mm FLAT sheet, and in the hipfire pose the
+   * weapon is rolled 7.7 degrees precisely so that flank faces the camera. Built
+   * in `steel_black` it rendered as a blank white slab — the brightest object in
+   * the frame by a wide margin — while every lathe-built receiver in this
+   * directory came out correctly dark. It is not the wear layer (setting that
+   * amplitude to zero moved nothing, measured) and it is not the albedo: it is
+   * that `steel_black` is a METAL, so three folds its tint into F0 and
+   * `specularIntensity` does not apply, and a smooth flat metal aimed at the
+   * viewmodel key IS a mirror by construction. The same note appears twice in
+   * this file — see `alu` and the windage drum in parts.js — and the conclusion
+   * both times was that the only cures are curvature or leaving the metal class.
+   *
+   * A real AKM receiver is not bare metal. It is phosphated and then coated in a
+   * black enamel, i.e. a DIELECTRIC film over steel, exactly as the M4's
+   * receiver is a dielectric oxide over aluminium. So it takes the same 0.11
+   * specular clamp and the same diffuse-dominant calibration, and the flat comes
+   * out as dark paint with a legible grain instead of a mirror.
+   *
+   * It is NOT a recoloured `alu`: the tint is a warm neutral rather than `alu`'s
+   * cool blue-grey (which is what carries the class separation between the two
+   * receivers at 40 px), it is rougher, its detail cell is coarser because
+   * enamel on stamped sheet has orange-peel where anodising has grain, and it
+   * wears through to BARE STEEL — a metal at 0.19 F0 — rather than to bright
+   * aluminium.
+   */
+  steel_enamel: [
+    'rubber',
+    {
+      ...BASE,
+      bake: { size: 1024, seed: 733, relief: 0.006 },
+      scale: 0.105,
+      tint: c(0.3, 0.288, 0.268),
+      roughness: [0.7, 0.13, 0.28],
+      three: { physical: true, specularIntensity: 0.11 },
+      normalStrength: 1.6,
+      detail: [16, 1.35, 0.8, 5],
+      /**
+       * Enamel chips off the edges of a stamped receiver in flakes, not in the
+       * hairlines a machined chamfer wears to, so the amplitude is a little
+       * higher than `alu`'s and the wear colour is bare phosphated steel at
+       * metalness 1 — the one place on this weapon where raw metal shows.
+       */
+      wear: [0.24, 0.62, 0.5, 0],
+      wearColor: 0x3a3a38,
+      wearMaterial: [0.5, 0.85, 0, 0.8],
+      grimeColor: 0x0a0906,
+    },
+  ],
+
   /** Glass-filled polymer: magazine, stock, grip shell, handguard panels. */
   polymer: [
     'rubber',

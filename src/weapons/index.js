@@ -5,6 +5,8 @@ import { Viewmodel } from './viewmodel.js';
 import { ProjectileSim } from './ballistics.js';
 import { WEAPON_DEFS, buildRecoilPattern, SPREAD_MODS } from './defs.js';
 import { buildRifle } from './models/rifle.js';
+import { buildAk } from './models/ak.js';
+import { buildSniper } from './models/sniper.js';
 import { buildSmg } from './models/smg.js';
 import { buildPistol } from './models/pistol.js';
 import { buildKnife } from './models/knife.js';
@@ -22,9 +24,10 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  *   parts.js      real firearm components built from published dimensions:
  *                 receivers, barrels, muzzle devices, handguards, stocks,
  *                 grips, magazines, optics, iron sights, triggers.
- *   models/*.js   the four weapons assembled from those parts — three firearms
- *                 and the combat knife (a `class: 'melee'` weapon with no
- *                 magazine, no reserve, no fire mode and no ADS).
+ *   models/*.js   the six weapons assembled from those parts — five firearms
+ *                 (an AR carbine, an AK-pattern rifle, a bolt-action sniper, an
+ *                 SMG and a pistol) and the combat knife (a `class: 'melee'`
+ *                 weapon with no magazine, no reserve, no fire mode and no ADS).
  *   hands.js      gloved hands + sleeved arms, two-bone IK from the hand.
  *   viewmodel.js  the animation stack (sway/bob/lag/recoil/ADS/clips).
  *   clips.js      keyframed reload / inspect / draw timelines.
@@ -40,7 +43,7 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  *   wp.spreadDegrees      live cone half-angle — drive the crosshair gap with it
  *   wp.adsProgress        0..1
  *   wp.reloading / wp.firing / wp.switching / wp.inspecting
- *   wp.weaponIds          ['rifle','smg','pistol','knife']
+ *   wp.weaponIds          ['rifle','ak','sniper','smg','pistol','knife']
  *   wp.isMelee / wp.swinging
  *   wp.setWeapon(id)      draw/holster animated swap
  *   wp.nextWeapon()
@@ -63,6 +66,13 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  * Anything else (ammo counts, fire mode, the current weapon) is a getter on
  * this object rather than an event, so no new event types are introduced.
  */
+/**
+ * Registration order, which is also the order 1/2/3... and `nextWeapon` cycle
+ * in, and the order the pause menu lists. Primaries first, then the sidearm,
+ * then the blade.
+ */
+const WEAPON_IDS = ['rifle', 'ak', 'sniper', 'smg', 'pistol', 'knife'];
+
 export class WeaponSystem {
   static id = 'weapons';
   static deps = ['materials', 'physics'];
@@ -171,16 +181,23 @@ export class WeaponSystem {
     this.viewmodel.onClipEvent = (name, clip) => this._onClipEvent(name, clip);
 
     const t0 = performance.now();
-    const builders = { rifle: buildRifle, smg: buildSmg, pistol: buildPistol, knife: buildKnife };
+    const builders = {
+      rifle: buildRifle,
+      ak: buildAk,
+      sniper: buildSniper,
+      smg: buildSmg,
+      pistol: buildPistol,
+      knife: buildKnife,
+    };
     let tris = 0;
-    for (const id of ['rifle', 'smg', 'pistol', 'knife']) {
+    for (const id of WEAPON_IDS) {
       const def = { ...WEAPON_DEFS[id] };
       const melee = def.class === 'melee';
       if (!melee) def.cycleTime = 60 / def.rpm;
       const model = builders[id]();
       const entry = this.viewmodel.addWeapon(model, def);
       tris += entry.tris;
-      if (melee) console.info(`[weapons] ${id}: ${entry.tris} tris`);
+      console.info(`[weapons] ${id}: ${entry.tris} tris`);
       this.states.set(id, {
         def,
         // A melee weapon has no recoil pattern to generate and no ammunition.

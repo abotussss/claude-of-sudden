@@ -19,6 +19,8 @@ import { WeaponMaterials } from './materials.js';
 import { Viewmodel } from './viewmodel.js';
 import { WEAPON_DEFS } from './defs.js';
 import { buildRifle } from './models/rifle.js';
+import { buildAk } from './models/ak.js';
+import { buildSniper } from './models/sniper.js';
 import { buildSmg } from './models/smg.js';
 import { buildPistol } from './models/pistol.js';
 
@@ -116,9 +118,15 @@ if (!FIRST_PERSON) {
   vm.rigOverride = { position: new THREE.Vector3(), quaternion: new THREE.Quaternion() };
 }
 
-const builders = { rifle: buildRifle, smg: buildSmg, pistol: buildPistol };
+const builders = {
+  rifle: buildRifle,
+  ak: buildAk,
+  sniper: buildSniper,
+  smg: buildSmg,
+  pistol: buildPistol,
+};
 const stats = {};
-for (const id of ['rifle', 'smg', 'pistol']) {
+for (const id of Object.keys(builders)) {
   const def = { ...WEAPON_DEFS[id] };
   def.cycleTime = 60 / def.rpm;
   const entry = vm.addWeapon(builders[id](), def);

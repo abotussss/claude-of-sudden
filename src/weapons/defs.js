@@ -214,11 +214,20 @@ export const WEAPON_DEFS = {
     drawTime: 0.72,
     holsterTime: 0.46,
     /* --- pose ---
-     * Carried over from the M4's solve (see there for the derivation): the same
-     * 4 deg of bore convergence, 2.9 deg nose-down and 7.7 deg of outboard
-     * roll. Only Y moves, by the 3.5 mm this weapon's bore sits higher than the
-     * M4's, so the two guns present their sights at the same screen height. */
-    hipPos: [0.118, -0.1885, -0.3],
+     * The same rotation as the M4's solve (see there for the derivation): 4 deg
+     * of bore convergence, 2.9 deg nose-down, 7.7 deg of outboard roll.
+     *
+     * The TRANSLATION is 16 mm higher and 12 mm further out than the M4's, and
+     * both come off the in-game capture rather than off the M4's numbers. This
+     * weapon has no optic, so nothing on it reaches above the dust cover and the
+     * whole silhouette sits lower in the frame; and its most identifying
+     * feature by a wide margin — the 235 mm curved magazine — hangs 74 mm
+     * forward of the grip, so at the M4's distance it fell off the bottom-right
+     * of the frame entirely. 12 mm further from the eye is affordable here
+     * because the support hand grips 36 mm further back than the M4's does
+     * (a clamshell handguard, not a 240 mm free-float tube), so the arm has
+     * that much slack left before the two-bone solve clamps. */
+    hipPos: [0.122, -0.172, -0.312],
     hipRot: [-0.05, 0.081, -0.135],
     adsCant: [0, 0, 0.004],
     /**
@@ -237,13 +246,22 @@ export const WEAPON_DEFS = {
      *   1080 frame, i.e. the pale slab across the bottom of the sight picture
      *   that models/rifle.js spent a whole comment removing.
      *
-     * 0.16 puts the leaf at 112 px, the front sight hood at 0.40 m (a 42 px
-     * ring), and the firing hand 87 mm behind the eye where it belongs.
+     * A THIRD constraint decides it, and only an in-game capture showed it: the
+     * eye has to end up BEHIND THE DUST COVER. The cover runs to z = +0.077 and
+     * the notch is at z = -0.1295, so at 0.21 the eye landed at z = +0.108 —
+     * 3 mm from the cover's rear edge — and a 190 mm sheet seen from 3 mm away
+     * fills everything below the sight line. Measured: the lower half of the
+     * ADS frame was solid receiver.
+     *
+     * 0.238 is the only band that satisfies all three: the eye is 31 mm behind
+     * the cover, the leaf's near edge subtends 64 px instead of 400, the front
+     * sight hood lands at 0.48 m, and the firing hand sits 9 mm behind the eye
+     * — the same margin the M4 has.
      */
-    eyeRelief: 0.16,
-    sprintPos: [0.09, -0.2655, -0.275],
+    eyeRelief: 0.238,
+    sprintPos: [0.094, -0.249, -0.287],
     sprintRot: [-0.4, 0.6, 0.2],
-    lowReadyPos: [0.112, -0.2835, -0.289],
+    lowReadyPos: [0.116, -0.267, -0.301],
     lowReadyRot: [-0.46, 0.125, -0.09],
     swayScale: 1.12,
     bobScale: 1.08,
@@ -336,12 +354,16 @@ export const WEAPON_DEFS = {
     hipPos: [0.12, -0.182, -0.32],
     hipRot: [-0.05, 0.081, -0.135],
     adsCant: [0, 0, 0.003],
-    /* Eye to the rear lens. Bounded the same way the AK's is, but by the
-     * OCULAR BELL rather than a sight leaf: at 0.09 the 42 mm bell subtends
-     * 60% of the frame height and the 25 mm clear aperture 36%, so the sight
-     * picture is 59% of the housing — a scope, not a red dot, and not a
-     * porthole. See buildScope for the matching aperture budget. */
-    eyeRelief: 0.09,
+    /* Eye to the rear lens. Bounded the same way the AK's is, but by the OCULAR
+     * BELL rather than a sight leaf.
+     *
+     * MEASURED: at 0.09 the 50 mm bell plus its rubber cup subtended 76% of the
+     * frame HEIGHT — the scope was not something you looked through, it was a
+     * wall with a hole in it. 0.115 (the same relief the M4's tube sight uses)
+     * puts the housing at 51% of frame height and the 30 mm clear aperture at
+     * 23%, so the sight picture is 46% of the housing: a scope, not a red dot,
+     * and not a porthole. See buildScope for the matching aperture budget. */
+    eyeRelief: 0.115,
     sprintPos: [0.092, -0.26, -0.295],
     sprintRot: [-0.4, 0.6, 0.2],
     lowReadyPos: [0.114, -0.278, -0.309],
