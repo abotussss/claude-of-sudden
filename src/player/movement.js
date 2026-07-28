@@ -47,6 +47,8 @@ export class Movement {
     this.airTime = 0;
     this.groundTime = 0;
     this.speed = 0;
+    /** Per-weapon movement multiplier. @see targetSpeed */
+    this.weaponMoveScale = 1;
     this.horizontalSpeed = 0;
     this.blocked = false;
 
@@ -638,6 +640,19 @@ export class Movement {
       base *= lerp(1, MOVE.adsScale, clamp01(this.adsAmount));
     }
     base *= lerp(1, 0.6, clamp01(Math.abs(this.leanAmount)));
+    /**
+     * WHAT YOU ARE CARRYING CHANGES HOW FAST YOU MOVE.
+     *
+     * There was no weapon term here at all: a knife and a bolt-action sniper
+     * moved you at exactly the same speed, which is why "ナイフの時の移動速度
+     * 上げて" had nothing to adjust. In this genre the knife is the thing you
+     * switch to in order to cross open ground, and that only works if it is
+     * actually faster.
+     *
+     * Set by PlayerSystem from `weapons.moveScale`; 1 when nothing says
+     * otherwise, so a weapon without an opinion behaves exactly as before.
+     */
+    base *= this.weaponMoveScale ?? 1;
     return base;
   }
 

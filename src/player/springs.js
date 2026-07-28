@@ -147,11 +147,25 @@ export class Spring {
  * back, then settles — a single spring can only do two of those three.
  */
 export class RecoilAxis {
+  /**
+   * Retune the recovery, per weapon. `share` is how much of a kick STAYS after
+   * the spring settles — the part you have to pull back down yourself — and
+   * `tau` is how long the rest takes to bleed off. Passing null restores the
+   * authored defaults.
+   */
+  setResidual(share, tau) {
+    this.residualShare = share ?? this._baseShare;
+    this.residualTau = tau ?? this._baseTau;
+  }
+
   constructor(freq = 9.5, damping = 0.52, residualTau = 0.3, residualShare = 0.34) {
     this.spring = new Spring(freq, damping, 0);
     this.residual = 0;
     this.residualTau = residualTau;
     this.residualShare = residualShare;
+    /** The authored defaults, so a per-weapon override can always be undone. */
+    this._baseTau = residualTau;
+    this._baseShare = residualShare;
     this.value = 0;
   }
 

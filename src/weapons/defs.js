@@ -17,6 +17,13 @@ import { DEG } from './mathx.js';
 
 export const WEAPON_DEFS = {
   rifle: {
+    /**
+     * MOVEMENT AND RECOIL CONTROL.
+     *
+     * The reference weapon: the pattern is memorisable and most of it comes back on its own, so a good player can hold a 30-round burst on a chest at 40 m.
+     */
+    moveScale: 1.0,
+    recoilControl: { residualShare: 0.30, residualTau: 0.26 },
     id: 'rifle',
     label: 'M4A1',
     class: 'carbine',
@@ -144,6 +151,13 @@ export const WEAPON_DEFS = {
   },
 
   ak: {
+    /**
+     * MOVEMENT AND RECOIL CONTROL.
+     *
+     * Heavier round, heavier rifle. Half the kick STAYS and takes a third of a second longer to bleed off, so it out-damages the M4 per hit and punishes you for holding the trigger. This is the trade that makes picking it a decision.
+     */
+    moveScale: 0.98,
+    recoilControl: { residualShare: 0.46, residualTau: 0.36 },
     id: 'ak',
     label: 'AKM-47',
     /* `rifle` rather than `carbine`: fx keys the muzzle flash off this string
@@ -269,6 +283,13 @@ export const WEAPON_DEFS = {
   },
 
   sniper: {
+    /**
+     * MOVEMENT AND RECOIL CONTROL.
+     *
+     * Slowest to carry and by far the hardest to settle: two thirds of the kick stays and takes well over half a second to go. You do not fight a moving target with this; you take one shot from a position and then you have moved or you are dead.
+     */
+    moveScale: 0.90,
+    recoilControl: { residualShare: 0.66, residualTau: 0.58 },
     /**
      * A REAL 6x OPTIC.
      *
@@ -402,6 +423,13 @@ export const WEAPON_DEFS = {
   },
 
   smg: {
+    /**
+     * MOVEMENT AND RECOIL CONTROL.
+     *
+     * Light and fast in every sense: the least residual in the game and the quickest settle, which is what makes it the close-range answer even though each round does little.
+     */
+    moveScale: 1.06,
+    recoilControl: { residualShare: 0.24, residualTau: 0.19 },
     id: 'smg',
     label: 'MPX-9',
     class: 'smg',
@@ -467,6 +495,13 @@ export const WEAPON_DEFS = {
   },
 
   pistol: {
+    /**
+     * MOVEMENT AND RECOIL CONTROL.
+     *
+     * A sidearm you can actually fight with while you reload the primary — small kick, and almost all of it recovers by itself.
+     */
+    moveScale: 1.08,
+    recoilControl: { residualShare: 0.20, residualTau: 0.17 },
     id: 'pistol',
     label: 'P-19',
     class: 'pistol',
@@ -609,6 +644,12 @@ export const WEAPON_DEFS = {
   },
 
   knife: {
+    /**
+     * MOVEMENT AND RECOIL CONTROL.
+     *
+     * THE POINT OF THE KNIFE. 18% faster than a rifle. In this genre the knife is what you switch to in order to cross open ground, and before this there was no weapon term in `targetSpeed()` at all, so it did nothing. Reported as "ナイフの時の移動速度上げて".
+     */
+    moveScale: 1.18,
     id: 'knife',
     label: 'KM-7',
     class: 'melee',

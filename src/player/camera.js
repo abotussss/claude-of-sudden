@@ -119,6 +119,29 @@ export class CameraRig {
   /* ==================================================================== */
 
   /** Camera-owned recoil. Angles in radians; `punch` in metres. */
+  /**
+   * PER-WEAPON RECOIL CONTROL.
+   *
+   * The three recoil axes were built once from `C.recoil` — one global
+   * `residualShare` / `residualTau` shared by every weapon — so an AK and a
+   * pistol recovered identically no matter how differently they kicked. The
+   * per-shot PATTERN was already per weapon; how much of it stays on your
+   * screen, and how long, was not. That is the half a player actually feels as
+   * "recoil control".
+   *
+   * `null` restores the authored defaults, so a weapon with no profile is
+   * unchanged.
+   */
+  setRecoilControl(profile) {
+    const share = profile?.residualShare ?? null;
+    const tau = profile?.residualTau ?? null;
+    this.recoilPitch.setResidual(share, tau);
+    this.recoilYaw.setResidual(share, tau);
+    // Roll keeps its own smaller share — it was authored at 0.24 against the
+    // shared 0.34 and that relationship is deliberate.
+    this.recoilRoll.setResidual(share === null ? null : share * 0.7, tau);
+  }
+
   addRecoil(pitch = 0, yaw = 0, roll = 0, punch = 0) {
     this.recoilPitch.kick(pitch);
     this.recoilYaw.kick(yaw);

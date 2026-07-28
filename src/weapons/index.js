@@ -368,6 +368,16 @@ export class WeaponSystem {
     return !!this.state?.def?.scope && this.viewmodel.adsT > 0.72;
   }
 
+  /** Movement multiplier for the weapon in hand. @see PlayerMovement.targetSpeed */
+  get moveScale() {
+    return this.state?.def?.moveScale ?? 1;
+  }
+
+  /** Recoil recovery profile for the weapon in hand. @see CameraRig.setRecoilControl */
+  get recoilControl() {
+    return this.state?.def?.recoilControl ?? null;
+  }
+
   get weaponIds() {
     return [...this.states.keys()];
   }

@@ -296,7 +296,11 @@ export class PlayerSystem {
 
     // A magnified optic zooms the WORLD camera, and only `weapons` knows which
     // optic is up. @see CameraRig.adsFovScale
-    this.rig.adsFovScale = ctx.peek('weapons')?.adsFovScale ?? null;
+    const wp = ctx.peek('weapons');
+    this.rig.adsFovScale = wp?.adsFovScale ?? null;
+    // What you carry changes how fast you move and how the kick settles.
+    this.movement.weaponMoveScale = wp?.moveScale ?? 1;
+    this.rig.setRecoilControl(wp?.recoilControl ?? null);
     this.rig.update(dt, this.movement, this.health);
     if (this.controlEnabled) this.rig.applyTo(ctx.camera);
     else this.rig.forward.set(0, 0, -1).applyQuaternion(ctx.camera.quaternion);
