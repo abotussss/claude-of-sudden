@@ -795,6 +795,17 @@ const CSS = `
 
 /* ============================================================== fadeouts */
 .ow-hidden { display:none !important; }
+
+/* ---- scope overlay (see ui/scope.js) ------------------------------------ */
+.ow-scope{position:absolute; inset:0; pointer-events:none; z-index:40;}
+.ow-scope-body{position:absolute; inset:0;}
+.ow-scope-vert{position:absolute; left:50%; top:0; bottom:0; width:1px;
+  transform:translateX(-0.5px); background:rgba(12,14,16,0.92);}
+.ow-scope-horz{position:absolute; top:50%; left:0; right:0; height:1px;
+  transform:translateY(-0.5px); background:rgba(12,14,16,0.92);}
+.ow-scope-dot{position:absolute; left:50%; width:3px; height:3px; margin-left:-1.5px;
+  border-radius:50%; background:rgba(12,14,16,0.92);}
+
 `;
 
 const DEFS = `

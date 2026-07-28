@@ -294,6 +294,9 @@ export class PlayerSystem {
     this._drainMovementEvents();
     this.health.update(dt);
 
+    // A magnified optic zooms the WORLD camera, and only `weapons` knows which
+    // optic is up. @see CameraRig.adsFovScale
+    this.rig.adsFovScale = ctx.peek('weapons')?.adsFovScale ?? null;
     this.rig.update(dt, this.movement, this.health);
     if (this.controlEnabled) this.rig.applyTo(ctx.camera);
     else this.rig.forward.set(0, 0, -1).applyQuaternion(ctx.camera.quaternion);

@@ -269,6 +269,27 @@ export const WEAPON_DEFS = {
   },
 
   sniper: {
+    /**
+     * A REAL 6x OPTIC.
+     *
+     * `adsFov` below is a viewmodel framing number; it never magnified
+     * anything, and the note under `eyeRelief` in this file said as much — the
+     * engine had no magnified optic because the zoom has to come from the world
+     * camera and weapons does not own it. `WeaponSystem.adsFovScale` is that
+     * hook now, and the camera reads it.
+     *
+     * 6x is the low end of a real designated-marksman scope and it is chosen to
+     * be usable rather than authentic-at-all-costs: the map's longest sightline
+     * is about 90 m, and at 6x a man at 90 m subtends roughly what a man at
+     * 15 m does unscoped, which is a shot you can actually take.
+     *
+     * `fullScreen` puts the sight picture over the whole screen and hides the
+     * viewmodel, which is what looking through a scope is. Without it the
+     * magnified world is drawn behind a rifle held at arm's length, and the
+     * scope tube is a 46%-of-housing window in the middle of the frame — the
+     * thing being complained about.
+     */
+    scope: { magnification: 6, fullScreen: true },
     id: 'sniper',
     label: 'M91-SR',
     class: 'sniper',
@@ -702,6 +723,110 @@ export const WEAPON_DEFS = {
     lowReadyRot: [0.17, 0.57, -0.37],
     swayScale: 1.25,
     bobScale: 1.2,
+  },
+
+  grenade: {
+    id: 'grenade',
+    label: 'M67',
+    /**
+     * ITS OWN CLASS, and that is load-bearing twice over.
+     *
+     * `WeaponSystem.primaryIds` derives the menu's primary picker by filtering
+     * `class` — anything that is not `pistol` and not `melee` is offered as a
+     * primary. A grenade under any existing class would appear in that list as
+     * something to carry INSTEAD of a rifle. `class: 'grenade'` keeps it out of
+     * the picker with nothing else to change, exactly as the comment on
+     * `primaryIds` intends, and gives every other consumer (`buildClips`,
+     * `reload`, the trigger state machine, `getHudState`) one honest thing to
+     * branch on.
+     */
+    class: 'grenade',
+    /* NO magazine, NO reserve, NO fire mode, NO ADS, NO recoil pattern. Like
+     * the knife those keys are ABSENT rather than zeroed — `magSize: 0` is what
+     * says "this weapon does not take magazines", which is a different
+     * statement from "this magazine is empty" (see ammo.js). */
+    modes: ['throw'],
+    /* --- how many you carry -------------------------------------------- */
+    /**
+     * TWO, AND NO RESUPPLY INSIDE A ROUND. There are no ammo pickups in this
+     * mode, so `resetAmmo()` at the top of the round is the only refill and two
+     * frags is the round's whole budget. `reserve: 0` is not decoration: it is
+     * what makes `reload()` a no-op and the HUD's reserve field truthful.
+     */
+    count: 2,
+    reserve: 0,
+    /* --- the fuze ------------------------------------------------------- */
+    /**
+     * 3.0 s FROM THE PULL, not from the release — an M67's fuze burns 4 to 5.5
+     * s and this is the shooter-game 3, but the important half is *from the
+     * pull*: the fuze starts when the spoon flies, so holding the button cooks
+     * it and holding it too long kills you with your own grenade. That is the
+     * entire tactical content of the weapon and it costs one subtraction.
+     */
+    fuse: 3.0,
+    /* --- the blast ------------------------------------------------------
+     * The same model the C4 uses (match/rules.js blastRadius/blastDamage, fired
+     * through the canonical `explosion` event): a radius, a damage number and a
+     * quadratic falloff, occluded by `MASK.EXPLOSION`. The NUMBERS are a frag's
+     * rather than a satchel's — the C4 is 22 m / 600, which is the round ending
+     * three metres from your face; this is lethal inside 3 m, painful at 7 and
+     * survivable at the rim. */
+    blastRadius: 7.5,
+    blastDamage: 165,
+    /* --- throwing ------------------------------------------------------- */
+    /**
+     * 17 m/s overhand, 8 m/s underhand, both released 9 degrees above the
+     * sight line. A 400 g grenade at 17 m/s thrown level from 1.6 m carries
+     * about 27 m before it lands, which is a street; the underhand toss is the
+     * one you use to put it round a corner two metres away without it coming
+     * back off the wall into your own feet.
+     */
+    throwSpeed: 17,
+    tossSpeed: 8,
+    throwLoft: 0.16,
+    /** Restitution / drag of the thrown body, ballistics.js is not involved. */
+    bounce: 0.34,
+    /* --- handling (seconds) --- */
+    ads: false,
+    adsTime: 0.16,
+    adsFov: 1,
+    viewFov: 1,
+    inspectTime: 2.2,
+    drawTime: 0.5,
+    holsterTime: 0.32,
+    cycleTime: 0.3,
+    /** Pull-to-cocked wind-up, and the throw itself. */
+    cookTime: 0.42,
+    throwTime: 0.66,
+    /** Fraction of the throw clip at which the grenade leaves the hand. */
+    releaseAt: 0.26,
+    /* --- accuracy: a thrown weapon has no cone. Real zeros rather than
+     * missing keys, because `_restSpread` reads them every frame. --- */
+    spreadHip: 0,
+    spreadAds: 0,
+    spreadPerShot: 0,
+    spreadMax: 0,
+    spreadDecay: 1,
+    /* --- pose ---
+     * Weapon-local origin is the centre of the body, which is also the middle
+     * of the fist. Carried high and inboard of the knife's rest pose: a
+     * grenade is held up where you can see the spoon, and the whole point of
+     * the readout is that the player can tell at a glance whether the pin is
+     * still in it. The rotation turns the fuze up and rolls the lever toward
+     * the camera so the spoon, the ring and the marking band are all readable.
+     */
+    hipPos: [0.115, -0.115, -0.30],
+    hipRot: [-0.18, 0.28, -0.34],
+    adsCant: [0, 0, 0],
+    /* Sprint and low ready are the SAME deltas the knife uses off its own rest
+     * pose, so the relationship between the three is preserved rather than
+     * re-authored: the hand drops and swings across the body. */
+    sprintPos: [0.085, -0.20, -0.275],
+    sprintRot: [-0.72, 0.52, 0.01],
+    lowReadyPos: [0.105, -0.185, -0.29],
+    lowReadyRot: [-0.56, 0.40, -0.26],
+    swayScale: 1.2,
+    bobScale: 1.15,
   },
 };
 

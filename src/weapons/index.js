@@ -10,6 +10,8 @@ import { buildSniper } from './models/sniper.js';
 import { buildSmg } from './models/smg.js';
 import { buildPistol } from './models/pistol.js';
 import { buildKnife } from './models/knife.js';
+import { buildGrenade } from './models/grenade.js';
+import { ThrownGrenades } from './grenades.js';
 import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
 
 /**
@@ -24,10 +26,13 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  *   parts.js      real firearm components built from published dimensions:
  *                 receivers, barrels, muzzle devices, handguards, stocks,
  *                 grips, magazines, optics, iron sights, triggers.
- *   models/*.js   the six weapons assembled from those parts — five firearms
+ *   models/*.js   the seven weapons assembled from those parts — five firearms
  *                 (an AR carbine, an AK-pattern rifle, a bolt-action sniper, an
- *                 SMG and a pistol) and the combat knife (a `class: 'melee'`
- *                 weapon with no magazine, no reserve, no fire mode and no ADS).
+ *                 SMG and a pistol), the combat knife (a `class: 'melee'`
+ *                 weapon with no magazine, no reserve, no fire mode and no ADS)
+ *                 and the frag grenade (`class: 'grenade'`: two of them, a
+ *                 3 s fuze from the pull, and no ADS either).
+ *   grenades.js   grenades in the air — rigid bodies, fuzes and the blast.
  *   hands.js      gloved hands + sleeved arms, two-bone IK from the hand.
  *   viewmodel.js  the animation stack (sway/bob/lag/recoil/ADS/clips).
  *   clips.js      keyframed reload / inspect / draw timelines.
@@ -43,8 +48,11 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  *   wp.spreadDegrees      live cone half-angle — drive the crosshair gap with it
  *   wp.adsProgress        0..1
  *   wp.reloading / wp.firing / wp.switching / wp.inspecting
- *   wp.weaponIds          ['rifle','ak','sniper','smg','pistol','knife']
+ *   wp.weaponIds          ['rifle','ak','sniper','smg','pistol','knife','grenade']
  *   wp.isMelee / wp.swinging
+ *   wp.isThrown / wp.cooking / wp.cookRemaining / wp.grenadeCount
+ *   wp.startCook('over'|'under')   pull the pin — hold
+ *   wp.releaseThrow()              let go; the grenade leaves on the clip beat
  *   wp.setWeapon(id)      draw/holster animated swap
  *   wp.nextWeapon()
  *   wp.meleeAttack('slash'|'stab')   blade only; traces on the impact frame
@@ -79,7 +87,7 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  * in, and the order the pause menu lists. Primaries first, then the sidearm,
  * then the blade.
  */
-const WEAPON_IDS = ['rifle', 'ak', 'sniper', 'smg', 'pistol', 'knife'];
+const WEAPON_IDS = ['rifle', 'ak', 'sniper', 'smg', 'pistol', 'knife', 'grenade'];
 
 export class WeaponSystem {
   static id = 'weapons';
@@ -169,6 +177,24 @@ export class WeaponSystem {
     this._boltTimer = -1;
     this._boltPayload = { weapon: null, duration: 0.78 };
 
+    /**
+     * ---- thrown (the grenade) ------------------------------------------
+     *
+     * THE FUZE IS HELD HERE, NOT ON THE GRENADE, until the moment it leaves
+     * the hand. `_cooking` is true from the pin pull to the release, and
+     * `_cookFuse` is the time left on a fuze that is already burning — which is
+     * what makes cooking a real decision rather than a hold-to-charge bar:
+     * whatever is left when it leaves the hand is what `ThrownGrenades` counts
+     * down, and if it reaches zero first it goes off in the fist.
+     */
+    this._cooking = false;
+    this._cookStyle = 'over';
+    this._cookFuse = 0;
+    this._throwing = false;
+    this._throwFuse = 0;
+    this._throwOrigin = new THREE.Vector3();
+    this._throwVel = new THREE.Vector3();
+
     // Deferred shell ejections (a case leaves the port a few ms after the shot).
     this._shellQueue = [];
     for (let i = 0; i < 8; i++) {
@@ -189,7 +215,7 @@ export class WeaponSystem {
     this._hudState = {
       name: '', mode: 'auto', ammo: 0, reserve: 0, magSize: 0,
       reloading: false, reloadProgress: 0, ads: false, spread: 0, firing: false,
-      melee: false,
+      melee: false, lethalCount: 0,
     };
   }
 
@@ -202,6 +228,8 @@ export class WeaponSystem {
     this.rng = ctx.rng.fork();
     this.mats = new WeaponMaterials(ctx);
     this.sim = new ProjectileSim(ctx);
+    /** Grenades in the air: rigid bodies, fuzes and the blast. @see grenades.js */
+    this.thrown = new ThrownGrenades(ctx);
     this.viewmodel = new Viewmodel(ctx, this.mats);
     // three only honours `material.envMapIntensity` when the material carries its
     // OWN `envMap`; for a material lit by `scene.environment` the renderer
@@ -221,12 +249,15 @@ export class WeaponSystem {
       smg: buildSmg,
       pistol: buildPistol,
       knife: buildKnife,
+      grenade: buildGrenade,
     };
     let tris = 0;
     for (const id of WEAPON_IDS) {
       const def = { ...WEAPON_DEFS[id] };
       const melee = def.class === 'melee';
-      if (!melee) def.cycleTime = 60 / def.rpm;
+      /** A thrown weapon has no rpm, no recoil pattern and no magazine. */
+      const thrown = def.class === 'grenade';
+      if (!melee && !thrown) def.cycleTime = 60 / def.rpm;
       const model = builders[id]();
       const entry = this.viewmodel.addWeapon(model, def);
       tris += entry.tris;
@@ -237,10 +268,13 @@ export class WeaponSystem {
         // 0/0/0 here is not a fake ammo count — it is what `ammo` reports as
         // `empty: true, magSize: 0`, which is the flag the HUD reads to print
         // an em dash instead of a number.
-        pattern: melee ? null : buildRecoilPattern(def, Rng),
-        mag: melee ? 0 : def.magSize,
-        chambered: !melee,
-        reserve: melee ? 0 : def.reserve,
+        pattern: melee || thrown ? null : buildRecoilPattern(def, Rng),
+        // A grenade's "magazine" is how many you are carrying: 2, with no
+        // reserve, so `ammo` reports { mag: 2, magSize: 0 } — a real count of a
+        // weapon that does not take magazines. @see getHudState.
+        mag: melee ? 0 : thrown ? def.count : def.magSize,
+        chambered: !melee && !thrown,
+        reserve: melee || thrown ? 0 : def.reserve,
         mode: def.modes[0],
         modeIndex: 0,
       });
@@ -316,6 +350,24 @@ export class WeaponSystem {
     return true;
   }
 
+  /**
+   * The ADS field-of-view scale the CAMERA should use for the weapon in hand.
+   *
+   * A scoped weapon's `scope.magnification` is a real magnification: 6x means
+   * the world camera runs at a sixth of its FOV, which is what actually makes
+   * distant targets bigger. Everything else returns null and the camera keeps
+   * the global `adsFovScale`.
+   */
+  get adsFovScale() {
+    const mag = this.state?.def?.scope?.magnification;
+    return mag > 1 ? 1 / mag : null;
+  }
+
+  /** True while the player is looking THROUGH a magnified optic. */
+  get scoped() {
+    return !!this.state?.def?.scope && this.viewmodel.adsT > 0.72;
+  }
+
   get weaponIds() {
     return [...this.states.keys()];
   }
@@ -341,6 +393,26 @@ export class WeaponSystem {
   /** True when the active weapon is a blade — no ammo, no fire mode, no ADS. */
   get isMelee() {
     return this.current?.class === 'melee';
+  }
+
+  /** True when the active weapon is thrown — no ammo, no fire mode, no ADS. */
+  get isThrown() {
+    return this.current?.class === 'grenade';
+  }
+
+  /** Pin out, fuze burning, still in the hand. */
+  get cooking() {
+    return this._cooking;
+  }
+
+  /** Seconds left on the fuze of the grenade being cooked, or 0. */
+  get cookRemaining() {
+    return this._cooking ? Math.max(0, this._cookFuse) : 0;
+  }
+
+  /** Grenades left, whatever is currently in the player's hands. */
+  get grenadeCount() {
+    return this.states.get('grenade')?.mag ?? 0;
   }
 
   get fireMode() {
@@ -397,9 +469,26 @@ export class WeaponSystem {
     // `a.mag` counts the chambered round, so a topped-off rifle is 31. The HUD
     // draws one pip per round against magSize, so clamp the *display* to the
     // magazine capacity rather than overflowing the pip strip.
-    h.ammo = Math.min(a.mag, a.magSize);
+    /**
+     * A GRENADE HAS A COUNT BUT NO MAGAZINE, which is a third case the readout
+     * did not have. The knife's `magSize: 0` is the right flag — it is what
+     * says "this weapon does not take magazines" — but the knife's answer to
+     * the count is an em dash, and "—" is exactly the wrong thing to print
+     * next to a weapon whose whole tactical question is *how many have I got
+     * left*. So: the real count, `magSize: 0`, and no reserve; ui/ammo.js
+     * reads that combination as countless-but-counted and drops the separator,
+     * the reserve, the pip strip and the reload prompt.
+     */
+    h.ammo = a.magSize > 0 ? Math.min(a.mag, a.magSize) : a.mag;
     h.reserve = a.reserve;
     h.magSize = a.magSize;
+    /**
+     * The equipment row's frag count, which the HUD has drawn as a hardcoded
+     * "2" since it was written. It is a real number now, and it is true on
+     * every weapon — you can see how many grenades you have while holding the
+     * rifle, which is the only time the number is any use.
+     */
+    h.lethalCount = this.grenadeCount;
     h.reloading = this.reloading;
     // 0..1 through the active reload clip; the bar is meaningless otherwise.
     h.reloadProgress = h.reloading && vm?.clip?.duration
@@ -419,6 +508,13 @@ export class WeaponSystem {
 
   setWeapon(id) {
     if (!this.states.has(id) || id === this.activeId || this._switchTo) return false;
+    /**
+     * A LIT GRENADE CANNOT BE PUT AWAY. The pin is on the floor and the fuze is
+     * burning; holstering it would either lose the timer or leave a bomb in a
+     * pouch. Both hands are on it until it is thrown or it goes off, exactly as
+     * a reload owns the weapon until it finishes.
+     */
+    if (this._cooking || this._throwing) return false;
     this._switchTo = id;
     this._switchTimer = this.viewmodel.play('holster');
     return true;
@@ -442,7 +538,7 @@ export class WeaponSystem {
   reload() {
     const s = this.state;
     if (!s || this.reloading || this.switching) return false;
-    if (s.def.class === 'melee') return false;
+    if (s.def.class === 'melee' || s.def.class === 'grenade') return false;
     if (s.mag >= s.def.magSize || s.reserve <= 0) return false;
     this.viewmodel.stopClip();
     const empty = s.mag === 0 && !s.chambered;
@@ -460,10 +556,22 @@ export class WeaponSystem {
   resetAmmo() {
     for (const s of this.states.values()) {
       if (s.def.class === 'melee') continue; // nothing to refill
+      if (s.def.class === 'grenade') {
+        // Two frags, and this is the ONLY place they come back: there are no
+        // pickups, so the round's grenades are the round's budget.
+        s.mag = s.def.count;
+        s.chambered = false;
+        s.reserve = 0;
+        continue;
+      }
       s.mag = s.def.magSize;
       s.chambered = true;
       s.reserve = s.def.reserve;
     }
+    // A round boundary is not a place to be holding a lit grenade.
+    this._cooking = false;
+    this._throwing = false;
+    this.thrown?.clear();
     this._burstLeft = 0;
     this._burstCooldown = 0;
     this._fireTimer = 0;
@@ -727,6 +835,138 @@ export class WeaponSystem {
   }
 
   /* ====================================================================== */
+  /*  throwing                                                              */
+  /* ====================================================================== */
+
+  /**
+   * Pull the pin. `style` is 'over' (LMB, a hard overhand throw) or 'under'
+   * (RMB, a short underhand toss for putting one round a corner).
+   *
+   * Nothing is thrown here and nothing is consumed here: this starts the FUZE
+   * and the wind-up, and the grenade only leaves the hand on the `release`
+   * beat of the throw clip — which is 170 ms into a whip that lasts 660 ms, so
+   * it leaves at the point of the arc where the hand is actually fastest. A
+   * grenade that spawns on the button press and animates afterwards is the
+   * throwing version of the melee bug the knife documents at length.
+   */
+  startCook(style = 'over') {
+    const s = this.state;
+    if (!s || s.def.class !== 'grenade') return false;
+    if (this._cooking || this._throwing || this.switching) return false;
+    if (s.mag <= 0) return false;
+    this.viewmodel.stopClip();
+    this._cooking = true;
+    this._cookStyle = style;
+    this._cookFuse = s.def.fuse ?? 3;
+    this.viewmodel.play('cook');
+    return true;
+  }
+
+  /** Let go. Runs the throw clip; the grenade leaves on its `release` beat. */
+  releaseThrow() {
+    if (!this._cooking) return false;
+    this._cooking = false;
+    this._throwing = true;
+    this._throwFuse = this._cookFuse;
+    this.viewmodel.play('throw');
+    return true;
+  }
+
+  /**
+   * THE RELEASE FRAME. One grenade leaves the hand with whatever is left of
+   * its fuze — cook it for two seconds and it detonates one second after it
+   * lands, which is the entire reason to hold the button.
+   */
+  _launchGrenade() {
+    const s = this.state;
+    if (!s || s.mag <= 0) return false;
+    const def = s.def;
+    const cam = this.ctx.camera;
+    cam.updateMatrixWorld();
+    const dir = this._camDir.set(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
+    const eye = this._tmp.setFromMatrixPosition(cam.matrixWorld);
+    /**
+     * Released 0.42 m down the sight line — an arm's length in front of the
+     * eye — but pulled back to whatever is actually clear when there is a wall
+     * there. Spawning the body inside geometry is how a thrown object ends up
+     * on the far side of a door it never went through.
+     */
+    let reach = 0.42;
+    const phys = this.physics ?? (this.physics = this.ctx.peek('physics'));
+    if (phys?.raycast) {
+      const h = phys.raycast(eye, dir, reach + 0.12, phys.MASK.WORLD);
+      if (h?.hit) reach = Math.max(0.1, h.distance - 0.14);
+    }
+    const origin = this._throwOrigin.copy(eye).addScaledVector(dir, reach);
+
+    const under = this._cookStyle === 'under';
+    const speed = under ? def.tossSpeed ?? 8 : def.throwSpeed ?? 17;
+    // The toss is lobbed twice as high as the throw: it has to clear the
+    // doorway and land short, not skip off the floor into the far wall.
+    const loft = (def.throwLoft ?? 0.16) * (under ? 2.2 : 1);
+    const vel = this._throwVel.copy(dir).multiplyScalar(speed);
+    vel.y += speed * Math.sin(loft);
+    // A grenade thrown from a moving man carries the man's momentum.
+    const pv = this.player?.velocity;
+    if (pv) vel.add(pv);
+
+    s.mag--;
+    this.thrown.spawn(origin, vel, this._throwFuse, def, this.viewmodel.active?.meshes);
+    // The hand is empty from this frame: hide the viewmodel copy or the player
+    // throws a grenade and is still holding it.
+    if (this.viewmodel.active) this.viewmodel.active.group.visible = false;
+    // Head-locked whoosh — the same voice the knife's swing uses, at half level.
+    try {
+      this.ctx.peek('audio')?.play?.('swing', { kind: 'slash', level: 0.5 });
+    } catch { /* audio is optional feedback */ }
+    return true;
+  }
+
+  /**
+   * COOK-OFF — the fuze reached zero with the grenade still in the fist.
+   *
+   * It goes off where the player is standing, at full damage, and the player is
+   * inside their own blast: `_damagePlayer` does not consult friendly fire
+   * because there is no such thing as being on your own bad side. This is the
+   * cost of the hold, and without it holding the button would be free.
+   */
+  _cookOff() {
+    const s = this.state;
+    this._cooking = false;
+    this._cookFuse = 0;
+    if (!s) return;
+    if (s.mag > 0) s.mag--;
+    const cam = this.ctx.camera;
+    cam.updateMatrixWorld();
+    this._throwOrigin.setFromMatrixPosition(cam.matrixWorld);
+    // Chest height, not eye height: it is in a hand, not between the teeth.
+    this._throwOrigin.y -= 0.25;
+    this.viewmodel.stopClip();
+    if (this.viewmodel.active) this.viewmodel.active.group.visible = false;
+    this.thrown.blastAt(this._throwOrigin, s.def);
+    this._afterThrow();
+  }
+
+  /** Draw the next one, or fall back to the primary when the pouch is empty. */
+  _afterThrow() {
+    const s = this.state;
+    this._throwing = false;
+    if (!s || s.def.class !== 'grenade') return;
+    const w = this.viewmodel.active;
+    if (s.mag > 0) {
+      if (w) {
+        w.group.visible = true;
+        if (w.parts.pin) w.parts.pin.visible = true;
+      }
+      this.viewmodel.play('draw');
+    } else {
+      // `setActive` turns the group's visibility back on when it next becomes
+      // the active weapon, so the hidden group heals itself on the way back.
+      this.setWeapon(this.primaryId);
+    }
+  }
+
+  /* ====================================================================== */
   /*  reload / clip callbacks                                               */
   /* ====================================================================== */
 
@@ -755,7 +995,25 @@ export class WeaponSystem {
       case 'meleeimpact':
         this._meleeStrike();
         break;
+      /**
+       * The pin is out. The ring and the pin are a separate assembly on the
+       * model precisely so they can go away here — a grenade whose fuze is
+       * burning with the ring still hanging off it is the same lie as a fired
+       * case still sitting in the chamber.
+       */
+      case 'pinpull':
+        if (this.viewmodel.active?.parts.pin) {
+          this.viewmodel.active.parts.pin.visible = false;
+        }
+        try {
+          this.ctx.peek('audio')?.play?.('dryfire', { level: 0.5 });
+        } catch { /* audio is optional feedback */ }
+        break;
+      case 'release':
+        if (clipName === 'throw') this._launchGrenade();
+        break;
       case 'end':
+        if (clipName === 'throw') this._afterThrow();
         if (isReload) {
           this._emitReload('end');
           this.viewmodel.boltHold = 0;
@@ -892,6 +1150,16 @@ export class WeaponSystem {
     if (this._burstCooldown > 0) this._burstCooldown -= dt;
     if (this._meleeCooldown > 0) this._meleeCooldown -= dt;
     const melee = def.class === 'melee';
+    const thrown = def.class === 'grenade';
+
+    // ---- the fuze, and everything already in the air ---------------------
+    // A burning fuze does not care whether the trigger is available: it is the
+    // only clock in this system that runs while the weapon is locked.
+    if (this._cooking) {
+      this._cookFuse -= dt;
+      if (this._cookFuse <= 0) this._cookOff();
+    }
+    this.thrown.update(dt);
 
     // ---- spread recovery -------------------------------------------------
     const rest = this._restSpread(def, player, st);
@@ -900,8 +1168,9 @@ export class WeaponSystem {
 
     // ---- gather state ----------------------------------------------------
     const live = !input.frozen && input.enabled !== false && this.debugMode === null;
-    // RMB is the heavy attack on a blade, not an aim request.
-    st.ads = melee
+    // RMB is the heavy attack on a blade and the underhand toss on a grenade,
+    // not an aim request; neither weapon has sights to look through.
+    st.ads = melee || thrown
       ? false
       : live
         ? input.ads || player?.adsRequested === true
@@ -919,23 +1188,40 @@ export class WeaponSystem {
       if (input.pressed('KeyB')) this.cycleFireMode();
       if (input.pressed('KeyI')) this.inspect();
       /**
-       * SLOTS: 1 primary, 2 sidearm, 3 knife — Sudden Attack's own layout.
+       * SLOTS: 1 primary, 2 sidearm, 3 knife, 4 frag — Sudden Attack's own
+       * layout.
        *
-       * The SMG stays reachable on the mouse wheel, which cycles all four in
-       * `weaponIds` order (rifle, smg, pistol, knife). Tab is NOT touched: it
-       * is the scoreboard in this build.
+       * The SMG stays reachable on the mouse wheel, which cycles everything in
+       * `weaponIds` order (rifle, smg, pistol, knife, grenade). Tab is NOT
+       * touched: it is the scoreboard in this build.
        */
       // Slot 1 is whatever primary the player chose in the menu, not always
       // the M4. @see setPrimary
       if (input.pressed('Digit1')) this.setWeapon(this.primaryId);
       if (input.pressed('Digit2')) this.setWeapon('pistol');
       if (input.pressed('Digit3')) this.setWeapon('knife');
+      /** Slot 4: the frag. Empty pouch = an empty hand, so the swap is refused. */
+      if (input.pressed('Digit4') && this.grenadeCount > 0) this.setWeapon('grenade');
       if (input.wheel) this.nextWeapon();
       if (!this.locked) {
         if (melee) {
           // LMB quick slash, RMB heavy stab.
           if (input.firePressed) this.meleeAttack('slash');
           else if (input.pressed('Mouse2')) this.meleeAttack('stab');
+          st.trigger = false;
+        } else if (thrown) {
+          /**
+           * HOLD TO COOK, RELEASE TO THROW. LMB is the overhand throw and RMB
+           * the underhand toss, and the release is read off whichever button
+           * started the cook — letting go of the OTHER one mid-throw must not
+           * launch anything.
+           */
+          if (input.firePressed) this.startCook('over');
+          else if (input.pressed('Mouse2')) this.startCook('under');
+          if (this._cooking) {
+            const btn = this._cookStyle === 'under' ? 'Mouse2' : 'Mouse0';
+            if (input.released(btn) || !input.held(btn)) this.releaseThrow();
+          }
           st.trigger = false;
         } else {
           this._runTrigger(dt, input.fire, input.firePressed, def, s);
@@ -1099,7 +1385,19 @@ export class WeaponSystem {
     this._debugFrame = 0;
 
     const s = this.state;
-    if (s) {
+    if (s?.def.class === 'grenade') {
+      // A full pouch and a pin still in it: the pose harness photographs the
+      // weapon as it is carried, and `magSize` does not exist on this def.
+      s.mag = s.def.count;
+      s.chambered = false;
+      s.reserve = 0;
+      this._cooking = false;
+      this._throwing = false;
+      if (vm.active) {
+        vm.active.group.visible = true;
+        if (vm.active.parts.pin) vm.active.parts.pin.visible = true;
+      }
+    } else if (s) {
       s.mag = kind === 'fire' ? 22 : s.def.magSize;
       s.chambered = true;
       s.reserve = s.def.reserve;
@@ -1174,6 +1472,7 @@ export class WeaponSystem {
   dispose() {
     for (const off of this._off ?? []) off();
     this.sim?.clear();
+    this.thrown?.dispose();
     for (const p of this._droppedMags) {
       p.group.removeFromParent();
       if (p.body && this.physics?.removeRigidBody) this.physics.removeRigidBody(p.body);

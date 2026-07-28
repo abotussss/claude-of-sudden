@@ -12,6 +12,7 @@ import { Minimap } from './minimap.js';
 import { WorldMarkers } from './markers.js';
 import { Prompt, Banner } from './prompts.js';
 import { PauseMenu } from './menu.js';
+import { ScopeOverlay } from './scope.js';
 import { RoundStrip, BombPanel, Scoreboard, SpectateBar } from './round.js';
 import { CombatDemo } from './demo.js';
 
@@ -87,6 +88,12 @@ export class UiSystem {
     this.markers = new WorldMarkers(this.worldLayer, this.rng.fork());
     this.arcs = new DamageArcs(this.centreLayer);
     this.crosshair = new Crosshair(this.centreLayer);
+    /**
+     * Above the crosshair layer on purpose: when the eye is behind a magnified
+     * optic the scope's own reticle is the aim, and the hipfire crosshair must
+     * not be drawn on top of it.
+     */
+    this.scope = new ScopeOverlay(this.centreLayer);
     this.hit = new Hitmarkers(this.centreLayer);
     this.minimap = new Minimap(this.chromeLayer, this.rng.fork());
     this.compass = new Compass(this.chromeLayer);
@@ -544,7 +551,23 @@ export class UiSystem {
     setStyle(this.worldLayer, 'opacity', this.hudVisible.toFixed(3));
     setStyle(this.centreLayer, 'opacity', this.hudVisible.toFixed(3));
 
+    /**
+     * A scoped weapon replaces the crosshair and the viewmodel, it does not sit
+     * behind them. `weapons.scoped` is true only once the ADS blend is most of
+     * the way in, so the rifle is still visible while it comes up.
+     */
+    const wp = this.ctx.peek('weapons');
+    const scoped = !!wp?.scoped;
+    this.scope.update(dt, scoped);
+    if (wp?.viewmodel?.rig) wp.viewmodel.rig.visible = !scoped;
     this.crosshair.update(dt, s);
+    /**
+     * AFTER `crosshair.update`, not before. It writes its own display/opacity
+     * every frame, so hiding it first was silently undone a line later and the
+     * hipfire reticle stayed drawn on top of the scope's crosshair — visible in
+     * the capture as a red dashed ring in the middle of the sight picture.
+     */
+    setStyle(this.crosshair.root, 'display', scoped ? 'none' : '');
     this.hit.update(dt);
     this.arcs.update(dt, rx, rz, fx, fz);
     this.health.update(dt, s);

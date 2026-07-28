@@ -72,6 +72,8 @@ export class CameraRig {
     this.fov = this.baseFov;
     this.fovMove = 1;
     this.fovAds = 1;
+    /** Per-weapon override for cfg.adsFovScale; null = use the global. */
+    this.adsFovScale = null;
 
     // ---- slide -----------------------------------------------------------
     this.slideBlend = 0;
@@ -302,7 +304,18 @@ export class CameraRig {
     else if (m.sprinting) moveTarget = F.sprint;
     else if (!m.grounded && m.velocity.y < -6) moveTarget = F.air;
     this.fovMove = approach(this.fovMove, moveTarget, F.moveTau, dt);
-    this.fovAds = approach(this.fovAds, lerp(1, cfg.adsFovScale, ads), F.adsTau, dt);
+    /**
+     * PER-WEAPON ADS FOV, so a magnified optic is possible at all.
+     *
+     * `cfg.adsFovScale` is one global number (0.72) and defs.js says so
+     * explicitly: "There is no magnified optic in this engine; a scope's
+     * magnification would have to come from the world camera, which weapons
+     * does not own." This is that hook. `adsFovScale` is set by the player each
+     * frame from the weapon in hand and falls back to the global when a weapon
+     * has no opinion, so every existing weapon behaves exactly as before.
+     */
+    const adsScale = this.adsFovScale ?? cfg.adsFovScale;
+    this.fovAds = approach(this.fovAds, lerp(1, adsScale, ads), F.adsTau, dt);
     this.baseFov = cfg.fov;
     this.fov = this.baseFov * this.fovMove * this.fovAds;
 
