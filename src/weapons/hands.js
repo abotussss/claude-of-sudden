@@ -307,13 +307,35 @@ function buildGlove(materials, opts = {}) {
   }
   root.add(new THREE.Mesh(mergeAll(seams), materials.pad));
 
-  // Wrist cuff + strap + a small steel keeper.
+  /**
+   * Wrist cuff + strap + a small steel keeper.
+   *
+   * THE RADII ARE OFF THE WRIST, NOT THE HAND. They used to be `w * 0.44..0.47`,
+   * where `w` is the hand's WIDTH — 88 mm across the knuckles. A wrist is 48-54
+   * mm. So the cuff was a 78 mm hoop floating around a 50 mm wrist, and because
+   * a `latheZ` profile that never returns to r=0 is an OPEN band, end-on it
+   * draws as nothing but its own silhouette: a thin ellipse with daylight
+   * through the middle.
+   *
+   * That is the "mystery ring" the pistol ADS shows. Found by elimination —
+   * hiding the arms removes it, disabling the sleeve fold rings does not,
+   * hiding the FOREARMS does not either, and a dump of every mesh in the arm
+   * rig contains nothing ring-shaped above 60 mm. It was never a stray object;
+   * it was this cuff, drawn edge-on around a wrist it does not touch.
+   *
+   * The forearm sleeve ends at r1 = 0.024, so a cuff that actually sits on the
+   * wrist is ~0.026-0.028 and overlaps it. The profile also closes at both ends
+   * now, so there is no open rim to catch a rim light.
+   */
+  const wristR = 0.027 * scale;
   const cuff = latheZ(
     [
-      [0, w * 0.44],
-      [0.004 * scale, w * 0.47],
-      [0.03 * scale, w * 0.46],
-      [0.034 * scale, w * 0.42],
+      [0, 0],
+      [0, wristR * 0.94],
+      [0.004 * scale, wristR],
+      [0.03 * scale, wristR * 0.98],
+      [0.034 * scale, wristR * 0.9],
+      [0.035 * scale, 0],
     ],
     16
   );
@@ -323,10 +345,12 @@ function buildGlove(materials, opts = {}) {
   root.add(cuffMesh);
   const strap = latheZ(
     [
-      [0, w * 0.47],
-      [0.0022, w * 0.5],
-      [0.009 * scale, w * 0.5],
-      [0.0112 * scale, w * 0.47],
+      [0, 0],
+      [0, wristR * 1.0],
+      [0.0022, wristR * 1.06],
+      [0.009 * scale, wristR * 1.06],
+      [0.0112 * scale, wristR * 1.0],
+      [0.0118 * scale, 0],
     ],
     16
   );
@@ -642,6 +666,8 @@ export class Arm {
      * always, exactly as they do on a real shooter.
      */
     this.pole = new THREE.Vector3(side * 0.46, -0.86, 0.22).normalize();
+    /** The authored default, so `setElbowPole` can always get back to it. */
+    this._poleDefault = this.pole.clone();
 
     // Bones. Geometry extends along -Z from each joint.
     /**
@@ -1079,6 +1105,31 @@ export class Arm {
   }
 
   /** Static finger poses. The trigger finger is driven separately. */
+  /**
+   * Override where the elbow swings, per weapon.
+   *
+   * THE POLE'S Z IS WHY THE PISTOL HAD A "MYSTERY RING". +Z is BEHIND the eye,
+   * and the authored default pushes the elbow to z = +0.22, i.e. back toward the
+   * camera. That is right for a shouldered rifle, where the elbow tucks in
+   * behind the grip and is out of frame anyway. It is wrong for a two-handed
+   * pistol: the hands are only 0.28 m out, so the chain is at 73% extension, the
+   * elbow bends hard, and a pole pointing backwards swings it far enough behind
+   * the shoulder that the UPPER ARM ends up pointing straight at the eye. You
+   * are then looking down the barrel of a 34 mm black sleeve, and all you can
+   * see of it is the lit rim — a ring, floating around each hand, with no object
+   * anywhere in the scene that is actually ring-shaped. Verified by elimination:
+   * hiding the arms removes it, disabling the sleeve fold rings does not, and a
+   * dump of every mesh in the arm rig contains nothing above 60 mm except the
+   * two sleeves themselves.
+   *
+   * @param {THREE.Vector3|null} v  direction in rig space, or null to restore
+   */
+  setElbowPole(v) {
+    if (v) this.pole.copy(v).normalize();
+    else this.pole.copy(this._poleDefault);
+    return this;
+  }
+
   setPose(name) {
     const P = this.poses?.[name] ?? HAND_POSES[name] ?? HAND_POSES.wrap;
     for (let i = 0; i < 4; i++) {
@@ -1105,6 +1156,8 @@ export class Arm {
   /**
    * Solve the two-bone chain so the hand lands exactly on `targetPos` with
    * orientation `targetQuat`, elbow swung toward the pole.
+   *
+   * See `setElbowPole` for why the pole is per-weapon.
    */
   solve(targetPos, targetQuat) {
     this.hand.position.copy(targetPos);

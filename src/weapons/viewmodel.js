@@ -280,6 +280,7 @@ export class Viewmodel {
     this._basePos = new THREE.Vector3();
     this._baseQuat = new THREE.Quaternion();
     this._adsPos = new THREE.Vector3();
+    this._poleTmp = new THREE.Vector3();
     this._adsQuat = new THREE.Quaternion();
     this._tmpPos = new THREE.Vector3();
     this._tmpQuat = new THREE.Quaternion();
@@ -620,6 +621,12 @@ export class Viewmodel {
     // _fitShootingHand / _fitSupportHand.
     this.armR.setPose(w.rhandPose ?? 'grip');
     this.armL.setPose(w.lhandPose ?? (id === 'pistol' ? 'cup' : 'clamp'));
+    // Elbows swing differently for a shouldered weapon and a pistol held out on
+    // the arms — see Arm.setElbowPole for what going without this looked like.
+    const ep = w.def?.elbowPole ?? null;
+    for (const arm of [this.armR, this.armL]) {
+      arm.setElbowPole(ep ? this._poleTmp.set(arm.side * ep[0], ep[1], ep[2]) : null);
+    }
     return w;
   }
 

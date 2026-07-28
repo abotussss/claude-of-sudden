@@ -307,6 +307,17 @@ export const WEAPON_DEFS = {
      * solve locks — this moves in the other direction.
      */
     eyeRelief: 0.28,
+    /**
+     * ELBOW POLE, rig space, pistol only. See `Arm.setElbowPole`.
+     * The shared default is (side*0.46, -0.86, +0.22) — elbow down, outboard and
+     * BACK, which is correct for a shouldered rifle. On a two-handed pistol the
+     * hands are 0.28 m out, the chain sits at 73% extension, and a backward pole
+     * swings the elbow so far behind the shoulder that the upper arm points at
+     * the eye: you see the sleeve end-on as a lit rim, which is the "mystery
+     * ring". Down, wider outboard, and slightly FORWARD is also what a real
+     * isosceles pistol stance does with the elbows.
+     */
+    elbowPole: [0.6, -0.78, -0.14],
     sprintPos: [0.09, -0.25, -0.28],
     sprintRot: [-0.42, 0.5, 0.14],
     lowReadyPos: [0.1, -0.26, -0.32],
