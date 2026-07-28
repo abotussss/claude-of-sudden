@@ -99,6 +99,16 @@ export function jacketTorso(nz, p = {}) {
     const t = Math.max(0, Math.min(1, (v.y - 1.1) / 0.3));
     if (v.z > 0) v.z += 0.016 * t;
     else v.z -= 0.006 * t;
+    // LUMBAR CURVE. The lofted sections gave the torso parallel front and back
+    // walls, so in profile it was a vertical slab from belt to collar. A spine
+    // is an S: the small of the back comes FORWARD between the ribcage and the
+    // sacrum, and that hollow — which sits in the one band of torso the plate
+    // carrier does not cover, 1.03 to 1.10 — is what tells the eye the thing has
+    // a skeleton in it. Only the back wall moves; the belly stays put.
+    if (v.z < 0) {
+      const lum = Math.exp(-((v.y - 1.048) ** 2) / 0.0028);
+      v.z += 0.019 * lum * Math.min(1, -v.z / 0.05);
+    }
     // trapezius slope
     if (v.y > 1.40) v.y -= 0.02 * Math.min(1, Math.abs(v.x) / 0.18) ** 2;
   });
@@ -119,7 +129,15 @@ export function jacketTorso(nz, p = {}) {
   return m;
 }
 
-/** Pelvis / seat block so the hips read solid between jacket hem and trousers. */
+/**
+ * Pelvis / seat block so the hips read solid between jacket hem and trousers.
+ *
+ * It was a symmetric ellipse, i.e. the figure had NO BUTTOCKS: in profile the
+ * back ran dead vertical from the shoulder blades to the heels. Below the
+ * shoulders the glute is the most rearward point on a standing human, and its
+ * absence is most of why the side view read as a mannequin. A separate seam is
+ * the seat seam, which is what stops the new mass from being one smooth lump.
+ */
 export function pelvis(nz) {
   const seg = 22;
   const rings = [
@@ -130,6 +148,19 @@ export function pelvis(nz) {
     [1.030, 0.144, 0.098],
   ].map(([y, hx, hz]) => ({ pts: superEllipse(hx, hz, 3.0, seg), o: [0, y, -0.006] }));
   const m = loft(rings, { capStart: true, capEnd: true });
+  computeNormals(m);
+  warp(m, (v) => {
+    // 3.4 cm of seat, peaking at the sacrum and dying out at the hip crest.
+    // Only vertices already on the back half move, so the pubis stays flat.
+    const h = Math.exp(-((v.y - 0.898) ** 2) / 0.0026);
+    const rear = Math.min(1, Math.max(0, -(v.z + 0.006) / 0.055));
+    const across = Math.exp(-((v.x / 0.13) ** 2) * 0.9); // fades at the flanks
+    v.z -= 0.034 * h * rear * across;
+    // and the gluteal fold: the underside tucks back UNDER the mass rather than
+    // running on down into the thigh
+    const fold = Math.exp(-((v.y - 0.852) ** 2) / 0.00035);
+    v.z += 0.010 * fold * rear * across;
+  });
   computeNormals(m);
   displace(m, (x, y, z) => nz.fbm3(x * 26, y * 20, z * 26, 3) * 0.004);
   return m;
@@ -1052,15 +1083,27 @@ export function kneePad(nz, knee, side) {
 export function boot(nz, ankle, side) {
   const out = emptyMesh();
   const ax = ankle[0], ay = ankle[1], az = ankle[2];
-  // upper: lofted sections front to back
+  /**
+   * Upper: lofted sections back to front. `[z, half-width, half-height,
+   * centre-height-above-the-sole]`.
+   *
+   * The old boot spanned z -0.078..0.134 — 21.2 cm. A 1.80 m man's foot is
+   * about 27 cm and his boot about 30, so the figure was standing on stumps,
+   * and because the ankle sat only 5.6 cm from the heel it was standing on them
+   * near the middle of the foot, like a doll on a peg. 28.6 cm now, with the
+   * ankle 9.4 cm back — the third of the way in where a real ankle enters the
+   * foot, which is also what finally puts a HEEL behind the leg in the side
+   * view. Widest at the ball, not at the arch.
+   */
   const S = [
-    [-0.078, 0.036, 0.030, 0.052],
-    [-0.052, 0.044, 0.038, 0.062],
-    [-0.016, 0.048, 0.044, 0.058],
-    [0.030, 0.049, 0.046, 0.048],
-    [0.076, 0.046, 0.042, 0.038],
-    [0.112, 0.040, 0.034, 0.030],
-    [0.134, 0.028, 0.022, 0.024],
+    [-0.094, 0.033, 0.033, 0.055],
+    [-0.066, 0.043, 0.041, 0.064],
+    [-0.026, 0.049, 0.046, 0.060],
+    [0.024, 0.053, 0.048, 0.050],
+    [0.080, 0.051, 0.043, 0.040],
+    [0.132, 0.044, 0.034, 0.032],
+    [0.170, 0.033, 0.025, 0.027],
+    [0.192, 0.018, 0.017, 0.026],
   ];
   const seg = 18;
   const rings = S.map(([z, hx, hy, cy]) => ({
@@ -1089,28 +1132,34 @@ export function boot(nz, ankle, side) {
   return out;
 }
 
-/** Boot sole + heel block, rubber. */
+/**
+ * Boot sole + heel block, rubber. Follows the (now 28.6 cm) upper, and the last
+ * column is TOE SPRING: a boot sole is not flat, its front 6 cm curls off the
+ * ground, and without that lift the foot reads as a plank glued to the floor.
+ */
 export function bootSole(ankle) {
+  //  z,      half-width, half-height, lift off the ground
   const S = [
-    [-0.082, 0.033, 0.018],
-    [-0.055, 0.043, 0.020],
-    [-0.020, 0.047, 0.014],
-    [0.030, 0.049, 0.013],
-    [0.080, 0.046, 0.013],
-    [0.118, 0.038, 0.013],
-    [0.140, 0.024, 0.012],
+    [-0.098, 0.030, 0.017, 0.004],
+    [-0.068, 0.042, 0.020, 0.000],
+    [-0.028, 0.048, 0.014, 0.000],
+    [0.024, 0.052, 0.013, 0.000],
+    [0.084, 0.050, 0.013, 0.000],
+    [0.136, 0.043, 0.013, 0.002],
+    [0.174, 0.032, 0.012, 0.008],
+    [0.194, 0.017, 0.011, 0.015],
   ];
   const ax = ankle[0], ay = ankle[1], az = ankle[2];
-  const rings = S.map(([z, hx, hy]) => ({
+  const rings = S.map(([z, hx, hy, lift]) => ({
     pts: superEllipse(hx, hy, 3.6, 16),
-    o: [ax, ay - 0.088 + hy + 0.001, az + z],
+    o: [ax, ay - 0.088 + hy + 0.001 + lift, az + z],
     q: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2),
   }));
   const m = loft(rings, { capStart: true, capEnd: true });
   computeNormals(m);
-  // heel block
-  const heel = boxRound(0.036, 0.011, 0.030, { n: 4, seg: 12, rows: 4, roundY: 0.4 });
-  place(heel, ax, ay - 0.082, az - 0.056);
+  // heel block — under the ankle where the load actually lands
+  const heel = boxRound(0.038, 0.011, 0.032, { n: 4, seg: 12, rows: 4, roundY: 0.4 });
+  place(heel, ax, ay - 0.082, az - 0.066);
   appendMesh(m, heel);
   computeNormals(m);
   return m;
@@ -1122,9 +1171,11 @@ export function bootLaces(ankle) {
   const ax = ankle[0], ay = ankle[1], az = ankle[2];
   for (let i = 0; i < 5; i++) {
     const t = i / 4;
-    const z = az + 0.088 - t * 0.076;
-    const y = ay - 0.028 + t * 0.070;
-    const w = 0.030 - t * 0.004;
+    // the lacing runs up the instep of a longer boot now, so it starts further
+    // forward and climbs to the same cuff
+    const z = az + 0.106 - t * 0.092;
+    const y = ay - 0.030 + t * 0.074;
+    const w = 0.032 - t * 0.005;
     const s = ribbon(
       [
         [ax - w, y - 0.006, z + 0.006],
