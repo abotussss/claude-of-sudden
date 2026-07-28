@@ -138,6 +138,30 @@ export const KEEPOUT = [
  * Interiors are described in normalised room coordinates (0..1 across the
  * interior), so a plan survives a change of footprint.
  *
+ * `route` — EVERY ENTERABLE BUILDING IS A THROUGH-ROUTE, AND SAYS SO.
+ *
+ * The complaint was "屋内で行き止まりはだめ" — an interior must not be a dead end
+ * — and `tools/throughcheck.mjs` walked the real player capsule over the ground
+ * floor of all eight and found nine openings that led nowhere. Not one of them
+ * was a wall: they were all furniture. W1 and W2 had BOTH doors opening into a
+ * pocket behind a shop counter, and K1 — a 5.4 m shed with a door at each end —
+ * was cut in half by a 3.3 m counter across the middle.
+ *
+ * So the corridor is declared rather than hoped for. Each entry is one polyline
+ * through the ground floor: `'s1'` / `'w3'` name an opening (door / vault
+ * window on that side) and resolve to wherever the builder actually cut it;
+ * `[x, z]` pairs are normalised interior coordinates like the room plans, 0 at
+ * the inner face of the -X / -Z wall and 1 at the +X / +Z one. Legs that end
+ * near each other join up into one network — a building with three ways in gets
+ * three legs, not three separate corridors.
+ *
+ * `buildInterior` then makes it true: a partition the route crosses gets its
+ * doorway AT the crossing, and nothing carrying a collision proxy may stand
+ * within 0.85 m of the line. Dressing with no proxy is untouched, so a corridor
+ * is clear to walk without being visibly swept.
+ *
+ * If you move a door or repartition a floor, re-run `throughcheck`.
+ *
  * THE TWO ROWS ARE THE LANE WALLS. Their z ranges are chosen so the only gaps
  * between them are the four cross links, and the outer faces (x ∓20.5) are the
  * lane's inner wall while the inner faces (x ∓6.5) are the mid street's.
@@ -194,6 +218,17 @@ export const BUILDINGS = [
     enterable: true,
     roofAccess: false,
     roofProps: 4,
+    /**
+     * A lane -> mid street across the north half, with the side-0 door off
+     * connector 1 and the A-lane window feeding into the same corridor. The
+     * spine deliberately runs NORTH of the z-centre partition so it comes out
+     * past the trimmed end of that wall, straight in front of the mid door.
+     */
+    route: [
+      ['s3', [0.16, 0.5], [0.3, 0.63], [0.55, 0.66], [0.8, 0.63], [0.93, 0.52], 's1'],
+      ['s0', [0.5, 0.16], [0.58, 0.4], [0.62, 0.62]],
+      ['w3', [0.16, 0.86], [0.28, 0.74], [0.36, 0.66]],
+    ],
     stairFlights: [{ floor: 0, x: 0.12, z: 0.06, ry: 0, w: 1.15, railing: 'right' }],
     stairHoles: { 1: { x0: -19.3, x1: -17.75, z0: 15.5, z1: 21.4 } },
     rooms: [
@@ -246,6 +281,9 @@ export const BUILDINGS = [
     enterable: true,
     roofAccess: false,
     roofProps: 5,
+    /** The covered way from mid straight into site A — the claim this building
+     *  was authored to make, now measured rather than asserted. */
+    route: [['s3', [0.16, 0.84], [0.34, 0.8], [0.5, 0.76], [0.7, 0.8], [0.88, 0.85], 's1']],
     stairFlights: [{ floor: 0, x: 0.12, z: 0.08, ry: 0, w: 1.2, railing: 'right' }],
     stairHoles: { 1: { x0: -19.35, x1: -17.8, z0: -0.2, z1: 5.95 } },
     rooms: [
@@ -300,6 +338,12 @@ export const BUILDINGS = [
     },
     enterable: true,
     roofProps: 2,
+    /** Across the south end lane-to-street, plus a spur north up the west side
+     *  from the vault window to the same crossing the plan already had. */
+    route: [
+      ['s3', [0.16, 0.22], [0.32, 0.27], [0.55, 0.26], [0.8, 0.23], 's1'],
+      ['w3', [0.16, 0.74], [0.26, 0.7], [0.28, 0.6], [0.3, 0.4], [0.32, 0.28]],
+    ],
     stairFlights: [{ floor: 0, x: 0.86, z: 0.06, ry: 0, w: 1.15, railing: 'right' }],
     stairHoles: { 1: { x0: -8.9, x1: -7.3, z0: -25.2, z1: -19.2 } },
     rooms: [
@@ -381,6 +425,13 @@ export const BUILDINGS = [
     enterable: true,
     roofAccess: true,
     roofProps: 6,
+    /** Mirror of W1: street -> B lane, with the connector door and the lane
+     *  window joining the same spine. */
+    route: [
+      ['s3', [0.1, 0.52], [0.3, 0.6], [0.5, 0.62], [0.72, 0.6], [0.86, 0.54], 's1'],
+      ['s0', [0.1, 0.16], [0.16, 0.36], [0.22, 0.56]],
+      ['w1', [0.9, 0.84], [0.8, 0.74], [0.74, 0.62]],
+    ],
     stairFlights: [
       { floor: 0, x: 0.86, z: 0.06, ry: 0, w: 1.2, railing: 'right' },
       { floor: 1, x: 0.86, z: 0.06, ry: 0, w: 1.2, railing: 'right' },
@@ -442,6 +493,12 @@ export const BUILDINGS = [
     enterable: true,
     roofAccess: false,
     roofProps: 5,
+    /** Mid street -> site B, and the mid-street vault window down at the south
+     *  end feeding into it up the west side of the plan. */
+    route: [
+      ['s3', [0.16, 0.84], [0.34, 0.8], [0.5, 0.76], [0.7, 0.8], [0.88, 0.85], 's1'],
+      ['w3', [0.14, 0.2], [0.2, 0.34], [0.24, 0.55], [0.26, 0.72], [0.3, 0.81]],
+    ],
     stairFlights: [
       { floor: 0, x: 0.88, z: 0.08, ry: 0, w: 1.2, railing: 'right' },
       { floor: 1, x: 0.88, z: 0.08, ry: 0, w: 1.2, railing: 'right' },
@@ -501,6 +558,12 @@ export const BUILDINGS = [
     },
     enterable: true,
     roofProps: 2,
+    /** Mirror of W3. The window spur runs down the EAST side here, so the
+     *  cross-wall's opening moves with it. */
+    route: [
+      ['s3', [0.2, 0.23], [0.35, 0.26], [0.6, 0.26], [0.84, 0.22], 's1'],
+      ['w1', [0.86, 0.72], [0.78, 0.7], [0.74, 0.58], [0.72, 0.4], [0.7, 0.28], [0.62, 0.25]],
+    ],
     stairFlights: [{ floor: 0, x: 0.14, z: 0.06, ry: 0, w: 1.15, railing: 'right' }],
     stairHoles: { 1: { x0: 7.3, x1: 8.9, z0: -25.2, z1: -19.2 } },
     rooms: [
@@ -567,6 +630,9 @@ export const BUILDINGS = [
     parapetH: 0.6,
     enterable: true,
     roofProps: 2,
+    /** Straight through, past the west end of the counter: the island is a
+     *  piece of cover you cut THROUGH on a rotation, not a box. */
+    route: [['s0', [0.21, 0.25], [0.21, 0.75], 's2']],
     rooms: [
       {
         walls: [],
@@ -590,6 +656,7 @@ export const BUILDINGS = [
     parapetH: 0.6,
     enterable: true,
     roofProps: 2,
+    route: [['s0', [0.22, 0.25], [0.22, 0.75], 's2']],
     rooms: [
       {
         walls: [],

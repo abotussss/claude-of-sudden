@@ -739,6 +739,93 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
   });
 
   /**
+   * THE THROUGH-ROUTE.
+   *
+   * An interior on this map is a ROUTE, not a room: every enterable building has
+   * at least two ways out, and the point of going inside is to come out
+   * somewhere else. That only works if the line between two openings is
+   * actually walkable, and it was not — `tools/throughcheck.mjs` measured the
+   * real player capsule over the ground floor of all eight and found nine
+   * openings that led nowhere: W1 and W2 had BOTH their doors opening into
+   * furniture pockets, and K1 — a 5.4 m shed with a door on each end — was
+   * sealed across the middle by its own shop counter.
+   *
+   * Nothing about that was authored; it was where the furnishing dice landed.
+   * So the route stops being an emergent property and becomes a declared one:
+   * `spec.route` is a list of polylines through the ground floor, given in the
+   * same normalised interior coordinates as the room plans, with the openings
+   * named ('s1' = the door on side 1, 'w3' = the vault window on side 3) so the
+   * ends stay attached to the real geometry wherever the builder cut it.
+   *
+   * Two things then use it, and between them they are what makes the route real:
+   *   - a partition the route crosses gets its doorway AT THE CROSSING, instead
+   *     of wherever `doorAt` put it;
+   *   - nothing that carries a collision proxy may stand within `ROUTE_R` of it
+   *     (see `interiors.js`) — the shop counter is slid and shortened, the crate
+   *     stacks and the wardrobe are moved or dropped.
+   * Everything with no proxy — litter, stains, shelves, wall dressing — is
+   * untouched, so the corridor is clear to walk and is not visibly empty.
+   */
+  const g0iw = g0.w - t * 2;
+  const g0id = g0.d - t * 2;
+  const g0x0 = g0.x - g0iw / 2;
+  const g0z0 = g0.z - g0id / 2;
+  const openingAt = (tag) => {
+    const side = +tag.slice(1);
+    if (tag[0] === 's') {
+      const dr = info.doors.find((d) => d.side === side);
+      return dr ? { x: dr.wp[0], z: dr.wp[2] } : null;
+    }
+    const win = (info.windows ?? []).find(
+      (o) => o.f === 0 && o.side === side && o.state === 'open'
+    );
+    if (!win) return null;
+    const p = worldOf(win.pm, win.x, 0, 0);
+    return { x: p[0], z: p[2] };
+  };
+  const routes = [];
+  for (const leg of spec.route ?? []) {
+    const pts = [];
+    for (const p of leg) {
+      if (typeof p === 'string') {
+        const q = openingAt(p);
+        if (q) pts.push(q);
+        else console.warn(`[world] ${spec.id}: route references missing opening "${p}"`);
+      } else {
+        pts.push({ x: g0x0 + p[0] * g0iw, z: g0z0 + p[1] * g0id });
+      }
+    }
+    if (pts.length >= 2) routes.push(pts);
+  }
+
+  /**
+   * Where along a wall (as fractions of its length) the route crosses it.
+   * Plain segment/segment intersection; a route that runs ALONG a wall rather
+   * than through it produces no crossing, which is correct — a corridor beside
+   * a partition does not need a hole in it.
+   */
+  const routeCrossings = (ax, az, bx, bz) => {
+    const out = [];
+    const rx = bx - ax;
+    const rz = bz - az;
+    for (const line of routes) {
+      for (let i = 1; i < line.length; i++) {
+        const cx = line[i - 1].x;
+        const cz = line[i - 1].z;
+        const sx = line[i].x - cx;
+        const sz = line[i].z - cz;
+        const den = rx * sz - rz * sx;
+        if (Math.abs(den) < 1e-6) continue;
+        const tt = ((cx - ax) * sz - (cz - az) * sx) / den;
+        const uu = ((cx - ax) * rz - (cz - az) * rx) / den;
+        if (tt < 0 || tt > 1 || uu < 0 || uu > 1) continue;
+        out.push(tt);
+      }
+    }
+    return out.sort((p, q) => p - q);
+  };
+
+  /**
    * Pull a partition back if it runs into an exterior doorway.
    *
    * W1's plan puts a wall at z-fraction 0.5 running out to x-fraction 1.0, and
@@ -802,16 +889,33 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
             : [x0 + ax * iw, z0 + az * id, x0 + bx * iw, z0 + bz * id];
         const len = Math.hypot(wx1 - wx0, wz1 - wz0);
         if (len < 0.5) continue; // trimmed away to nothing
+        /**
+         * The route wins over `doorAt`. A partition the corridor crosses gets
+         * its opening at the crossing; one the corridor misses keeps the
+         * authored door, because that door is cover to fight over and moving it
+         * for no reason would change the plan. A stub too short to take a
+         * 1.05 m opening AND be crossed is dropped: half a wall in the middle
+         * of a doorway is worse than no wall.
+         */
+        const HOLE_W = 1.05;
+        const holes = [];
+        const cross = f === 0 ? routeCrossings(wx0, wz0, wx1, wz1) : [];
+        if (cross.length && len < HOLE_W + 0.5) continue;
+        for (const tc of cross) {
+          const at = Math.min(Math.max(tc * len, HOLE_W / 2 + 0.2), len - HOLE_W / 2 - 0.2);
+          const hx = -len / 2 + at;
+          if (holes.some((h) => Math.abs(h.x - hx) < HOLE_W)) continue;
+          holes.push({ x: hx, y: 1.06, w: HOLE_W, h: 2.12 });
+        }
+        if (!holes.length && doorAt !== undefined && doorAt !== null) {
+          holes.push({ x: -len / 2 + doorAt * len, y: 1.06, w: HOLE_W, h: 2.12 });
+        }
         const ry = Math.atan2(wx1 - wx0, wz1 - wz0) - Math.PI / 2;
         _e.set(0, ry, 0);
         _q.setFromEuler(_e);
         _p.set((wx0 + wx1) / 2 - Math.sin(ry) * (it / 2), fy, (wz0 + wz1) / 2 - Math.cos(ry) * (it / 2));
         _s.set(1, 1, 1);
         const pm = new THREE.Matrix4().compose(_p, _q, _s);
-        const holes = [];
-        if (doorAt !== undefined && doorAt !== null) {
-          holes.push({ x: -len / 2 + doorAt * len, y: 1.06, w: 1.05, h: 2.12 });
-        }
         facadeWall(A, pm, {
           w: len,
           h: fh,
@@ -878,6 +982,9 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
           // an oil drum rolled in front of a door is a locked door. E3's side-3
           // and K2's side-2 openings were both blocked down to a 0.3 m slot.
           doorways: f === 0 ? doorSpots : null,
+          // …and the same is true of the whole corridor between two openings,
+          // not just the first metre of it. See the route note above.
+          route: f === 0 && routes.length ? routes : null,
         });
       }
     }

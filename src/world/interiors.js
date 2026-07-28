@@ -34,14 +34,112 @@ function inDoorway(r, x, z) {
   return false;
 }
 
-/** A spot for a collision-bearing prop, resampled off the doorways. */
+/**
+ * How wide the through-route corridor is kept, measured from its centre line.
+ *
+ * The player capsule is 0.64 m across, so 0.85 m of half-width leaves about a
+ * metre of slack for the fact that the corridor is a straight polyline and a
+ * player is not — enough that you can walk it without scraping, and narrow
+ * enough that a 6.7 m room still has both its long walls dressed.
+ */
+const ROUTE_R = 0.85;
+
+/**
+ * True where a collision-bearing prop would stand in the building's declared
+ * through-route (see the long note in `buildInterior`). `r.route` is a list of
+ * polylines in level space; this is the point/segment distance test against all
+ * of them.
+ */
+function onRoute(r, x, z, pad = 0) {
+  const lines = r.route;
+  if (!lines) return false;
+  const rad = ROUTE_R + pad;
+  const r2 = rad * rad;
+  for (let l = 0; l < lines.length; l++) {
+    const line = lines[l];
+    for (let i = 1; i < line.length; i++) {
+      const ax = line[i - 1].x, az = line[i - 1].z;
+      const bx = line[i].x, bz = line[i].z;
+      const vx = bx - ax, vz = bz - az;
+      const ll = vx * vx + vz * vz;
+      let t = ll > 1e-9 ? ((x - ax) * vx + (z - az) * vz) / ll : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const dx = x - (ax + vx * t);
+      const dz = z - (az + vz * t);
+      if (dx * dx + dz * dz < r2) return true;
+    }
+  }
+  return false;
+}
+
+/** Anywhere a collision-bearing prop must not stand: a doorway or the route. */
+function blocksWay(r, x, z, pad = 0) {
+  return inDoorway(r, x, z) || onRoute(r, x, z, pad);
+}
+
+/** A spot for a collision-bearing prop, resampled off the doorways and route. */
 function clearSpot(rng, r, x0, z0, x1, z1) {
   for (let i = 0; i < 8; i++) {
     const x = rng.range(x0, x1);
     const z = rng.range(z0, z1);
-    if (!inDoorway(r, x, z)) return [x, z];
+    if (!blocksWay(r, x, z)) return [x, z];
   }
   return null; // room is mostly threshold — leave it empty rather than block it
+}
+
+/**
+ * Slide a fixed piece of furniture off the route without losing it.
+ *
+ * The alternative — dropping anything that lands in the corridor — empties the
+ * rooms the corridor runs through, which is most of them. So try the authored
+ * spot, then a ring of nearby ones, and only give up if the whole
+ * neighbourhood is corridor.
+ */
+function shiftClear(r, x, z, x0, z0, x1, z1, pad = 0) {
+  if (!blocksWay(r, x, z, pad)) return [x, z];
+  for (let ring = 1; ring <= 4; ring++) {
+    const step = ring * 0.55;
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      const px = x + Math.cos(a) * step;
+      const pz = z + Math.sin(a) * step;
+      if (px < x0 || px > x1 || pz < z0 || pz > z1) continue;
+      if (!blocksWay(r, px, pz, pad)) return [px, pz];
+    }
+  }
+  return null;
+}
+
+/**
+ * The longest run of a straight line of furniture that stays off the route.
+ *
+ * A counter is not a point and cannot be nudged aside — it runs the length of
+ * the room. K1 is the case that forced this: a 5.4 m shed with a door at each
+ * end and a 3.3 m counter straight across the middle of it, which is a wall.
+ * Shortening it to the longest clear run keeps a counter in the shop and puts
+ * the gap where the corridor needs it, which is also how a real stallholder
+ * would arrange a room people walk through.
+ *
+ * Returns `[centre, length]` along the free axis, or null when nothing usable
+ * survives. `pad` is the piece's own half-depth, so the clearance is measured
+ * to its FACE and not to its centre line.
+ */
+function clearSpan(r, alongZ, fixed, a, b, pad, minLen) {
+  if (!r.route) return [(a + b) / 2, b - a];
+  const n = Math.max(8, Math.ceil((b - a) / 0.15));
+  let bs = 0, be = -1, s = -1;
+  for (let i = 0; i <= n; i++) {
+    const t = a + ((b - a) * i) / n;
+    const ok = !blocksWay(r, alongZ ? fixed : t, alongZ ? t : fixed, pad);
+    if (ok) {
+      if (s < 0) s = i;
+      if (i - s > be - bs) { bs = s; be = i; }
+    } else s = -1;
+  }
+  if (be <= bs) return null;
+  const t0 = a + ((b - a) * bs) / n;
+  const t1 = a + ((b - a) * be) / n;
+  return t1 - t0 < minLen ? null : [(t0 + t1) / 2, t1 - t0];
 }
 
 /** Furnish one room. Rect is in level space; y is the floor surface. */
@@ -414,55 +512,73 @@ function furnishShop(A, rng, r, cx, cz, w, d, m) {
    * the shop with goods instead of walling the opening off.
    */
   const alongZ = r.street === 1 || r.street === 3;
-  const ccx = alongZ ? (r.street === 1 ? x1 - 1.3 : x0 + 1.3) : cx;
-  const ccz = alongZ ? cz : frontZ ? cz - frontZ * (d * 0.5 - 1.3) : cz + d * 0.18;
-  const clen = Math.min((alongZ ? d : w) - 1.4, 4.4);
+  // `ccFixed` is the offset from the frontage, on the axis the counter does NOT
+  // run along; `ccFree` is where its centre sits on the axis it does.
+  const ccFixed = alongZ
+    ? r.street === 1 ? x1 - 1.3 : x0 + 1.3
+    : frontZ ? cz - frontZ * (d * 0.5 - 1.3) : cz + d * 0.18;
+  const ccFree = alongZ ? cz : cx;
+  const wantLen = Math.min((alongZ ? d : w) - 1.4, 4.4);
+  // Clip the run to whatever the through-route leaves. Below 1.4 m it is a
+  // table, not a counter, and the room is better off with the space.
+  const span = clearSpan(
+    r, alongZ, ccFixed, ccFree - wantLen / 2, ccFree + wantLen / 2, 0.37, 1.4
+  );
+  const clen = span ? span[1] : 0;
+  const ccx = alongZ ? ccFixed : span ? span[0] : cx;
+  const ccz = alongZ ? (span ? span[0] : cz) : ccFixed;
   const cSX = alongZ ? 0.74 : clen;
   const cSZ = alongZ ? clen : 0.74;
-  A.add('wood_prop_dark', BOX(A), LL(IDENT, ccx, y + 0.9, ccz, 0, cSX, 0.06, cSZ), {
-    masks: [0.9, 0.4, 0.1],
-  });
-  A.add('wood_prop_dark', BOX(A), LL(IDENT, ccx + (alongZ ? -0.32 : 0), y + 0.45, ccz + (alongZ ? 0 : 0.32), 0, alongZ ? 0.09 : cSX, 0.9, alongZ ? cSZ : 0.09), {
-    masks: [0.5, 0.6, 0.4],
-  });
-  A.add('wood_prop_dark', BOX(A), LL(IDENT, ccx, y + 0.28, ccz, 0, cSX - 0.2, 0.04, cSZ - 0.2), {
-    masks: [0.4, 0.7, 0.5],
-  });
-  A.box('wood', ccx, y + 0.45, ccz, cSX, 0.9, cSZ);
-  for (let i = 0; i < 6; i++) {
-    const t = rng.range(-clen / 2 + 0.3, clen / 2 - 0.3);
-    const px = ccx + (alongZ ? rng.range(-0.22, 0.22) : t);
-    const pz = ccz + (alongZ ? t : rng.range(-0.22, 0.22));
-    if (rng.float() < 0.45) {
-      A.put('tray', px, y + 0.94, pz, rng.range(-0.4, 0.4) + (alongZ ? Math.PI / 2 : 0), 1, [1, 1.1, 1]);
-      A.put('produce', px, y + 0.96, pz, rng.float() * 6.28, 1, [1, 1, 1]);
-    } else {
+  if (span) {
+    A.add('wood_prop_dark', BOX(A), LL(IDENT, ccx, y + 0.9, ccz, 0, cSX, 0.06, cSZ), {
+      masks: [0.9, 0.4, 0.1],
+    });
+    A.add('wood_prop_dark', BOX(A), LL(IDENT, ccx + (alongZ ? -0.32 : 0), y + 0.45, ccz + (alongZ ? 0 : 0.32), 0, alongZ ? 0.09 : cSX, 0.9, alongZ ? cSZ : 0.09), {
+      masks: [0.5, 0.6, 0.4],
+    });
+    A.add('wood_prop_dark', BOX(A), LL(IDENT, ccx, y + 0.28, ccz, 0, cSX - 0.2, 0.04, cSZ - 0.2), {
+      masks: [0.4, 0.7, 0.5],
+    });
+    A.box('wood', ccx, y + 0.45, ccz, cSX, 0.9, cSZ);
+    for (let i = 0; i < 6; i++) {
+      const t = rng.range(-clen / 2 + 0.3, clen / 2 - 0.3);
+      const px = ccx + (alongZ ? rng.range(-0.22, 0.22) : t);
+      const pz = ccz + (alongZ ? t : rng.range(-0.22, 0.22));
+      if (rng.float() < 0.45) {
+        A.put('tray', px, y + 0.94, pz, rng.range(-0.4, 0.4) + (alongZ ? Math.PI / 2 : 0), 1, [1, 1.1, 1]);
+        A.put('produce', px, y + 0.96, pz, rng.float() * 6.28, 1, [1, 1, 1]);
+      } else {
+        A.put(
+          rng.pick(['box_card_a', 'box_card_b', 'crate_b', 'bottle', 'can', 'bucket']),
+          px,
+          y + 0.94,
+          pz,
+          rng.float() * 6.28,
+          rng.range(0.6, 0.9),
+          [1, 1.15, 1]
+        );
+      }
+    }
+    // sacks and trays stacked on the customer side of the counter
+    for (let i = 0; i < rng.int(3, 6); i++) {
+      const t = rng.range(-clen / 2, clen / 2);
+      const off = rng.range(0.55, 1.05);
+      const px = ccx + (alongZ ? (r.street === 1 ? off : -off) : t);
+      const pz = ccz + (alongZ ? t : frontZ ? frontZ * off : off);
+      // A sack dropped on the customer side of a shortened counter can land in
+      // the corridor the counter was shortened to make; nudge it back in.
+      const sp = shiftClear(r, px, pz, x0 + 0.3, z0 + 0.3, x1 - 0.3, z1 - 0.3, 0.25);
+      if (!sp) continue;
       A.put(
-        rng.pick(['box_card_a', 'box_card_b', 'crate_b', 'bottle', 'can', 'bucket']),
-        px,
-        y + 0.94,
-        pz,
+        rng.pick(['sandbag_a', 'sandbag_b', 'tray', 'crate_b', 'crate_flat']),
+        sp[0],
+        y + 0.02 + (i % 2) * 0.16,
+        sp[1],
         rng.float() * 6.28,
-        rng.range(0.6, 0.9),
-        [1, 1.15, 1]
+        rng.range(0.9, 1.05),
+        [1, rng.range(1.0, 1.3), 1]
       );
     }
-  }
-  // sacks and trays stacked on the customer side of the counter
-  for (let i = 0; i < rng.int(3, 6); i++) {
-    const t = rng.range(-clen / 2, clen / 2);
-    const off = rng.range(0.55, 1.05);
-    const px = ccx + (alongZ ? (r.street === 1 ? off : -off) : t);
-    const pz = ccz + (alongZ ? t : frontZ ? frontZ * off : off);
-    A.put(
-      rng.pick(['sandbag_a', 'sandbag_b', 'tray', 'crate_b', 'crate_flat']),
-      px,
-      y + 0.02 + (i % 2) * 0.16,
-      pz,
-      rng.float() * 6.28,
-      rng.range(0.9, 1.05),
-      [1, rng.range(1.0, 1.3), 1]
-    );
   }
   // Shelving against the side walls — but never against the shop's own
   // frontage, or it blockades the opening the street is seen through.
@@ -496,8 +612,11 @@ function furnishShop(A, rng, r, cx, cz, w, d, m) {
       }
     }
   }
-  // crate stacks and sacks
-  stackCrates(A, rng, x0 + 0.7, y, z1 - 0.9, rng.int(3, 6));
+  // crate stacks and sacks. The stack is 0.7 m of solid collision — it is the
+  // one piece of shop dressing that can seal a corridor on its own, so it moves.
+  const cs = shiftClear(r, x0 + 0.7, z1 - 0.9, x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, 0.35);
+  if (cs) stackCrates(A, rng, cs[0], y, cs[1], rng.int(3, 6));
+  else rng.int(3, 6);
   for (let i = 0; i < rng.int(3, 6); i++) {
     A.put(
       rng.pick(['sandbag_a', 'sandbag_b', 'sandbag_c']),
@@ -510,9 +629,13 @@ function furnishShop(A, rng, r, cx, cz, w, d, m) {
     );
   }
   A.put('barrel_wood', x1 - 0.6, y, z0 + 0.7, rng.float() * 6.28, 1, [1, 1.2, 1]);
-  A.put('table_small', cx - w * 0.28, y, cz - d * 0.28, rng.range(-0.4, 0.4), 1, [1, 1, 1]);
-  A.put('chair', cx - w * 0.28 + 0.7, y, cz - d * 0.2, rng.range(2, 4), 1, [1, 1.2, 1]);
-  A.box('wood', cx - w * 0.28, y + 0.4, cz - d * 0.28, 1.0, 0.8, 0.8);
+  // Table and chair — a 1.0 x 0.8 collision box, so it moves off the route too.
+  const tb = shiftClear(r, cx - w * 0.28, cz - d * 0.28, x0 + 0.7, z0 + 0.7, x1 - 0.7, z1 - 0.7, 0.5);
+  if (tb) {
+    A.put('table_small', tb[0], y, tb[1], rng.range(-0.4, 0.4), 1, [1, 1, 1]);
+    A.put('chair', tb[0] + 0.7, y, tb[1] + d * 0.08, rng.range(2, 4), 1, [1, 1.2, 1]);
+    A.box('wood', tb[0], y + 0.4, tb[1], 1.0, 0.8, 0.8);
+  }
 }
 
 // ----------------------------------------------------------------- living --
@@ -536,8 +659,13 @@ function furnishLiving(A, rng, r, cx, cz, w, d, m) {
       LL(IDENT, cx + rng.range(-1, 1), y + 0.07, cz + rng.range(-1, 1), rng.float() * 6.28)
     );
   }
-  A.put('cabinet', x1 - 0.35, y, cz + rng.range(-0.6, 0.6), -Math.PI / 2, 1, [1, 1, 1]);
-  A.box('wood', x1 - 0.35, y + 0.6, cz, 0.5, 1.2, 0.9);
+  // The cabinet stands against the +X wall — which is exactly where a corridor
+  // running along that wall would be, so it slides along the wall to clear it.
+  const cab = shiftClear(r, x1 - 0.35, cz + rng.range(-0.6, 0.6), x1 - 0.55, z0 + 0.6, x1 - 0.3, z1 - 0.6, 0.5);
+  if (cab) {
+    A.put('cabinet', cab[0], y, cab[1], -Math.PI / 2, 1, [1, 1, 1]);
+    A.box('wood', cab[0], y + 0.6, cab[1], 0.5, 1.2, 0.9);
+  }
   A.put('table_small', cx + 0.4, y, cz - 0.8, rng.range(0, 0.4), 1, [1, 1, 1]);
   A.put('chair', cx - 0.8, y, cz - 1.2, rng.range(1.5, 2.5), 1, [1, 1.2, 1]);
   A.put('chair', cx + 1.4, y, cz - 0.4, rng.range(-1.5, -0.5), 1, [1, 1.2, 1]);
@@ -549,7 +677,8 @@ function furnishLiving(A, rng, r, cx, cz, w, d, m) {
   A.addOnce('fabric_red', wall, LL(IDENT, cx - 0.4, y + 1.65, z0 + 0.09, 0, 1, 1, 1), {
     masks: [0.3, 0.4, 0.2],
   });
-  stackCrates(A, rng, x1 - 0.9, y, z0 + 0.8, rng.int(1, 3));
+  const lcs = shiftClear(r, x1 - 0.9, z0 + 0.8, x0 + 0.6, z0 + 0.6, x1 - 0.6, z1 - 0.6, 0.35);
+  if (lcs) stackCrates(A, rng, lcs[0], y, lcs[1], rng.int(1, 3));
 }
 
 // ---------------------------------------------------------------- storage --
