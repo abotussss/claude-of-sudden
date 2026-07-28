@@ -54,7 +54,7 @@ Two teams of seven, one life each, on the market street.
 | freeze | 10 s. Weapons locked, loadout free |
 | round clock | 120 s. Runs out ⇒ the defence wins |
 | the C4 | 4 s to plant, **40 s fuse**, 7 s to defuse |
-| bomb sites | **A** — the west alley · **B** — the east alley |
+| bomb sites | **A** and **B**, painted on the ground, 8 m radius each |
 | match | first to 4 rounds, sides swap after round 3, 7 rounds maximum |
 
 The rule that shapes every round: **once the C4 is armed, the round clock stops
@@ -111,6 +111,30 @@ The game on top of it:
 | `ui` | Round strip (who is left), C4 fuse panel, scoreboard, spectator line, and a killfeed that knows which side you are on |
 
 ### Some specifics worth recording
+
+**The map is gated, not eyeballed.** `tools/navcheck.mjs` asserts that every
+spawn of both teams has an A* route to every bomb site and every hold point, and
+prints the real route lengths, which is the map's balance in one table:
+
+```
+site A: attack 34.1 m vs defend 36.8 m — attack arrives first by 2.7 m
+site B: attack 37.2 m vs defend 28.2 m — defence arrives first by 9.0 m
+PASS — every spawn reaches every site
+```
+
+That asymmetry is deliberate: A is the fast site the attack can contest on
+timing, B is the one the defence holds. Run it after ANY change to `src/world`
+or `src/match/sites.js`. It has already caught three things nothing else did —
+both hold points unreachable from every defender spawn, a probe ray that
+resolved points inside buildings onto their ROOFS, and a site sealed into a
+courtyard with no route from the attacking half.
+
+**Getting inside matters.** W1 overlooks site A and E2 overlooks site B; both
+are enterable, both have a second door on the far side, so each is a route
+between the street and its site rather than a room with one mouth. And you can
+**vault in through a ground-floor window** — measured, street level to inside,
+climbing 1 m on the forward key alone. That was always possible; it was useless
+until there were buildings worth entering next to the objectives.
 
 **Spawn separation is a gameplay parameter.** The map is one straight street and
 an actor's view range is 58 m. At the first spacing tried the two spawn clusters
