@@ -128,11 +128,41 @@ const VIEWS = {
   // 12 m: mid-range, where the gear silhouette has to read
   mid: { pos: [0.6, 1.3, 12], look: [0, 1.0, 0], fov: 30 },
 };
-const V = VIEWS[view] ?? VIEWS.front;
-camera.position.fromArray(V.pos);
-camera.lookAt(new THREE.Vector3().fromArray(V.look));
-camera.fov = V.fov;
-camera.updateProjectionMatrix();
+/**
+ * Generic orbit framing: `?dist=10&az=45` puts the camera 10 m out on that
+ * azimuth (0 = dead front, 90 = the character's left side) at chest height, with
+ * the fov chosen so the figure keeps a constant on-screen height regardless of
+ * distance. This is what the "read it at 3 / 10 / 30 m" pass needs — the named
+ * VIEWS above are all at one distance each.
+ */
+const distParam = q.get('dist');
+if (distParam) {
+  const d = Number(distParam);
+  const az = ((Number(q.get('az') ?? 0)) * Math.PI) / 180;
+  const cy = 1.0;
+  camera.position.set(Math.sin(az) * d, cy + d * 0.045, Math.cos(az) * d);
+  camera.lookAt(0, cy, 0);
+  // 1.9 m of subject filling ~62% of the frame height at any distance
+  camera.fov = (2 * Math.atan(1.9 / 0.62 / 2 / d) * 180) / Math.PI;
+  camera.updateProjectionMatrix();
+} else {
+  const V = VIEWS[view] ?? VIEWS.front;
+  camera.position.fromArray(V.pos);
+  camera.lookAt(new THREE.Vector3().fromArray(V.look));
+  camera.fov = V.fov;
+  camera.updateProjectionMatrix();
+}
+
+/**
+ * `?light=shade` drops the key to a hair of bounce and leans on the hemisphere,
+ * which is the lighting a figure standing inside a doorway actually gets. It is
+ * the case the team rim exists for, and the case a model's form reads worst in.
+ */
+if (q.get('light') === 'shade') {
+  key.intensity = 0.22;
+  rim.intensity = 0.35;
+  renderer.toneMappingExposure = 1.6;
+}
 
 /* ---- animation ---- */
 const clip = q.get('clip') ?? 'idle';

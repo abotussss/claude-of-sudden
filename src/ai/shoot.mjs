@@ -66,7 +66,9 @@ page.on('console', (m) => logs.push(`[${m.type()}] ${m.text()}`));
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}\n${e.stack ?? ''}`));
 
 const qs = new URLSearchParams();
-for (const k of ['view', 'variant', 'clip', 'phase', 'aim']) if (args[k]) qs.set(k, args[k]);
+for (const k of ['view', 'variant', 'clip', 'phase', 'aim', 'dist', 'az', 'light']) {
+  if (args[k]) qs.set(k, args[k]);
+}
 
 let failed = null;
 try {
