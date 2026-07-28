@@ -154,6 +154,15 @@ export class WorldSystem {
       new THREE.Vector3(62, 26, 62)
     ).applyMatrix4(A.xform);
     this.stats = A.stats;
+    /**
+     * The authored layout, exposed for TOOLS only — nothing in the engine reads
+     * it back through here. `tools/indoorcheck.mjs` needs the footprints of the
+     * `enterable` buildings so it can walk the real player capsule at each one
+     * and prove you can actually get inside; `navcheck` cannot tell, because it
+     * tests the BOT height field and that has no opinion about whether a doorway
+     * fits the player or whether a prop was dressed across it.
+     */
+    this.layout = { BUILDINGS, STREET, SET_PIECES, GATE };
 
     const ms = performance.now() - t0;
     console.info(
