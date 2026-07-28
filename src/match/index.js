@@ -48,6 +48,7 @@ import { RULES, TEAM, TEAM_NAME, TEAM_COLOR, ROLE, attackingTeam, BOT_NAMES, TEA
 import { resolveLayout } from './sites.js';
 import { Bomb, BOMB } from './bomb.js';
 import { Spectator } from './spectate.js';
+import { SiteMarks } from './sitemark.js';
 
 const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', MATCH_OVER: 'matchover' };
 
@@ -110,8 +111,15 @@ export class MatchSystem {
 
     /* ---- bomb + spectator --------------------------------------------- */
     this.bomb = new Bomb(ctx);
+    // Paint the sites on the ground from the RESOLVED positions, so the paint is
+    // always where the plant trigger is even when `resolveLayout` has had to
+    // move a site off sealed geometry. See src/match/sitemark.js.
+    this.marks = new SiteMarks(ctx, this.sites);
     const patcher = ctx.peek('render')?.patcher;
-    if (patcher) for (const m of this.bomb.materials) patcher.patch(m);
+    if (patcher) {
+      for (const m of this.bomb.materials) patcher.patch(m);
+      patcher.patch(this.marks.paint);
+    }
     this.spectator = new Spectator(ctx);
 
     /* ---- scratch ------------------------------------------------------- */
@@ -1014,6 +1022,7 @@ export class MatchSystem {
     if (this.weapons) this.weapons.locked = false;
     if (this.ai) this.ai.combatEnabled = true;
     this.bomb?.dispose();
+    this.marks?.dispose();
   }
 }
 
