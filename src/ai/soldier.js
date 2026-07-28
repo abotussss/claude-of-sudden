@@ -193,8 +193,14 @@ export function buildSoldier(name, { rng, materials }) {
   B.occlude([0, 1.20, -0.105], [0, 1.40, -0.112], 0.105, 0.8); // back plate
   B.occlude([-0.17, 1.16, 0.02], [-0.17, 1.30, 0.02], 0.055, 0.7); // right side
   B.occlude([0.17, 1.16, 0.02], [0.17, 1.30, 0.02], 0.055, 0.7);
-  B.occlude([0, 1.60, 0.0], [0, 1.80, -0.01], 0.122, 1.0); // helmet interior
-  B.occlude([-0.09, 1.655, 0.05], [0.09, 1.655, 0.05], 0.055, 1.0); // brim shadow
+  B.occlude([0, 1.63, 0.0], [0, 1.81, -0.012], 0.106, 1.0); // helmet interior
+  // Brim shadow. The rim moved up onto the brow (head bone 1.552 + 0.118), and
+  // this proxy is what puts the dark band across the eye sockets that makes the
+  // newly-exposed face read as a face instead of a bright patch of skin.
+  B.occlude([-0.10, 1.672, 0.058], [0.10, 1.672, 0.058], 0.050, 1.0);
+  // eye sockets themselves: a small proxy per orbit, so the globe sits in shade
+  B.occlude([-0.033, 1.650, 0.055], [-0.033, 1.650, 0.075], 0.022, 0.9);
+  B.occlude([0.033, 1.650, 0.055], [0.033, 1.650, 0.075], 0.022, 0.9);
   B.occlude(shR, elR, 0.058, 0.7);
   B.occlude(shL, elL, 0.058, 0.7);
   B.occlude(hipR, knR, 0.085, 0.8);
@@ -272,9 +278,25 @@ export function buildSoldier(name, { rng, materials }) {
       wear: 0.06,
       name: `shoulder${suffix}`,
     });
+    /**
+     * SLEEVE PROFILE — 9 samples from the shoulder (t=0) through the elbow
+     * (t=0.5, index 4) to the cuff (t=1).
+     *
+     * The old array was [0.050, 0.062, 0.056, 0.050, 0.046, 0.042, 0.038]:
+     * monotonically shrinking from just below the shoulder all the way to the
+     * wrist. A limb whose radius only ever decreases is a cone, and a cone is
+     * the thing the eye refuses to read as an arm no matter what is painted on
+     * it. Two masses are missing from it, and both are named in the brief:
+     *
+     *   - the elbow is not the narrowest point (it should be, between the
+     *     triceps above and the flexor bulge below);
+     *   - there is no FOREARM. A real forearm swells to about 110% of the elbow
+     *     roughly a third of the way down and then tapers hard to a wrist about
+     *     60% of that — the classic double curve. Straight taper is a broomstick.
+     */
     B.add(
       P.limbTube(nz, [sh[0] + side * 0.012, sh[1] + 0.055, sh[2]], el, wr,
-        [0.050, 0.062, 0.056, 0.050, 0.046, 0.042, 0.038], {
+        [0.055, 0.062, 0.059, 0.052, 0.047, 0.052, 0.047, 0.039, 0.036], {
         rings: 22,
         seg: 16,
         fold: 0.0016,
@@ -324,15 +346,33 @@ export function buildSoldier(name, { rng, materials }) {
     [hipR, knR, anR, 'R'],
     [hipL, knL, anL, 'L'],
   ]) {
+    /**
+     * TROUSER PROFILE — 9 samples from the hip (t=0) through the knee (t=0.5,
+     * index 4) to the boot cuff (t=1), plus a rearward offset for the calf.
+     *
+     * The old array was [0.090, 0.085, 0.076, 0.068, 0.062, 0.060, 0.064] and it
+     * had the same disease as the sleeve, but worse, because the leg is longer
+     * and there is nothing else on it to look at: the knee (0.068) was WIDER
+     * than the calf (0.060), so the lower leg was a straight stick that got
+     * thinner all the way down. In the walk cycle it was the loudest non-human
+     * cue on the model — two noodles swinging under a torso.
+     *
+     * Real: the knee is the narrowest point of the whole leg above the ankle,
+     * the calf belly peaks about a third of the way down the shin at ~115% of
+     * the knee, and it peaks BEHIND the tibia, not around it. `offset` supplies
+     * that asymmetry; a symmetric bump would just look like a swollen joint.
+     */
     B.add(
       P.limbTube(nz, hip, kn, [an[0], an[1] + 0.085, an[2] + 0.008],
-        [0.090, 0.085, 0.076, 0.068, 0.062, 0.060, 0.064], {
+        [0.098, 0.093, 0.085, 0.074, 0.065, 0.075, 0.069, 0.058, 0.059], {
         rings: 24,
         seg: 17,
         fold: 0.0018,
         // trousers crease harder than sleeves and stack on the boot cuff
         crease: 0.0042,
         bend: [0, 0, -1], // gathers behind the knee
+        flat: 0.94, // a thigh is nearly as deep as it is wide; 0.88 read flat
+        offset: (t) => [0, -0.024 * Math.exp(-((t - 0.60) ** 2) / 0.0090)],
       }),
       {
         material: 'cloth',
@@ -542,7 +582,11 @@ export function buildSoldier(name, { rng, materials }) {
     B.add(P.eyeball(head, side), {
       material: 'polymer',
       bone: 'Head',
-      colour: [0.55, 0.5, 0.45],
+      // Was 0.55 — a pale bead, and at 3 m the eye read as a highlight stuck on
+      // the face. What the viewer actually recognises is a DARK aperture inside
+      // the brow's shadow with one specular pin in it, and the polymer set is
+      // glossy enough to supply the pin on its own.
+      colour: [0.20, 0.185, 0.175],
       grime: 0.2,
       name: 'eye',
     });

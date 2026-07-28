@@ -15,7 +15,17 @@ import {
 
 const V = (x, y, z) => [x, y, z];
 
-/** Cylindrical wrap about the Y axis — bends flat slabs around the torso. */
+/**
+ * Cylindrical wrap about the Y axis — bends flat slabs around the torso.
+ *
+ * `centreZ` MUST be the z the slab actually sits at. The bend angle is
+ * `v.x / radius` but the arm it is swung on is `radius + (v.z - centreZ)`, so
+ * passing 0 for a part that lives 9 cm in front of the origin multiplies its
+ * width by `(radius + 0.09) / radius`. On the goggles and the shooting glasses
+ * that was 1.8x — 25 cm of eyewear on a 17 cm head, sticking out past the
+ * helmet like a diving board. It was invisible only because the helmet used to
+ * cover the whole face.
+ */
 export function bendY(mesh, radius, centreZ = 0) {
   return warp(mesh, (v) => {
     const r = radius + (v.z - centreZ);
@@ -125,14 +135,22 @@ export function pelvis(nz) {
   return m;
 }
 
-/** Collar: a short stand-up band around the neck. */
+/**
+ * Collar: a short stand-up band around the neck.
+ *
+ * It used to be 21.6 cm across at its base — wider than the head (17.2 cm) — so
+ * the head, the collar and the shoulders were one continuous mass with no pinch
+ * between them, which is the whole of the "he has no neck" read. A stand collar
+ * is a tube around a 12 cm neck; 18.4 cm at the base and 14.4 at the top is
+ * already generous for one worn open over a wrap.
+ */
 export function collar(nz) {
   const seg = 22;
   const rings = [
-    [1.435, 0.108, 0.092],
-    [1.470, 0.090, 0.082],
-    [1.500, 0.082, 0.076],
-    [1.516, 0.086, 0.080],
+    [1.435, 0.092, 0.084],
+    [1.470, 0.080, 0.076],
+    [1.500, 0.072, 0.070],
+    [1.516, 0.076, 0.074],
   ].map(([y, hx, hz]) => ({ pts: superEllipse(hx, hz, 2.6, seg), o: [0, y, -0.006] }));
   const m = loft(rings, { capStart: false, capEnd: true });
   computeNormals(m);
@@ -182,11 +200,22 @@ export function limbTube(nz, a, b, c, radii, opts = {}) {
     pts.push([tmp.x, tmp.y, tmp.z]);
   }
   const flat = opts.flat ?? 0.88;
+  // `opts.offset(t)` -> [dx, dz] in the tube's own frame (local +Z is the
+  // direction `up` points, i.e. FORWARD for a hanging limb). This is how the
+  // calf gets to bulge BEHIND the shin rather than swelling the whole ring:
+  // a symmetric radius bump reads as a swollen ankle, an asymmetric one reads as
+  // a gastrocnemius.
+  const off = opts.offset;
   const m = tube(
     pts,
     (t) => {
       const r = radiusAt(radii, t);
-      return ellipseProfile(r, r * flat, segs);
+      const ring = ellipseProfile(r, r * flat, segs);
+      if (off) {
+        const [dx, dz] = off(t);
+        if (dx || dz) for (const q of ring) { q[0] += dx; q[1] += dz; }
+      }
+      return ring;
     },
     { capStart: opts.capStart ?? false, capEnd: opts.capEnd ?? false, up: opts.up ?? [0, 0, 1] }
   );
@@ -241,15 +270,31 @@ function radiusAt(radii, t) {
   return radii[i] + (radii[i + 1] - radii[i]) * f;
 }
 
-/** Deltoid cap so the shoulder is round rather than a tube end. */
+/**
+ * Deltoid cap so the shoulder is round rather than a tube end.
+ *
+ * It used to be a plain ellipsoid centred on the joint, and it read as exactly
+ * that: a ball stuck on the shoulder, visibly proud of the sleeve, a pauldron.
+ * A deltoid is a TEARDROP — it caps the acromion, wraps the head of the humerus
+ * and runs to a V insertion a third of the way down the upper arm. So the cap is
+ * taller than it is wide, its lower half is pinched toward the arm axis, and it
+ * is centred below the joint rather than on it, which is what lets it melt into
+ * the sleeve instead of sitting on top of it.
+ */
 export function shoulderCap(nz, shoulder, side) {
-  const m = ellipsoid(0.052, 0.064, 0.056, { seg: 18, rows: 12 });
+  const m = ellipsoid(0.050, 0.082, 0.053, { seg: 18, rows: 13 });
   computeNormals(m);
   warp(m, (v) => {
-    v.y *= 1.0;
-    if (v.y < 0) v.x *= 0.9;
+    const t = Math.max(0, -v.y / 0.082); // 0 at the equator, 1 at the bottom
+    // pinch to the V insertion, and pull the taper inboard so the mass hangs
+    // down the OUTSIDE of the humerus the way the muscle actually does
+    const k = 1 - 0.62 * t ** 1.5;
+    v.x = v.x * k - side * 0.016 * t ** 2;
+    v.z *= k;
+    // the top is a shelf, not a dome: the acromion squares the shoulder off
+    if (v.y > 0) v.y *= 0.78;
   });
-  place(m, shoulder[0] + side * 0.012, shoulder[1] - 0.008, shoulder[2], 0, 0, -side * 0.12);
+  place(m, shoulder[0] + side * 0.014, shoulder[1] + 0.004, shoulder[2] - 0.002, 0, 0, -side * 0.16);
   displace(m, (x, y, z) => nz.fbm3(x * 30, y * 30, z * 30, 3) * 0.004);
   return m;
 }
@@ -303,10 +348,35 @@ export function headMesh(nz, base, p = {}) {
     const chin = Math.exp(-(y * y) / 0.00035) * front;
     // occiput
     const occ = Math.exp(-((y - 0.165) ** 2) / 0.0018) * Math.max(0, -z / 0.09);
-    const scale = 1 + 0.05 * brow - 0.10 * socket + 0.05 * cheek - 0.06 * temple;
-    v.x = bx + x * (1 - 0.05 * socket - 0.05 * temple);
+    // EYELIDS. The socket used to be a shallow dish with a bare ball sitting in
+    // it, which is why the eye read as a bead rather than an eye even when it
+    // was not hidden under the helmet. A lid is a soft roll of tissue ACROSS the
+    // top of the globe and a thinner one under it; together they cut the visible
+    // sclera down to a slit, and that slit — not the globe — is what the viewer
+    // recognises as an eye.
+    const lidX = Math.exp(-((Math.abs(x) - 0.033) ** 2) / 0.00050) * front;
+    const upperLid = Math.exp(-((y - 0.1075) ** 2) / 0.000060) * lidX;
+    const lowerLid = Math.exp(-((y - 0.0885) ** 2) / 0.000045) * lidX;
+    // MANDIBLE ANGLE. The loft tapers the jaw off as a smooth cone; a real jaw
+    // has a corner under the ear that squares off the lower head. Without it the
+    // head is an egg from every angle.
+    const jaw =
+      Math.exp(-((Math.abs(x) - 0.062) ** 2) / 0.00060) *
+      Math.exp(-((y - 0.042) ** 2) / 0.00090);
+    // The socket is nearly twice as deep as it was and the brow nearly twice as
+    // proud: at 3 m the eye is read almost entirely off the shadow the brow
+    // throws into the socket, and 1 mm of relief throws no shadow.
+    const scale = 1 + 0.09 * brow - 0.17 * socket + 0.05 * cheek - 0.06 * temple;
+    v.x = bx + x * (1 - 0.05 * socket - 0.05 * temple + 0.055 * jaw);
     v.y = by + y;
-    v.z = bz + z * scale + 0.006 * brow + 0.004 * chin + 0.008 * occ * -1;
+    v.z =
+      bz +
+      z * scale +
+      0.010 * brow +
+      0.004 * chin +
+      0.008 * occ * -1 +
+      0.0085 * upperLid +
+      0.0050 * lowerLid;
   });
   computeNormals(m);
   displace(m, (x, y, z) => nz.fbm3(x * 70, y * 70, z * 70, 3) * 0.0012);
@@ -345,11 +415,16 @@ export function ear(nz, base, side) {
   return m;
 }
 
-/** Eyeball: a small dark glossy sphere set into the socket. */
+/**
+ * Eyeball: a small glossy sphere set into the socket. 11.8 mm is life size, and
+ * the centre sits far enough forward that the cornea clears the (now much
+ * deeper) socket floor by about the 12 mm it does on a real skull — any less and
+ * the globe is simply buried, which is what it was.
+ */
 export function eyeball(base, side) {
-  const m = ellipsoid(0.0125, 0.0125, 0.0125, { seg: 12, rows: 8 });
+  const m = ellipsoid(0.0118, 0.0118, 0.0118, { seg: 12, rows: 8 });
   computeNormals(m);
-  place(m, base[0] + side * 0.032, base[1] + 0.0975, base[2] + 0.0665);
+  place(m, base[0] + side * 0.033, base[1] + 0.0975, base[2] + 0.0700);
   return m;
 }
 
@@ -371,9 +446,9 @@ export function faceWrap(nz, base, p = {}) {
     [-0.010, 0.080, 0.084, 0.004, 2.5],
     [0.014, 0.070, 0.082, 0.014, 2.5],
     [0.038, 0.078, 0.086, 0.008, 2.5],
-    [0.060, 0.086, 0.092, 0.002, 2.4],
-    [0.076, 0.090, 0.094, -0.002, 2.4],
-    [0.086, 0.090, 0.093, -0.006, 2.4],
+    [0.054, 0.086, 0.092, 0.002, 2.4],
+    [0.066, 0.090, 0.094, -0.002, 2.4],
+    [0.074, 0.090, 0.093, -0.006, 2.4],
   ];
   const seg = 22;
   const rings = S.map(([y, hx, hz, zo, n]) => ({
@@ -394,25 +469,30 @@ export function faceWrap(nz, base, p = {}) {
 
   // --- rolled hem along the eye line -----------------------------------
   // A wrap's top edge is a doubled-over hem: 8 mm of roll that catches the key
-  // light and draws the horizontal line under the eyes.
+  // light and draws the horizontal line under the eyes. It rides at 0.074 now,
+  // not 0.086: the lower lid is at 0.0885 and the old hem's 15 mm roll came up
+  // to 0.0995, i.e. straight across the bottom half of the eyeball. A wrap that
+  // eats the eye it is supposed to sit under is worse than no wrap.
   const hem = [];
   const nHem = 26;
   for (let i = 0; i <= nHem; i++) {
     const a = (i / nHem) * Math.PI * 2;
     const sx = Math.sin(a), sz = Math.cos(a);
     // the hem rides higher over the cheeks and dips at the bridge of the nose
-    const y = 0.086 + Math.max(0, sz) * 0.006 - Math.exp(-(sx * sx) / 0.06) * Math.max(0, sz) * 0.010;
+    const y = 0.074 + Math.max(0, sz) * 0.006 - Math.exp(-(sx * sx) / 0.16) * Math.max(0, sz) * 0.012;
     hem.push([bx + sx * 0.092, by + y, bz + sz * 0.096 - 0.004]);
   }
   const roll = ribbon(hem, 0.015, 0.008, { seg: 6, up: [0, 1, 0], upright: true });
   computeNormals(roll);
   appendMesh(out, roll);
 
-  // --- centre-front seam from the chin to the hem ------------------------
+  // --- centre-front seam from the chin up under the nose -----------------
+  // It used to run to 0.082 and crossed the bridge fold, drawing a hard X in
+  // the middle of the face.
   const seam = [];
   for (let i = 0; i <= 4; i++) {
     const t = i / 4;
-    seam.push([bx, by + 0.082 - t * 0.086, bz + 0.088 - t * 0.020]);
+    seam.push([bx, by + 0.046 - t * 0.050, bz + 0.084 - t * 0.024]);
   }
   const sm = ribbon(seam, 0.009, 0.004, { seg: 5, up: [1, 0, 0] });
   computeNormals(sm);
@@ -421,9 +501,9 @@ export function faceWrap(nz, base, p = {}) {
   // --- bridge fold over the nose ----------------------------------------
   const bridge = ribbon(
     [
-      [bx - 0.042, by + 0.070, bz + 0.070],
-      [bx, by + 0.078, bz + 0.092],
-      [bx + 0.042, by + 0.070, bz + 0.070],
+      [bx - 0.042, by + 0.056, bz + 0.070],
+      [bx, by + 0.064, bz + 0.092],
+      [bx + 0.042, by + 0.056, bz + 0.070],
     ],
     0.013,
     0.005,
@@ -444,17 +524,22 @@ export function faceWrap(nz, base, p = {}) {
  */
 export function sunglasses(base) {
   const bx = base[0], by = base[1], bz = base[2];
-  const lens = boxRound(0.072, 0.0155, 0.006, { n: 3.0, seg: 18, rows: 5, roundY: 0.6 });
-  place(lens, bx, by + 0.100, bz + 0.080, -0.06, 0, 0);
-  bendY(lens, 0.098, 0);
+  // A bend pulls its own edges backwards by `radius*(1 - cos)`, so once the
+  // width stopped being inflated the lens sat 1 mm INSIDE the cheekbone and
+  // vanished, leaving only the two temples reading as a pair of floating
+  // lozenges. A flatter bend and 10 mm more standoff put the whole band proud of
+  // the face, which is what this variant's only facing cue depends on.
+  const lens = boxRound(0.072, 0.019, 0.006, { n: 3.0, seg: 18, rows: 5, roundY: 0.6 });
+  place(lens, bx, by + 0.100, bz + 0.094, -0.06, 0, 0);
+  bendY(lens, 0.115, bz + 0.094);
   computeNormals(lens);
   const frame = emptyMesh();
   for (const side of [-1, 1]) {
     const arm = ribbon(
       [
-        [bx + side * 0.070, by + 0.104, bz + 0.062],
-        [bx + side * 0.083, by + 0.104, bz + 0.010],
-        [bx + side * 0.080, by + 0.100, bz - 0.030],
+        [bx + side * 0.064, by + 0.104, bz + 0.062],
+        [bx + side * 0.080, by + 0.104, bz + 0.010],
+        [bx + side * 0.078, by + 0.100, bz - 0.030],
       ],
       0.008,
       0.004,
@@ -478,8 +563,25 @@ export function sunglasses(base) {
 export function helmet(nz, base, p = {}) {
   const out = emptyMesh();
   const bx = base[0], by = base[1], bz = base[2];
-  const cy = by + 0.100; // shell centre (just above the brow)
-  const rx = 0.121, ry = 0.158, rz = 0.135;
+  // HEAD-LOCAL LANDMARKS (chin = 0, crown = 0.244): eye line 0.098, brow ridge
+  // 0.113, top of the ear 0.128.
+  //
+  // The rim used to sit at 0.100 and the front scallop dropped it to 0.090 —
+  // BELOW the eye line. Between that and the face wrap's hem at 0.086 the face
+  // got a 4 mm sliver, so the head rendered as one smooth dome from collar to
+  // crown with no eyes, no brow and no nose at any distance. It is the single
+  // biggest reason the figure did not read as a person at 3 m.
+  //
+  // 0.128 puts the rim on the brow where a real ballistic helmet sits, which
+  // opens a 4 cm band containing the brow, the socket shadow and the goggle
+  // lens. The shell then has to SHRINK to keep the crown where it was: 0.132
+  // of rise lands the top at 0.260, i.e. 1.6 cm of standoff over the skull,
+  // which is what the pad suspension actually is.
+  const cy = by + 0.128; // rim, at the brow
+  // 20.8 cm across x 25.2 cm front-to-back. The old shell was 24.2 x 27.0 —
+  // nearly round in plan, which is why it read as a bowling ball from the side.
+  // A real high-cut shell is markedly longer than it is wide.
+  const rx = 0.104, ry = 0.132, rz = 0.126;
 
   // --- shell: revolved dome, bottom edge scalloped per angle
   const seg = 26, rows = 12;
@@ -495,15 +597,32 @@ export function helmet(nz, base, p = {}) {
   }
   const shell = loft(rings, { capStart: false, capEnd: false });
   computeNormals(shell);
-  // scallop: raise the rim over the ears, drop it at the front and back
+  // Scallop: raise the rim over the ears, drop it at the front and back. The
+  // lift is 0.026 now, not 0.042 — with the rim already up on the brow, the old
+  // lift put the ear cut 4 cm clear of the ear and the shell stopped touching
+  // the head anywhere along its side.
   warp(shell, (v) => {
     const dy = v.y - cy;
     if (dy > 0.012) return;
     const ang = Math.atan2(v.x - bx, v.z - bz);
     const side = Math.abs(Math.sin(ang));
-    const lift = side ** 2 * 0.042 - Math.max(0, Math.cos(ang)) * 0.010;
+    const lift = side ** 2 * 0.026 - Math.max(0, Math.cos(ang)) * 0.010;
     const k = Math.min(1, Math.max(0, (0.012 - dy) / 0.06));
     v.y += lift * k;
+  });
+  // Occipital swell: a real shell bulges out over the back of the skull and its
+  // widest point in plan is BEHIND centre. A pure ellipsoid is symmetric front
+  // to back, which from the side is a circle — the second reason the head read
+  // as a ball.
+  warp(shell, (v) => {
+    const dz = (v.z - bz + 0.006) / rz;
+    const dyy = (v.y - cy) / ry;
+    const rear = Math.max(0, -dz);
+    const swell = rear ** 1.6 * Math.exp(-((dyy - 0.34) ** 2) / 0.22);
+    v.z -= 0.017 * swell;
+    // and the brow end tucks in, so the front is a visor rather than a bulge
+    const fwd = Math.max(0, dz);
+    v.z -= 0.010 * fwd ** 2 * Math.max(0, dyy) ** 0.8;
   });
   computeNormals(shell);
   displace(shell, (x, y, z) => nz.fbm3(x * 40, y * 40, z * 40, 3) * 0.0016);
@@ -516,8 +635,10 @@ export function helmet(nz, base, p = {}) {
     const a = (i / nLip) * Math.PI * 2;
     const sx = Math.sin(a), sz = Math.cos(a);
     const side = Math.abs(sx);
-    const lift = side ** 2 * 0.042 - Math.max(0, sz) * 0.010;
-    lipPts.push([bx + sx * rx * 0.955, cy + lift - 0.001, bz - 0.004 + sz * rz * 0.955]);
+    const lift = side ** 2 * 0.026 - Math.max(0, sz) * 0.010;
+    // follow the shell's occipital swell so the lip does not float off the back
+    const rearTuck = Math.max(0, -sz) ** 1.6 * 0.017;
+    lipPts.push([bx + sx * rx * 0.955, cy + lift - 0.001, bz - 0.004 + sz * rz * 0.955 - rearTuck]);
   }
   const lip = ribbon(lipPts, 0.011, 0.006, { seg: 6, up: [0, 1, 0], upright: true });
   computeNormals(lip);
@@ -530,14 +651,17 @@ export function helmet(nz, base, p = {}) {
 export function helmetHardware(nz, base) {
   const out = emptyMesh();
   const bx = base[0], by = base[1], bz = base[2];
-  const cy = by + 0.100;
+  // Every landmark here is measured off the shell in `helmet()` above; when the
+  // shell moved up onto the brow and narrowed, all of it had to follow or the
+  // rails and the shroud float in mid air.
+  const cy = by + 0.128;
 
   // NVG shroud on the brow
   const shroud = boxRound(0.030, 0.012, 0.022, { n: 4, seg: 12, rows: 5, roundY: 0.5 });
-  place(shroud, bx, cy + 0.062, bz + 0.120, -0.50, 0, 0);
+  place(shroud, bx, cy + 0.050, bz + 0.081, -0.50, 0, 0);
   appendMesh(out, shroud);
   const lug = boxRound(0.009, 0.016, 0.007, { n: 4, seg: 8, rows: 4, roundY: 0.4 });
-  place(lug, bx, cy + 0.086, bz + 0.126, -0.50, 0, 0);
+  place(lug, bx, cy + 0.072, bz + 0.084, -0.50, 0, 0);
   appendMesh(out, lug);
 
   // ARC rails: a slotted strip down each side
@@ -547,9 +671,9 @@ export function helmetHardware(nz, base) {
       const t = i / 5;
       const a = (-0.55 + t * 1.1) * side;
       pts.push([
-        bx + side * 0.114 * Math.cos(a * 0.6),
-        cy + 0.052 + Math.sin(t * Math.PI) * 0.016,
-        bz - 0.004 + Math.sin(a) * 0.118,
+        bx + side * 0.098 * Math.cos(a * 0.6),
+        cy + 0.038 + Math.sin(t * Math.PI) * 0.013,
+        bz - 0.004 + Math.sin(a) * 0.110,
       ]);
     }
     const rail = ribbon(pts, 0.016, 0.009, { seg: 6, up: [0, 1, 0], upright: true });
@@ -558,8 +682,8 @@ export function helmetHardware(nz, base) {
   }
 
   // rear counterweight pouch
-  const cw = boxRound(0.058, 0.034, 0.026, { n: 4, seg: 14, rows: 6, roundY: 0.5 });
-  place(cw, bx, cy + 0.075, bz - 0.128, 0.28, 0, 0);
+  const cw = boxRound(0.054, 0.030, 0.024, { n: 4, seg: 14, rows: 6, roundY: 0.5 });
+  place(cw, bx, cy + 0.058, bz - 0.116, 0.28, 0, 0);
   computeNormals(cw);
   displace(cw, (x, y, z) => nz.fbm3(x * 40, y * 40, z * 40, 2) * 0.002);
   appendMesh(out, cw);
@@ -570,21 +694,24 @@ export function helmetHardware(nz, base) {
 export function chinStrap(base) {
   const out = emptyMesh();
   const bx = base[0], by = base[1], bz = base[2];
-  const cy = by + 0.100;
+  const cy = by + 0.128;
   for (const side of [-1, 1]) {
+    // From the rim, down in front of the ear, to the chin cup. With the rim on
+    // the brow the run is longer, and it passes the cheekbone — which is what
+    // draws the jaw line on a face that is otherwise covered by the wrap.
     const pts = [
-      [bx + side * 0.104, cy + 0.004, bz + 0.036],
-      [bx + side * 0.086, cy - 0.058, bz + 0.056],
-      [bx + side * 0.048, cy - 0.104, bz + 0.062],
-      [bx + side * 0.014, cy - 0.118, bz + 0.054],
+      [bx + side * 0.096, cy - 0.006, bz + 0.030],
+      [bx + side * 0.082, cy - 0.070, bz + 0.052],
+      [bx + side * 0.046, cy - 0.126, bz + 0.062],
+      [bx + side * 0.013, cy - 0.144, bz + 0.052],
     ];
     const s = ribbon(pts, 0.016, 0.005, { seg: 6, up: [0, 0, 1] });
     computeNormals(s);
     appendMesh(out, s);
     const rear = [
-      [bx + side * 0.106, cy + 0.000, bz - 0.024],
-      [bx + side * 0.090, cy - 0.058, bz - 0.058],
-      [bx + side * 0.040, cy - 0.078, bz - 0.082],
+      [bx + side * 0.098, cy - 0.010, bz - 0.024],
+      [bx + side * 0.086, cy - 0.076, bz - 0.056],
+      [bx + side * 0.038, cy - 0.098, bz - 0.078],
     ];
     const r = ribbon(rear, 0.014, 0.005, { seg: 6, up: [0, 1, 0] });
     computeNormals(r);
@@ -596,19 +723,21 @@ export function chinStrap(base) {
 /** Goggles: pushed up on the shell, or pulled down over the eyes. */
 export function goggles(base, down = false) {
   if (down) return gogglesDown(base);
-  const frame = boxRound(0.082, 0.026, 0.024, { n: 3.2, seg: 20, rows: 6, roundY: 0.5 });
+  // Parked on the shell. The shell is narrower and its rim is higher than it
+  // used to be, so the frame and the strap arc both come in with it.
+  const frame = boxRound(0.076, 0.025, 0.023, { n: 3.2, seg: 20, rows: 6, roundY: 0.5 });
   const bx = base[0], by = base[1], bz = base[2];
-  place(frame, bx, by + 0.176, bz + 0.098, -0.95, 0, 0);
-  bendY(frame, 0.15, 0);
+  place(frame, bx, by + 0.172, bz + 0.090, -0.95, 0, 0);
+  bendY(frame, 0.15, bz + 0.090);
   computeNormals(frame);
   const strap = ribbon(
     [
-      [bx - 0.098, by + 0.176, bz + 0.078],
-      [bx - 0.118, by + 0.198, bz - 0.020],
-      [bx - 0.072, by + 0.226, bz - 0.116],
-      [bx + 0.072, by + 0.226, bz - 0.116],
-      [bx + 0.118, by + 0.198, bz - 0.020],
-      [bx + 0.098, by + 0.176, bz + 0.078],
+      [bx - 0.090, by + 0.172, bz + 0.070],
+      [bx - 0.100, by + 0.190, bz - 0.020],
+      [bx - 0.062, by + 0.208, bz - 0.106],
+      [bx + 0.062, by + 0.208, bz - 0.106],
+      [bx + 0.100, by + 0.190, bz - 0.020],
+      [bx + 0.090, by + 0.172, bz + 0.070],
     ],
     0.024,
     0.007,
@@ -620,18 +749,18 @@ export function goggles(base, down = false) {
 
 function gogglesDown(base) {
   const bx = base[0], by = base[1], bz = base[2];
-  const frame = boxRound(0.078, 0.028, 0.026, { n: 3.2, seg: 20, rows: 6, roundY: 0.5 });
-  place(frame, bx, by + 0.098, bz + 0.072, -0.10, 0, 0);
-  bendY(frame, 0.115, 0);
+  const frame = boxRound(0.076, 0.026, 0.025, { n: 3.2, seg: 20, rows: 6, roundY: 0.5 });
+  place(frame, bx, by + 0.094, bz + 0.074, -0.10, 0, 0);
+  bendY(frame, 0.115, bz + 0.074);
   computeNormals(frame);
   const strap = ribbon(
     [
-      [bx - 0.084, by + 0.100, bz + 0.058],
-      [bx - 0.106, by + 0.108, bz - 0.030],
-      [bx - 0.062, by + 0.116, bz - 0.108],
-      [bx + 0.062, by + 0.116, bz - 0.108],
-      [bx + 0.106, by + 0.108, bz - 0.030],
-      [bx + 0.084, by + 0.100, bz + 0.058],
+      [bx - 0.082, by + 0.096, bz + 0.058],
+      [bx - 0.100, by + 0.104, bz - 0.030],
+      [bx - 0.060, by + 0.112, bz - 0.104],
+      [bx + 0.060, by + 0.112, bz - 0.104],
+      [bx + 0.100, by + 0.104, bz - 0.030],
+      [bx + 0.082, by + 0.096, bz + 0.058],
     ],
     0.026,
     0.008,
@@ -645,16 +774,16 @@ function gogglesDown(base) {
 export function goggleLens(base, down = false) {
   if (down) {
     const bx = base[0], by = base[1], bz = base[2];
-    const lens = boxRound(0.071, 0.020, 0.008, { n: 3.0, seg: 18, rows: 5, roundY: 0.6 });
-    place(lens, bx, by + 0.098, bz + 0.090, -0.10, 0, 0);
-    bendY(lens, 0.105, 0);
+    const lens = boxRound(0.069, 0.019, 0.008, { n: 3.0, seg: 18, rows: 5, roundY: 0.6 });
+    place(lens, bx, by + 0.094, bz + 0.091, -0.10, 0, 0);
+    bendY(lens, 0.105, bz + 0.091);
     computeNormals(lens);
     return lens;
   }
-  const lens = boxRound(0.074, 0.019, 0.008, { n: 3.0, seg: 18, rows: 5, roundY: 0.6 });
+  const lens = boxRound(0.069, 0.018, 0.008, { n: 3.0, seg: 18, rows: 5, roundY: 0.6 });
   const bx = base[0], by = base[1], bz = base[2];
-  place(lens, bx, by + 0.176, bz + 0.115, -0.95, 0, 0);
-  bendY(lens, 0.14, 0);
+  place(lens, bx, by + 0.172, bz + 0.106, -0.95, 0, 0);
+  bendY(lens, 0.14, bz + 0.106);
   computeNormals(lens);
   return lens;
 }
@@ -670,19 +799,37 @@ export function headScarf(nz, base) {
   // The skull crown sits at +0.244 in head-local space, so the dome has to reach
   // +0.250 or the bare scalp pokes through the top of the wrap — which is exactly
   // what it looked like: a pink patch on the crown at every distance.
-  const dome = ellipsoid(0.102, 0.146, 0.112, { seg: 22, rows: 12, v0: 0.34, v1: 1 });
+  const dome = ellipsoid(0.100, 0.144, 0.112, { seg: 22, rows: 12, v0: 0.34, v1: 1 });
   computeNormals(dome);
   place(dome, bx, by + 0.104, bz - 0.008);
+  // The wrap had exactly the helmet's disease: its front edge came down to
+  // head-local 0.033 and its brim sat at 0.118-0.106, so the eyes and brow were
+  // buried and this head was a featureless egg too. Lift the FRONT of the dome
+  // clear of the brow (0.132) while leaving the sides and the back low, where a
+  // shemagh really does cover the ears and the nape. That keeps the soft,
+  // brimless silhouette that separates BLUE from RED at 40 m and still gives the
+  // face somewhere to be.
+  warp(dome, (v) => {
+    const fwd = Math.max(0, (v.z - bz + 0.008) / 0.112);
+    const low = Math.max(0, (by + 0.132 - v.y) / 0.10);
+    v.y += Math.min(low, 1) * fwd ** 1.4 * 0.10;
+  });
+  computeNormals(dome);
   displace(dome, (x, y, z) => {
     const f = nz.fbm3(x * 26, y * 22, z * 26, 3);
     return f * 0.006 + Math.sin(y * 70 + f * 4) * 0.0022;
   });
   appendMesh(out, dome);
-  // rolled brim
+  // rolled brim — follows the lifted front edge
   const pts = [];
   for (let i = 0; i <= 24; i++) {
     const a = (i / 24) * Math.PI * 2;
-    pts.push([bx + Math.sin(a) * 0.099, by + 0.118 - Math.max(0, Math.cos(a)) * 0.012, bz - 0.008 + Math.cos(a) * 0.109]);
+    const fwd = Math.max(0, Math.cos(a));
+    pts.push([
+      bx + Math.sin(a) * 0.097,
+      by + 0.114 + fwd ** 1.4 * 0.022,
+      bz - 0.008 + Math.cos(a) * 0.107,
+    ]);
   }
   const brim = ribbon(pts, 0.030, 0.016, { seg: 7, up: [0, 1, 0], upright: true });
   computeNormals(brim);
