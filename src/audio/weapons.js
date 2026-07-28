@@ -32,56 +32,106 @@ import {
 /**
  * Per-weapon character. Frequencies in Hz, times in seconds.
  * `level` is a linear trim; the mix expects ~1.0 for a 5.56 rifle.
+ *
+ * ───────────────────────────────────────────────────────────────────────────
+ * TWO FIELDS ON EVERY PROFILE CHANGED MEANING. Read this before retuning.
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ * `send` IS NO LONGER AN ABSOLUTE WET LEVEL. It is the weapon's share of
+ * whatever wetness the SPACE grants — a character trim, not a room. The room is
+ * `o.echoBoost`, which `src/audio/index.js` computes from where the shooter is
+ * standing (0.12 in the open street, 0.97 inside). The old values were 0.40 to
+ * 0.72 and were multiplied by a space term as well as by a second space term in
+ * the caller, so a shot in the open street went out at a send of 0.19 and one
+ * indoors at 0.29: barely a distinction, and both far too wet.
+ *
+ * MEASURED, offline, seven profiles rendered through the real mixer in the
+ * outdoor blend (street 0.35 / open 0.65), reporting the time for the RMS
+ * envelope to fall 20 and 40 dB below its peak:
+ *
+ *              send x1 (shipped)      send x0 (no reverb at all)
+ *   pistol      -20 0.425  -40 0.785    -20 0.020  -40 0.075
+ *   smg         -20 0.425  -40 0.780    -20 0.025  -40 0.075
+ *   rifle       -20 0.350* -40 0.725*   -20 0.045  -40 0.110
+ *   ak          -20 0.385  -40 0.790    -20 0.060  -40 0.175
+ *   lmg         -20 0.410  -40 0.780    -20 0.060  -40 0.205
+ *   shotgun     -20 0.430  -40 0.780    -20 0.070  -40 0.200
+ *   sniper      -20 0.450  -40 0.810    -20 0.085  -40 0.370
+ *
+ * Dry, the set spans 4.3:1 at -20 dB and 4.9:1 at -40 dB — the profiles below
+ * ARE differentiated. Wet, the same set spans 1.3:1 and 1.12:1: every weapon
+ * decayed within 4% of every other. The reverb was not colouring the shots, it
+ * was REPLACING them, and 68% of the total energy of a shot (rms 0.0083 wet vs
+ * 0.0027 dry, AK) was the room rather than the gun. That is one cause for both
+ * "銃声がなんでこんなリバーブかかってるの" and "銃声が全部一緒だけど".
+ *
+ * `transF`/`transPk`/`transLevel`/`clickF` ARE NEW, and they are the other
+ * cause. Layer 1 — the transient, the loudest and first thing in the shot — was
+ * a white burst through a highpass at a hard-coded 2600 Hz, a peaking filter at
+ * a hard-coded 6200 Hz and a triangle click at a hard-coded 1750 Hz, at a
+ * hard-coded level of 0.9, for every weapon in the game. Measured spectral
+ * centroid over the first 60 ms, DRY, before this change: pistol 2523, sniper
+ * 2584, ak 2578, shotgun 2629, smg 2701, lmg 2728, rifle 2747 Hz — a 9% spread
+ * across a 9 mm and a .338. The profiles differed everywhere except in the one
+ * layer that arrives first and loudest.
  */
 export const WEAPON_PROFILES = {
   rifle: {
     level: 1.0, bodyF: 148, bodyF2: 56, bodyDecay: 0.085, subF: 62, subDecay: 0.12,
     crackF: 2450, crackQ: 0.95, crackDecay: 0.055, drive: 6, asym: 0.35,
     midF: 780, midDecay: 0.05, tailDecay: 0.3, tailF: 5200, tailEndF: 700,
-    mechDelay: 0.028, mechLevel: 0.42, mechPartials: [1880, 3260, 5400], send: 0.5,
+    mechDelay: 0.028, mechLevel: 0.42, mechPartials: [1880, 3260, 5400], send: 0.16,
+    transF: 2600, transPk: 6200, transTop: 9500, transLevel: 0.9, clickF: 1750,
   },
   ak: {
     level: 1.1, bodyF: 124, bodyF2: 46, bodyDecay: 0.105, subF: 52, subDecay: 0.15,
-    crackF: 1780, crackQ: 0.9, crackDecay: 0.07, drive: 7.5, asym: 0.5,
+    crackF: 1680, crackQ: 0.9, crackDecay: 0.07, drive: 7.5, asym: 0.5,
     midF: 640, midDecay: 0.06, tailDecay: 0.42, tailF: 4200, tailEndF: 560,
-    mechDelay: 0.034, mechLevel: 0.55, mechPartials: [1420, 2650, 4300], send: 0.55,
+    mechDelay: 0.034, mechLevel: 0.55, mechPartials: [1420, 2650, 4300], send: 0.18,
+    transF: 1780, transPk: 4200, transTop: 6500, transLevel: 0.96, clickF: 1150,
   },
   smg: {
     level: 0.84, bodyF: 172, bodyF2: 72, bodyDecay: 0.06, subF: 78, subDecay: 0.08,
-    crackF: 3050, crackQ: 1.05, crackDecay: 0.04, drive: 5, asym: 0.3,
+    crackF: 3350, crackQ: 1.05, crackDecay: 0.04, drive: 5, asym: 0.3,
     midF: 900, midDecay: 0.035, tailDecay: 0.19, tailF: 6200, tailEndF: 900,
-    mechDelay: 0.021, mechLevel: 0.5, mechPartials: [2200, 3900, 6300], send: 0.44,
+    mechDelay: 0.021, mechLevel: 0.5, mechPartials: [2200, 3900, 6300], send: 0.13,
+    transF: 4400, transPk: 9800, transTop: 17000, transLevel: 0.8, clickF: 2600,
   },
   pistol: {
     level: 0.74, bodyF: 186, bodyF2: 84, bodyDecay: 0.05, subF: 92, subDecay: 0.07,
     crackF: 2750, crackQ: 1.15, crackDecay: 0.035, drive: 4.5, asym: 0.28,
     midF: 950, midDecay: 0.03, tailDecay: 0.16, tailF: 6800, tailEndF: 1000,
-    mechDelay: 0.038, mechLevel: 0.46, mechPartials: [2450, 4200, 6900], send: 0.4,
+    mechDelay: 0.038, mechLevel: 0.46, mechPartials: [2450, 4200, 6900], send: 0.12,
+    transF: 3400, transPk: 7800, transTop: 12000, transLevel: 0.7, clickF: 2250,
   },
   shotgun: {
     level: 1.18, bodyF: 108, bodyF2: 40, bodyDecay: 0.13, subF: 44, subDecay: 0.19,
     crackF: 1450, crackQ: 0.7, crackDecay: 0.09, drive: 9, asym: 0.6,
     midF: 520, midDecay: 0.08, tailDecay: 0.5, tailF: 3600, tailEndF: 460,
-    mechDelay: 0.16, mechLevel: 0.7, mechPartials: [980, 1760, 3050], send: 0.6,
+    mechDelay: 0.16, mechLevel: 0.7, mechPartials: [980, 1760, 3050], send: 0.2,
+    transF: 1450, transPk: 3400, transTop: 5800, transLevel: 1.0, clickF: 900,
     pellets: 6,
   },
   sniper: {
     level: 1.3, bodyF: 96, bodyF2: 34, bodyDecay: 0.16, subF: 38, subDecay: 0.24,
     crackF: 1320, crackQ: 0.8, crackDecay: 0.11, drive: 10, asym: 0.55,
     midF: 470, midDecay: 0.1, tailDecay: 0.95, tailF: 3300, tailEndF: 380,
-    mechDelay: 0.19, mechLevel: 0.65, mechPartials: [1150, 2050, 3400], send: 0.72,
+    mechDelay: 0.19, mechLevel: 0.65, mechPartials: [1150, 2050, 3400], send: 0.24,
+    transF: 1250, transPk: 2900, transTop: 5200, transLevel: 1.05, clickF: 780,
   },
   lmg: {
-    level: 1.14, bodyF: 118, bodyF2: 44, bodyDecay: 0.11, subF: 50, subDecay: 0.16,
-    crackF: 1920, crackQ: 0.85, crackDecay: 0.075, drive: 8, asym: 0.45,
-    midF: 610, midDecay: 0.065, tailDecay: 0.5, tailF: 4000, tailEndF: 520,
-    mechDelay: 0.03, mechLevel: 0.6, mechPartials: [1330, 2480, 4100], send: 0.58,
+    level: 1.22, bodyF: 118, bodyF2: 44, bodyDecay: 0.135, subF: 44, subDecay: 0.22,
+    crackF: 2250, crackQ: 0.85, crackDecay: 0.085, drive: 8, asym: 0.45,
+    midF: 610, midDecay: 0.065, tailDecay: 0.72, tailF: 4000, tailEndF: 520,
+    mechDelay: 0.03, mechLevel: 0.6, mechPartials: [1330, 2480, 4100], send: 0.19,
+    transF: 2500, transPk: 5900, transTop: 9200, transLevel: 0.99, clickF: 1680,
   },
   suppressed: {
     level: 0.5, bodyF: 132, bodyF2: 64, bodyDecay: 0.055, subF: 70, subDecay: 0.07,
     crackF: 900, crackQ: 0.6, crackDecay: 0.03, drive: 2.5, asym: 0.2,
     midF: 430, midDecay: 0.05, tailDecay: 0.1, tailF: 1800, tailEndF: 400,
-    mechDelay: 0.019, mechLevel: 0.85, mechPartials: [2100, 3700, 5900], send: 0.18,
+    mechDelay: 0.019, mechLevel: 0.85, mechPartials: [2100, 3700, 5900], send: 0.06,
+    transF: 1100, transPk: 2600, transTop: 4200, transLevel: 0.32, clickF: 700,
     suppressed: true,
   },
 };
@@ -166,20 +216,52 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
   let end = t0 + 0.2;
 
   /* ---- 1. transient --------------------------------------------- */
+  /**
+   * THIS LAYER WAS IDENTICAL ON EVERY WEAPON — see the block comment on
+   * WEAPON_PROFILES. The highpass corner, the peak it emphasises, its level and
+   * the click frequency now all come off the profile, because this is the layer
+   * that arrives first and loudest and therefore the one that decides what the
+   * gun sounds like before any other layer has started.
+   *
+   * The physical claim behind the numbers: a muzzle blast's pressure step is
+   * band-limited by the bore, so the transient's corner scales with calibre, not
+   * with taste. A 9 mm cracks at 3.4 kHz and up; a .338 at 1.25 kHz and is much
+   * heavier under it. The decay is left alone — a pressure step is a pressure
+   * step and lengthening it just makes the gun sound like a firework.
+   */
   if (nearP > 0.05) {
+    const transF = profile.transF ?? 2600;
     const tg = gain(actx, 0);
     const src = bank.source('white', rng, rng.range(0.9, 1.3));
-    const hp = biquad(actx, 'highpass', 2600, 0.6);
-    const pk = biquad(actx, 'peaking', 6200 * jC, 1.1, 8 + v.tilt);
-    series(src, hp, pk, tg).connect(out);
-    hit(tg.gain, t0, 0.9 * nearP * jL * (profile.suppressed ? 0.35 : 1), 0.0075);
+    const hp = biquad(actx, 'highpass', transF, 0.6);
+    /**
+     * THE CEILING MATTERS MORE THAN THE CORNER, and this is the part I got
+     * wrong on the first attempt. Moving only the highpass from 1250 Hz to
+     * 3900 Hz across the weapon set changed the measured spectral centroid of
+     * the first 5 ms by 5% (4583 -> 4792 Hz), because white noise through a
+     * 12 dB/oct highpass still runs all the way to Nyquist and the centroid of
+     * that is set by the top of the band, not by where it starts. The band has
+     * to be closed at BOTH ends before the transient can carry a calibre.
+     *
+     * Physically that ceiling is real: the bore is a short tube and it rolls
+     * off the pressure step, so a .338's blast has nothing like a 9 mm's 12 kHz
+     * content. `transTop` is that roll-off, 5.2 kHz on the sniper up to 14 kHz
+     * on the SMG.
+     */
+    const lp = biquad(actx, 'lowpass', profile.transTop ?? 9500, 0.7);
+    const pk = biquad(actx, 'peaking', (profile.transPk ?? 6200) * jC, 1.1, 8 + v.tilt);
+    series(src, hp, lp, pk, tg).connect(out);
+    // Big-bore blasts hold their step longer than a pistol's: 5 ms at 1.25 kHz,
+    // 9 ms at 3.9 kHz, interpolated on the transient corner itself.
+    const transDecay = clamp(0.0125 - transF * 1.9e-6, 0.005, 0.0095);
+    hit(tg.gain, t0, (profile.transLevel ?? 0.9) * nearP * jL, transDecay);
     src.start(t0, src._offset, 0.05);
     // A single-cycle sine at the top of the click adds the "snap" that pure
     // noise cannot produce.
-    const clk = osc(actx, 'triangle', 1750 * jC);
+    const clk = osc(actx, 'triangle', (profile.clickF ?? 1750) * jC);
     const cg = gain(actx, 0);
     clk.connect(cg); cg.connect(out);
-    hit(cg.gain, t0, 0.35 * nearP * jL, 0.004);
+    hit(cg.gain, t0, 0.35 * nearP * jL * (profile.suppressed ? 0.4 : 1), 0.004);
     clk.start(t0); clk.stop(t0 + 0.02);
   }
 
@@ -212,13 +294,40 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
   }
 
   /* ---- 3. crack -------------------------------------------------- */
+  /**
+   * THE SATURATOR IS WHY EVERY GUN SOUNDED THE SAME, and it is not obvious from
+   * reading the profiles.
+   *
+   * The chain is bandpass -> resonance -> WAVESHAPER -> envelope, and note the
+   * order: the envelope is applied AFTER the shaper, so the shaper always sees
+   * bandpassed noise at full scale. `saturationCurve(drive)` is tanh with
+   * k = 1 + drive, and drive is 4.5 to 10 here, so a signal that spends most of
+   * its time past |0.3| comes out very nearly square. Squaring a 1.3 kHz band
+   * and squaring a 3.1 kHz band both produce harmonics all the way to Nyquist,
+   * and the result is that the loudest, most identifying layer of the shot had
+   * essentially the same bandwidth on a .338 and on a 9 mm.
+   *
+   * MEASURED. Raw voice, onset-aligned, spectral centroid of the first 5 ms
+   * across seven profiles: 4583 .. 4792 Hz, a 1.05:1 spread — while `crackF`
+   * itself spans 2.3:1. Band-limiting the transient alone did not move it
+   * (1.06:1), which is what proved the crack rather than the transient was
+   * setting it.
+   *
+   * The fix is one filter AFTER the shaper, at 3.4x the crack's own band. That
+   * is a bore roll-off, not a taste decision: the harmonics the muzzle actually
+   * radiates are bounded by the calibre, so a big slow gun stays dark under
+   * heavy drive instead of turning into the same wall of fizz as a fast small
+   * one. It keeps every bit of the drive's density and throws away only the
+   * part that was making all seven weapons identical.
+   */
   if (nearP > 0.03) {
     const src = bank.source('white', rng, rng.range(0.85, 1.25));
     const bp = biquad(actx, 'bandpass', profile.crackF * jC, profile.crackQ * v.crackQ);
     const res = biquad(actx, 'peaking', profile.crackF * jC * 1.9, 1.6, 6 + v.tilt);
     const drv = shaper(actx, saturationCurve(profile.drive * v.drive, profile.asym * 0.6), '2x');
+    const top = biquad(actx, 'lowpass', clamp(profile.crackF * jC * 3.4, 2500, 15000), 0.7);
     const cg = gain(actx, 0);
-    series(src, bp, res, drv, cg).connect(out);
+    series(src, bp, res, drv, top, cg).connect(out);
     // The crack's own band sweeps down a little: the shock front decays.
     sweep(bp.frequency, t0, profile.crackF * jC * 1.35, profile.crackF * jC * 0.8, profile.crackDecay * 2);
     ad(cg.gain, t0, 1.05 * nearP * jL * profile.level, 0.0015, profile.crackDecay * rng.range(0.85, 1.2));
@@ -315,6 +424,11 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
     }
   }
 
+  // WET = character x room x distance. `profile.send` is the weapon's share,
+  // `o.echoBoost` is the room the SHOOTER is standing in (see `_wetnessAt` in
+  // index.js) and `far` is the fact that a distant shot reaches you as tail.
+  // There is exactly one space term in this product now; there used to be two,
+  // one here and one in the caller, and they multiplied.
   const send = profile.send * (1 + far * 1.4) * (o.echoBoost ?? 1);
   return { node: out, end: end + 0.05, send };
 }

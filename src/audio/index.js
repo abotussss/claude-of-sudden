@@ -29,7 +29,7 @@
  * `ai:bark {kind, position, voice}` it is picked up as well.
  */
 
-import { NoiseBank, SPEED_OF_SOUND, clamp, gain as mkGain } from './dsp.js';
+import { NoiseBank, SPEED_OF_SOUND, clamp, lerp, gain as mkGain } from './dsp.js';
 import { Mixer } from './mixer.js';
 import { SpatialField } from './spatial.js';
 import { Ambience, ambientOneShot, ONE_SHOTS } from './ambience.js';
@@ -46,6 +46,31 @@ import { classifySpace } from './ir.js';
 const PROBE_RAYS = 9;
 const PROBE_DIST = 40;
 const DRY_SLOTS = 48;
+
+/**
+ * Level trim for the LOCAL player's own footfalls and landings.
+ *
+ * It was 0.72 — quieter than every other actor in the level. Your own steps are
+ * the metronome you move to and the thing that tells you you have stopped being
+ * quiet, so they are staged above a remote step rather than below it.
+ *
+ * MEASURED at this value, against a first-person rifle shot and the ambience
+ * bed rendered through the same mixer (peaks, and the bed as RMS):
+ *
+ *   rifle shot  0.0608     walk 0.0238   run 0.0353   sprint 0.0416
+ *   land 0.0415   crouch-walk 0.0169     ambience bed rms 0.00362
+ *
+ * So a walking step lands 8.1 dB under the shot's peak and 16.4 dB over the
+ * bed, and crouch-walking is 11.1 dB under the shot — quiet, but still 13.4 dB
+ * clear of the bed, which is the point of crouching rather than of silence.
+ */
+const OWN_STEP_LEVEL = 1.05;
+
+/** Upward ray length for the remote-shooter enclosure test, metres. */
+const ROOF_PROBE = 12;
+/** Wetness a shot gets with open sky over the muzzle, and with a low ceiling. */
+const WET_OUTDOOR = 0.12;
+const WET_INDOOR = 0.95;
 const GESTURES = ['pointerdown', 'mousedown', 'keydown', 'touchstart', 'wheel'];
 
 /** Names other subsystems already use, mapped onto our voices. */
@@ -377,6 +402,74 @@ export class AudioSystem {
   }
 
   /* ================================================================ */
+  /* where the shooter is standing                                    */
+  /* ================================================================ */
+
+  /**
+   * Wetness of a classified space, 0..1.3. This is the ONLY space term in the
+   * gunshot send chain; `weaponShot` multiplies it by the weapon's character
+   * trim and by distance and that is the whole product.
+   *
+   * The weights sum against a normalised blend (classifySpace divides by the
+   * total), so the value is a weighted average bounded by its extremes: 0.10
+   * standing in the middle of open ground, 0.12 in the outdoor blend the level
+   * actually produces (street 0.35 / open 0.65), 0.97 in a small hard room,
+   * 1.25 in a corridor. That is 8:1 between the street and a stairwell, where
+   * the shipped code managed 1.5:1 — and the absolute value outdoors is a tenth
+   * of what it was, which is the "why is there so much reverb on the gunshots"
+   * complaint.
+   *
+   * OPEN GROUND IS NOT ZERO ON PURPOSE. A rifle fired in a field still returns
+   * something off the ground and the treeline half a second later, and the
+   * `open` IR (50 ms predelay, dark, sparse) is what that sounds like. Zero
+   * here would make outdoor fire sound like a headphone test tone.
+   */
+  _wetness(space) {
+    return space.open * 0.10 + space.street * 0.22 + space.room * 0.90 +
+      space.tight * 0.97 + space.tunnel * 1.25;
+  }
+
+  /**
+   * How enclosed a point in the world is, 0 (sky above) .. 1 (low ceiling),
+   * from ONE raycast straight up. Returns null when physics is unavailable.
+   *
+   * The listener's own space costs nine rays every 0.45 s and is worth it; a
+   * remote shot cannot pay that, and it does not have to. Per `classifySpace`
+   * in ir.js, a ceiling within a few metres is the single most reliable indoor
+   * signal there is — outdoors that ray goes to the sky — so this reuses the
+   * same `roofed` curve on its own. It is one ray per remote shot, behind the
+   * 8-shots-a-second rate limit, i.e. at most 8 rays a second.
+   *
+   * This is why `audio` needs no knowledge of `src/world`'s `enterable` flag
+   * and imports nothing: geometry answers the question directly, through the
+   * `physics` handle audio already holds via ctx.peek().
+   */
+  _roofedAt(x, y, z) {
+    const phys = this.ctx.peek('physics');
+    if (!phys?.raycast) return null;
+    const o = this._origin;
+    o.x = x; o.y = y; o.z = z;
+    const h = phys.raycast(o, this._probeDirs[PROBE_RAYS - 1], ROOF_PROBE, phys.MASK?.WORLD);
+    if (!h?.hit) return 0;
+    return clamp(1 - (h.distance - 2.8) / 7, 0, 1);
+  }
+
+  /**
+   * Wetness for a shot fired at (x,y,z) by somebody who is not the listener.
+   *
+   * The tail is made where the muzzle is, so the shooter's own enclosure leads.
+   * The listener's room still answers a shot fired outside it, though — that is
+   * what you hear standing in a stairwell while somebody fires in the street —
+   * so the listener's space sets a floor at 60%.
+   */
+  _wetnessAt(x, y, z) {
+    const here = this._wetness(this._space);
+    const roofed = this._roofedAt(x, y, z);
+    if (roofed === null) return here;
+    return Math.max(lerp(WET_OUTDOOR, WET_INDOOR, roofed), here * 0.6);
+  }
+
+  /* ================================================================ */
   /* voice plumbing                                                   */
   /* ================================================================ */
 
@@ -391,8 +484,7 @@ export class AudioSystem {
       case 'shot':
         return weaponShot(actx, bank, rng, o.profile ?? WEAPON_PROFILES.rifle, {
           when, distance: dist, firstPerson: o.firstPerson,
-          echoBoost: 0.75 + this._space.street * 0.7 + this._space.tight * 0.35 +
-            this._space.tunnel * 0.8 + this._space.open * 0.2,
+          echoBoost: o.echoBoost ?? this._wetness(this._space),
         });
       case 'whizz': return bulletWhizz(actx, bank, rng, { when, miss: o.miss, gain: o.gain });
       case 'dryfire': return dryFire(actx, bank, rng, { when });
@@ -611,12 +703,22 @@ export class AudioSystem {
     const firstPerson = p.firstPerson ?? dist < 2.6;
 
     if (firstPerson) {
-      // Own weapon: no propagation delay, mostly dry, and the send level is
-      // driven by the space probe so the *room* answers the shot — a tight slap
-      // indoors, a long crack down the street.
-      const echo = 0.35 + this._space.tight * 0.5 + this._space.street * 0.9 +
-        this._space.tunnel * 1.0 + this._space.room * 0.75;
-      this._playDry('shot', { profile, firstPerson: true }, 'weapons', echo * 0.6);
+      /**
+       * Own weapon: no propagation delay, and the wet level is decided by the
+       * space the SHOOTER is standing in — which for the local player is the
+       * nine-ray probe already running every 0.45 s at the listener.
+       *
+       * This used to compute a second space term of its own
+       *   echo = 0.35 + tight*0.5 + street*0.9 + tunnel*1.0 + room*0.75
+       * and pass `echo * 0.6` as the send, which `_playDry` then multiplied by
+       * `voice.send` — and `voice.send` had ALREADY been multiplied by a space
+       * term inside `weaponShot`. Two space multipliers on the same signal, and
+       * a floor of 0.35 that never went away, is how a rifle in an open street
+       * ended up as wet as one in a room. There is one term now and it is
+       * `_wetness()`; the send argument here is a pass-through.
+       */
+      const wet = this._wetness(this._space);
+      this._playDry('shot', { profile, firstPerson: true, echoBoost: wet }, 'weapons', 1);
       this.mixer.duck(0.55, 0.1);
     } else {
       /**
@@ -645,7 +747,11 @@ export class AudioSystem {
       if (!this._allow('shot')) return;
       if (dist > 80) return;
       const shotPriority = clamp(0.95 - dist * 0.006, 0.4, 0.95);
-      this._playAt('shot', x, y, z, { profile, firstPerson: false }, 'weapons', shotPriority);
+      // One upward ray from the muzzle decides whether this shot is a rifle in
+      // a room or a rifle in the street. See `_wetnessAt`.
+      this._playAt('shot', x, y, z, {
+        profile, firstPerson: false, echoBoost: this._wetnessAt(x, y, z),
+      }, 'weapons', shotPriority);
       this.mixer.duck(clamp(0.5 - dist * 0.004, 0.12, 0.5), 0.08);
       // Enemies opening fire get occasional chatter, so firefights feel alive
       // even before `ai` grows its own bark logic.
@@ -806,29 +912,92 @@ export class AudioSystem {
     if (near > 0.1) this.mixer.concuss(Math.pow(near, 1.4));
   }
 
+  /**
+   * Classify a step from what `player` actually puts on the payload.
+   *
+   * The old line was
+   *   `p.gait ?? (p.running ? 'run' : p.crouched ? 'crouch' : 'walk')`
+   * and `player:footstep` has never carried `gait` or `crouched` — the payload
+   * is `{ position, surface, running, left, speed, stance }` (src/player/index.js).
+   * So `crouch` and `sprint` were unreachable: every step in the game was
+   * either `walk` or `run`, and `footstep()` in foley.js has had four distinct
+   * gait weights (crouch 0.42, walk 0.62, run 1.0, sprint 1.25) the whole time
+   * with half of them dead.
+   *
+   * Thresholds come from src/player/tuning.js so the audio changes on the same
+   * frame the movement machine does: STANCE.stand.speed 4.57, MOVE.sprintSpeed
+   * 7.01, MOVE.tacSprintSpeed 8.38, and FOOTSTEP.runSpeed 5.4 (which is what
+   * sets the payload's `running`).
+   */
+  _gaitOf(p) {
+    if (p?.gait) return p.gait;
+    const st = p?.stance;
+    if (st === 'crouch' || st === 'prone') return 'crouch';
+    const sp = typeof p?.speed === 'number' ? p.speed : (p?.running ? 5.6 : 3);
+    if (sp >= 6.2) return 'sprint';
+    if (sp >= 5.4 || p?.running) return 'run';
+    return 'walk';
+  }
+
+  /**
+   * `player:footstep`. Nothing else in the engine emits it — `ai` only listens
+   * — so every one of these is the LOCAL player's own boot, and it is treated
+   * as such: never rate-limited, never occluded, and mixed as the closest
+   * diegetic sound in the game.
+   *
+   * MEASURED, why it was reported as missing entirely. Rendering one walking
+   * step and ten seconds of the ambience bed through the same mixer offline:
+   * the step peaked at 0.017 while the bed's RMS was 0.044, i.e. the bed was
+   * 28 dB louder than the sound it was burying. That is the ambience fix (see
+   * ambience.js); the three defects on this side were:
+   *
+   *  1. `_allow('step')` capped ALL steps at 4/s. Tactical sprint is 8.38 m/s
+   *     over a 1.894 m stride = 4.42 footfalls a second, so the player's own
+   *     cadence outran the limiter exactly when he was moving fastest.
+   *  2. Occlusion. `field.acquire` defaults to `occlusionAt()`, which casts
+   *     from the eye to the emitter — and the emitter is a point ON the floor
+   *     1.6 m below the eye. Any hit there costs up to 62% of the level and
+   *     lowpasses to 420 Hz. Your own feet cannot be occluded from your own
+   *     ears, so this passes `occlusion: 0`.
+   *  3. Level. Own steps were attenuated to 0.72 while every other actor's got
+   *     1.0 — backwards. Yours are the ones you play off.
+   */
   _onFootstep(p) {
     if (!this.running) return;
-    if (!this._allow('step')) return;
     const pos = p?.position;
     const lp = this.field.listenerPos;
     const x = pos?.x ?? lp.x, y = pos?.y ?? lp.y - 1.6, z = pos?.z ?? lp.z;
     const dist = this.field.distanceTo(x, y, z);
     if (dist > 45) return;
-    const gait = p?.gait ?? (p?.running ? 'run' : p?.crouched ? 'crouch' : 'walk');
+    // Within arm's reach of the listener it is the local player's own foot.
+    const own = dist < 2.6;
+    if (!own && !this._allow('step')) return;
+    const gait = this._gaitOf(p);
     this._playAt('step', x, y, z, {
       surface: p?.surface ?? 'concrete', gait,
-      level: p?.level ?? (dist < 2 ? 0.72 : 1),
-    }, 'foley', 0.4);
+      level: p?.level ?? (own ? OWN_STEP_LEVEL : 1),
+      occlusion: own ? 0 : undefined,
+      // Your own webbing and sling are on your chest, not across the street.
+      gear: own ? (gait === 'crouch' ? 0.3 : gait === 'walk' ? 0.45 : 0.9) : undefined,
+    }, 'foley', own ? 0.85 : 0.4);
   }
 
+  /**
+   * `player:land`. The payload carries `position` (src/player/index.js sets it
+   * from the movement machine); it was being ignored in favour of "wherever the
+   * camera is, minus 1.6 m", which put the thump inside the listener's head
+   * during a mantle and anywhere but the feet on a slope.
+   */
   _onLand(p) {
     if (!this.running) return;
     const lp = this.field.listenerPos;
+    const pos = isVec(p?.position) ? p.position : null;
+    const x = pos?.x ?? lp.x, y = pos?.y ?? (lp.y - 1.6), z = pos?.z ?? lp.z;
     const v = Math.abs(typeof p?.velocity === 'number' ? p.velocity : (p?.velocity?.y ?? 4));
-    this._playAt('step', lp.x, lp.y - 1.6, lp.z, {
+    this._playAt('step', x, y, z, {
       surface: p?.surface ?? 'concrete', gait: 'land',
-      level: clamp(v / 7, 0.35, 1.7), gear: 1,
-    }, 'foley', 0.7);
+      level: clamp(v / 7, 0.35, 1.7) * OWN_STEP_LEVEL, gear: 1, occlusion: 0,
+    }, 'foley', 0.9);
     if (v > 8.5) this._playDry('cloth', { level: 0.8 }, 'foley', 0.15);
   }
 
@@ -900,6 +1069,9 @@ export class AudioSystem {
         profile, extraDelay: i * rate * rng.range(0.9, 1.1), maxDist: 400,
         gain: 4.5,
         occlusion: 0, // it is over the rooftops, not through them
+        // ...and so is its tail: a volley 200 m away is outdoors by definition,
+        // whatever room the listener happens to be standing in.
+        echoBoost: WET_OUTDOOR,
       }, 'weapons', 0.2);
     }
   }

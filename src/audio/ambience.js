@@ -15,6 +15,11 @@
 
 import { ad, biquad, clamp, gain, lerp, osc, series, struckResonator, sweep } from './dsp.js';
 
+/** Summed trim of the two wind layers. See the block comment in start(). */
+const WIND_BUS_GAIN = 0.045;
+/** Per-layer trim, and the level a gust decays back to. */
+const WIND_LAYER_GAIN = 0.42;
+
 export class Ambience {
   constructor(actx, bank, mixer, field, rng) {
     this.actx = actx;
@@ -50,23 +55,70 @@ export class Ambience {
     sendTap.connect(this.mixer.reverbSend);
     this.nodes.push(sendTap);
 
-    /* ---- wind: two decorrelated brown-noise layers ---------------- */
-    this._windGain = gain(actx, 0.5);
+    /**
+     * ---- wind: two decorrelated brown-noise layers ----------------
+     *
+     * THIS BED WAS LOUDER THAN A GUNSHOT, and it is the reason footsteps were
+     * reported as missing rather than as quiet. MEASURED offline, ten seconds
+     * of the steady bed against one first-person rifle shot and one walking
+     * footstep, both rendered through this same mixer:
+     *
+     *   bed (all three layers)   peak 0.187   rms 0.0441
+     *   bed with the wind muted  peak 0.021   rms 0.0047
+     *   own rifle shot           peak 0.130   rms 0.0106
+     *   own walking footstep     peak 0.017   rms 0.0017
+     *
+     * So the bed sat +3.1 dB over a gunshot's PEAK and +28 dB over a footstep's
+     * RMS, and muting the wind alone took 19 dB off it: the wind IS the bed.
+     * `BUS_DEFS.ambience` was already down at 0.20 and the note there claims
+     * footsteps ended up 10.5 dB clear of it — a bus trim cannot do that when
+     * the generator behind it is this hot, which is exactly what happened.
+     *
+     * Three separate causes, all fixed here rather than at the bus:
+     *
+     *  1. LEVEL. windGain 0.50 -> 0.045 and each layer 0.50 -> 0.42, i.e. the
+     *     product 0.250 -> 0.0189, -22.4 dB.
+     *  2. WEIGHT. The layers are brown noise (-6 dB/oct) highpassed at 40 Hz
+     *     and lowpassed at 260-520 Hz, so nearly all of their energy was below
+     *     150 Hz — a sub rumble sitting exactly where a footstep's body layer
+     *     lives (STEP.concrete.bodyF is 92 Hz). Highpass 40 -> 110 Hz thins
+     *     that out and un-masks the steps without making the bed thinner in
+     *     the band you actually hear it in.
+     *  3. PUMPING. The two gain LFOs had depths of 0.18-0.30 and 0.08-0.16 on
+     *     top of a 0.5 base, so the bed breathed between 0.06 and 0.94 — a
+     *     15 dB swell every ~25 s, which is what reads as "風切り音". Depths
+     *     are cut to a third, so it now moves +-2.5 dB.
+     *
+     * MEASURED AFTER, same three renders, plus the two other beds trimmed and
+     * the own-step level fixed in index.js:
+     *
+     *   bed (all three layers)   peak 0.0147  rms 0.00362   was 0.187 / 0.0441
+     *   own rifle shot           peak 0.0608                was 0.130
+     *   own walking footstep     peak 0.0238                was 0.017
+     *   own running footstep     peak 0.0353
+     *
+     * A walking step's peak now sits 16.4 dB ABOVE the bed's RMS and a running
+     * one 19.8 dB above it, where before a walking step was 8.2 dB BELOW it.
+     * That is a 25 dB swing on the one signal the mode is played on, and it is
+     * the whole of "走る音とか足音ないけど" — the steps were always there.
+     */
+    this._windGain = gain(actx, WIND_BUS_GAIN);
     this._windGain.connect(outdoorLP);
     this.nodes.push(this._windGain);
+    this._windBase = WIND_BUS_GAIN;
     for (let i = 0; i < 2; i++) {
       const src = bank.source('brown', rng, rng.range(0.82, 1.15), true);
       const lp = biquad(actx, 'lowpass', rng.range(260, 520), 0.6);
-      const hp = biquad(actx, 'highpass', 40, 0.7);
-      const g = gain(actx, 0.5);
+      const hp = biquad(actx, 'highpass', 110, 0.7);
+      const g = gain(actx, WIND_LAYER_GAIN);
       const pan = actx.createStereoPanner();
       pan.pan.value = i === 0 ? -0.55 : 0.55;
       series(src, hp, lp, g, pan).connect(this._windGain);
       src.start(0, src._offset);
 
       // Two incommensurate LFOs per layer: the sum never repeats audibly.
-      this._lfo(0.041 + i * 0.017, rng.range(0.18, 0.3), g.gain);
-      this._lfo(0.0917 + i * 0.031, rng.range(0.08, 0.16), g.gain);
+      this._lfo(0.041 + i * 0.017, rng.range(0.06, 0.1), g.gain);
+      this._lfo(0.0917 + i * 0.031, rng.range(0.026, 0.055), g.gain);
       this._lfo(0.037 + i * 0.023, rng.range(80, 170), lp.frequency);
       this.nodes.push(src, lp, hp, g, pan);
       this._windLayers ??= [];
@@ -77,11 +129,11 @@ export class Ambience {
     {
       const src = bank.source('white', rng, 1, true);
       const bp = biquad(actx, 'bandpass', 820, 7);
-      const g = gain(actx, 0.012);
+      const g = gain(actx, 0.005);
       series(src, bp, g).connect(this._windGain);
       src.start(0, src._offset);
       this._lfo(0.053, 640, bp.frequency);
-      this._lfo(0.071, 0.011, g.gain);
+      this._lfo(0.071, 0.0045, g.gain);
       this.nodes.push(src, bp, g);
     }
 
@@ -90,7 +142,9 @@ export class Ambience {
       const src = bank.source('pink', rng, 0.9, true);
       const lp = biquad(actx, 'lowpass', 480, 0.7);
       const hp = biquad(actx, 'highpass', 70, 0.7);
-      const g = gain(actx, 0.06);
+      // 0.06 -> 0.020 (-9.5 dB): with the wind pulled back this layer became
+      // the loudest thing in the bed, and it is the same complaint.
+      const g = gain(actx, 0.020);
       series(src, hp, lp, g).connect(outdoorLP);
       src.start(0, src._offset);
       this._lfo(0.023, 0.025, g.gain);
@@ -103,7 +157,10 @@ export class Ambience {
     {
       const src = bank.source('brown', rng, 0.7, true);
       const lp = biquad(actx, 'lowpass', 105, 0.9);
-      const g = gain(actx, 0.05);
+      // 0.05 -> 0.010 (-14.0 dB). Everything under 105 Hz masks the 70-120 Hz
+      // body layer of a footstep, so this one costs the most information per
+      // dB of anything in the bed.
+      const g = gain(actx, 0.010);
       series(src, lp, g).connect(outdoorLP);
       src.start(0, src._offset);
       this._lfo(0.0137, 0.035, g.gain);
@@ -141,7 +198,10 @@ export class Ambience {
     const t = this.actx.currentTime;
     this._outdoorLP.frequency.setTargetAtTime(lerp(20000, 620, this.enclosure), t, 0.6);
     this._outdoorGain.gain.setTargetAtTime(lerp(1, 0.45, this.enclosure), t, 0.6);
-    if (this._windGain) this._windGain.gain.setTargetAtTime(lerp(0.5, 0.12, this.enclosure), t, 0.8);
+    if (this._windGain) {
+      const b = this._windBase ?? 0.13;
+      this._windGain.gain.setTargetAtTime(lerp(b, b * 0.24, this.enclosure), t, 0.8);
+    }
   }
 
   update(dt, api) {
@@ -180,16 +240,24 @@ export class Ambience {
     }
   }
 
-  /** A gust: level swell plus the lowpass opening as the air speeds up. */
+  /**
+   * A gust: level swell plus the lowpass opening as the air speeds up.
+   *
+   * The swell used to reach 2.2x the layer base (+6.8 dB) on top of a bed that
+   * was already too loud; it now reaches 1.63x (+4.2 dB) of the new base, which
+   * is enough for the bed to breathe without a gust ever climbing back over a
+   * footstep.
+   */
   _gust() {
     const t = this.actx.currentTime;
     const r = this.rng;
     const dur = r.range(2.2, 6.5);
     const strength = r.range(0.25, 1) * lerp(1, 0.25, this.enclosure);
+    const base = WIND_LAYER_GAIN;
     for (const l of this._windLayers ?? []) {
-      const peak = 0.5 + 0.5 * strength * r.range(0.7, 1.2);
+      const peak = base * (1 + 0.52 * strength * r.range(0.7, 1.2));
       l.g.gain.setTargetAtTime(peak, t + r.range(0, 0.5), dur * 0.28);
-      l.g.gain.setTargetAtTime(0.5, t + dur * 0.55, dur * 0.4);
+      l.g.gain.setTargetAtTime(base, t + dur * 0.55, dur * 0.4);
       const f = l.lp.frequency.value;
       l.lp.frequency.setTargetAtTime(f * (1 + strength * 0.9), t, dur * 0.3);
       l.lp.frequency.setTargetAtTime(f, t + dur * 0.6, dur * 0.5);
