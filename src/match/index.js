@@ -65,9 +65,15 @@ import { Bomb, BOMB } from './bomb.js';
 import { Spectator } from './spectate.js';
 import { SiteMarks } from './sitemark.js';
 import { Airstrike } from './airstrike.js';
+import { Bomber } from './bomber.js';
 import { AmmoDrops } from './ammo.js';
 
 const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', MATCH_OVER: 'matchover' };
+
+/** Metres. Close enough to the flank staging point to count as "been there". */
+const FLANK_ARRIVE = 7;
+/** Seconds. A staging point he has not reached by now is not worth any more of the round. */
+const FLANK_TIMEOUT = 45;
 
 export class MatchSystem {
   static id = 'match';
@@ -152,16 +158,35 @@ export class MatchSystem {
     }
     this.spectator = new Spectator(ctx);
 
-    /* ---- airstrike ----------------------------------------------------- */
+    /* ---- the air ------------------------------------------------------- */
     /**
-     * Three fixed strike sites on the town, everything about how they break
-     * baked here at boot. `build()` is the only expensive call in the whole
-     * feature and it runs exactly once, inside the loading state; firing one
-     * mid-round costs a uniform write. See src/match/airstrike.js.
+     * TWO WEAPONS, ONE RULE: everything about how they break is baked here at
+     * boot, and the frame either of them fires is a uniform write.
+     *
+     * `airstrike` is eight fixed strike sites on the town — three that take a
+     * storey down and change the map, five smaller ones standing over the
+     * attackers' approach so that pushing costs something. `bomber` is the
+     * aircraft that crosses and walks a STICK of bombs along a line, which is a
+     * different shape of threat: a line you have to be out of rather than a
+     * point you have to be away from.
+     *
+     * `build()` on each is the only expensive call in either feature and both
+     * run exactly once, inside the loading state.
+     *
+     * They are told about each other so they can never share the sky. Two
+     * telegraphs at once is noise — the player has to be able to tell which one
+     * is about to be theirs — so each one's scheduler stands down while the
+     * other has something inbound.
      */
     this.airstrike = new Airstrike(ctx, { rng: this.rng.fork() }).build();
     if (patcher) for (const site of this.airstrike.sites) for (const m of site.materials) patcher.patch(m);
-    if (typeof window !== 'undefined') window.__STRIKE__ = this.airstrike;
+    this.bomber = new Bomber(ctx, { rng: this.rng.fork() }).build();
+    this.airstrike.coBusy = this.bomber;
+    this.bomber.coBusy = this.airstrike;
+    if (typeof window !== 'undefined') {
+      window.__STRIKE__ = this.airstrike;
+      window.__BOMBER__ = this.bomber;
+    }
 
     /* ---- scratch ------------------------------------------------------- */
     this._v = new THREE.Vector3();
@@ -209,6 +234,13 @@ export class MatchSystem {
     /** The defenders told to cut the charge. Reused; see `_nearestInto`. */
     this._crew = [];
     this._crewDist = [];
+    /**
+     * Who is taking the long way round, and how far through it they are.
+     * Agent -> the time they were given the order, or -1 once they have been.
+     * Cleared every round and pruned with the bodies, so it never holds a
+     * ragdoll alive. @see `_flankTarget`
+     */
+    this._flankLeg = new Map();
     /** Where each side comes from, so a held position is actually watched. */
     this._approach = [new THREE.Vector3(), new THREE.Vector3()];
 
@@ -329,6 +361,7 @@ export class MatchSystem {
     // attackers did NOT pick only by chance, because they do not know either.
     this.targetSite = this.sites[this.rng.int(0, this.sites.length - 1)];
     for (const s of this.sites) s.defenders.length = 0;
+    this._flankLeg.clear();
 
     this._spawnTeam(atk, ROLE.ATTACK);
     this._spawnTeam(def, ROLE.DEFEND);
@@ -338,6 +371,10 @@ export class MatchSystem {
     // Rest pose back in `instanceMatrix`, rubble back off the BVH mask and the
     // nav cells back to what `ai` built. All three are array writes.
     this.airstrike?.reset();
+    // Same for the bomber, minus the collision and nav restore it never made:
+    // a crater is a hole and a scatter of grit, so the BVH and `ai.grid` were
+    // never touched and there is nothing to put back.
+    this.bomber?.reset();
 
     // ---- the charge ---------------------------------------------------
     // Last round's pouches go with last round's bodies: `_resetPlayer` has
@@ -587,6 +624,10 @@ export class MatchSystem {
       list.length = w;
     }
     for (const s of this._squads) s?.prune();
+    // A dead flanker's entry would keep his ragdoll referenced for the round.
+    if (this._flankLeg.size) {
+      for (const a of this._flankLeg.keys()) if (!a.alive) this._flankLeg.delete(a);
+    }
   }
 
   /**
@@ -613,6 +654,7 @@ export class MatchSystem {
     // back the way the defence will come — and vice versa before the plant.
     const atkFace = this._spawnCentre.defend;
     const defFace = this._spawnCentre.attack;
+    let i = 0;
     for (const a of this._botsByTeam[atk]) {
       if (!a.alive) continue;
       if (this.bomb.carrier === a) {
@@ -629,8 +671,29 @@ export class MatchSystem {
         // seconds while six men pushed past it to a site they could not use.
         a.setObjective('push', this.bomb.position, null);
       } else {
-        a.setObjective('push', this.targetSite.position, this.targetSite);
+        /**
+         * THE FLANK — "攻める側は裏どりや屋内移動 … 移動に関しては攻める側が
+         * 有利になるように".
+         *
+         * Fifteen men walking one lane at one mouth is not an attack, it is a
+         * queue: the defence only ever has to hold the direction the whole
+         * courtyard is being entered from, which on a map with three mouths per
+         * site throws away the attack's only structural advantage. So a share
+         * of the attack is staged through the CONNECTOR first (see
+         * `site.flank` in sites.js) and arrives at a different mouth, at the
+         * same time, from a lane the defence's hold does not overlook.
+         *
+         * The share is every third man — `RULES.flankShare`, the number that
+         * keeps the main push heavy enough to still take the site on its own.
+         * Picked by list index rather than by dice, and MEMBERSHIP IS STICKY:
+         * `_flankTarget` only consults the index for a man it has never sent,
+         * so a flanker keeps flanking while the list is re-cut under him by
+         * deaths and respawns, instead of changing his mind every two seconds.
+         */
+        const via = this._flankTarget(a, i);
+        a.setObjective('push', via ?? this.targetSite.position, via ? null : this.targetSite);
       }
+      i++;
     }
 
     // ---- defenders ----------------------------------------------------
@@ -682,6 +745,37 @@ export class MatchSystem {
         live[i].setObjective('hold', site.hold, site, defFace);
       }
     }
+  }
+
+  /**
+   * Where attacker number `index` should be walking on his way to the site:
+   * the flank staging point, or null for "straight down the lane".
+   *
+   * A LATCH, NOT A TEST. `_flankLeg` remembers who has already been through
+   * the connector (`-1`), because a pure distance test oscillates: the man
+   * arrives, is re-tasked to the site, walks away from the staging point, and
+   * the next refresh two seconds later sends him back to it. He goes once.
+   *
+   * The timeout is the other half of not stranding anybody — a staging point
+   * he cannot reach (rubble from an airstrike, a body of men in the way) stops
+   * being his problem after `FLANK_TIMEOUT` and he joins the push.
+   */
+  _flankTarget(a, index) {
+    const site = this.targetSite;
+    if (!site?.flank || index % RULES.flankShare !== 0) return null;
+    const leg = this._flankLeg.get(a);
+    if (leg === -1) return null;
+    const now = this.ctx.time.elapsed;
+    if (leg === undefined) {
+      this._flankLeg.set(a, now);
+      return site.flank;
+    }
+    const arrived = a.position.distanceToSquared(site.flank) < FLANK_ARRIVE * FLANK_ARRIVE;
+    if (arrived || now - leg > FLANK_TIMEOUT) {
+      this._flankLeg.set(a, -1);
+      return null;
+    }
+    return site.flank;
   }
 
   /**
@@ -781,8 +875,13 @@ export class MatchSystem {
     this._objectiveTimer = 0;
     // The airstrike only schedules itself inside a live round, and the first
     // one cannot be called for `RULES.airstrikeFirstDelay` seconds after GO.
-    if (phase === PHASE.LIVE) this.airstrike?.armRound();
-    else this.airstrike?.disarm();
+    if (phase === PHASE.LIVE) {
+      this.airstrike?.armRound();
+      this.bomber?.armRound();
+    } else {
+      this.airstrike?.disarm();
+      this.bomber?.disarm();
+    }
   }
 
   _endRound(winner, reason) {
@@ -1007,9 +1106,11 @@ export class MatchSystem {
         break;
     }
 
-    // The strike runs its own clock in every phase — a mass that is mid-air
-    // when a round ends still has to land — but only ARMS during LIVE.
+    // Both run their own clock in every phase — a mass that is mid-air when a
+    // round ends still has to land, and an aeroplane halfway across the map
+    // still has to finish crossing it — but they only ARM during LIVE.
     this.airstrike?.update(dt, this.phase === PHASE.LIVE);
+    this.bomber?.update(dt, this.phase === PHASE.LIVE);
 
     // Dead players watch. Written here, in update(), so it lands before `ui`
     // and `render` read the camera this frame.
@@ -1428,7 +1529,11 @@ export class MatchSystem {
     this.ammoDrops?.dispose();
     this.marks?.dispose();
     this.airstrike?.dispose();
-    if (typeof window !== 'undefined' && window.__STRIKE__ === this.airstrike) delete window.__STRIKE__;
+    this.bomber?.dispose();
+    if (typeof window !== 'undefined') {
+      if (window.__STRIKE__ === this.airstrike) delete window.__STRIKE__;
+      if (window.__BOMBER__ === this.bomber) delete window.__BOMBER__;
+    }
   }
 }
 

@@ -152,7 +152,9 @@ Emit and listen via `ctx.events`. Payloads are plain objects. The canonical set:
 | `match:respawn` | `{ name, team, isPlayer }` | match |
 | ↳ | somebody is back on their feet inside the round. Fires for a bot and for the local player on the same path, `RULES.respawnDelay` after the death. A respawned bot is a NEW `Agent`; anything holding the old one has a corpse. | |
 | `match:airstrike` | `{ phase: 'inbound'\|'impact'\|'settled', site, position }` | match |
-| ↳ | an airstrike on one of the three fixed strike sites. `inbound` is the telegraph (4.4 s of jet and whistle before it lands), `impact` is the frame it goes off, `settled` is when the rubble stops moving and becomes collision. The blast itself is a normal `explosion` event, so nothing has to listen to this to take damage. The payload object is REUSED — copy what you need. See `src/match/airstrike.js`. | |
+| ↳ | an airstrike on one of the eight fixed strike sites (three that take a storey down and change the map, five smaller ones over the attackers' approach). `inbound` is the telegraph (4.4 s of jet and whistle before it lands), `impact` is the frame it goes off, `settled` is when the rubble stops moving and becomes collision. The blast itself is a normal `explosion` event, so nothing has to listen to this to take damage. The payload object is REUSED — copy what you need. See `src/match/airstrike.js`. | |
+| `match:bomber` | `{ phase: 'inbound'\|'impact'\|'settled', run, position }` | match |
+| ↳ | an aircraft crossing the map and walking a STICK of 5-8 bombs along one of four fixed lines. `inbound` is the launch — the aeroplane itself is the telegraph and is on screen for 2.4 s before the first bomb is even released; `impact` fires once PER BOMB, with `position` at that bomb's crater; `settled` is when the debris stops moving. It changes no collision and no navigation, unlike the airstrike. Each bomb is a normal `explosion` event. The payload object is REUSED — copy what you need. See `src/match/bomber.js`. | |
 
 Two additive fields on existing payloads, both optional and both ignorable:
 
