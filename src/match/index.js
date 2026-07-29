@@ -609,14 +609,67 @@ export class MatchSystem {
         else a.setObjective('retake', this.bomb.position, this.bomb.site, defFace);
       }
     } else {
-      // Split across both sites — 4 on one, 3 on the other, so neither is naked.
+      /**
+       * ROTATE ONTO THE SITE THAT IS ACTUALLY BEING HIT.
+       *
+       * The old split was a flat alternation across both sites for the whole
+       * round, which means half the defence spends every round guarding a
+       * courtyard nobody ever walks into. That is not a defence, it is two
+       * half-strength garrisons — and against fifteen attackers who all commit
+       * to one site it loses every time.
+       *
+       * `_threatenedSite` reads the defence's OWN contact reports (see the
+       * function), so this is information the team has genuinely earned: a man
+       * has to have seen an attacker near a site within the last few seconds.
+       * Two thirds rotate onto it and a third stays home, because a rotation
+       * that empties the other site is exactly what a fake is for.
+       */
+      const hot = this._threatenedSite();
       const live = this._botsByTeam[def].filter((a) => a.alive);
       for (let i = 0; i < live.length; i++) {
-        const site = this.sites[i % this.sites.length];
+        const site = hot
+          ? (i % 3 === 0 ? this._otherSite(hot) : hot)
+          : this.sites[i % this.sites.length];
         site.defenders.push(live[i]);
         live[i].setObjective('hold', site.hold, site, defFace);
       }
     }
+  }
+
+  /**
+   * Which bomb site the defence currently believes is under attack, or null.
+   *
+   * Built from `lastKnown` — the position each defender last put an enemy at —
+   * so it is exactly the "call it out or it isn't there" rule the rest of the
+   * mode runs on, and it can be faked. A contact only votes if it is fresh
+   * (under six seconds) and within 22 m of a site, and a site needs two votes
+   * to move anybody: one man glimpsing somebody in a connector must not swing
+   * the whole defence, or the attack rotates the defence back and forth by
+   * showing one player at each site in turn.
+   */
+  _threatenedSite() {
+    const def = this.defenders;
+    let bestSite = null;
+    let bestVotes = 1;
+    for (const s of this.sites) {
+      let votes = 0;
+      for (const a of this._botsByTeam[def]) {
+        if (!a.alive || a.lastKnownAge > 6) continue;
+        const dx = a.lastKnown.x - s.position.x;
+        const dz = a.lastKnown.z - s.position.z;
+        if (dx * dx + dz * dz < 22 * 22) votes++;
+      }
+      if (votes > bestVotes) {
+        bestVotes = votes;
+        bestSite = s;
+      }
+    }
+    return bestSite;
+  }
+
+  _otherSite(site) {
+    for (const s of this.sites) if (s !== site) return s;
+    return site;
   }
 
   /** @param {boolean} freeOnly  skip anyone currently engaged */

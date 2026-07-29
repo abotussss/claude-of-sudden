@@ -471,12 +471,21 @@ export class CoverMap {
      */
     const toward = opts.toward ?? null;
     const towardW = opts.towardWeight ?? 0.55;
+    /**
+     * A point this search may NOT return, and the reason cover rotation works
+     * at all. A man standing in a cover point scores it better than anywhere
+     * else — zero travel, already claimed to him, still protecting him — so a
+     * re-pick without this returns where he already is and he never moves. See
+     * `coverDwell` in agent.js.
+     */
+    const avoid = opts.avoid ?? null;
     const dTowardNow = toward ? Math.hypot(toward.x - pos.x, toward.z - pos.z) : 0;
     let best = null;
     let bestScore = -Infinity;
     const tx = threat.x, tz = threat.z;
     for (let i = 0; i < this.points.length; i++) {
       const p = this.points[i];
+      if (p === avoid) continue;
       if (p.claimed >= 0 && p.claimed !== claimId) continue;
       const toThreatX = tx - p.x, toThreatZ = tz - p.z;
       const dT = Math.hypot(toThreatX, toThreatZ);

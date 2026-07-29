@@ -304,6 +304,25 @@ export class Agent {
     this.crouch = false;
     this.cover = null;
     this.coverPos = new THREE.Vector3();
+    /**
+     * HOW LONG THIS MAN WILL SIT IN ONE PIECE OF COVER.
+     *
+     * Cover selection used to be re-run on `repathTimer` and then almost always
+     * return the point already occupied, because that point scores well BECAUSE
+     * he is standing in it and it is claimed to him. The result is a man who
+     * "re-evaluates" every three seconds and never moves — measured at 49.7 % of
+     * all actor-time in COMBAT with a mean of 52 m travelled per bot per minute.
+     * When this runs out the next pick EXCLUDES the current point, so the
+     * re-evaluation has to produce an actual decision.
+     */
+    this.coverDwell = 0;
+    /**
+     * Where inside his sector a man holding ground is currently standing. A
+     * hold objective is an AREA, not a spot: see `_pickHoldSpot`.
+     */
+    this._holdSpot = new THREE.Vector3();
+    this._hasHoldSpot = false;
+    this.holdTimer = 0;
     this.patrolPoints = opts.patrol ?? null;
     this.patrolIndex = 0;
     this.stuckTimer = 0;
@@ -349,6 +368,8 @@ export class Agent {
     this.grenadeCooldown -= dt;
     this.peekTimer -= dt;
     this.repathTimer -= dt;
+    this.coverDwell -= dt;
+    this.holdTimer -= dt;
     this.vaultCooldown -= dt;
     if (this.lastKnownAge < 1e6) this.lastKnownAge += dt;
 
@@ -428,6 +449,10 @@ export class Agent {
     // Force a fresh path next time ADVANCE runs rather than finishing the old one.
     if (changed) {
       this.repathTimer = 0;
+      // A sector spot belongs to the objective it was rolled around; a new
+      // objective has to roll a new one or the man holds the old site's ground.
+      this._hasHoldSpot = false;
+      this.holdTimer = 0;
       if (this.state === STATE.ADVANCE) this.hasMoveTarget = false;
     }
   }
@@ -546,7 +571,14 @@ export class Agent {
         this.desiredSpeed = 0;
         this.wantFire = false;
         this.peeking = false;
-        if (this.suppression < 0.45) this._setState(STATE.COMBAT);
+        if (this.suppression < 0.45) {
+          // Somebody has this angle ranged. Coming back up in the same spot he
+          // was just driven out of is how a man dies twice — the dwell and the
+          // repath are both spent, so the first thing COMBAT does is move him.
+          this.coverDwell = 0;
+          this.repathTimer = 0;
+          this._setState(STATE.COMBAT);
+        }
         break;
 
       case STATE.FLANK: {
@@ -663,17 +695,48 @@ export class Agent {
     this.wantFire = false;
     this.aimWeight = 0.4;
 
+    /**
+     * A HOLD IS A SECTOR, NOT A FLAGPOLE.
+     *
+     * `hold` and `retake` are given to more than half the men on the map at any
+     * moment (measured: 51 % + 6 % of all objective-time), and the old code
+     * walked them to a single authored point and set `desiredSpeed = 0` for the
+     * rest of the round. Fifteen defenders converging on one dot and then
+     * standing on it is exactly the "AIが立ち止まる" complaint, and it is also
+     * bad defence: one grenade, one angle, and the whole site is gone.
+     *
+     * So a holder walks a spot INSIDE his sector, re-rolled every few seconds,
+     * which spreads the defence across the courtyard, keeps every man moving,
+     * and means an attacker peeking the same angle twice sees a different
+     * picture. `_pickHoldSpot` keeps every spot on the nav grid and inside the
+     * sector, so this can never wander a man off the objective.
+     */
+    const holdish = obj.mode === 'hold' || obj.mode === 'retake';
+    let dest = obj.position;
+    if (holdish) {
+      if (!this._hasHoldSpot || this.holdTimer <= 0) this._pickHoldSpot(obj);
+      if (this._hasHoldSpot) dest = this._holdSpot;
+    } else {
+      this._hasHoldSpot = false;
+    }
+
     const arrive =
       obj.mode === 'pickup' || obj.mode === 'defuse' ? 1.0
         : obj.mode === 'plant' ? 1.6
           : 2.2;
-    const dist = this.position.distanceTo(obj.position);
+    const dist = this.position.distanceTo(dest);
 
     if (dist > arrive) {
-      this.desiredSpeed = obj.mode === 'hold' ? 3.4 : 4.3;
+      // Crossing the map is a run; moving inside a sector you already hold is a
+      // walk, because a defender who sprints between two sandbags cannot shoot.
+      const inSector = holdish && this.position.distanceTo(obj.position) < 14;
+      this.desiredSpeed = inSector ? 2.4 : obj.mode === 'hold' ? 3.4 : 4.3;
       if (this.repathTimer <= 0 && !this.pathPending && (!this.hasMoveTarget || this.stuckTimer > 0.6)) {
         this.repathTimer = this.rng.range(1.1, 2.2);
-        if (!this._goTo(obj.position) && !this.pathPending) this._advanceFallback(obj);
+        if (!this._goTo(dest) && !this.pathPending) {
+          if (holdish && this._hasHoldSpot) this._hasHoldSpot = false; // try another spot
+          else this._advanceFallback(obj);
+        }
       }
       return;
     }
@@ -695,6 +758,44 @@ export class Agent {
     // and it is what a defence actually looks like.
     this.crouch = (this.id & 1) === 0 && obj.mode === 'hold';
     this.aimWeight = 0.6;
+  }
+
+  /**
+   * Roll a new spot inside the sector this man is holding.
+   *
+   * The ring is 4-11 m from the objective, which for a bomb site (radius 8) is
+   * the courtyard and its mouths rather than the middle of the paint. Twelve
+   * candidate bearings are tried and the first that lands on a nav cell at
+   * roughly the objective's height wins — cheap, and the height test is what
+   * stops a man on the street "holding" a spot on a roof he cannot path to. If
+   * nothing lands, the objective itself is used and the timer is short, so the
+   * next attempt comes round quickly instead of the man giving up for good.
+   */
+  _pickHoldSpot(obj) {
+    const grid = this.ai.grid;
+    this.holdTimer = this.rng.range(4, 9);
+    this._hasHoldSpot = false;
+    if (!grid) return;
+    const base = this.rng.range(0, Math.PI * 2);
+    for (let i = 0; i < 12; i++) {
+      const th = base + (i / 12) * Math.PI * 2;
+      const r = this.rng.range(4, 11);
+      const x = obj.position.x + Math.cos(th) * r;
+      const z = obj.position.z + Math.sin(th) * r;
+      const ci = grid.nearest(x, z, obj.position.y, 2, 1.4);
+      if (ci < 0) continue;
+      this._holdSpot.set(
+        grid.worldX(ci % grid.nx),
+        grid.floor[ci],
+        grid.worldZ((ci / grid.nx) | 0)
+      );
+      // Do not re-roll onto the square we are already standing on.
+      if (this.position.distanceToSquared(this._holdSpot) < 2.5 * 2.5) continue;
+      this._hasHoldSpot = true;
+      this.repathTimer = 0;
+      return;
+    }
+    this.holdTimer = this.rng.range(1.2, 2.4);
   }
 
   _combat(dt) {
@@ -720,17 +821,39 @@ export class Agent {
     // because it is the man everybody is shooting at.
     const mode = this.objective?.mode;
     const urgency =
-      mode === 'pickup' || mode === 'defuse' ? 3
-        : mode === 'plant' ? 6
-          // 'push' joined the list because without it the attack never arrives:
+      mode === 'pickup' || mode === 'defuse' ? 2.5
+        : mode === 'plant' ? 4
+          // 'push' is on the list because without it the attack never arrives:
           // in a stalemate somebody is always visible, so a break-off gated only
-          // on "nothing in sight" never fires for the four men who are not
-          // carrying anything. Twelve seconds is long enough that it cannot be
-          // used to walk out of a duel, short enough that a 120 s round still
-          // sees an execute.
-          : mode === 'push' ? 12
+          // on "nothing in sight" never fires for the men who are not carrying
+          // anything.
+          //
+          // 12 s -> 5 s with the move to fifteen a side. Twelve was tuned for a
+          // 120 s round with seven men, where one duel was a large fraction of
+          // the team; at thirty men there is ALWAYS a duel somewhere, so a
+          // twelve second dwell meant the attack advanced in the gaps between
+          // other people's fights. Five is still long enough that it cannot be
+          // used to walk straight out of an ambush — the man has to have had
+          // nothing in his sights for the last beat of it.
+          : mode === 'push' ? 5
             : 0;
     if (urgency && this.stateTime > urgency && !this.targetVisible) {
+      this.cover = null;
+      this.ai.cover?.release(this.id);
+      this._setState(STATE.ADVANCE);
+      return;
+    }
+    /**
+     * THE STALEMATE BREAK. Everything above still requires a clear beat with
+     * nothing in sight, and across a thirty-man map that beat can simply never
+     * arrive: two lines of men trade shots down a lane and both sides hold,
+     * for ever, because every one of them individually always has somebody
+     * visible. Three times the dwell — fifteen seconds of continuous contact
+     * with no progress — and the man goes anyway, from cover to cover with the
+     * objective pull turned up (see `toward` below). This is the difference
+     * between a firing line and an assault.
+     */
+    if (urgency && this.stateTime > urgency * 3) {
       this.cover = null;
       this.ai.cover?.release(this.id);
       this._setState(STATE.ADVANCE);
@@ -754,8 +877,27 @@ export class Agent {
       }
     }
 
-    // no cover yet, or the current one no longer protects: find one
-    if (!this.cover || this.repathTimer <= 0) {
+    /**
+     * COVER SELECTION, AND WHY IT HAS A DWELL NOW.
+     *
+     * The old condition was "no cover, or the repath timer expired", and the
+     * pick that followed nearly always came back with the point the man was
+     * already standing in: he is on it, so `travel` is 0 and the travel penalty
+     * is 0; it is claimed to him, so the claim filter lets it through; and if it
+     * protected him a moment ago it still does. `pick !== this.cover` then made
+     * the whole thing a no-op. A man therefore chose cover ONCE per contact and
+     * stayed there until the contact died — which is the rooting the brief is
+     * about, and it is invisible in the code because it looks like it is
+     * re-deciding every three seconds.
+     *
+     * `coverDwell` forces the issue: when it runs out the current point is
+     * EXCLUDED from the search, so the pick has to name somewhere else and the
+     * man has to walk. Re-taking cover under fire is most of what reads as
+     * competence in a firefight, and it is also how ground gets taken, because
+     * the `toward` bias is applied on every one of these moves.
+     */
+    const stale = this.cover !== null && this.coverDwell <= 0;
+    if (!this.cover || this.repathTimer <= 0 || stale) {
       // An attacker's cover has to take ground. See `toward` in nav.js.
       const mode2 = this.objective?.mode;
       const pushing = mode2 === 'push' || mode2 === 'plant' || mode2 === 'pickup' ||
@@ -766,6 +908,10 @@ export class Agent {
         minRange: 7,
         maxRange: 30,
         maxTravel: this.cover ? 12 : 26,
+        // Rotating out of a stale spot has to be allowed to go somewhere; with
+        // the current point excluded and no room to move, the man would drop
+        // cover entirely and stand in the open.
+        avoid: stale ? this.cover : null,
         toward: pushing ? this.objective.position : null,
         // The carrier and the defuser push hardest; the rest of the attack
         // still has to be willing to trade for ground.
@@ -775,7 +921,13 @@ export class Agent {
       if (pick && pick !== this.cover) {
         this.cover = pick;
         this.coverPos.set(pick.x, pick.y, pick.z);
+        // 4-8 s in one spot. Shorter and they never settle enough to shoot;
+        // longer and it reads as the old statue.
+        this.coverDwell = this.rng.range(4, 8);
         this._goTo(this.coverPos);
+      } else if (stale) {
+        // Nothing better exists right now — do not ask again next frame.
+        this.coverDwell = this.rng.range(2, 3.5);
       }
     }
 
@@ -828,13 +980,27 @@ export class Agent {
       }
     }
 
-    // flank when the player has been static and we have friends shooting
+    /**
+     * FLANK when somebody else is holding the enemy's attention.
+     *
+     * This used to carry `this.grenadeCooldown < 0 === false` as a condition,
+     * which parses as `grenadeCooldown >= 0` — i.e. "only flank while the
+     * grenade is NOT ready". `grenadeCooldown` is seeded to 9-22 s at spawn and
+     * counts down, so the term evaluated true for the first few seconds of an
+     * actor's life and false for ever afterwards: flanking switched itself off
+     * about twenty seconds into every round. Measured consequence at 15v15:
+     * 0.4 % of all actor-time in FLANK. There is no reason a man's grenade
+     * should decide whether he may move, and the term is gone.
+     *
+     * The dwell is 4 s -> 2.5 s and the rate 0.25 -> 0.55/s to match: `Squad`
+     * rations flankers properly now (one per five men rather than exactly one),
+     * so the gate that matters is the squad's, not a coin flip per actor.
+     */
     if (
       sq &&
-      this.stateTime > 4 &&
-      this.grenadeCooldown < 0 === false &&
+      this.stateTime > 2.5 &&
       sq.canFlank(this) &&
-      this.rng.float() < dt * 0.25
+      this.rng.float() < dt * 0.55
     ) {
       const side = this.rng.float() < 0.5 ? 1 : -1;
       const perp = this._v.copy(target).sub(this.position).setY(0).normalize();

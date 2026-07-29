@@ -148,6 +148,8 @@ export class AiSystem {
 
     /* ---- frame budgets and LOD state (see _updateRelevance / requestPath) ---- */
     this._pathBudget = 0;
+    /** Rotating start index for the per-frame sweep; see `update()`. */
+    this._turnCursor = 0;
     /** A* solves allowed per frame. Measured: one solve is 0.5-1.1 ms on the
      *  221x221 grid, and a squad that all enters combat on the same frame used to
      *  ask for six of them at once.
@@ -158,13 +160,28 @@ export class AiSystem {
      *  bots hesitating at every corner. 4 solves is ~3 ms worst case and the
      *  worst case does not happen on consecutive frames.
      *
-     *  Raised again to 7 for the 15v15: thirty actors ask for rather more than
-     *  twice what thirteen did, because more of them are in contact at once. The
-     *  budget is a RATION, not a target — a frame only pays for the solves that
-     *  were actually asked for, and `stats.pathsDeferred` is the number to watch.
-     *  `match` re-tunes this from the roster size in `MatchSystem.init` if it
-     *  ever moves; see `ai.scaleBudgets`. */
-    this.pathsPerFrame = ctx.has('match') ? 7 : 2;
+     *  Raised again to 9 for the 15v15, and this one was measured three ways on
+     *  full headless matches at thirty actors — ~250 s of wall clock each, ~20
+     *  live minutes of match. One solve on this grid costs 0.29-0.33 ms (mean
+     *  over ~50k of them), so the ration is a hard cap of about 3 ms:
+     *
+     *    ration   solves/frame   ai ms   m/bot/min   deferred/frame
+     *      7          6.07        4.47      62.1          6.1
+     *      9          8.08        5.17      67.0          4.3
+     *     11          9.10        5.80      69.7          2.4
+     *
+     *  Distance travelled keeps climbing with the ration, because a man whose
+     *  path request is never answered has no move target and stands still — but
+     *  it is flattening by 9 while the millisecond is not. 9 takes most of the
+     *  starvation out for a fifth of a 60 Hz frame. (Plant counts and win
+     *  reasons moved around by more than the ration did across these runs; seven
+     *  to ten rounds is not enough to read a two-plant difference, so they are
+     *  deliberately not in this table.)
+     *
+     *  The other half of this fix is in `update()`: the sweep starts at a
+     *  rotating offset so the ration is round-robin. Without that, no ration is
+     *  large enough — the tail of the array is starved every frame regardless. */
+    this.pathsPerFrame = ctx.has('match') ? 9 : 2;
     this.stats.pathsDeferred = 0;
     /**
      * CORPSE BUDGET. With one life a round there were at most 30 bodies on the
@@ -1053,8 +1070,31 @@ export class AiSystem {
 
     for (const s of this.squads) s.update(dt);
 
+    /**
+     * THE UPDATE ORDER ROTATES, AND IT IS NOT COSMETIC.
+     *
+     * `requestPath` is a per-frame ration, and it is spent by whoever asks
+     * first. Walking `agents` from index 0 every frame therefore means the men
+     * at the front of the array take the whole budget every frame and the men at
+     * the back are deferred every frame — for ever, not just once. At thirteen
+     * actors the budget covered nearly everyone and this never showed; at thirty
+     * it starves the tail of the array outright, and a man whose path request is
+     * never answered has no move target, so he stands in the street thinking
+     * about moving. MEASURED: 95k deferred solves in 8k frames with a fixed
+     * order, and mean distance travelled per bot FELL when the AI was made
+     * keener to reposition, because keener meant more requests into the same
+     * starved queue.
+     *
+     * Starting the sweep at a rotating offset makes the ration round-robin, so
+     * every actor is served within `agents.length / pathsPerFrame` frames.
+     */
+    const n = this.agents.length;
+    this._turnCursor = n ? (this._turnCursor + this.pathsPerFrame) % n : 0;
+    const start = this._turnCursor;
+
     let alive = 0;
-    for (let i = 0; i < this.agents.length; i++) {
+    for (let j = 0; j < n; j++) {
+      const i = (start + j) % n;
       const a = this.agents[i];
       if (a.alive) {
         if (a.staged) this._updateStaged(a, dt);
