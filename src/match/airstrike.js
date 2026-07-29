@@ -344,83 +344,10 @@ export class Airstrike {
    * "no flat/untextured surfaces" — without touching anything shared.
    */
   _makeMaterial(name, uniforms) {
-    const set = this._lib?.getTextureSet?.(name) ?? null;
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      roughness: 1,
-      metalness: 0,
-      flatShading: true,
-      dithering: true,
-      // Carries the per-chunk tint through `instanceColor`. The chunk geometry
-      // ships a white `color` attribute because USE_COLOR expects one.
-      vertexColors: true,
-    });
-    mat.name = `airstrike_${name}`;
-    if (set) {
-      mat.map = set.albedo;
-      mat.normalMap = set.normal;
-      mat.normalScale.set(1.15, 1.15);
-      mat.roughnessMap = set.orm; // r=ao, g=rough, b=metal — three's convention
-      mat.transparent = false;
-    }
-
-    mat.userData.owUniforms = uniforms;
-    mat.onBeforeCompile = (shader) => {
-      shader.uniforms.uT = uniforms.uT;
-      shader.uniforms.uAnim = uniforms.uAnim;
-      shader.vertexShader = shader.vertexShader
-        .replace(
-          '#include <common>',
-          `#include <common>
-attribute vec4 aMot;   // x delay, y flight, z arc height, w total spin
-attribute vec3 aOff;   // rest -> settled, mesh local
-attribute vec3 aAxis;  // spin axis, unit
-attribute vec3 aUv;    // xy uv offset, z uv scale
-uniform float uT;
-uniform float uAnim;`
-        )
-        .replace(
-          '#include <uv_vertex>',
-          `#include <uv_vertex>
-#ifdef USE_MAP
-  vMapUv = vMapUv * aUv.z + aUv.xy;
-#endif
-#ifdef USE_NORMALMAP
-  vNormalMapUv = vNormalMapUv * aUv.z + aUv.xy;
-#endif
-#ifdef USE_ROUGHNESSMAP
-  vRoughnessMapUv = vRoughnessMapUv * aUv.z + aUv.xy;
-#endif`
-        )
-        .replace(
-          '#include <project_vertex>',
-          `vec4 mvPosition = vec4( transformed, 1.0 );
-mvPosition = instanceMatrix * mvPosition;
-float owU = clamp( ( uT - aMot.x ) / max( aMot.y, 1e-4 ), 0.0, 1.0 ) * uAnim;
-if ( owU > 0.0 ) {
-  vec3 owPiv = instanceMatrix[ 3 ].xyz;
-  vec3 owRel = mvPosition.xyz - owPiv;
-  // Spin eases out as the chunk lands, and ends exactly on aMot.w so the
-  // settled pose the CPU baked and the pose the GPU stops at are the same.
-  float owAng = aMot.w * owU * ( 2.0 - owU );
-  float owS = sin( owAng );
-  float owC = cos( owAng );
-  owRel = owRel * owC + cross( aAxis, owRel ) * owS + aAxis * dot( aAxis, owRel ) * ( 1.0 - owC );
-  vec3 owD = aOff * owU;
-  owD.y += aMot.z * 4.0 * owU * ( 1.0 - owU );
-  mvPosition.xyz = owPiv + owRel + owD;
-}
-mvPosition = modelViewMatrix * mvPosition;
-gl_Position = projectionMatrix * mvPosition;`
-        );
-    };
-    // Flat shading means the fragment normal comes from the derivatives of the
-    // view position we just rewrote, so the tumbling chunks light correctly
-    // without touching a single normal chunk.
-    const patcher = this.ctx.peek('render')?.patcher;
-    patcher?.patch(mat);
-    return mat;
+    return makeChunkMaterial(this.ctx, this._lib, name, uniforms);
   }
+
+  /* ---- the free function that does the work is at the foot of the file --- */
 
   /* ------------------------------------------------------------- one site -- */
 
@@ -1386,4 +1313,92 @@ function logFacade(id, roofY, facadeU) {
 
 export function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+/**
+ * THE CHUNK MATERIAL AND ITS VERTEX PROGRAM.
+ *
+ * A free function rather than a method because `src/match/bomber.js` needs the
+ * exact same closed-form animation for its crater debris, and two copies of a
+ * `project_vertex` rewrite is two things to keep in step. `Airstrike` reaches
+ * it through `_makeMaterial`; the doc comment on that method is the one that
+ * explains why this is not `materials.get()`.
+ */
+export function makeChunkMaterial(ctx, lib, name, uniforms) {
+  const set = lib?.getTextureSet?.(name) ?? null;
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 1,
+    metalness: 0,
+    flatShading: true,
+    dithering: true,
+    // Carries the per-chunk tint through `instanceColor`. The chunk geometry
+    // ships a white `color` attribute because USE_COLOR expects one.
+    vertexColors: true,
+  });
+  mat.name = `airstrike_${name}`;
+  if (set) {
+    mat.map = set.albedo;
+    mat.normalMap = set.normal;
+    mat.normalScale.set(1.15, 1.15);
+    mat.roughnessMap = set.orm; // r=ao, g=rough, b=metal — three's convention
+    mat.transparent = false;
+  }
+
+  mat.userData.owUniforms = uniforms;
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uT = uniforms.uT;
+    shader.uniforms.uAnim = uniforms.uAnim;
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+  attribute vec4 aMot;   // x delay, y flight, z arc height, w total spin
+  attribute vec3 aOff;   // rest -> settled, mesh local
+  attribute vec3 aAxis;  // spin axis, unit
+  attribute vec3 aUv;    // xy uv offset, z uv scale
+  uniform float uT;
+  uniform float uAnim;`
+      )
+      .replace(
+        '#include <uv_vertex>',
+        `#include <uv_vertex>
+  #ifdef USE_MAP
+  vMapUv = vMapUv * aUv.z + aUv.xy;
+  #endif
+  #ifdef USE_NORMALMAP
+  vNormalMapUv = vNormalMapUv * aUv.z + aUv.xy;
+  #endif
+  #ifdef USE_ROUGHNESSMAP
+  vRoughnessMapUv = vRoughnessMapUv * aUv.z + aUv.xy;
+  #endif`
+      )
+      .replace(
+        '#include <project_vertex>',
+        `vec4 mvPosition = vec4( transformed, 1.0 );
+  mvPosition = instanceMatrix * mvPosition;
+  float owU = clamp( ( uT - aMot.x ) / max( aMot.y, 1e-4 ), 0.0, 1.0 ) * uAnim;
+  if ( owU > 0.0 ) {
+  vec3 owPiv = instanceMatrix[ 3 ].xyz;
+  vec3 owRel = mvPosition.xyz - owPiv;
+  // Spin eases out as the chunk lands, and ends exactly on aMot.w so the
+  // settled pose the CPU baked and the pose the GPU stops at are the same.
+  float owAng = aMot.w * owU * ( 2.0 - owU );
+  float owS = sin( owAng );
+  float owC = cos( owAng );
+  owRel = owRel * owC + cross( aAxis, owRel ) * owS + aAxis * dot( aAxis, owRel ) * ( 1.0 - owC );
+  vec3 owD = aOff * owU;
+  owD.y += aMot.z * 4.0 * owU * ( 1.0 - owU );
+  mvPosition.xyz = owPiv + owRel + owD;
+  }
+  mvPosition = modelViewMatrix * mvPosition;
+  gl_Position = projectionMatrix * mvPosition;`
+      );
+  };
+  // Flat shading means the fragment normal comes from the derivatives of the
+  // view position we just rewrote, so the tumbling chunks light correctly
+  // without touching a single normal chunk.
+  const patcher = ctx.peek('render')?.patcher;
+  patcher?.patch(mat);
+  return mat;
 }
