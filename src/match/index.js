@@ -64,6 +64,7 @@ import { resolveLayout } from './sites.js';
 import { Bomb, BOMB } from './bomb.js';
 import { Spectator } from './spectate.js';
 import { SiteMarks } from './sitemark.js';
+import { Airstrike } from './airstrike.js';
 
 const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', MATCH_OVER: 'matchover' };
 
@@ -140,6 +141,17 @@ export class MatchSystem {
       patcher.patch(this.marks.paint);
     }
     this.spectator = new Spectator(ctx);
+
+    /* ---- airstrike ----------------------------------------------------- */
+    /**
+     * Three fixed strike sites on the town, everything about how they break
+     * baked here at boot. `build()` is the only expensive call in the whole
+     * feature and it runs exactly once, inside the loading state; firing one
+     * mid-round costs a uniform write. See src/match/airstrike.js.
+     */
+    this.airstrike = new Airstrike(ctx, { rng: this.rng.fork() }).build();
+    if (patcher) for (const site of this.airstrike.sites) for (const m of site.materials) patcher.patch(m);
+    if (typeof window !== 'undefined') window.__STRIKE__ = this.airstrike;
 
     /* ---- scratch ------------------------------------------------------- */
     this._v = new THREE.Vector3();
@@ -291,6 +303,11 @@ export class MatchSystem {
     this._spawnTeam(atk, ROLE.ATTACK);
     this._spawnTeam(def, ROLE.DEFEND);
     this._resetPlayer();
+
+    // ---- the town is whole again --------------------------------------
+    // Rest pose back in `instanceMatrix`, rubble back off the BVH mask and the
+    // nav cells back to what `ai` built. All three are array writes.
+    this.airstrike?.reset();
 
     // ---- the charge ---------------------------------------------------
     this.bomb.reset();
@@ -628,6 +645,10 @@ export class MatchSystem {
     // do not move up. Both sides — `Agent._advance` reads `combatEnabled`.
     this.player.movementLocked = phase === PHASE.FREEZE;
     this._objectiveTimer = 0;
+    // The airstrike only schedules itself inside a live round, and the first
+    // one cannot be called for `RULES.airstrikeFirstDelay` seconds after GO.
+    if (phase === PHASE.LIVE) this.airstrike?.armRound();
+    else this.airstrike?.disarm();
   }
 
   _endRound(winner, reason) {
@@ -841,6 +862,10 @@ export class MatchSystem {
       default:
         break;
     }
+
+    // The strike runs its own clock in every phase — a mass that is mid-air
+    // when a round ends still has to land — but only ARMS during LIVE.
+    this.airstrike?.update(dt, this.phase === PHASE.LIVE);
 
     // Dead players watch. Written here, in update(), so it lands before `ui`
     // and `render` read the camera this frame.
@@ -1236,6 +1261,8 @@ export class MatchSystem {
     if (this.ai) this.ai.combatEnabled = true;
     this.bomb?.dispose();
     this.marks?.dispose();
+    this.airstrike?.dispose();
+    if (typeof window !== 'undefined' && window.__STRIKE__ === this.airstrike) delete window.__STRIKE__;
   }
 }
 
