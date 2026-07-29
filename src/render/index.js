@@ -377,12 +377,29 @@ export class RenderSystem {
       // the pass — stays pin sharp.
       // 3.3 px at 1080p, down 40%: at 5.5 the near and mid ground of an ADS frame
       // was a watercolour smear that hid the very thing the sights are pointed at.
-      dofMaxCoc: 3.3,
+      /**
+       * ADS DOF NOW BLURS THE NEAR FIELD ONLY. The far field stays sharp.
+       *
+       * "ADS時にもブラーが強いかも" — and the numbers agreed. `dofFocusMax` was
+       * 18 m with `dofFarRange` 18, so everything past roughly 25 m went
+       * visibly soft the moment the sights came up. The comment above described
+       * that as the feature. In a shooter it is a defect of the first order: the
+       * ONE thing aiming exists to do is resolve a man at distance, and this
+       * was blurring him precisely because he was far away. It also fought the
+       * 6x scope directly — magnify a target and then smear it.
+       *
+       * The near-field half is kept and is the legitimate effect: your own
+       * hands and the gun body soften because your eye is focused downrange.
+       * `dofFocusMax` 140 m is past the longest sightline on the 114x141 m map,
+       * so nothing an enemy can stand on is ever defocused, and `dofMaxCoc`
+       * halves so what blur remains is a hint rather than a watercolour.
+       */
+      dofMaxCoc: 1.6,
       dofNearRatio: 0.38,
       dofFocusMin: 3.0,
-      dofFocusMax: 18.0,
+      dofFocusMax: 140.0,
       dofFarStart: 1.15,
-      dofFarRange: 18.0,
+      dofFarRange: 260.0,
       dofNearScale: 0.55,
       sharpen: 0.25,
       lutStrength: 1.0,

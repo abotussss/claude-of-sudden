@@ -54,8 +54,22 @@ export const QUALITY_PRESETS = {
     decalBudget: 64,
   },
   medium: {
+    /**
+     * MEDIUM WAS THE WORST COMBINATION IN THE FILE FOR SEEING ANYTHING.
+     *
+     * "画質がMediumでも非常に敵を視認しにくい". Multiply it out: pixelRatio 1.0 on
+     * a Retina display is already half linear resolution, `renderScale` 0.85 is
+     * applied on top of that, so the 3D scene was drawn at 0.425x linear — about
+     * 18% of the native pixel count — and then TAA smeared what was left over
+     * several frames and motion blur smeared it again. A man at 40 m is a
+     * handful of pixels before any of that happens.
+     *
+     * renderScale goes to 1.0 (the 3D is drawn at the buffer's own resolution)
+     * and motion blur comes off. TAA stays: it is the anti-aliasing, and at full
+     * render scale it sharpens the silhouette rather than destroying it.
+     */
     pixelRatio: 1.0,
-    renderScale: 0.85,
+    renderScale: 1.0,
     shadowMapSize: 2048,
     cascades: 3,
     shadowDistance: 90,
@@ -63,7 +77,7 @@ export const QUALITY_PRESETS = {
     gtao: true,
     ssr: false,
     volumetrics: true,
-    motionBlur: true,
+    motionBlur: false,
     bloom: true,
     anisotropy: 8,
     particleBudget: 6000,
