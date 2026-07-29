@@ -742,6 +742,12 @@ gl_Position = projectionMatrix * mvPosition;`
   _setProxySolid(site, solid) {
     const sw = this.physics?.staticWorld;
     if (!sw || site.triStart < 0) return;
+    // A rebuild by anybody else repacks the triangle array. `obj.mask` is kept
+    // in step below so the rebuild itself is correct; the cached RANGE is what
+    // goes stale, so re-derive it when the first triangle is no longer ours.
+    // Never on the fire frame — this is only reached at settle and at reset.
+    if (sw.object?.[site.triStart] !== site.proxyId) this._cacheTriRange(site);
+    if (site.triStart < 0) return;
     const LAYER = this.physics.LAYER;
     const m = solid ? LAYER.STATIC : 0;
     sw.mask.fill(m, site.triStart, site.triEnd);

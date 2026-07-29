@@ -128,6 +128,8 @@ Emit and listen via `ctx.events`. Payloads are plain objects. The canonical set:
 | `match:round` | `{ round, phase, attackers, score }` | match |
 | `match:bomb` | `{ state, site, fuse, carrier }` | match |
 | `match:result` | `{ winner, reason, score, matchOver }` | match |
+| `match:airstrike` | `{ phase: 'inbound'\|'impact'\|'settled', site, position }` | match |
+| ↳ | an airstrike on one of the three fixed strike sites. `inbound` is the telegraph (4.4 s of jet and whistle before it lands), `impact` is the frame it goes off, `settled` is when the rubble stops moving and becomes collision. The blast itself is a normal `explosion` event, so nothing has to listen to this to take damage. The payload object is REUSED — copy what you need. See `src/match/airstrike.js`. | |
 
 Two additive fields on existing payloads, both optional and both ignorable:
 
