@@ -170,12 +170,57 @@ export function buildBuilding(A, rng, spec) {
   // ended up. See `plinthCourse` below the floor loop.
   const plinthH = spec.plinthH ?? 0.42;
 
+  /**
+   * The floor heights are ARITHMETIC and are now computed up front, before a
+   * single wall goes up. They used to be accumulated inside the loop, which
+   * meant `info.roofY` did not exist until the loop had finished — and that is
+   * why `stairHoles` had to be a hand-authored table of absolute level
+   * coordinates in layout.js: nothing inside the loop could work out where a
+   * flight to the roof would end. Hand-authored voids are how E2's stairwell
+   * came to be measured correct and unusable at the same time, and they cannot
+   * survive the level being rescaled. Knowing every floor height first makes
+   * `stairVoids` below derivable, which is the whole point.
+   */
   let y = 0;
+  for (let f = 0; f < floors; f++) {
+    info.floorY.push(y);
+    y += f === 0 ? groundH : upperH;
+  }
+  info.roofY = y;
+  info.top = y;
+
+  /**
+   * Every authored flight, resolved to real geometry, and the VOID each one
+   * needs cut in the slab it arrives at.
+   *
+   * `stairRun` lays a flight from the bottom tread's front-centre climbing +Z,
+   * so the footprint is the run plus the landing slab the builder puts at
+   * `D + 0.55`. A climbing player needs that whole strip open above him or he
+   * walks head-first into the underside of the next floor, so the void is the
+   * strip — not a guess at one.
+   */
+  info.stairs = [];
+  const stairVoids = {};       // level -> {x0,x1,z0,z1}, unioned
+  for (const fl of spec.stairFlights ?? []) {
+    const g = stairGeometry(spec, info, fl, t, groundH, upperH, floors);
+    if (!g) continue;
+    info.stairs.push(g);
+    const lvl = fl.floor + 1;
+    const v = stairVoids[lvl];
+    stairVoids[lvl] = v
+      ? { x0: Math.min(v.x0, g.void.x0), x1: Math.max(v.x1, g.void.x1),
+          z0: Math.min(v.z0, g.void.z0), z1: Math.max(v.z1, g.void.z1) }
+      : { ...g.void };
+  }
+  /** An authored hole still wins, so an existing map can pin one by hand. */
+  const holeFor = (level) =>
+    (spec.enterable ? (spec.stairHoles?.[level] ?? stairVoids[level] ?? null) : null);
+
   info.terraces = [];
+  y = 0;
   for (let f = 0; f < floors; f++) {
     const h = f === 0 ? groundH : upperH;
     const fs = floorSpec(spec, f);
-    info.floorY.push(y);
     for (let side = 0; side < 4; side++) {
       if (spec.skipSides?.includes(side)) continue;
       buildFacade(A, rng, fs, info, { side, f, y, h, t, wallKey, streetSide, floors });
@@ -183,15 +228,13 @@ export function buildBuilding(A, rng, spec) {
     // ---- floor / ceiling slab of the NEXT level ----
     y += h;
     if (f < floors - 1) {
-      interiorSlab(A, rng, floorSpec(spec, f + 1), y, t, f + 1);
+      interiorSlab(A, rng, floorSpec(spec, f + 1), y, t, holeFor(f + 1));
       // the setback happens on top of this floor: dress the exposed strip
       if (spec.setback && f + 1 === spec.setback.from) {
         info.terraces.push(terrace(A, rng, spec, y, t));
       }
     }
   }
-  info.roofY = y;
-  info.top = y;
 
   // ---------------------------------------------------------------- plinth --
   // A base course everywhere: catches the ground grime band and stops the walls
@@ -200,7 +243,9 @@ export function buildBuilding(A, rng, spec) {
 
   // ------------------------------------------------------------------ roof --
   const ts = floorSpec(spec, floors - 1);
-  interiorSlab(A, rng, ts, y, t, floors, true);
+  const roofHole = holeFor(floors);
+  interiorSlab(A, rng, ts, y, t, roofHole, true);
+  info.roofHole = roofHole;
   if (spec.parapet !== false) {
     parapet(A, spec.parapetKey ?? wallKey, ts.x, ts.z, ts.w + 0.1, ts.d + 0.1, y, rng, {
       h: spec.parapetH ?? 0.78,
@@ -668,13 +713,87 @@ function buildFacade(A, rng, spec, info, ctx) {
   }
 }
 
+// ================================================================= stairs ===
+/**
+ * One authored flight, resolved. LEVEL SPACE throughout.
+ *
+ * This is the single place that knows how a flight is laid out, and both the
+ * builder and the void it needs cut above it read it — so the tread the player
+ * stands on and the hole over his head cannot disagree, which is exactly how
+ * E2's first floor came to be sealed off behind a stairwell that measured
+ * correct.
+ *
+ * `ry` is supported for completeness but every authored flight is axis-aligned;
+ * the void is an AABB, so a diagonal flight gets a conservative (larger) one.
+ */
+function stairGeometry(spec, info, fl, t, groundH, upperH, floors) {
+  const f = fl.floor;
+  if (f < 0 || f >= floors) return null;
+  const fs = floorSpec(spec, f);
+  const iw = fs.w - t * 2;
+  const id = fs.d - t * 2;
+  const base = info.floorY[f] + (f === 0 ? 0.13 : 0);
+  const climb = (info.floorY[f + 1] ?? info.roofY) - base;
+  if (climb <= 0.5) return null;
+  const steps = Math.max(6, Math.round(climb / 0.19));
+  const rise = climb / steps;
+  const run = fl.run ?? 0.275;
+  const sw = fl.w ?? 1.2;
+  const ry = fl.ry ?? 0;
+  const ox = fs.x - iw / 2 + fl.x * iw;
+  const oz = fs.z - id / 2 + fl.z * id;
+  const D = steps * run;
+  /** Landing depth, as built below: a 1.1 m slab centred at D + 0.55. */
+  const landing = 1.1;
+  const ax = Math.sin(ry), az = Math.cos(ry); // the climb direction
+  /**
+   * THE VOID STARTS WHERE THE HEAD CLEARANCE DOES, NOT AT THE BOTTOM TREAD.
+   *
+   * Cutting the whole flight out of the slab above is the obvious thing and it
+   * is wrong, for a reason that only shows up once a building has TWO flights.
+   * `floorcheck` measured it: W1, W3, E1 and E2 all stack their upper flight
+   * directly over the lower one, so with a full-length void the upper flight's
+   * bottom step stood over five metres of open stairwell — no floor to walk to
+   * it across, and the storey above was sealed. E1's second floor and the roofs
+   * of four buildings were unreachable for exactly this.
+   *
+   * A real stairwell has a soffit: the slab covers the lower treads and opens
+   * where a climber's head would otherwise hit it. That is `nextY - thick -
+   * H - margin`, solved for the tread that first exceeds it. The floor above
+   * therefore stays SOLID over the foot of the flight, which is the ground the
+   * next flight up has to stand on.
+   */
+  const nextY = info.floorY[f + 1] ?? info.roofY;
+  const slabT = f + 1 >= floors ? 0.26 : 0.2;   // interiorSlab's roof/floor thickness
+  const headroom = nextY - slabT - 1.78 - 0.06;
+  let firstOpen = 0;
+  while (firstOpen < steps && base + (firstOpen + 1) * rise <= headroom) firstOpen++;
+  const openAt = Math.max(0, firstOpen * run - 0.15);
+  /** …and 0.22 m of side clearance for the railing and the capsule's shoulder. */
+  const sideR = sw / 2 + 0.22;
+  const fwd = D + landing;
+  const cx = [ox + ax * openAt, ox + ax * fwd];
+  const cz = [oz + az * openAt, oz + az * fwd];
+  const px = Math.abs(az) * sideR + Math.abs(ax) * 0.0;
+  const pz = Math.abs(ax) * sideR + Math.abs(az) * 0.0;
+  return {
+    floor: f, ox, oz, ry, sw, run, rise, steps, base, climb,
+    top: base + climb, D, landing,
+    void: {
+      x0: Math.min(cx[0], cx[1]) - px - Math.abs(ax) * 0,
+      x1: Math.max(cx[0], cx[1]) + px,
+      z0: Math.min(cz[0], cz[1]) - pz,
+      z1: Math.max(cz[0], cz[1]) + pz,
+    },
+  };
+}
+
 // ================================================================= slabs ====
 /** Floor slab for one level, with the stairwell void left open. */
-function interiorSlab(A, rng, spec, y, t, level, roof = false) {
+function interiorSlab(A, rng, spec, y, t, hole = null, roof = false) {
   const iw = spec.w - t * 2;
   const id = spec.d - t * 2;
   const key = roof ? 'roof_screed' : 'floor_concrete';
-  const hole = spec.enterable ? (spec.stairHoles?.[level] ?? null) : null;
   const thick = roof ? 0.26 : 0.2;
   if (!hole) {
     A.add(key, BOX(A), LL(IDENT, spec.x, y - thick / 2, spec.z, 0, iw, thick, id), {
@@ -687,10 +806,18 @@ function interiorSlab(A, rng, spec, y, t, level, roof = false) {
     const x1 = spec.x + iw / 2;
     const z0 = spec.z - id / 2;
     const z1 = spec.z + id / 2;
-    const hx0 = hole.x0;
-    const hx1 = hole.x1;
-    const hz0 = hole.z0;
-    const hz1 = hole.z1;
+    /**
+     * CLAMPED to the slab. A derived void runs the length of the flight and a
+     * flight tucked against a wall (every one on this map is) pokes out past
+     * the slab edge — and an unclamped hz0 < z0 makes the first picture-frame
+     * part negative-depth, which the loop below silently drops. That is a
+     * missing STRIP of floor, not a missing hole, and it is the kind of thing
+     * that only shows up as a player falling through a corner.
+     */
+    const hx0 = Math.max(x0, Math.min(x1, hole.x0));
+    const hx1 = Math.max(x0, Math.min(x1, hole.x1));
+    const hz0 = Math.max(z0, Math.min(z1, hole.z0));
+    const hz1 = Math.max(z0, Math.min(z1, hole.z1));
     const parts = [
       [x0, z0, x1, hz0],
       [x0, hz1, x1, z1],
@@ -739,6 +866,47 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
   });
 
   /**
+   * KEEP THE STAIRS CLEAR — on EVERY floor.
+   *
+   * The same argument as the doorways, and the same failure. `furnishRoom` has
+   * never known where a staircase is, and above the ground floor it was handed
+   * no keep-clear set at all (`doorways: f === 0 ? doorSpots : null`). The
+   * result was measured by `tools/floorcheck.mjs`: E2's only flight had a
+   * storage room's crate stacks rolled onto its bottom step, so the whole
+   * building above the ground floor — two storeys and a roof — was sealed. The
+   * other seven were passing on nothing but where the dice fell.
+   *
+   * A flight is a strip, not a point, so it is covered with a chain of circles
+   * every 0.5 m: the approach behind the bottom tread, the run itself, and — on
+   * the floor it ARRIVES at — the landing and the void, because a wardrobe at
+   * the top of a staircase is exactly as good as a locked door.
+   */
+  const floorClear = [];
+  for (let f = 0; f < floors; f++) floorClear.push(f === 0 ? doorSpots.slice() : []);
+  const chain = (list, ax, az, bx, bz, r) => {
+    const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 0.5));
+    for (let i = 0; i <= n; i++) {
+      list.push({ x: ax + ((bx - ax) * i) / n, z: az + ((bz - az) * i) / n, r });
+    }
+  };
+  for (const g of info.stairs ?? []) {
+    const ax = Math.sin(g.ry), az = Math.cos(g.ry);
+    const r = g.sw / 2 + 0.5;
+    // the floor the flight LEAVES: the approach and the first third of the run
+    // (past that the treads are already above furniture height)
+    if (floorClear[g.floor]) {
+      chain(floorClear[g.floor], g.ox - ax * 1.5, g.oz - az * 1.5,
+        g.ox + ax * g.D * 0.35, g.oz + az * g.D * 0.35, r);
+    }
+    // the floor it ARRIVES at: the landing, and the walk-off in front of it
+    const up = floorClear[g.floor + 1];
+    if (up) {
+      chain(up, g.ox + ax * (g.D - 0.6), g.oz + az * (g.D - 0.6),
+        g.ox + ax * (g.D + g.landing + 1.4), g.oz + az * (g.D + g.landing + 1.4), r);
+    }
+  }
+
+  /**
    * THE THROUGH-ROUTE.
    *
    * An interior on this map is a ROUTE, not a room: every enterable building has
@@ -776,10 +944,28 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
       const dr = info.doors.find((d) => d.side === side);
       return dr ? { x: dr.wp[0], z: dr.wp[2] } : null;
     }
-    const win = (info.windows ?? []).find(
+    /**
+     * THE AUTHORED WINDOW, not whichever one the dice opened first.
+     *
+     * E3's side-1 face has three glassless openings on the ground floor and
+     * only ONE of them — bay 4, declared in `spec.bayKinds` — is the vault-in
+     * this map's route is drawn to. Taking the first `state === 'open'` window
+     * in bay order meant the corridor's anchor moved whenever the window dice
+     * moved, and `vaultcheck` caught the authored window walled in behind a
+     * shop counter while the route ran to an incidental one nine metres away.
+     * Resolve the bay the same way `buildFacade` derived it, and prefer the bay
+     * that was actually authored.
+     */
+    const cands = (info.windows ?? []).filter(
       (o) => o.f === 0 && o.side === side && o.state === 'open'
     );
-    if (!win) return null;
+    if (!cands.length) return null;
+    const bayOf = (o) => {
+      const len = o.side === 0 || o.side === 2 ? spec.w : spec.d;
+      const bays = Math.max(1, Math.round(len / 3.05));
+      return Math.round((o.x + len / 2) / (len / bays) - 0.5);
+    };
+    const win = cands.find((o) => spec.bayKinds?.[side]?.[0]?.[bayOf(o)]) ?? cands[0];
     const p = worldOf(win.pm, win.x, 0, 0);
     return { x: p[0], z: p[2] };
   };
@@ -857,6 +1043,44 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
     return [x0, z0, x1, z1];
   };
 
+  /**
+   * …and the same for a partition run across a stairwell.
+   *
+   * No plan in layout.js does this today, but every one of them was written
+   * against a hand-authored `stairHoles` table and none of them will survive
+   * the level being rescaled or a flight being moved. A wall across the head of
+   * a staircase is a sealed floor, which is the defect this whole pass exists
+   * to remove, so it is made structurally impossible here rather than left to
+   * be re-checked by hand. Same trim-back-from-the-nearer-end rule as the doors.
+   */
+  const clearOfStairs = (f, ax, az, bx, bz) => {
+    let x0 = ax, z0 = az, x1 = bx, z1 = bz;
+    for (const g of info.stairs ?? []) {
+      // the void belongs to the floor the flight arrives at AND the one it
+      // leaves — you have to be able to walk onto the bottom step too
+      if (g.floor !== f && g.floor + 1 !== f) continue;
+      const v = g.void;
+      const cx = (v.x0 + v.x1) / 2, cz = (v.z0 + v.z1) / 2;
+      const half = Math.max(v.x1 - v.x0, v.z1 - v.z0) / 2;
+      const vx = x1 - x0, vz = z1 - z0;
+      const len = Math.hypot(vx, vz);
+      if (len < 0.4) break;
+      const ux = vx / len, uz = vz / len;
+      if (Math.abs((cx - x0) * uz - (cz - z0) * ux) > half) continue;
+      const along = (cx - x0) * ux + (cz - z0) * uz;
+      if (along < -half || along > len + half) continue;
+      const CLEAR = half + 0.6;
+      if (along < len / 2) {
+        const cut = along + CLEAR;
+        if (cut > 0) { x0 += ux * cut; z0 += uz * cut; }
+      } else {
+        const cut = along - CLEAR;
+        if (cut < len) { x1 = x0 + ux * cut; z1 = z0 + uz * cut; }
+      }
+    }
+    return [x0, z0, x1, z1];
+  };
+
   // Ground slab, a step up from the street. It runs the FULL footprint (and the
   // 0.07 the base course stands proud) rather than stopping two wall-thicknesses
   // short: the old inset left a 0.5 m ring with no floor between the slab edge
@@ -883,10 +1107,11 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
       for (const wall of plan.walls) {
         const [ax, az, bx, bz, doorAt] = wall;
         // Only the ground floor meets the exterior doors; upper floors are free.
-        const [wx0, wz0, wx1, wz1] =
+        const raw =
           f === 0
             ? clearOfDoors(x0 + ax * iw, z0 + az * id, x0 + bx * iw, z0 + bz * id)
             : [x0 + ax * iw, z0 + az * id, x0 + bx * iw, z0 + bz * id];
+        const [wx0, wz0, wx1, wz1] = clearOfStairs(f, raw[0], raw[1], raw[2], raw[3]);
         const len = Math.hypot(wx1 - wx0, wz1 - wz0);
         if (len < 0.5) continue; // trimmed away to nothing
         /**
@@ -938,30 +1163,24 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
     }
 
     // ---- stairs rising out of this floor ----
-    for (const fl of spec.stairFlights ?? []) {
-      if (fl.floor !== f) continue;
-      const base = info.floorY[f] + (f === 0 ? 0.13 : 0);
-      const climb = (info.floorY[f + 1] ?? info.roofY) - base;
-      const steps = Math.max(6, Math.round(climb / 0.19));
-      const rise = climb / steps;
-      const run = fl.run ?? 0.275;
-      const sw = fl.w ?? 1.2;
-      _e.set(0, fl.ry ?? 0, 0);
+    for (const g of info.stairs) {
+      if (g.floor !== f) continue;
+      _e.set(0, g.ry, 0);
       _q.setFromEuler(_e);
-      _p.set(x0 + fl.x * iw, base, z0 + fl.z * id);
+      _p.set(g.ox, g.base, g.oz);
       _s.set(1, 1, 1);
       const pm = new THREE.Matrix4().compose(_p, _q, _s);
-      stairRun(A, pm, 0, 0, 0, sw, steps, rise, run, {
+      stairRun(A, pm, 0, 0, 0, g.sw, g.steps, g.rise, g.run, {
         key: 'concrete_dark',
-        railing: fl.railing ?? 'right',
+        railing: spec.stairFlights.find((fl) => fl.floor === f)?.railing ?? 'right',
       });
-      const D = steps * run;
-      const H = steps * rise;
-      A.add('concrete_dark', BOX(A), LL(pm, 0, H - 0.1, D + 0.55, 0, sw + 0.1, 0.2, 1.1), {
+      const D = g.D;
+      const H = g.steps * g.rise;
+      A.add('concrete_dark', BOX(A), LL(pm, 0, H - 0.1, D + 0.55, 0, g.sw + 0.1, 0.2, 1.1), {
         masks: [0.4, 0.5, 0.3],
       });
       const wp = worldOf(pm, 0, H - 0.1, D + 0.55);
-      A.box('concrete', wp[0], wp[1], wp[2], sw + 0.1, 0.2, 1.1, fl.ry ?? 0);
+      A.box('concrete', wp[0], wp[1], wp[2], g.sw + 0.1, 0.2, 1.1, g.ry);
     }
 
     // furnishing
@@ -981,7 +1200,15 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
           // Ground-floor clutter carries a collision proxy, so a crate stack or
           // an oil drum rolled in front of a door is a locked door. E3's side-3
           // and K2's side-2 openings were both blocked down to a 0.3 m slot.
-          doorways: f === 0 ? doorSpots : null,
+          // THE STAIR IS ON THAT LIST NOW, on every floor. `floorclear[f]`
+          // covers the foot of every flight leaving this floor and the head of
+          // every flight arriving on it — measured, E2's ground floor had a
+          // storage room's crate stacks dropped straight onto its only
+          // staircase, and floorcheck's flood could not get to E2's first or
+          // second storey at all. Nothing above the ground floor used to get
+          // any keep-clear whatsoever, which is why every upper floor on the
+          // map was one dice roll away from the same thing.
+          doorways: floorClear[f] ?? null,
           // …and the same is true of the whole corridor between two openings,
           // not just the first metre of it. See the route note above.
           route: f === 0 && routes.length ? routes : null,
@@ -990,21 +1217,42 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
     }
   }
 
-  // roof access: a stair penthouse box with an open doorway
-  if (spec.roofAccess) {
-    const rs = floorSpec(spec, floors - 1);
-    const riw = rs.w - t * 2;
-    const rid = rs.d - t * 2;
-    const st = spec.stairFlights?.[spec.stairFlights.length - 1];
-    const px = rs.x - riw / 2 + (st?.x ?? 0.5) * riw;
-    const pz = rs.z - rid / 2 + (st?.z ?? 0.5) * rid + 3.6;
+  /**
+   * ROOF ACCESS — the stairhead, built OVER the hole the stair comes up through.
+   *
+   * What was here before was a 2.4 x 2.6 m box parked 3.6 m in +Z of the top
+   * flight's foot and a doorway cut in its +Z wall. It was scenery. No flight
+   * ever ran to the roof and no hole was ever cut in the roof slab, so the one
+   * building on the map that declared `roofAccess` had a shed on its roof with
+   * a solid floor under it: floorcheck's first run reached 0 of 8 roofs.
+   *
+   * It is now sized and placed off `info.roofHole`, which is derived from the
+   * flight itself, so the shed is around the stairwell by construction. A flight
+   * plus its landing is 5-6 m long, which is a long stairhead — that is what a
+   * flat-roofed block with an internal stair actually has, and the extra mass
+   * and its cast shadow are worth more on the skyline than the old cube was.
+   */
+  if (spec.roofAccess && info.roofHole) {
+    const hv = info.roofHole;
     const y = info.roofY;
+    const px = (hv.x0 + hv.x1) / 2;
+    const pz = (hv.z0 + hv.z1) / 2;
+    const pw = hv.x1 - hv.x0 + 1.0;
+    const pd = hv.z1 - hv.z0 + 1.0;
+    /** The wall the player walks OUT of: the end the flight climbs toward. */
+    const g = (info.stairs ?? []).find((s) => s.floor === floors - 1);
+    const exitSide = g ? (Math.abs(Math.sin(g.ry)) > 0.5 ? (Math.sin(g.ry) > 0 ? 1 : 3)
+      : (Math.cos(g.ry) > 0 ? 2 : 0)) : 2;
     for (let side = 0; side < 4; side++) {
-      const pm = panelMatrix({ x: px, z: pz, w: 2.4, d: 2.6 }, side, y).clone();
-      const holes = side === 2 ? [{ x: 0, y: 1.08, w: 1.05, h: 2.16 }] : [];
+      const pm = panelMatrix({ x: px, z: pz, w: pw, d: pd }, side, y).clone();
+      const len = side === 0 || side === 2 ? pw : pd;
+      const holes = side === exitSide
+        ? [{ x: 0, y: 1.12, w: 1.15, h: 2.24 }]
+        // a slot window on the long flanks so the stairhead is not a blind box
+        : len > 3.2 ? [{ x: len * 0.28, y: 1.7, w: 0.8, h: 0.9 }] : [];
       facadeWall(A, pm, {
-        w: side === 0 || side === 2 ? 2.4 : 2.6,
-        h: 2.5,
+        w: len,
+        h: 2.6,
         t: 0.22,
         key: spec.wallKey ?? 'plaster_cream',
         openings: holes,
@@ -1012,10 +1260,10 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
         warp: 0.015,
       });
     }
-    A.add('concrete', BOX(A), LL(IDENT, px, y + 2.6, pz, 0, 2.7, 0.2, 2.9), {
+    A.add('concrete', BOX(A), LL(IDENT, px, y + 2.7, pz, 0, pw + 0.3, 0.2, pd + 0.3), {
       masks: [0.5, 0.45, 0.2],
     });
-    A.box('concrete', px, y + 2.6, pz, 2.7, 0.2, 2.9);
+    A.box('concrete', px, y + 2.7, pz, pw + 0.3, 0.2, pd + 0.3);
   }
 }
 

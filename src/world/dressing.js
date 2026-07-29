@@ -1725,9 +1725,47 @@ function dressBuilding(A, rng, info) {
   const rz0 = rs.z - rs.d / 2 + 1.0;
   const rz1 = rs.z + rs.d / 2 - 1.0;
   const roofY = top + 0.02;
+  /**
+   * THE STAIRWELL IS NOT SCENERY GROUND.
+   *
+   * `info.roofHole` is the void the internal stair comes up through and the
+   * stairhead is built around it (see `buildBuilding`). A water tank rolled
+   * onto the hatch, or a crate stack in front of its door, is a sealed roof —
+   * the same defect as a crate stack in a doorway, three storeys up where it is
+   * far less obvious. Resample off it, and keep the walk-off in +Z clear too,
+   * because that is the side the stairhead's door is in.
+   */
+  const rh = info.roofHole;
+  /**
+   * NUDGED, NOT RESAMPLED, and that is deliberate. Resampling would draw a
+   * variable number of numbers out of `rng` and every random value in the rest
+   * of the level — every window state, every prop, every piece of damage —
+   * would shift under it. The first attempt at this moved a dice-rolled grille
+   * onto an authored vault-in window three buildings away and `vaultcheck`
+   * caught it. So the spot is drawn exactly once, as before, and pushed out of
+   * the keep-out along whichever axis is nearer: the stream is byte-identical
+   * to the one this map was tuned against.
+   */
+  const kx0 = rh ? rh.x0 - 1.3 : 0, kx1 = rh ? rh.x1 + 1.3 : 0;
+  const kz0 = rh ? rh.z0 - 1.3 : 0, kz1 = rh ? rh.z1 + 2.4 : 0;
+  const nudge = (out) => {
+    if (!rh) return;
+    let x = out[0], z = out[1];
+    if (x <= kx0 || x >= kx1 || z <= kz0 || z >= kz1) return;
+    const dxL = x - kx0, dxR = kx1 - x, dzL = z - kz0, dzR = kz1 - z;
+    const m = Math.min(dxL, dxR, dzL, dzR);
+    if (m === dxL) x = kx0; else if (m === dxR) x = kx1;
+    else if (m === dzL) z = kz0; else z = kz1;
+    out[0] = Math.max(rx0, Math.min(rx1, x));
+    out[1] = Math.max(rz0, Math.min(rz1, z));
+  };
+  const _rs = [0, 0];
   for (let i = 0; i < rp; i++) {
-    const px = rng.range(rx0, rx1);
-    const pz = rng.range(rz0, rz1);
+    _rs[0] = rng.range(rx0, rx1);
+    _rs[1] = rng.range(rz0, rz1);
+    nudge(_rs);
+    const px = _rs[0];
+    const pz = _rs[1];
     const pick = rng.float();
     if (pick < 0.22) {
       A.put('water_tank', px, roofY, pz, rng.float() * 6.28, rng.range(0.9, 1.15), [1, rng.range(0.9, 1.3), 1]);

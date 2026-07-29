@@ -91,7 +91,38 @@ const report = await page.evaluate((MANTLE) => {
   const R = 0.32;      // UNITS.playerRadius
   const H = 1.78;      // UNITS.playerHeight
   const STEP = 0.42;   // STANCE.stand.stepHeight
-  const CELL = 0.22;
+  /**
+   * `MOVE.mantle.maxHeight`. A ledge between STEP and this is not walked up, it
+   * is PULLED up — and a stack of two crates or a container beside a wall is
+   * therefore a route, which is how the mid island's roof was always meant to
+   * be reached. Modelling only the step height is what made the first run of
+   * this tool report K1's roof unreachable when the map has a three-block
+   * mantle chain leaning on it.
+   */
+  const MANTLE_UP = 1.85;
+  /**
+   * How far the player will step OFF a ledge. `MOVE.land` starts hurting at
+   * about 14 m/s, which is a 10 m fall; 6 m (≈ 10.8 m/s) is the height a player
+   * will actually take voluntarily, and it is two storeys, so a balcony or a
+   * roof parapet counts as a way out and a fourth-floor window does not.
+   */
+  const DROP_MAX = 6.0;
+  /**
+   * How far away, HORIZONTALLY, a ledge can be and still be mantled.
+   *
+   * `MOVE.mantle.reach` is 0.62 measured from the capsule SURFACE, so the face
+   * can be 0.62 + 0.32 = 0.94 m from where the player is standing, and
+   * `landDepth` puts the spot he ends up on another 0.46 past the lip. Linking
+   * only touching cells is therefore wrong and it measured wrong: beside K1's
+   * mantle chain the ground cell that touches the container has no standing
+   * room at all (the capsule is inside the container), the nearest one that
+   * does is 0.56 m away, and the gate called the map's only authored route onto
+   * the mid island's roof "UNREACHABLE" — which the map's own comment says it
+   * built on purpose. So vertical links get the real reach; walking links stay
+   * at one cell, because walking is one cell at a time.
+   */
+  const MREACH = 1.05;
+  const CELL = 0.28;
   const MAXSURF = 10;  // surfaces per column; a 4-storey block has ~6
   const _a = new V(), _b = new V(), _wp = new V();
 
@@ -106,9 +137,15 @@ const report = await page.evaluate((MANTLE) => {
     const floorY = info.floorY.slice();
     const top = roofY + 4.5;
 
-    // The footprint, plus a 1 m skirt so an EXTERIOR stair or a fire escape
-    // hung off the wall is inside the grid and can be found by the same flood.
-    const PAD = 1.0;
+    /**
+     * The footprint plus a 4 m skirt. An EXTERIOR route up — a fire escape, a
+     * ramp, or the container-and-crate mantle chain leaning on K1 — stands
+     * OUTSIDE the building it serves, so a grid clipped to the footprint cannot
+     * see it and scores the roof unreachable when it is not. 4 m reaches past
+     * the widest authored chain (`RELIEF.blocks`) and no further, because
+     * everything in this grid is raycast.
+     */
+    const PAD = 4.0;
     const x0 = spec.x - spec.w / 2 - PAD, z0 = spec.z - spec.d / 2 - PAD;
     const nx = Math.floor((spec.w + PAD * 2) / CELL) + 1;
     const nz = Math.floor((spec.d + PAD * 2) / CELL) + 1;
@@ -131,6 +168,15 @@ const report = await page.evaluate((MANTLE) => {
           const fy = hit.point.y;
           if (fy < -0.6) break;
           from = fy - 0.06;
+          /**
+           * A FLOOR FACES UP. The BVH reports backfaces, so a downward ray
+           * through a slab returns its UNDERSIDE as well as its top, and the
+           * underside passes a standing-room test because the room it tests is
+           * the open air above the slab. That is a phantom floor 0.26 m inside
+           * every roof on the map. 0.5 is the same 46-degree limit `nav.js`
+           * uses for a walkable normal.
+           */
+          if (hit.normal && hit.normal.y < 0.5) continue;
           // Standing room, from step height up — the controller steps over
           // anything below 0.42 rather than colliding with it.
           _a.set(_wp.x, fy + STEP + R, _wp.z);
@@ -145,24 +191,71 @@ const report = await page.evaluate((MANTLE) => {
       }
     }
 
-    // ------------------------------------------------------------- links --
+    /**
+     * ------------------------------------------------------------- links --
+     * Three kinds of edge between adjacent columns, and they are DIRECTED,
+     * because getting up and getting down are not the same move:
+     *
+     *   |dy| <= STEP        walk, both ways
+     *   dy <= MANTLE_UP     mantle up, one way up (and step off, coming back)
+     *   dy <= DROP_MAX      step off a ledge, one way DOWN only
+     *
+     * A drop edge is what makes a balcony or a parapet a genuine way out of an
+     * upper floor without pretending you can climb back in through it.
+     */
     const n = nodeY.length;
     const adjHead = new Int32Array(n).fill(-1);
-    const adjNext = []; const adjTo = [];
-    const link = (a, b) => {
-      adjTo.push(b); adjNext.push(adjHead[a]); adjHead[a] = adjTo.length - 1;
+    const adjNext = []; const adjTo = []; const adjKind = [];
+    const link = (a, b, kind) => {
+      adjTo.push(b); adjKind.push(kind); adjNext.push(adjHead[a]); adjHead[a] = adjTo.length - 1;
+    };
+    const RING = Math.ceil(MREACH / CELL);
+    /**
+     * Nothing solid between the two of them at the height of the higher one.
+     * Without this a 1.05 m window would happily mantle a player THROUGH a wall
+     * onto whatever stands on the other side of it. One ray, at 0.3 m above the
+     * ledge, which is where his chest goes over.
+     */
+    const clearBetween = (lo, hi) => {
+      const lc = nodeCell[lo], hc = nodeCell[hi];
+      const ax = x0 + (lc % nx) * CELL, az = z0 + ((lc / nx) | 0) * CELL;
+      const bx = x0 + (hc % nx) * CELL, bz = z0 + ((hc / nx) | 0) * CELL;
+      w.levelToWorld(ax, 0, az, _a);
+      w.levelToWorld(bx, 0, bz, _b);
+      const dx = _b.x - _a.x, dz = _b.z - _a.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 1e-4) return true;
+      const y = nodeY[hi] + 0.3;
+      const r = phys.raycast(_a.x, y, _a.z, dx / d, 0, dz / d, d, MASK);
+      return !r.hit;
     };
     for (let iz = 0; iz < nz; iz++) {
       for (let ix = 0; ix < nx; ix++) {
         const ci = iz * nx + ix;
-        for (const [dx, dz] of [[1, 0], [0, 1]]) {
-          const jx = ix + dx, jz = iz + dz;
-          if (jx >= nx || jz >= nz) continue;
-          const cj = jz * nx + jx;
-          for (const a of cellNodes[ci]) {
-            for (const b of cellNodes[cj]) {
-              if (Math.abs(nodeY[a] - nodeY[b]) > STEP) continue;
-              link(a, b); link(b, a);
+        if (!cellNodes[ci].length) continue;
+        for (let dz = -RING; dz <= RING; dz++) {
+          for (let dx = -RING; dx <= RING; dx++) {
+            if (dz < 0 || (dz === 0 && dx <= 0)) continue;   // each pair once
+            const jx = ix + dx, jz = iz + dz;
+            if (jx < 0 || jz < 0 || jx >= nx || jz >= nz) continue;
+            const step1 = Math.abs(dx) + Math.abs(dz) === 1;
+            const far = Math.hypot(dx, dz) * CELL;
+            if (!step1 && far > MREACH) continue;
+            const cj = jz * nx + jx;
+            for (const a of cellNodes[ci]) {
+              for (const b of cellNodes[cj]) {
+                const dy = nodeY[b] - nodeY[a];
+                const ady = Math.abs(dy);
+                if (ady <= STEP) {
+                  // walking is one cell at a time
+                  if (step1) { link(a, b, 0); link(b, a, 0); }
+                  continue;
+                }
+                const [lo, hi] = dy > 0 ? [a, b] : [b, a];   // hi is the higher one
+                if (!step1 && !clearBetween(lo, hi)) continue;
+                if (ady <= MANTLE_UP) { link(lo, hi, 1); link(hi, lo, 2); continue; }
+                if (ady <= DROP_MAX) link(hi, lo, 2);
+              }
             }
           }
         }
@@ -188,8 +281,11 @@ const report = await page.evaluate((MANTLE) => {
       openings.push({ kind: 'window', side: win.side, f: win.f, lx: p.x, lz: p.z, y: base, sill: +sill.toFixed(2) });
     }
     for (const bal of info.balconies ?? []) {
-      const p = _wp.set(bal.x, 0, 0).applyMatrix4(bal.pm);
-      openings.push({ kind: 'balcony', side: bal.side, f: null, lx: p.x, lz: p.z, y: bal.y });
+      // `bal.y` is PANEL-LOCAL (0.02) — the floor height is in `pm`. Reading it
+      // as a world height put every balcony on the map at y = 0.02 and had this
+      // tool crediting the GROUND floor with balconies three storeys up.
+      const p = _wp.set(bal.x, bal.y, 0).applyMatrix4(bal.pm);
+      openings.push({ kind: 'balcony', side: bal.side, f: null, lx: p.x, lz: p.z, y: p.y });
     }
 
     /** The node nearest (lx, lz, wantY) that has standing room. */
@@ -215,6 +311,15 @@ const report = await page.evaluate((MANTLE) => {
       return best;
     };
 
+    /**
+     * The flood starts where a player starts: OUTSIDE, on the street. Every
+     * ground-level surface in the 1-cell border ring of the grid is a seed, plus
+     * the cell just inside each ground-floor opening — the ring alone would miss
+     * a building whose skirt is walled off, and the door anchors alone would
+     * miss an exterior route in (a ramp, a crate chain) that starts on the
+     * pavement. `floorY[0] + 2.0` keeps a neighbouring building's ROOF, which
+     * can clip the corner of a 4 m skirt, out of the seed set.
+     */
     const seeds = [];
     for (const e of openings) {
       if (e.f !== 0) continue;
@@ -222,6 +327,15 @@ const report = await page.evaluate((MANTLE) => {
       const k = nearestNode(e.lx - inn[0] * 0.85, e.lz - inn[1] * 0.85, floorY[0], 1.6, 1.2);
       e.node = k;
       if (k >= 0) seeds.push(k);
+    }
+    for (let iz = 0; iz < nz; iz++) {
+      for (let ix = 0; ix < nx; ix++) {
+        if (ix > 0 && iz > 0 && ix < nx - 1 && iz < nz - 1) continue;
+        for (const k of cellNodes[iz * nx + ix]) {
+          if (nodeY[k] > floorY[0] + 2.0) continue;
+          seeds.push(k);
+        }
+      }
     }
 
     // ---------------------------------------------------------- the flood --
@@ -248,10 +362,23 @@ const report = await page.evaluate((MANTLE) => {
     for (let f = 0; f < floorY.length; f++) levels.push({ name: `F${f}`, y: floorY[f], f });
     levels.push({ name: 'roof', y: roofY, f: floorY.length });
 
+    /** Only cells inside the real footprint are THIS building's floors — the
+     *  4 m skirt is the street, and on a tight row it is the neighbour's roof. */
+    const inFoot = new Uint8Array(nx * nz);
+    for (let iz = 0; iz < nz; iz++) {
+      for (let ix = 0; ix < nx; ix++) {
+        const lx = x0 + ix * CELL, lz = z0 + iz * CELL;
+        if (Math.abs(lx - spec.x) <= spec.w / 2 - 0.2 && Math.abs(lz - spec.z) <= spec.d / 2 - 0.2) {
+          inFoot[iz * nx + ix] = 1;
+        }
+      }
+    }
+    const onLevel = (k, L) => nodeY[k] >= L.y - 0.35 && nodeY[k] <= L.y + BAND && inFoot[nodeCell[k]];
+
     for (const L of levels) {
       let free = 0, reach = 0;
       for (let k = 0; k < n; k++) {
-        if (nodeY[k] < L.y - 0.35 || nodeY[k] > L.y + BAND) continue;
+        if (!onLevel(k, L)) continue;
         free++; if (seen[k]) reach++;
       }
       L.free = free; L.reach = reach;
@@ -264,44 +391,49 @@ const report = await page.evaluate((MANTLE) => {
      * the vertical is a rung of the same flight, so they are clustered by XY at
      * 3 m before counting.
      */
+    const KIND = ['walk', 'mantle', 'drop'];
     for (const L of levels) {
-      const ways = [];
-      // vertical links out of this level
       const clusters = [];
       for (let k = 0; k < n; k++) {
-        if (!seen[k]) continue;
-        if (nodeY[k] < L.y - 0.35 || nodeY[k] > L.y + BAND) continue;
+        if (!seen[k] || !onLevel(k, L)) continue;
         for (let e = adjHead[k]; e !== -1; e = adjNext[e]) {
           const j = adjTo[e];
-          const inLevel = nodeY[j] >= L.y - 0.35 && nodeY[j] <= L.y + BAND;
-          if (inLevel) continue;
-          const dir = nodeY[j] > nodeY[k] ? 'up' : 'down';
+          // leaving this level means leaving its height band OR leaving the
+          // footprint at a walkable height — a balcony door is the second one
+          const bandOut = nodeY[j] < L.y - 0.35 || nodeY[j] > L.y + BAND;
+          const footOut = !inFoot[nodeCell[j]] && Math.abs(nodeY[j] - L.y) < BAND;
+          if (!bandOut && !footOut) continue;
+          const dir = nodeY[j] > nodeY[k] + 0.1 ? 'up' : nodeY[j] < nodeY[k] - 0.1 ? 'down' : 'out';
+          const tag = `${KIND[adjKind[e]]}-${dir}`;
           const cx = nodeCell[k] % nx, cz = (nodeCell[k] / nx) | 0;
           let hit = false;
           for (const cl of clusters) {
-            if (cl.dir === dir && Math.hypot(cl.x - cx, cl.z - cz) * CELL < 3.0) { hit = true; break; }
+            if (cl.tag === tag && Math.hypot(cl.x - cx, cl.z - cz) * CELL < 3.5) { hit = true; break; }
           }
-          if (!hit) clusters.push({ dir, x: cx, z: cz });
+          if (!hit) clusters.push({ tag, x: cx, z: cz });
         }
       }
-      for (const cl of clusters) ways.push(`stair-${cl.dir}`);
-      // openings a player standing on this level can use
-      for (const e of openings) {
-        const inn = OUT[e.side] ?? [0, 0];
-        const k = nearestNode(e.lx - inn[0] * 0.85, e.lz - inn[1] * 0.85, L.y, 1.8, 1.0);
-        if (k < 0 || !seen[k]) continue;
-        if (e.kind === 'door' && Math.abs(L.y - floorY[0]) > 0.5) continue;
-        if (e.kind === 'window' && (floorY[e.f] === undefined || Math.abs(floorY[e.f] - L.y) > 0.6)) continue;
-        if (e.kind === 'balcony' && Math.abs(e.y - L.y) > 1.4) continue;
-        ways.push(`${e.kind}-s${e.side}`);
+      /**
+       * Two ways out means two SEPARATE PLACES, not two labels. A stair you can
+       * both climb and descend is one hole in the floor, and being able to go
+       * down it as well as up it does not help you if somebody is standing in
+       * it — which is the whole meaning of "屋内に入ったら行き止まりはやめて".
+       * So the count is over distinct locations at least 3.5 m apart.
+       */
+      const spots = [];
+      for (const cl of clusters) {
+        if (spots.some((s) => Math.hypot(s.x - cl.x, s.z - cl.z) * CELL < 3.5)) continue;
+        spots.push(cl);
       }
-      L.ways = ways;
+      L.ways = clusters.map((c) => c.tag);
+      L.exits = spots.length;
     }
 
     out.push({
       id: spec.id, floors: spec.floors ?? 1, roofY: +roofY.toFixed(2),
       nodes: n, levels: levels.map((L) => ({
-        name: L.name, y: +L.y.toFixed(2), free: L.free, reach: L.reach, ways: L.ways,
+        name: L.name, y: +L.y.toFixed(2), free: L.free, reach: L.reach,
+        ways: L.ways, exits: L.exits,
       })),
       openings: openings.map((e) => ({ kind: e.kind, side: e.side, f: e.f, sill: e.sill ?? null })),
       grid: { x0, z0, cell: CELL, nx, nz },
@@ -315,7 +447,7 @@ const report = await page.evaluate((MANTLE) => {
             const ci = iz * nx + ix;
             let ch = '#';
             for (const k of cellNodes[ci]) {
-              if (nodeY[k] < L.y - 0.35 || nodeY[k] > L.y + BAND) continue;
+              if (!onLevel(k, L)) continue;
               ch = seen[k] ? 'o' : '.'; if (ch === 'o') break;
             }
             s += ch;
@@ -348,12 +480,27 @@ if (CLIMB) {
       if (!spec.enterable || !info || !spec.stairFlights) continue;
       const t = spec.t ?? 0.34;
       for (const fl of spec.stairFlights) {
+        const sb = spec.setback;
         const fs = { w: spec.w, d: spec.d, x: spec.x, z: spec.z };
+        if (sb && fl.floor >= sb.from) {
+          const side = sb.side ?? spec.streetSide ?? 0;
+          if (side === 1) { fs.x = spec.x - sb.depth / 2; fs.w = spec.w - sb.depth; }
+          else if (side === 3) { fs.x = spec.x + sb.depth / 2; fs.w = spec.w - sb.depth; }
+          else if (side === 0) { fs.z = spec.z + sb.depth / 2; fs.d = spec.d - sb.depth; }
+          else { fs.z = spec.z - sb.depth / 2; fs.d = spec.d - sb.depth; }
+        }
         const iw = fs.w - t * 2, id = fs.d - t * 2;
         const base = info.floorY[fl.floor] + (fl.floor === 0 ? 0.13 : 0);
+        const lx = fs.x - iw / 2 + fl.x * iw, lz = fs.z - id / 2 + fl.z * id;
+        const ry = fl.ry ?? 0;
+        const ax = Math.sin(ry), az = Math.cos(ry);
+        // distance back along the climb axis to the inside face of the wall
+        const toWall = ax !== 0
+          ? (ax > 0 ? lx - (fs.x - iw / 2) : (fs.x + iw / 2) - lx)
+          : (az > 0 ? lz - (fs.z - id / 2) : (fs.z + id / 2) - lz);
         list.push({
-          id: spec.id, floor: fl.floor, ry: fl.ry ?? 0,
-          lx: fs.x - iw / 2 + fl.x * iw, lz: fs.z - id / 2 + fl.z * id,
+          id: spec.id, floor: fl.floor, ry,
+          lx, lz, standoff: Math.max(0.35, toWall - 0.45),
           base, want: (info.floorY[fl.floor + 1] ?? info.roofY),
         });
       }
@@ -367,9 +514,25 @@ if (CLIMB) {
       const V = c.camera.position.constructor;
       // Stand 1.1 m in front of the bottom tread, on the flight's own axis.
       const ax = Math.sin(f.ry), az = Math.cos(f.ry); // the +Z climb direction
-      const sW = w.levelToWorld(f.lx - ax * 1.1, f.base + 0.3, f.lz - az * 1.1, new V());
+      /**
+       * Stand off the bottom tread, CLAMPED INSIDE the building. A flight is
+       * authored hard against a wall, so the naive "1.1 m back along the climb
+       * axis" spot is usually in the masonry or out in the street, and the
+       * first run of this harness scored five perfectly good flights as
+       * unclimbable because the capsule started outside and walked into a
+       * facade. `f.standoff` is how far back it can go and still be indoors.
+       */
+      const back = Math.min(1.1, f.standoff);
+      const sW = w.levelToWorld(f.lx - ax * back, f.base + 0.25, f.lz - az * back, new V());
       const tW = w.levelToWorld(f.lx + ax * 3, f.base, f.lz + az * 3, new V());
+      /**
+       * `respawnAt` snaps the feet to `physics.groundHeight(x, z, y + 6)`,
+       * which casts DOWN from six metres up — so asking it for a spot on the
+       * first floor lands you on the ROOF. Reset the controller with it, then
+       * teleport to the exact height the flight actually starts at.
+       */
       pl.respawnAt({ x: sW.x, y: sW.y, z: sW.z });
+      pl.movement.teleport(sW.x, sW.y, sW.z);
       const yaw = Math.atan2(-(tW.x - sW.x), -(tW.z - sW.z));
       pl.movement.yaw = yaw; pl.yaw = yaw;
     }, f);
@@ -408,10 +571,10 @@ for (const b of rows) {
     if (isRoof && got) anyRoof = true;
     const verdict = L.free === 0 ? 'no standing room'
       : !got ? '<-- UNREACHABLE'
-        : L.ways.length < 2 ? `<-- ONE WAY OUT (${L.ways.join(',') || 'none'})`
-          : L.ways.join(' ');
+        : L.exits < 2 ? `<-- ONE WAY OUT (${L.ways.join(',') || 'none'})`
+          : `${L.exits} ways: ${[...new Set(L.ways)].join(' ')}`;
     if (L.free > 0 && !got) unreached++;
-    else if (got && L.ways.length < 2) culdesac++;
+    else if (got && L.exits < 2) culdesac++;
     console.log(
       `  ${(first ? b.id : '').padEnd(9)} ${L.name.padEnd(6)} ${String(L.y).padStart(5)}  ` +
       `${String(L.free).padStart(9)}  ${String(L.reach).padStart(7)}   ${verdict}`

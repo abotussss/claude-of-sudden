@@ -171,6 +171,16 @@ export const RELIEF = {
     { id: 'B-deck step', rect: [32, -5.5, 34, -3.5], h: 1.5, key: 'metal_blue' },
     { id: 'K1 step 1', rect: [-1, 16.05, 1, 17.65], h: 1.4, key: 'metal_blue' },
     { id: 'K1 step 2', rect: [-0.9, 14.75, 0.9, 16.05], h: 2.6, key: 'metal_green' },
+    /**
+     * …and the same for K2, which had none. `tools/floorcheck.mjs` floods the
+     * real player capsule up the map and K2's roof was the one surface on the
+     * level it could not reach: the island in connector 2 was the only piece of
+     * cover on the mid street with no way on top of it, so the two connectors
+     * did not play the same. Kept east of centre because K2's side-0 door is
+     * bay 0 at level x -1.8 and a container in a doorway is a locked door.
+     */
+    { id: 'K2 step 1', rect: [1.3, -10.9, 2.8, -9.2], h: 1.45, key: 'metal_green' },
+    { id: 'K2 step 2', rect: [1.3, -9.2, 2.85, -7.75], h: 2.7, key: 'metal_blue' },
   ],
 };
 
@@ -284,7 +294,7 @@ export const BUILDINGS = [
       3: { 0: { 0: { kind: 'window', state: 'open', grille: false, y: 1.85, h: 1.8, w: 1.5 } } },
     },
     enterable: true,
-    roofAccess: false,
+    roofAccess: true,
     roofProps: 4,
     /**
      * A lane -> mid street across the north half, with the side-0 door off
@@ -297,8 +307,10 @@ export const BUILDINGS = [
       ['s0', [0.5, 0.16], [0.58, 0.4], [0.62, 0.62]],
       ['w3', [0.16, 0.86], [0.28, 0.74], [0.36, 0.66]],
     ],
-    stairFlights: [{ floor: 0, x: 0.12, z: 0.06, ry: 0, w: 1.15, railing: 'right' }],
-    stairHoles: { 1: { x0: -19.3, x1: -17.75, z0: 15.5, z1: 21.4 } },
+    stairFlights: [
+      { floor: 0, x: 0.12, z: 0.06, ry: 0, w: 1.15, railing: 'right' },
+      { floor: 1, x: 0.12, z: 0.06, ry: 0, w: 1.15, railing: 'right' },
+    ],
     rooms: [
       {
         // A cross-shaped through route: one partition with a doorway in it, and
@@ -347,13 +359,15 @@ export const BUILDINGS = [
     // street facade, so that bay is an open shopfront by hand, not by dice.
     bayKinds: { 1: { 0: { 1: { kind: 'shop', drop: 0 } } } },
     enterable: true,
-    roofAccess: false,
+    roofAccess: true,
     roofProps: 5,
     /** The covered way from mid straight into site A — the claim this building
      *  was authored to make, now measured rather than asserted. */
     route: [['s3', [0.16, 0.84], [0.34, 0.8], [0.5, 0.76], [0.7, 0.8], [0.88, 0.85], 's1']],
-    stairFlights: [{ floor: 0, x: 0.12, z: 0.08, ry: 0, w: 1.2, railing: 'right' }],
-    stairHoles: { 1: { x0: -19.35, x1: -17.8, z0: -0.2, z1: 5.95 } },
+    stairFlights: [
+      { floor: 0, x: 0.12, z: 0.08, ry: 0, w: 1.2, railing: 'right' },
+      { floor: 1, x: 0.14, z: 0.08, ry: 0, w: 1.2, railing: 'right' },
+    ],
     rooms: [
       {
         // One partition across the through route with a door in the middle of
@@ -405,6 +419,7 @@ export const BUILDINGS = [
       3: { 0: { 1: { kind: 'window', state: 'open', grille: false, y: 1.8, h: 1.7, w: 1.4 } } },
     },
     enterable: true,
+    roofAccess: true,
     roofProps: 2,
     /** Across the south end lane-to-street, plus a spur north up the west side
      *  from the vault window to the same crossing the plan already had. */
@@ -412,8 +427,10 @@ export const BUILDINGS = [
       ['s3', [0.16, 0.22], [0.32, 0.27], [0.55, 0.26], [0.8, 0.23], 's1'],
       ['w3', [0.16, 0.74], [0.26, 0.7], [0.28, 0.6], [0.3, 0.4], [0.32, 0.28]],
     ],
-    stairFlights: [{ floor: 0, x: 0.86, z: 0.06, ry: 0, w: 1.15, railing: 'right' }],
-    stairHoles: { 1: { x0: -8.9, x1: -7.3, z0: -25.2, z1: -19.2 } },
+    stairFlights: [
+      { floor: 0, x: 0.86, z: 0.06, ry: 0, w: 1.15, railing: 'right' },
+      { floor: 1, x: 0.86, z: 0.06, ry: 0, w: 1.15, railing: 'right' },
+    ],
     rooms: [
       {
         walls: [
@@ -503,11 +520,8 @@ export const BUILDINGS = [
     stairFlights: [
       { floor: 0, x: 0.86, z: 0.06, ry: 0, w: 1.2, railing: 'right' },
       { floor: 1, x: 0.86, z: 0.06, ry: 0, w: 1.2, railing: 'right' },
+      { floor: 2, x: 0.86, z: 0.06, ry: 0, w: 1.2, railing: 'right' },
     ],
-    stairHoles: {
-      1: { x0: 17.75, x1: 19.3, z0: 15.5, z1: 21.4 },
-      2: { x0: 17.75, x1: 19.3, z0: 15.5, z1: 21.4 },
-    },
     rooms: [
       {
         walls: [
@@ -559,7 +573,7 @@ export const BUILDINGS = [
       3: { 0: { 2: { kind: 'window', state: 'open', grille: false, y: 1.85, h: 1.8, w: 1.5 } } },
     },
     enterable: true,
-    roofAccess: false,
+    roofAccess: true,
     roofProps: 5,
     /** Mid street -> site B, and the mid-street vault window down at the south
      *  end feeding into it up the west side of the plan. */
@@ -570,11 +584,8 @@ export const BUILDINGS = [
     stairFlights: [
       { floor: 0, x: 0.88, z: 0.08, ry: 0, w: 1.2, railing: 'right' },
       { floor: 1, x: 0.88, z: 0.08, ry: 0, w: 1.2, railing: 'right' },
+      { floor: 2, x: 0.88, z: 0.08, ry: 0, w: 1.2, railing: 'right' },
     ],
-    stairHoles: {
-      1: { x0: 17.8, x1: 19.35, z0: -0.2, z1: 5.95 },
-      2: { x0: 17.8, x1: 19.35, z0: -0.2, z1: 5.95 },
-    },
     rooms: [
       {
         walls: [
@@ -625,6 +636,7 @@ export const BUILDINGS = [
       1: { 0: { 4: { kind: 'window', state: 'open', grille: false, y: 1.8, h: 1.7, w: 1.4 } } },
     },
     enterable: true,
+    roofAccess: true,
     roofProps: 2,
     /** Mirror of W3. The window spur runs down the EAST side here, so the
      *  cross-wall's opening moves with it. */
@@ -632,8 +644,10 @@ export const BUILDINGS = [
       ['s3', [0.2, 0.23], [0.35, 0.26], [0.6, 0.26], [0.84, 0.22], 's1'],
       ['w1', [0.86, 0.72], [0.78, 0.7], [0.74, 0.58], [0.72, 0.4], [0.7, 0.28], [0.62, 0.25]],
     ],
-    stairFlights: [{ floor: 0, x: 0.14, z: 0.06, ry: 0, w: 1.15, railing: 'right' }],
-    stairHoles: { 1: { x0: 7.3, x1: 8.9, z0: -25.2, z1: -19.2 } },
+    stairFlights: [
+      { floor: 0, x: 0.14, z: 0.06, ry: 0, w: 1.15, railing: 'right' },
+      { floor: 1, x: 0.14, z: 0.06, ry: 0, w: 1.15, railing: 'right' },
+    ],
     rooms: [
       {
         walls: [
