@@ -865,8 +865,6 @@ function marketStalls(A, rng) {
       rng.range(0.8, 1.35),
       1,
     ]);
-    // collision: the table volume plus the two post lines
-    A.box('wood', x, y + 0.45, z, w, 0.9, 1.05, ry);
     // the legs stand IN something: dust and swept grit at each post line
     for (const t of [-0.42, 0.42]) {
       groundSkirt(A, rng, x + Math.cos(ry) * w * t, y, z - Math.sin(ry) * w * t, 0.4, {

@@ -174,6 +174,7 @@ const scan = await page.evaluate(() => {
     const geo = im.geometry;
     if (!geo.boundingBox) geo.computeBoundingBox();
     const bb = geo.boundingBox;
+    const pos = geo.getAttribute('position');
     const permeable = PERMEABLE.has(id);
     let k = kinds.get(id);
     if (!k) kinds.set(id, (k = { id, n: 0, obstacles: 0, through: 0, permeable,
@@ -202,6 +203,30 @@ const scan = await page.evaluate(() => {
       const oh = (bb.max.y - bb.min.y) * sY;
       const oz = (bb.max.z - bb.min.z) * sZ;
       if (oh < MIN_H || ox < MIN_W || oz < MIN_W) continue;
+      /**
+       * ...AND THE PROP HAS TO BE UP THERE, not just reach up there.
+       *
+       * A broken floor slab is 0.1 m of concrete lying flat with three bent
+       * rebars sticking out of it. Scaled 1.35x by the dressing jitter its
+       * bounding box is 0.6 m tall and 0.7 m across and it sails through every
+       * test above — but the only thing at knee height is 8 mm of steel, and
+       * demanding a collision box would have put a knee-high concrete kerb
+       * under 157 pieces of ground debris the player is supposed to walk over.
+       *
+       * So measure the prop where the capsule actually sweeps: the horizontal
+       * extent of the vertices ABOVE step height. Cheap (a few hundred verts,
+       * and only for props that already passed the size gate) and it needs no
+       * per-prop judgement — the shard fails because its shard is on the floor.
+       */
+      const yCut = bb.min.y + STEP / sY;
+      let bnx = Infinity, bxx = -Infinity, bnz = Infinity, bxz = -Infinity;
+      for (let v = 0; v < pos.count; v++) {
+        if (pos.getY(v) < yCut) continue;
+        const vx = pos.getX(v), vz = pos.getZ(v);
+        if (vx < bnx) bnx = vx; if (vx > bxx) bxx = vx;
+        if (vz < bnz) bnz = vz; if (vz > bxz) bxz = vz;
+      }
+      if ((bxx - bnx) * sX < MIN_W || (bxz - bnz) * sZ < MIN_W) continue;
       const hgt = xy - ny, wx = xx - nx, wz = xz - nz;
       /**
        * PROBE AT THE INSTANCE ORIGIN, NOT THE AABB CENTRE.

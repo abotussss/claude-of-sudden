@@ -957,7 +957,16 @@ export function registerProps(A, rngIn) {
   // furniture
   P('table', 'wood_prop_dark', table(rng, 1.5, 0.78, 0.8), { skirt: 0.57, ...SOLID });
   P('table_small', 'wood_prop', table(rng, 0.9, 0.72, 0.7), SOLID);
-  P('stall', 'wood_prop_dark', stall(rng, 2.3), { skirt: 0.90, maxDist: 0 });
+  /**
+   * The stall is solid to the TABLE, not to the canopy: 2 m corner posts carry
+   * a cloth roof, and boxing the bounding box would put a 2 m wall across the
+   * market you are supposed to be able to shoot over and duck behind. 0.95 is
+   * the trestle plus its top, which is what the hand-written box in dressing.js
+   * meant by 0.9 — except that one was axis-aligned at the stall's nominal
+   * width, so a stall the dressing had yawed and scaled had its collision
+   * standing somewhere slightly else. solidcheck caught one of the twenty.
+   */
+  P('stall', 'wood_prop_dark', stall(rng, 2.3), { skirt: 0.90, maxDist: 0, collide: { h: 0.95 } });
   P('shelf', 'wood_prop_dark', shelfUnit(rng), { skirt: 0.42, ...SOLID });
   P('mattress', 'fabric_cream', mattress(rng), LOOSE(0.06, 0.01));
   /**
