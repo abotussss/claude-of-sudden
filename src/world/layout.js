@@ -169,8 +169,18 @@ export const RELIEF = {
   blocks: [
     { id: 'A-deck step', rect: [-34, -4.5, -32, -2.5], h: 1.5, key: 'metal_green' },
     { id: 'B-deck step', rect: [32, -5.5, 34, -3.5], h: 1.5, key: 'metal_blue' },
-    { id: 'K1 step 1', rect: [-1, 16.05, 1, 17.65], h: 1.4, key: 'metal_blue' },
-    { id: 'K1 step 2', rect: [-0.9, 14.75, 0.9, 16.05], h: 2.6, key: 'metal_green' },
+    /**
+     * Moved off centre, and SCALING IS WHY. A facade's door lands in a BAY, and
+     * the bay count is `round(length / 3.05)` — so K1's +Z face went from two
+     * bays to three when the map went to 1.5x and `doorBays: { 2: 1 }` moved
+     * its door from a quarter of the way along to dead centre, straight into
+     * the container. `indoorcheck` reported the capsule moving 0.0 m: it was
+     * spawned inside a shipping container. Nothing about the door changed, and
+     * nothing about the container did; the bay grid under them did. Off to one
+     * side, like K2's, it clears a door wherever the bay grid puts it.
+     */
+    { id: 'K1 step 1', rect: [1.3, 16.05, 2.8, 17.65], h: 1.4, key: 'metal_blue' },
+    { id: 'K1 step 2', rect: [1.3, 14.75, 2.85, 16.05], h: 2.6, key: 'metal_green' },
     /**
      * …and the same for K2, which had none. `tools/floorcheck.mjs` floods the
      * real player capsule up the map and K2's roof was the one surface on the
@@ -814,10 +824,10 @@ export const BUILDINGS = [
    *
    * `navcheck` is the gate: every spawn must still reach every site.
    */
-  { id: 'CA1', x: -27.5, z: 24, w: 5, d: 6, floors: 1, groundH: 3.6, wallKey: 'plaster_sand', streetSide: 1, damage: 0.35, parapetH: 0.7, roofProps: 2 },
-  { id: 'CA2', x: -24, z: -19, w: 5, d: 5, floors: 1, groundH: 3.3, wallKey: 'plaster_blue', streetSide: 1, damage: 0.45, parapetH: 0.6, roofProps: 2 },
-  { id: 'CB1', x: 27.5, z: 23, w: 5, d: 6, floors: 1, groundH: 3.6, wallKey: 'plaster_cream', streetSide: 3, damage: 0.35, parapetH: 0.7, roofProps: 2 },
-  { id: 'CB2', x: 24, z: -20, w: 5, d: 5, floors: 1, groundH: 3.3, wallKey: 'plaster_pink', streetSide: 3, damage: 0.45, parapetH: 0.6, roofProps: 2 },
+  { id: 'CA1', x: -25.5, z: 24, w: 4.5, d: 6, floors: 1, groundH: 3.6, wallKey: 'plaster_sand', streetSide: 1, damage: 0.35, parapetH: 0.7, roofProps: 2 },
+  { id: 'CA2', x: -25.5, z: -19, w: 4.5, d: 5, floors: 1, groundH: 3.3, wallKey: 'plaster_blue', streetSide: 1, damage: 0.45, parapetH: 0.6, roofProps: 2 },
+  { id: 'CB1', x: 25.5, z: 23, w: 4.5, d: 6, floors: 1, groundH: 3.6, wallKey: 'plaster_cream', streetSide: 3, damage: 0.35, parapetH: 0.7, roofProps: 2 },
+  { id: 'CB2', x: 25.5, z: -20, w: 4.5, d: 5, floors: 1, groundH: 3.3, wallKey: 'plaster_pink', streetSide: 3, damage: 0.45, parapetH: 0.6, roofProps: 2 },
 ];
 /**
  * THERE IS NO BLOCK IN EITHER CROSS STREET, and that is a measured decision.
@@ -908,8 +918,11 @@ export const SET_PIECES = {
     // the lane north runs. Kept south of z 5: at z 8 this stall stood squarely
     // across W2's side-3 doorway — 2.4 m of market stall, 0.9 m tall, 2.4 m out
     // from an opening the player is meant to come through.
-    [-22.4, 3.4, 1.5, 2.4],
-    [22.6, 5.0, -1.6, 2.4],
+    // …and pulled further south again for the same reason K1's containers
+    // moved: at 1.5x, W2 and E2's lane faces went from three bays to five and
+    // their doors slid to the middle of the face, which is where these were.
+    [-22.4, -1.0, 1.5, 2.4],
+    [22.6, 0.0, -1.6, 2.4],
     [-29.6, 14.5, -1.6, 2.2],
     [29.8, 21.0, 1.5, 2.2], // was on the B-lane terrace's north ramp
     [-22.5, 26.5, 0.1, 2.4],
