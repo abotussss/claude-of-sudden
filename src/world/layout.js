@@ -207,8 +207,29 @@ export const RELIEF = {
 export const KEEPOUT = [
   [-28.0, -4.0, 3.4], // site A plant area
   [28.4, -3.6, 3.4], // site B plant area
-  [0, 40.4, 6.0], // attack spawn pocket
-  [0, -40.4, 6.0], // defend spawn pocket
+  /**
+   * The two HOLD points, and they belong on this list for exactly the reason
+   * the site centres do. `navcheck` proves that every defender can reach the
+   * spot his own side sets up on, and it is resolved by dropping a ray and
+   * taking whatever it lands on — so a barrel dressed onto it puts the whole
+   * defence's rally point on a 0.9 m island. Six defenders lost their route to
+   * hold A on one reroll of the dressing dice. Duplicated from
+   * `SITES[].holdLevel` in src/match/sites.js for the same reason the centres
+   * are: `world` may not import `match`. If one moves, move the other.
+   */
+  [-26.0, -9.8, 3.0], // site A hold
+  [26.4, -9.4, 3.0], // site B hold
+  /**
+   * The spawn pockets. Radius 6 covered a seven-man cluster spread over 8 m of
+   * z; both clusters are fifteen men over 10.4 m now, and at 1.5x that is 15.6
+   * m of real ground with rubble and barriers dressed into the ends of it.
+   * `navcheck` reported six defenders relocated by `relocateSpawn` — the mode
+   * papering over a level bug, which is exactly what the note above says this
+   * list exists to prevent. Sized to the cluster: 9.5 x 1.5 = 14.3 m clears the
+   * furthest man plus a capsule.
+   */
+  [0, 39.4, 9.5], // attack spawn pocket
+  [0, -39.4, 9.5], // defend spawn pocket
 ];
 
 /**
@@ -771,7 +792,42 @@ export const BUILDINGS = [
   { id: 'BS2', x: 14, z: -68, w: 24, d: 16, floors: 2, wallKey: 'plaster_blue', streetSide: 2, damage: 0.2, roofProps: 2 },
   { id: 'BN1', x: -16, z: 54, w: 20, d: 14, floors: 2, wallKey: 'plaster_cream', streetSide: 0, damage: 0.15, roofProps: 2 },
   { id: 'BN2', x: 14, z: 56, w: 22, d: 16, floors: 3, wallKey: 'plaster_pink', streetSide: 0, damage: 0.15, roofProps: 2 },
+
+  // ------------------------------------------------- IN-LANE HARD COVER --
+  /**
+   * "Battle Fieldみたいにマップをもう少し広くして" is not only a request for more
+   * ground, and 1.5x on its own is a downgrade: the same fifteen barriers and
+   * six wrecks now stand in 2.25x the square metres, so every lane got a third
+   * emptier at the same time as it got half again as long. These are the mass
+   * that goes back in — single-storey blocks standing IN the lanes and across
+   * the two cross streets, sized and sited so that:
+   *
+   *   - a lane keeps a walkable width either side. The lanes are 15.75 m at
+   *     1.5x and a 7.5 m block leaves 8 m, which is more than the 10.5 m lane
+   *     had spare before;
+   *   - the cross streets are BLOCKED FROM ONE EDGE rather than down the
+   *     middle. A block centred in a 12 m cross street leaves two 2 m slots and
+   *     seals it for a 0.72 m nav radius; flush to one kerb it leaves one 7.5 m
+   *     mouth, which is a corner to fight round instead of a wall;
+   *   - none of them is `enterable`, so the interior gates have nothing new to
+   *     prove and a solid block is honest cover rather than another room.
+   *
+   * `navcheck` is the gate: every spawn must still reach every site.
+   */
+  { id: 'CA1', x: -27.5, z: 24, w: 5, d: 6, floors: 1, groundH: 3.6, wallKey: 'plaster_sand', streetSide: 1, damage: 0.35, parapetH: 0.7, roofProps: 2 },
+  { id: 'CA2', x: -24, z: -19, w: 5, d: 5, floors: 1, groundH: 3.3, wallKey: 'plaster_blue', streetSide: 1, damage: 0.45, parapetH: 0.6, roofProps: 2 },
+  { id: 'CB1', x: 27.5, z: 23, w: 5, d: 6, floors: 1, groundH: 3.6, wallKey: 'plaster_cream', streetSide: 3, damage: 0.35, parapetH: 0.7, roofProps: 2 },
+  { id: 'CB2', x: 24, z: -20, w: 5, d: 5, floors: 1, groundH: 3.3, wallKey: 'plaster_pink', streetSide: 3, damage: 0.45, parapetH: 0.6, roofProps: 2 },
 ];
+/**
+ * THERE IS NO BLOCK IN EITHER CROSS STREET, and that is a measured decision.
+ * Two were tried, 9 x 4.5 m at 1.5x, flush to the outer kerb so each left a
+ * 7.5 m mouth. `navcheck` priced them: the defence's shortest route to site B
+ * went from 12.5 m ahead of the attack to 0.6 m BEHIND it, because the cross
+ * streets are the rotation and lengthening them is the one thing this map
+ * cannot afford. The cover that was going in there is a wrecked lorry and a
+ * sandbag run instead — mass to fight behind that a route can still run past.
+ */
 
 /**
  * The street terminator at the south end of the vista, now standing behind the
@@ -856,6 +912,10 @@ export const SET_PIECES = {
     [22.6, 5.0, -1.6, 2.4],
     [-29.6, 14.5, -1.6, 2.2],
     [29.8, 21.0, 1.5, 2.2], // was on the B-lane terrace's north ramp
+    [-22.5, 26.5, 0.1, 2.4],
+    [22.7, 25.5, 3.1, 2.4],
+    [-22.5, -2.5, 1.5, 2.3],
+    [22.7, -1.5, -1.6, 2.3],
   ],
   /** Jersey barriers: [x, z, ry] */
   jerseys: [
@@ -876,6 +936,16 @@ export const SET_PIECES = {
     [27.8, 14.0, 1.5],
     [-25.2, -19.5, 0.1],
     [25.4, -20.5, 0.1],
+    // ---- 1.5x: the same fifteen barriers in 2.25x the ground is a third
+    // emptier than the map this was tuned on. These put the density back.
+    [-24.5, 30.0, 0.1],
+    [24.7, 29.0, -0.1],
+    [-28.5, 0.5, 1.55],
+    [28.7, 1.5, 1.55],
+    [-23.0, -15.0, 0.1],
+    [23.2, -16.0, 0.1],
+    [-16.5, 12.5, 0.1],
+    [16.7, -5.5, 0.1],
   ],
   /** Sandbag emplacements: [x, z, ry, length] */
   sandbagWalls: [
@@ -897,6 +967,13 @@ export const SET_PIECES = {
     [24.8, 13.0, 1.57, 3.2],
     [-29.8, 7.5, 0.0, 2.8],
     [29.9, 9.5, 0.0, 2.8],
+    // ---- 1.5x cover ----
+    [-27.0, -15.5, 0.0, 3.0],
+    [27.2, -16.5, 0.0, 3.0],
+    [-12.5, 28.5, 0.0, 3.0],
+    [12.7, -30.5, 0.0, 3.0],
+    [-4.0, 14.5, 0.0, 2.6],
+    [4.2, -16.5, 0.0, 2.6],
   ],
   /** Burnt-out vehicles: [x, z, ry, rollDeg] */
   wrecks: [
@@ -910,6 +987,13 @@ export const SET_PIECES = {
     // one on each lane, blocking the long run
     [-25.8, 24.0, 1.42, 0],
     [26.2, 22.5, 1.5, 0],
+    // ---- 1.5x cover. The two in the cross streets are what replaces the
+    // blocks that were tried there: hard cover that a rotation runs past
+    // rather than around.
+    [-22.5, 6.5, 1.4, 0],
+    [22.7, 7.5, 1.5, 3],
+    [-14.5, 29.0, 0.3, 0],
+    [14.7, -31.0, -0.4, 2],
   ],
   /** Palm trees: [x, z, scale] */
   palms: [
@@ -924,6 +1008,10 @@ export const SET_PIECES = {
     [34.4, 1.0, 1.0],
     [-29.4, 10.0, 0.88], // stands ON the A-lane terrace
     [29.6, 8.0, 0.92], // stands ON the B-lane terrace
+    [-27.0, -19.0, 1.0],
+    [27.2, -18.0, 0.95],
+    [-17.0, 30.5, 1.0],
+    [17.2, -32.5, 1.0],
   ],
   /** Street lamps: [x, z, ry] — ry points the arm across the street. */
   lamps: [
@@ -993,6 +1081,10 @@ export const SET_PIECES = {
     [28.2, -23.0, 2.2, 26],
     [-29.4, 24.5, 2.4, 30], // clear of the A-lane terrace's north ramp
     [29.6, 21.5, 2.4, 30],
+    [-23.0, 21.5, 2.2, 26],
+    [23.2, 20.5, 2.2, 26],
+    [-11.5, -30.5, 2.0, 24],
+    [11.7, 27.5, 2.0, 24],
   ],
   /** Tyre stacks: [x, z, n] */
   tyres: [
@@ -1008,5 +1100,104 @@ export const SET_PIECES = {
     [30.4, 25.0, 4],
     [-21.4, 20.0, 3],
     [21.6, 18.5, 4],
+    [-29.5, -14.0, 4],
+    [29.7, -15.0, 3],
+    [-22.0, 28.5, 4],
+    [22.2, 27.5, 3],
+    [-4.8, 24.0, 3],
+    [4.9, -26.0, 4],
   ],
 };
+
+/* ========================================================================== */
+/* THE MAP IS 1.5x                                                            */
+/* ========================================================================== */
+/**
+ * "Battle Fieldみたいにマップをもう少し広くして、マップは今の１.５倍に".
+ *
+ * WHY IT IS A TRANSFORM AND NOT A REWRITE. Every number above is tuned — the
+ * lane walls meet at exactly the four cross links, the two sites are the same
+ * distance from both spawns, `KEEPOUT` sits on the plant circles, the cover
+ * clusters are spaced at the distance you can cross without being shot. Typing
+ * out 1.5x versions of nine hundred literals would silently destroy all of that
+ * and there is no gate that could tell you which one you got wrong. Scaling the
+ * authored plan preserves every relationship in it by construction: the map is
+ * the same map, played at 1.5x, which is what was asked for.
+ *
+ * WHAT SCALES: everything that is a PLAN DIMENSION — positions, footprints,
+ * lane rects, courtyards, keep-out radii, the gate's span.
+ *
+ * WHAT DOES NOT, and this is the part that matters:
+ *
+ *   HEIGHTS. A storey is 3.45 m because a man is 1.78 m. Scaling a floor to
+ *   5.2 m does not make the map bigger, it makes the player small. Every
+ *   `groundH`, `upperH`, parapet, plinth, balcony, terrace and relief height is
+ *   left alone, so a 1.5x building is a WIDER building of the same height —
+ *   which is also the Battlefield silhouette rather than the alley one.
+ *
+ *   THE MANTLE LADDER. `RELIEF.blocks` heights are authored against
+ *   `MOVE.mantle.maxHeight` = 1.85. Scale them and every route onto a roof
+ *   silently stops being a route. `tools/floorcheck.mjs` is the gate on this.
+ *
+ *   ANYTHING SIZED BY THE PLAYER OR HIS KIT: wall thickness, door and window
+ *   openings, stair width and going, prop sizes, sandbag run lengths. A 1.7 m
+ *   door and a 3.6 m market stall are the wrong shape for the human in front of
+ *   them no matter how big the map is.
+ *
+ *   FRACTIONS. Room plans, through-routes and stair positions inside a building
+ *   are authored in normalised interior coordinates, so they follow the
+ *   footprint on their own and must not be touched.
+ *
+ * `density` is divided rather than scaled: it is a count per square metre and
+ * the lanes now have 2.25x the square metres. Left alone it would put 2.25x the
+ * instanced debris on the map for no gameplay gain and a real frame cost.
+ */
+export const SCALE = 1.5;
+
+const S = SCALE;
+const sc2 = (a) => { a[0] *= S; a[1] *= S; };
+const scRect = (r) => { r[0] *= S; r[1] *= S; r[2] *= S; r[3] *= S; };
+
+STREET.halfWidth *= S;
+STREET.kerb *= S;
+STREET.zMin *= S;
+STREET.zMax *= S;
+
+for (const a of ALLEYS) { scRect(a.rect); a.density /= S; }
+for (const f of FLAT) scRect(f);
+
+for (const t of RELIEF.terraces) {
+  scRect(t.rect);
+  for (const r of t.ramps) r.len *= S;   // a longer ramp is a gentler ramp
+}
+for (const d of RELIEF.decks) scRect(d.rect);           // `y` is a height: left
+for (const b of RELIEF.blocks) scRect(b.rect);          // `h` is the mantle ladder: left
+
+for (const k of KEEPOUT) { k[0] *= S; k[1] *= S; k[2] *= S; }
+
+for (const b of BUILDINGS) {
+  b.x *= S; b.z *= S; b.w *= S; b.d *= S;
+  if (b.setback) b.setback.depth *= S;
+  // floors, groundH, upperH, parapetH, plinthH, t, damage, balconies,
+  // roofProps, doorBays, bayKinds, rooms, route and stairFlights are all either
+  // heights, human-sized openings, counts or normalised fractions. None scale.
+}
+
+// The gate spans the street, so its plan scales with the street. Its HEIGHT is
+// raised only enough to keep the arch from reading as a squat culvert once the
+// opening is half as wide again — 1.5 on the span and 1.25 on the rise.
+for (const k of ['z', 'depth', 'span', 'outerW', 'xL0', 'xL1', 'xR0', 'xR1', 'xT0', 'xT1', 'eastProud', 'towerProud']) GATE[k] *= S;
+for (const k of ['height', 'bodyH', 'hL', 'hR', 'hT']) GATE[k] *= 1.25;
+
+for (const p of SET_PIECES.stalls) sc2(p);        // [x, z, ry, width]
+for (const p of SET_PIECES.jerseys) sc2(p);
+for (const p of SET_PIECES.sandbagWalls) sc2(p);  // [x, z, ry, length]
+for (const p of SET_PIECES.wrecks) sc2(p);
+for (const p of SET_PIECES.palms) sc2(p);
+for (const p of SET_PIECES.lamps) sc2(p);
+for (const p of SET_PIECES.tyres) sc2(p);
+for (const p of SET_PIECES.rubble) { p[0] *= S; p[1] *= S; p[2] *= 1.2; }
+// [x0, y0, z0, x1, y1, z1, …] — the y's are facade heights and stay put
+for (const p of SET_PIECES.cables) { p[0] *= S; p[2] *= S; p[3] *= S; p[5] *= S; }
+for (const p of SET_PIECES.laundry) { p[0] *= S; p[2] *= S; p[3] *= S; p[5] *= S; }
+for (const p of SET_PIECES.hangings) { p[0] *= S; p[2] *= S; }  // [x, y, z, ry, w, h]

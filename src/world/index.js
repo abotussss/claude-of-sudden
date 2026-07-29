@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Assembler } from './builder.js';
-import { BUILDINGS, STREET, SET_PIECES, GATE } from './layout.js';
+import { BUILDINGS, STREET, SET_PIECES, GATE, SCALE } from './layout.js';
 import { buildGround } from './ground.js';
 import { buildBuilding, collapseRoof } from './buildings.js';
 import { buildRelief } from './relief.js';
@@ -153,13 +153,21 @@ export class WorldSystem {
     /** The level->world yaw, so gameplay can author facings in level space. */
     this.levelYaw = LEVEL_YAW;
     this.spawnPoints = SPAWNS.map(([x, z, yaw, tag]) => ({
-      position: A.toWorld(x, 0, z),
+      position: A.toWorld(x * SCALE, 0, z * SCALE),
       yaw: yaw + LEVEL_YAW,
       tag,
     }));
+    /**
+     * The playable box. `src/ai/index.js` builds its nav grid straight off
+     * this, so it is also the nav grid's extent and therefore its memory and
+     * its boot cost: 1.5x here is 2.25x the cells. Left at ±62 while the map
+     * went to 1.5x, everything outside 62 m would simply have no nav in it and
+     * both spawns would sit off the edge of the grid.
+     */
+    const HB = 62 * SCALE;
     this.bounds = new THREE.Box3(
-      new THREE.Vector3(-62, -2, -62),
-      new THREE.Vector3(62, 26, 62)
+      new THREE.Vector3(-HB, -2, -HB),
+      new THREE.Vector3(HB, 26, HB)
     ).applyMatrix4(A.xform);
     this.stats = A.stats;
     /**
@@ -170,7 +178,7 @@ export class WorldSystem {
      * tests the BOT height field and that has no opinion about whether a doorway
      * fits the player or whether a prop was dressed across it.
      */
-    this.layout = { BUILDINGS, STREET, SET_PIECES, GATE };
+    this.layout = { BUILDINGS, STREET, SET_PIECES, GATE, SCALE };
 
     const ms = performance.now() - t0;
     console.info(

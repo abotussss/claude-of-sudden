@@ -41,25 +41,44 @@ import { RULES } from './rules.js';
  * `fallback` is a point further up the same lane, used if the primary does not
  * resolve onto walkable ground.
  */
+/**
+ * THE MAP IS 1.5x AND THESE ARE IN THE MAP'S COORDINATES.
+ *
+ * `src/world/layout.js` scales its whole authored plan by `SCALE` (see the long
+ * note at the bottom of that file). Everything here is a LEVEL-space point in
+ * that same plan — the courtyard centres, the hold points, both spawn clusters
+ * — so every one of them has to move with it, or the mode plays the old map's
+ * geometry on the new map's ground: sites inside a building, spawns outside the
+ * perimeter wall.
+ *
+ * `match` may not import `world`, so the factor is repeated here rather than
+ * shared, exactly as `KEEPOUT` in layout.js repeats these site centres. IF ONE
+ * MOVES, MOVE THE OTHER. `tools/navcheck.mjs` is the gate — it fails loudly the
+ * moment a spawn cannot reach a site.
+ */
+const SCALE = 1.5;
+const L = (x, z) => [x * SCALE, z * SCALE];
+const spawnRow = (r) => r.map(([x, z, y]) => [x * SCALE, z * SCALE, y]);
+
 export const SITES = [
   {
     id: 'A',
     name: 'WEST COURTYARD',
-    level: [-28.0, -4.0],
-    fallback: [-25.5, -6.0],
+    level: L(-28.0, -4.0),
+    fallback: L(-25.5, -6.0),
     /**
      * Where defenders set up: on the mouth their own rotation arrives through,
      * which for both sites is the lane from the south. Open courtyard ground,
      * NOT inside a building — see groundPoint's roof note.
      */
-    holdLevel: [-26.0, -9.8],
+    holdLevel: L(-26.0, -9.8),
   },
   {
     id: 'B',
     name: 'EAST COURTYARD',
-    level: [28.4, -3.6],
-    fallback: [25.5, -6.0],
-    holdLevel: [26.4, -9.4],
+    level: L(28.4, -3.6),
+    fallback: L(25.5, -6.0),
+    holdLevel: L(26.4, -9.4),
   },
 ];
 
@@ -98,20 +117,20 @@ export const SITES = [
  * them to choose between.
  */
 export const SPAWNS = {
-  attack: [
+  attack: spawnRow([
     [-5.0, 44.6, Math.PI], [0.0, 44.6, Math.PI], [5.0, 44.6, Math.PI],
     [-5.0, 42.0, Math.PI], [0.0, 42.0, Math.PI], [5.0, 42.0, Math.PI],
     [-5.0, 39.4, Math.PI], [0.0, 39.4, Math.PI], [5.0, 39.4, Math.PI],
     [-5.0, 36.8, Math.PI], [0.0, 36.8, Math.PI], [5.0, 36.8, Math.PI],
     [-5.0, 34.2, Math.PI], [0.0, 34.2, Math.PI], [5.0, 34.2, Math.PI],
-  ],
-  defend: [
+  ]),
+  defend: spawnRow([
     [-5.0, -44.6, 0], [0.0, -44.6, 0], [5.0, -44.6, 0],
     [-5.0, -42.0, 0], [0.0, -42.0, 0], [5.0, -42.0, 0],
     [-5.0, -39.4, 0], [0.0, -39.4, 0], [5.0, -39.4, 0],
     [-5.0, -36.8, 0], [0.0, -36.8, 0], [5.0, -36.8, 0],
     [-5.0, -34.2, 0], [0.0, -34.2, 0], [5.0, -34.2, 0],
-  ],
+  ]),
 };
 
 /**

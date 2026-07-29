@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { BOX, BOX_SOFT, IDENT, LL } from './kit.js';
 import { fbm3, patchGeometry, paintMasks } from './util.js';
 import { Rng } from '../core/rng.js';
-import { STREET, ALLEYS, FLAT } from './layout.js';
+import { STREET, ALLEYS, FLAT, SCALE } from './layout.js';
 
 /**
  * How flat the ground is at (x, z): 1 inside a `FLAT` rect, 0 out in the dunes,
@@ -47,8 +47,13 @@ export function buildGround(A, rng) {
   // ruler-straight line where it meets the buildings.
   // Subdivided finer than it was: at 42 segments a 168 m plane has a 4 m quad,
   // which is coarser than the 7 m shoulder the flattening needs to resolve.
-  const S = 168;
-  const N = 84;
+  // 168 m covered the old box with room for the dunes to carry the horizon.
+  // The play box is 1.5x now, so the plane is too, and the segment count with
+  // it — at a fixed 84 the quad would be 3 m across, coarser than the 7 m
+  // shoulder the flattening has to resolve, and the lanes would sit in a
+  // visible crease.
+  const S = 168 * SCALE;
+  const N = Math.round(84 * SCALE);
   const terrain = new THREE.PlaneGeometry(S, S, N, N);
   terrain.rotateX(-Math.PI / 2);
   const pa = terrain.getAttribute('position');

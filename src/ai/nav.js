@@ -126,7 +126,14 @@ export class NavGrid {
     this.came = new Int32Array(n);
     this.visitStamp = new Int32Array(n);
     this.stamp = 0;
-    this.open = new Heap(Math.min(n, 1 << 16));
+    /**
+     * The open list. Capped at 65536 it was comfortably larger than the whole
+     * 221 x 221 grid; the level is 1.5x and the grid is 109k cells, so the cap
+     * became a SILENT one — `Heap.push` returns without pushing when it is
+     * full, and a search that overflows quietly reports "no route" instead of
+     * failing loudly. Sized to the grid.
+     */
+    this.open = new Heap(Math.min(n, 1 << 18));
 
     this._v = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
@@ -257,7 +264,24 @@ export class NavGrid {
     const nx = this.nx;
     const gx = goal % nx, gz = (goal / nx) | 0;
     const cell = this.cell;
-    const maxNodes = opts.maxNodes ?? 6000;
+    /**
+     * The A* expansion budget, and it is a function of the MAP, not a taste.
+     *
+     * 6000 was right for a 221 x 221 grid with 38k walkable cells and a 63 m
+     * longest route. The level is 1.5x now — 331 x 331, 86k walkable, 104 m —
+     * and the search frontier grows with the AREA it has to sweep past cover,
+     * not with the length of the answer. `navcheck` caught the difference
+     * precisely: every spawn still reached both SITES, and three defenders lost
+     * their route to hold A, which reads from the outside as three bots going
+     * brain-dead in the corner of a courtyard nine metres from where the rest
+     * of the squad is standing.
+     *
+     * Scaled with the grid (2.25x the cells) and rounded up. This is a CEILING,
+     * not a cost: a search that succeeds still stops the moment it pops the
+     * goal, and the routes on this map settle in a few hundred expansions. It
+     * only ever spends the budget on a query that was going to fail.
+     */
+    const maxNodes = opts.maxNodes ?? 24000;
 
     this.stamp++;
     const stamp = this.stamp;

@@ -27,7 +27,7 @@ import {
   tubeY,
   fbm3,
 } from './util.js';
-import { STREET, ALLEYS, BUILDINGS, SET_PIECES, GATE, KEEPOUT } from './layout.js';
+import { STREET, ALLEYS, BUILDINGS, SET_PIECES, GATE, KEEPOUT, SCALE } from './layout.js';
 import { reliefY, inRelief } from './relief.js';
 
 /**
@@ -708,7 +708,9 @@ function streetFloor(A, rng) {
     [-5.3, -25.5],
     [5.5, -33.0],
   ];
-  for (const [x, z] of spills) {
+  for (const [sx, sz] of spills) {
+    // hand-placed against the facades, so they move with the street
+    const x = sx * SCALE, z = sz * SCALE;
     if (!isOpen(x, z, 0.1) || !camClear(x, z, 1.8)) continue;
     rubbleMound(A, rng, x, groundY(x, z), z, rng.range(1.1, 1.9), rng.int(18, 30), {
       key: 'concrete_prop',
@@ -1533,7 +1535,9 @@ function coverClusters(A, rng) {
     [-15.5, 12.0, 1.55],
     [15.7, 11.4, 1.55],
   ];
-  for (const [x, z, ry] of spots) {
+  for (const [sx, sz, ry] of spots) {
+    // authored against the lanes and the site courtyards, so they scale with them
+    const x = sx * SCALE, z = sz * SCALE;
     if (!keepClear(x, z)) continue;
     const y = groundY(x, z);
     // six squashed courses ≈ 0.8 m: cover you can shoot over crouched, not standing
@@ -2421,7 +2425,10 @@ export function buildGate(A, rng) {
  * distant infill so the playable 120 m reads as part of a bigger town.
  */
 export function buildPerimeter(A, rng) {
-  const R = 58;
+  // The compound wall is the edge of the world and has to stay outside the
+  // play box, which is 1.5x. Left at 58 it would run down the middle of the
+  // outer lanes.
+  const R = 58 * SCALE;
   const segs = [
     // [x0,z0,x1,z1] runs of compound wall
     [-R, -R, R, -R],
