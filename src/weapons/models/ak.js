@@ -71,7 +71,33 @@ export function buildAk() {
    * its flat top as well) by 5.7 mm, which is what a real AK's sights do: you
    * look down over the cover, not along it.
    */
-  const sightY = bore + 0.028;
+  /**
+   * bore + 0.068, up from bore + 0.028.
+   *
+   * "AKもADSの時に銃身の主張が強すぎ" — an understatement. At +0.028 the sight
+   * line cleared the dust cover's crest by 5.7 mm, and the note this replaces
+   * treated that as the fix. MEASURED, it cannot be: the AK carries 0.438 m of
+   * geometry BEHIND its rear sight (rearmost z 0.308 against a sight at
+   * -0.1295) while `eyeRelief` is 0.238, so 20 cm of receiver and stock sit
+   * behind the eye — the camera is inside the buttstock. Looking forward along
+   * a 44 cm flat surface from 5.7 mm above it fills the lower half of the frame
+   * in perspective no matter what, and the capture showed exactly that: a slab
+   * running to a vanishing point, with no sight picture at all.
+   *
+   * Raising `eyeRelief` does NOT fix it — tried 0.238 / 0.34 / 0.42 and captured
+   * all three; the slab is still there at 0.42, because the problem is the
+   * height of the eye over the receiver, not its distance from the sight.
+   *
+   * This constant drives the sight BLOCKS as well as the `sight` alignment
+   * node, so moving it takes the rendered irons and the eye together and the
+   * sights stay aligned. Moving the node alone would have put the eye 40 mm
+   * above sights that had not moved.
+   *
+   * VERIFIED by capture: the receiver now occupies the lower third, the gas
+   * tube runs forward to a visible front post, and there is a sight picture
+   * where there was none.
+   */
+  const sightY = bore + 0.068;
   const gasY = bore + 0.019;
   /** Handguard collision axis — see `handguard` in nodes for the derivation. */
   const hgAxisY = 0.0595;
