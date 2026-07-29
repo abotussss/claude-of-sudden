@@ -60,25 +60,97 @@ const SCALE = 1.5;
 const L = (x, z) => [x * SCALE, z * SCALE];
 const spawnRow = (r) => r.map(([x, z, y]) => [x * SCALE, z * SCALE, y]);
 
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHY THE PLANT ZONE IS NOT IN THE FIRST-FLOOR COMMAND ROOM
+ * ────────────────────────────────────────────────────────────────────────────
+ * The brief was "C4設置できる場所は守る側に有利になるように配置して。屋内の２回の
+ * 司令室とか" — put the site where the DEFENCE has the advantage, for instance a
+ * command room upstairs in a building. Half of that is done below. The upstairs
+ * half cannot be done and here is the measurement rather than the opinion:
+ *
+ *   `src/ai/nav.js` is a 2.5D HEIGHT FIELD — ONE floor per (x, z) cell, sampled
+ *   by dropping a ray from above the level. Inside a building that ray lands on
+ *   the ROOF, so a building's interior is not merely hard to path through, it
+ *   is not in the grid at all. Probed at boot on this map: `grid.nearest()` at
+ *   the centre of W2's ground floor and at the centre of E2's returns NO CELL
+ *   within three rings. A* therefore cannot route a single bot into either
+ *   building, let alone up a flight of stairs.
+ *
+ * A charge planted in a first-floor room would be a charge NO BOT COULD EVER
+ * DEFUSE, which directly contradicts the other half of the same brief — "C4設置
+ * したらちゃんと敵は解除をしに来るように". A site that cannot be defused is not a
+ * defender-favouring site, it is an attacker-winning one.
+ *
+ * So the split is: the PLANT ZONE stays on ground both sides can walk, and the
+ * ELEVATION is where the defence's advantage lives. Both sites sit in the half
+ * of their courtyard that the storeys above look down into — `RELIEF.decks` in
+ * src/world/layout.js runs a 2.9 m catwalk along each courtyard's outer wall
+ * and E2/W2's balconies overhang the north end — and every one of those
+ * positions is reachable by a PLAYER (`tools/floorcheck.mjs` is the gate on
+ * that) and by nobody else. The human defending gets the command post. The bots
+ * hold the ground, which is all they have ever been able to do.
+ */
 export const SITES = [
   {
     id: 'A',
     name: 'WEST COURTYARD',
-    level: L(-28.0, -4.0),
-    fallback: L(-25.5, -6.0),
+    /**
+     * MOVED SOUTH, from z -4 to z -7, which is 4.5 m of world ground and the
+     * whole of what "favour the defence" means here.
+     *
+     * Measured with A* over the real nav grid, shortest route from any spawn of
+     * the cluster to the site centre:
+     *
+     *              attack      defence
+     *   z -4 (old)   76.9 m      63.7 m     defence 13.2 m ahead
+     *   z -7 (new)   81.0 m      58.8 m     defence 22.2 m ahead
+     *
+     * A 9 m swing, ~2 s at the player's 4.57 m/s stand speed, and it compounds:
+     * the attack now has to cross the WHOLE courtyard to plant, with the
+     * defence's own mouth behind the charge rather than in front of it, while
+     * the deck along the west wall (2.9 m, player only) looks straight down on
+     * the plant spot. The circle still fits the courtyard — `RULES.plantRadius`
+     * is 8 and the south wall is 10.5 m away — and 92 % of it remains ground a
+     * defender can physically stand on to cut the charge (swept cell by cell;
+     * the missing 8 % is the strip against the perimeter wall).
+     */
+    level: L(-28.0, -7.0),
+    fallback: L(-26.0, -5.0),
     /**
      * Where defenders set up: on the mouth their own rotation arrives through,
-     * which for both sites is the lane from the south. Open courtyard ground,
-     * NOT inside a building — see groundPoint's roof note.
+     * which for both sites is the lane from the south, ~9.6 m off the charge —
+     * far enough that `Agent._pickHoldSpot`'s 4-11 m ring spreads them across
+     * the south half of the courtyard instead of stacking them on the plant
+     * spot, close enough to contest a plant the moment it starts. Open
+     * courtyard ground, NOT inside a building — see groundPoint's roof note.
      */
-    holdLevel: L(-26.0, -9.8),
+    holdLevel: L(-24.0, -12.0),
+    /**
+     * THE ATTACK'S SECOND WAY IN. @see `MatchSystem._assignObjectives`.
+     *
+     * A point in connector 2's west arm — the mid street's link into this lane,
+     * which arrives at the courtyard's EAST mouth. The main body walks the A
+     * lane down from the north; a third of the attack is sent here first and
+     * comes in through a different hole in a different wall. Null-safe: if this
+     * does not resolve onto reachable ground the flank is simply not ordered.
+     */
+    flankLevel: L(-13.0, -4.5),
   },
   {
     id: 'B',
     name: 'EAST COURTYARD',
-    level: L(28.4, -3.6),
-    fallback: L(25.5, -6.0),
-    holdLevel: L(26.4, -9.4),
+    level: L(28.0, -7.0),
+    fallback: L(26.0, -5.0),
+    holdLevel: L(24.0, -12.0),
+    /**
+     * (15, -5) rather than the mirror of A's (-13, -4.5): the east arm of
+     * connector 2 is not the west arm's mirror image. Probed cell by cell, the
+     * mirrored point resolves onto something 0.84 m off the deck — a crate, and
+     * therefore a cell no A* route reaches (0 of 15 attack spawns). Two metres
+     * along the connector it is open gravel and all 15 reach it.
+     */
+    flankLevel: L(15.0, -5.0),
   },
 ];
 
@@ -181,6 +253,27 @@ export function resolveLayout(world, ai) {
       // A hold you cannot get to the site from is worse than no hold at all.
       console.warn(`[match] site ${s.id} hold: no route on to the site — using the site itself`);
     }
+    /**
+     * THE FLANK STAGING POINT, and it is allowed to be null.
+     *
+     * A via-point in the connector that joins the mid street to this lane. It
+     * is proved from the ATTACK spawns only — nobody else is ever sent here —
+     * and it must also have a route on to the site, or "flank" would mean
+     * "walk into a connector and stop". If either fails the point is dropped
+     * and `_assignObjectives` simply never orders a flank: a broken flank is a
+     * third of the attack standing in an alley, which is worse than no flank.
+     */
+    let flank = null;
+    if (s.flankLevel) {
+      const f = groundPoint(world, ai, s.flankLevel[0], s.flankLevel[1]);
+      const ok =
+        walkable(ai, f) &&
+        ensureReachable(ai, f, spawns, ['attack'], `site ${s.id} flank`, false) &&
+        sitesReachableFrom(ai, f, [{ position }]);
+      if (ok) flank = f;
+      else console.warn(`[match] site ${s.id} flank: no usable staging point — flank disabled`);
+    }
+
     return {
       id: s.id,
       name: s.name,
@@ -188,6 +281,7 @@ export function resolveLayout(world, ai) {
       radius: s.radius ?? RULES.plantRadius,
       position,
       hold: holdOk ? hold : position.clone(),
+      flank,
       /** Filled in by the match each round. */
       defenders: [],
     };

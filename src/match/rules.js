@@ -112,6 +112,22 @@ export const RULES = {
    * that all stands on the charge is a team that gets killed on the charge.
    */
   defuseCrew: 3,
+  /**
+   * ONE ATTACKER IN EVERY `flankShare` TAKES THE LONG WAY ROUND.
+   *
+   * "攻める側は裏どりや屋内移動、マップをちゃんと拡大して移動に関しては攻める側が
+   * 有利になるようにしてください" — the attack's advantage on this map is
+   * MOVEMENT, and it was not being used: all fifteen men were handed the same
+   * point and A* handed all fifteen the same lane, so a site with three mouths
+   * was only ever entered through one of them and the defence only ever had to
+   * hold one direction.
+   *
+   * 3 — a third of the attack — is the split that leaves the main push heavy
+   * enough to take the site on its own. It is applied by roster index, not by
+   * dice, so the same men flank all round and nobody changes his mind on the
+   * two second objective refresh. @see `MatchSystem._flankTarget`
+   */
+  flankShare: 3,
   /** Scoreboard dwell between rounds. */
   roundOverTime: 6,
   matchOverTime: 16,

@@ -94,9 +94,20 @@ agent.setObjective(mode, position, site, facing)   agent.working
 player.team / player.name / player.alive
 player.respawnAt(position, yaw)     player.health.regenEnabled
 weapons.locked              weapons.resetAmmo()
+weapons.scavenge(mags)      weapons.needsAmmo
 ui.setRound(state)          ui.matchDriven      ui.isFriendlyTarget(actor)
 world.levelYaw              world.levelToWorld(x, y, z, out)
 ```
+
+`weapons.scavenge(mags)` is AMMUNITION OFF A BODY — "スカベンジャー". `match`
+leaves a pouch where every man falls (`src/match/ammo.js`) and the player walks
+into it; `weapons` decides what it is worth, because `reserve` is its state and
+nothing outside it may write it. It tops up every magazine-fed weapon by `mags`
+magazines, CAPPED AT EACH WEAPON'S STARTING `def.reserve`, so a pickup can only
+claw back what has already been spent and a five minute round full of bodies
+cannot become infinite ammunition. Grenades are excluded on purpose. It returns
+the rounds actually handed over, and `weapons.needsAmmo` is the cheap test that
+keeps the pickup from consuming a pouch for nothing.
 
 `ai.protect(actor, seconds)` is SPAWN PROTECTION, and it takes the local player
 as happily as it takes an `Agent` — `match` calls it on every respawn, so bots
