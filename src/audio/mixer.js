@@ -49,8 +49,26 @@ import { IR_SPECS, generateIR } from './ir.js';
  * If the bed now feels too thin, that is the knob.
  */
 const BUS_DEFS = {
-  weapons:  { trim: 1.1, comp: { threshold: -7, knee: 8, ratio: 2.6, attack: 0.003, release: 0.16 } },
-  foley:    { trim: 1.2, comp: { threshold: -14, knee: 10, ratio: 2.0, attack: 0.004, release: 0.2 } },
+  /**
+   * WEAPONS AND FOLEY TRIMS RAISED to pay for the wet trim.
+   *
+   * `reverbReturn` went 0.9 -> 0.42 and the measured consequence was not just
+   * drier, it was QUIETER: a concrete footstep's peak fell 0.097 -> 0.045, i.e.
+   * -6.7 dB, and a concrete impact 0.128 -> 0.060. The reverb had been carrying
+   * roughly half the level of every near-field sound, which is itself the
+   * clearest evidence the complaint was right.
+   *
+   * Losing that level is not acceptable here: footsteps were reported as
+   * MISSING before, so a fix that makes them drier by making them half as loud
+   * trades one complaint for the other. +4.4 dB on foley and +3.3 dB on weapons
+   * restores the level with dry signal instead of tail.
+   *
+   * `ambience` is deliberately NOT compensated — "環境音、風切り音みたいなのもっと
+   * 小さくしろ" asked for it quieter, so it keeps both the wet cut and the
+   * level cut.
+   */
+  weapons:  { trim: 1.6, comp: { threshold: -7, knee: 8, ratio: 2.6, attack: 0.003, release: 0.16 } },
+  foley:    { trim: 2.0, comp: { threshold: -14, knee: 10, ratio: 2.0, attack: 0.004, release: 0.2 } },
   ambience: { trim: 0.2,  comp: { threshold: -24, knee: 12, ratio: 2.0, attack: 0.05, release: 0.5 } },
   voice:    { trim: 1.15, comp: { threshold: -18, knee: 8, ratio: 3.0, attack: 0.006, release: 0.22 } },
   ui:       { trim: 1.3,  comp: null },
@@ -144,7 +162,24 @@ export class Mixer {
 
     this.spaces = {};
     this.spaceNames = Object.keys(IR_SPECS);
-    this.reverbReturn = gain(actx, 0.9);
+    /**
+     * 0.42, down from 0.9. THE GLOBAL WET TRIM.
+     *
+     * A previous pass cut the reverb send on the WEAPON profiles (0.4-0.72 down
+     * to 0.06-0.24) and that was correct and measured — wet, all seven guns
+     * decayed within 1.3:1 of each other where dry they span 4.3:1, so the
+     * reverb really was flattening them into one sound. But it only touched the
+     * guns. Everything else kept sending hard into the same bus: ambience beds
+     * at 0.6-1.2, foley up to 0.85. Hence "まだ全ての効果音にリバーブかかりすぎ"
+     * — still too much reverb on ALL the sound effects, which is a different
+     * complaint from the first one and a fair one.
+     *
+     * This is the one gain every wet path passes through, so it is the honest
+     * place to take the rest out of, rather than editing forty call sites and
+     * missing some. The per-voice sends below stay as CHARACTER — a blast is
+     * still wetter than a magazine catch — they are just all quieter now.
+     */
+    this.reverbReturn = gain(actx, 0.42);
     this.reverbReturn.connect(this.worldSum);
     this._irReady = false;
 

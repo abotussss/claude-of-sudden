@@ -532,7 +532,7 @@ export function meleeHit(actx, bank, rng, o = {}) {
   ad(gg.gain, gt, 0.26 * lvl * R.grit, 0.004, gd);
   gs.start(gt, gs._offset, gd * 2 + 0.05);
 
-  return { node: out, end: t0 + Math.max(0.3, R.decay * 3), send: 0.4 };
+  return { node: out, end: t0 + Math.max(0.3, R.decay * 3), send: 0.18 };
 }
 
 /* ------------------------------------------------------------------ */
@@ -580,7 +580,7 @@ export function shellCasing(actx, bank, rng, o = {}) {
       end = Math.max(end, rt + 0.06);
     }
   }
-  return { node: out, end: end + 0.05, send: 0.42 };
+  return { node: out, end: end + 0.05, send: 0.189 };
 }
 
 /* ------------------------------------------------------------------ */
@@ -924,7 +924,7 @@ export function bodyFall(actx, bank, rng, o = {}) {
       { f: rng.range(1500, 5200), q: rng.range(16, 40), g: rng.range(0.03, 0.09) * lvl, decay: rng.range(0.02, 0.1) },
     ], 0.002).connect(out);
   }
-  return { node: out, end: t0 + 0.6, send: 0.4 };
+  return { node: out, end: t0 + 0.6, send: 0.18 };
 }
 
 /* ------------------------------------------------------------------ */
