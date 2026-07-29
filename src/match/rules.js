@@ -135,8 +135,47 @@ export const RULES = {
    * information; dropping a building on that is the one moment it is unfair.
    */
   airstrikeFirstDelay: 26,
-  /** Gap between strikes, seconds. Three sites, so at most three a round. */
-  airstrikeInterval: [34, 62],
+  /** Gap between strikes, seconds. */
+  airstrikeInterval: [28, 50],
+  /**
+   * Ceiling on strikes per round.
+   *
+   * There are eight strike sites now (three map changers plus five on the
+   * attackers' approach) and a 300 s round divided by a 39 s mean gap would
+   * spend every one of them. Five leaves the map different every round and
+   * stops the whole town coming down every round.
+   */
+  airstrikeMaxPerRound: 5,
+  /**
+   * THE ROUTE STRIKE — the smaller one, on the way in to a site.
+   *
+   * "C4設置場所に行くまでのところに空爆ポイントを作ること … 守る側有利にして".
+   * It drops a parapet and the wall under it into a lane the attack has to walk,
+   * so it is cover-generating and lethal, but at 11 m / 190 it is survivable
+   * from about 4 m out where the 15 m / 260 storey is not. A push through it
+   * costs health and tempo rather than the round.
+   */
+  routeStrikeRadius: 11,
+  routeStrikeDamage: 190,
+
+  /* ---- the bomber run ---- */
+  /**
+   * "敵の戦闘機の爆弾投下も適宜行なって" — an aircraft that crosses and walks a
+   * STICK of bombs along a line, as distinct from the single-point strike.
+   *
+   * Per bomb it is deliberately weaker than either strike: what makes a stick
+   * dangerous is that there are eight of them 11 m apart across a lane, so
+   * there is no single safe metre inside the run and the answer is to not be in
+   * the lane rather than to find cover in it.
+   */
+  bombRadius: 9,
+  bombDamage: 165,
+  /** Seconds into a LIVE round before the first run may be called. */
+  bomberFirstDelay: 44,
+  /** Gap between runs, seconds. */
+  bomberInterval: [52, 84],
+  /** Ceiling on runs per round. */
+  bomberMaxPerRound: 3,
 
   /* ---- combat ---- */
   /**

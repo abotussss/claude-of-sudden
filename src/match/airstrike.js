@@ -2,9 +2,16 @@
  * MATCH — the airstrike.
  *
  * Occasionally, mid-round, a bomb lands on the town and takes the top off a
- * building. Three fixed sites, one strike per event, telegraphed with a jet
+ * building. Eight fixed sites, one strike per event, telegraphed with a jet
  * pass and a falling whistle so it is a thing you can react to rather than a
  * thing that kills you.
+ *
+ * Three of the eight are the map changers this file was written around; the
+ * other five are smaller masses standing over the attackers' approach to the
+ * bomb sites, so that pushing costs something. See `STRIKE_SITES`. The bomber
+ * — an aircraft that walks a stick of bombs along a line rather than dropping
+ * one on a point — is the other half of the same brief and lives in
+ * `src/match/bomber.js`, built on the helpers this file exports.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * EVERYTHING IS BAKED AT BOOT. NOTHING IS SOLVED WHEN IT FIRES.
@@ -69,35 +76,86 @@ import * as THREE from 'three';
 import { RULES } from './rules.js';
 
 /**
- * THE THREE SITES, authored in the level space `src/world/layout.js` uses.
+ * THE MAP IS 1.5x AND THESE ARE IN THE MAP'S OWN PLAN UNITS.
  *
- * Each one is an added top storey on a building that FACES A LANE, and the
- * choice of which three is the map design in this file:
+ * `src/world/layout.js` scales its whole authored plan by `SCALE`, and
+ * `src/match/sites.js` repeats the factor for the same reason: `match` may not
+ * import `world`, so every gameplay-authored level point has to be transformed
+ * the same way or it lands on the OLD map's geometry.
  *
- *   MID   the east row's west face at the mid street's waist, between the two
- *         connectors. Takes the highest mass on the middle lane down into it:
- *         the mound gives the mid street the only hard cover it has between
- *         K1 and K2, which is the stretch that was a pure firing line.
- *   WEST  the corner where connector 2 meets the A lane. Losing the top of
- *         that corner opens a sightline from the connector mouth onto the
- *         north half of the A lane — the rotation you could previously make
- *         completely blind.
- *   EAST  the B lane's north run, on the building row's east face. Drops cover
- *         into the attack's natural approach to site B, so the walk in stops
- *         being a straight open lane.
+ * THIS FILE MISSED THAT TRANSFORM AND THAT IS THE WHOLE "空爆イベントが起きて
+ * いない" BUG. The scheduler was firing exactly on time — instrumented over a
+ * live round it called WEST at 33.4 s and EAST at 82.5 s — but two of the three
+ * anchors had drifted off the buildings they were authored on and into the open
+ * street, so the boot probe put the roof at 0.05 m and the whole mass, its
+ * fireball and its rubble were built at ankle height in the middle of a road.
+ * Nothing came down, because there was nothing up. Measured at boot before the
+ * fix:
  *
- * `face` is the level-space direction the mass overhangs and the rubble falls,
- * i.e. out into the lane. `yaw` is derived from it. Sites are deliberately ON
- * the building line and never inside a courtyard, so no strike can bury a bomb
- * site or a spawn — the demolition layout is untouched by all three.
+ *     MID   roof 0.06 m     WEST roof 6.50 m     EAST roof 0.05 m
+ *
+ * and after (`_findRoof` reports the plane it settled on in the boot log):
+ *
+ *     MID   roof 9.55 m     WEST roof 7.38 m     EAST roof 12.35 m
+ *
+ * `L()` and `SCALE` are duplicated from sites.js deliberately, the same way
+ * sites.js duplicates them from layout.js. IF ONE MOVES, MOVE THE OTHERS.
+ */
+const SCALE = 1.5;
+const L = (x, z) => [x * SCALE, z * SCALE];
+
+/**
+ * THE STRIKE SITES, authored in the level space `src/world/layout.js` uses.
+ *
+ * Each one is an added top storey on a building that FACES A LANE. `face` is
+ * the level-space direction the mass overhangs and the rubble falls, i.e. out
+ * into the lane; `yaw` is derived from it. Sites are deliberately ON the
+ * building line and never inside a courtyard, so no strike can bury a bomb site
+ * or a spawn — the demolition layout is untouched by every one of them.
+ *
+ * `kind` picks the mass profile and the scheduler's weighting:
+ *
+ *   'block'  the big one. A whole added storey, its crown, the stair hut, the
+ *            water tank, two flues, a strip of facade and a balcony — 923
+ *            chunks. These are MAP CHANGES: the mound is permanent cover for
+ *            the rest of the round, and where it lands is the level design.
+ *   'route'  a parapet, its coping, the wall under it and a balcony — 292
+ *            chunks, a smaller radius and a smaller mound. These exist to make
+ *            the WALK IN cost something, so they are not level design so much
+ *            as weather on the attackers' approach.
+ *
+ * WHERE THEY ARE AND WHY — "C4設置場所に行くまでのところに空爆ポイントを作る
+ * こと … 守る側有利にして". Measured off `tools/lanecheck.mjs`'s own A* on the
+ * built map, the two sides' routes to the objectives do not overlap at all:
+ *
+ *     attack spawn -> either site   level z from +66.7 down to  -5.8
+ *     defend spawn -> either site   level z from -67.1 up   to  -5.0
+ *
+ * They meet only AT the sites. So every anchor below is at level z >= +6.9,
+ * which is on the attackers' half of every route and on none of the defenders'.
+ * That is the entire balance argument and it is a geometric fact rather than a
+ * tuning opinion — see the exposure table in the commit message.
  */
 const STRIKE_SITES = [
-  // east row, west face, on the mid street between connector 2 and E3
-  { id: 'MID', name: 'MID STREET', level: [6.5, -16.0], face: [-1, 0], reach: 5.2 },
-  // west row, west face, on the A lane's south run just below connector 2
-  { id: 'WEST', name: 'A LANE', level: [-20.5, -14.5], face: [-1, 0], reach: 4.2 },
-  // east row, east face, on the B lane's north run below E1
-  { id: 'EAST', name: 'B LANE', level: [20.5, 17.5], face: [1, 0], reach: 4.4 },
+  /* ---- the three map changers ------------------------------------------ */
+  // east row, west face, on the mid street where both branches still share it
+  { id: 'MID', name: 'MID STREET', level: L(7.7, 18.7), face: [-1, 0], reach: 5.2, kind: 'block' },
+  // north row, south face, over the west connector the A branch crosses
+  { id: 'WEST', name: 'WEST CROSSING', level: L(-13.1, 14.3), face: [0, -1], reach: 4.2, kind: 'block' },
+  // east row, west face, on the B lane's long north run
+  { id: 'EAST', name: 'B LANE', level: L(20.0, 17.3), face: [1, 0], reach: 4.4, kind: 'block' },
+
+  /* ---- five points on the way in --------------------------------------- */
+  // the trunk both branches walk out of spawn, west row's east face
+  { id: 'R1', name: 'MAIN STREET', level: L(-6.3, 22.6), face: [1, 0], reach: 3.4, kind: 'route' },
+  // west connector, south row's north face, where the A branch turns west
+  { id: 'R2', name: 'WEST LINK', level: L(-15.5, 9.4), face: [0, 1], reach: 3.4, kind: 'route' },
+  // A lane's last run in to site A, east row's west face
+  { id: 'R3', name: 'A APPROACH', level: L(-20.9, 4.6), face: [-1, 0], reach: 3.4, kind: 'route' },
+  // east connector, south row's north face, where the B branch turns east
+  { id: 'R4', name: 'EAST LINK', level: L(15.5, 24.1), face: [0, 1], reach: 3.4, kind: 'route' },
+  // B lane's last run in to site B, west row's east face
+  { id: 'R5', name: 'B APPROACH', level: L(21.3, 7.5), face: [1, 0], reach: 3.4, kind: 'route' },
 ];
 
 /**
@@ -118,7 +176,7 @@ const ROOF_INSET = 3.0;
  * ~0.35 m — below that a chunk is a particle, and `fx` already throws several
  * hundred of those.
  */
-const MASS = [
+const MASS_BLOCK = [
   // the added storey itself: the big one, and the only piece with real depth
   { id: 'storey', mat: 0, size: [4.6, 3.4, 8.4], at: [-2.0, 1.7, 0], cut: [7, 6, 13] },
   // its crown course, proud of the storey on every side
@@ -137,6 +195,31 @@ const MASS = [
   { id: 'balcony', mat: 1, size: [1.3, 0.24, 3.6], at: [0.65, -2.1, -1.4], cut: [2, 1, 7] },
   { id: 'rail', mat: 1, size: [0.14, 0.9, 3.6], at: [1.25, -1.6, -1.4], cut: [1, 2, 9] },
 ];
+
+/**
+ * The ROUTE mass: a parapet with its coping, the wall under it and the balcony
+ * that was bolted to that wall. 292 chunks against the block's 923.
+ *
+ * It is deliberately ONE material and deliberately shallow. One material
+ * because eight sites at two materials each is sixteen shader permutations
+ * compiled at boot for a thing that is meant to be the cheap version; shallow
+ * because a route strike must drop cover into a lane the attack has to walk,
+ * not seal it — `moundR` comes out at 3.1 m against lanes 8-14 m wide, and
+ * `tools/navcheck.mjs` is run WITH every strike settled to prove it.
+ */
+const MASS_LEDGE = [
+  { id: 'parapet', mat: 0, size: [3.2, 1.5, 7.0], at: [-1.3, 0.75, 0], cut: [5, 3, 11] },
+  { id: 'coping', mat: 0, size: [3.6, 0.4, 7.4], at: [-1.2, 1.7, 0], cut: [4, 1, 11] },
+  { id: 'skin', mat: 0, size: [0.34, 2.6, 7.0], at: [-0.17, -1.9, 0], cut: [1, 5, 11] },
+  { id: 'balcony', mat: 0, size: [1.2, 0.22, 3.2], at: [0.6, -2.7, -1.2], cut: [2, 1, 6] },
+  { id: 'rail', mat: 0, size: [0.14, 0.85, 3.2], at: [1.15, -2.2, -1.2], cut: [1, 2, 8] },
+];
+
+const MASS_FOR = { block: MASS_BLOCK, route: MASS_LEDGE };
+/** Surface library name per material slot, per kind. */
+const SURFACE_FOR = { block: ['plaster', 'concrete'], route: ['concrete'] };
+/** Mound height per kind — a parapet does not make the pile a storey does. */
+const MOUND_H = { block: 1.55, route: 1.05 };
 
 /**
  * Parts whose `at[0]` is measured from the REAL facade plane found by the boot
@@ -175,6 +258,10 @@ export class Airstrike {
     this._pending = [];
     /** Seconds until the scheduler may pick a site. Set by `armRound`. */
     this._next = Infinity;
+    /** Strikes called this round, against `RULES.airstrikeMaxPerRound`. */
+    this._fired = 0;
+    /** The other air system, so the two never overlap. Set by `match`. */
+    this.coBusy = null;
 
     this.group = new THREE.Group();
     this.group.name = 'match-airstrike';
@@ -232,10 +319,16 @@ export class Airstrike {
       cells += s.nav ? s.nav.cells.length : 0;
     }
     console.info(
-      `[airstrike] ${this.sites.length} sites baked in ${this.buildMs.toFixed(0)}ms — ` +
-        `${chunks} chunks, ${cells} nav cells patched, ` +
-        `${this.sites.map((s) => s.id).join('/')}`
+      `[airstrike] ${this.sites.length}/${STRIKE_SITES.length} sites baked in ` +
+        `${this.buildMs.toFixed(0)}ms — ${chunks} chunks, ${cells} nav cells patched, ` +
+        this.sites.map((s) => `${s.id}@${s.roofY.toFixed(1)}m`).join(' ')
     );
+    if (this.sites.length < STRIKE_SITES.length) {
+      console.error(
+        `[airstrike] ${STRIKE_SITES.length - this.sites.length} SITE(S) DROPPED — ` +
+          'the level coordinates in src/match/airstrike.js no longer match the map.'
+      );
+    }
     return this;
   }
 
@@ -331,33 +424,56 @@ gl_Position = projectionMatrix * mvPosition;`
 
   /* ------------------------------------------------------------- one site -- */
 
+  /**
+   * Find the roof plane this site's mass stands on, and refuse to build if
+   * there is not one.
+   *
+   * ONE downward ray at one authored point is what let this feature ship
+   * broken: when the map moved under the anchors, the ray answered "0.05 m" —
+   * a perfectly valid height, just the tarmac — and the site built a building
+   * storey in a road with nobody the wiser. So the probe is a small SEARCH,
+   * and a miss is now fatal to the site rather than cosmetic.
+   *
+   * The search is a few dozen raycasts inside the footprint (varying how far in
+   * from the building line and how far along it), taking the highest plane
+   * found. All of it is boot work; nothing here is ever reached again.
+   *
+   * @returns {number} roof height, or NaN when the anchor is not on a building
+   */
+  _findRoof(anchor, u, v, physics) {
+    const p = this._v;
+    let best = NaN;
+    for (const inset of [ROOF_INSET, 4.5, 6.0, 2.0, 7.5]) {
+      for (const along of [0, 2.5, -2.5, 5, -5]) {
+        p.copy(anchor).addScaledVector(u, -inset).addScaledVector(v, along);
+        const h = physics.groundHeight(p.x, p.z, 40);
+        if (Number.isFinite(h) && h >= 3 && !(h <= best)) best = h;
+      }
+    }
+    return best;
+  }
+
   _buildSite(spec, index, world, physics) {
     const rng = this.rng.fork();
+    const kind = spec.kind ?? 'block';
 
     /* ---- frame ------------------------------------------------------- */
     const anchor = world.levelToWorld(spec.level[0], 0, spec.level[1], new THREE.Vector3());
     // The face direction is authored in level space and has to be rotated with
     // the level, like every other gameplay-authored facing in `match`.
     const yaw = Math.atan2(spec.face[0], spec.face[1]) + (world.levelYaw ?? 0);
-    // Roof height, probed INSIDE the footprint. Dropped from 40 m, over everything.
-    const probe = new THREE.Vector3(
-      anchor.x - Math.sin(yaw) * ROOF_INSET,
-      0,
-      anchor.z - Math.cos(yaw) * ROOF_INSET
-    );
-    const roofY = physics.groundHeight(probe.x, probe.z, 40);
-    if (!Number.isFinite(roofY)) {
-      console.warn(`[airstrike] ${spec.id}: nothing under the anchor — skipped`);
-      return null;
-    }
-    if (roofY < 3) {
-      console.warn(
-        `[airstrike] ${spec.id}: roof probe came back at ${roofY.toFixed(2)} m — ` +
-          'the anchor is not on a building. Fix the level coordinates.'
-      );
-    }
     const u = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)); // out over the lane
     const v = new THREE.Vector3(u.z, 0, -u.x); // along the facade
+    // Roof height, probed INSIDE the footprint. Dropped from 40 m, over everything.
+    const roofY = this._findRoof(anchor, u, v, physics);
+    if (!Number.isFinite(roofY)) {
+      console.error(
+        `[airstrike] ${spec.id}: no roof anywhere inside the footprint at level ` +
+          `[${spec.level[0].toFixed(1)}, ${spec.level[1].toFixed(1)}] — SITE DROPPED. ` +
+          'The anchor is not on a building; fix the level coordinates.'
+      );
+      return null;
+    }
     const base = new THREE.Vector3(anchor.x, roofY, anchor.z);
 
     /* ---- where the rubble ends up ------------------------------------ */
@@ -368,7 +484,7 @@ gl_Position = projectionMatrix * mvPosition;`
     moundC.y = Number.isFinite(streetY) ? streetY : world.groundHeight(moundC.x, moundC.z);
     /** Mound footprint: a squashed disc pressed against the building line. */
     const moundR = spec.reach * 0.92;
-    const moundH = 1.55;
+    const moundH = MOUND_H[kind];
 
     /** Where the bomb goes off — at the roof line on the lane side. */
     const blast = new THREE.Vector3().copy(base).addScaledVector(u, 1.2);
@@ -390,12 +506,25 @@ gl_Position = projectionMatrix * mvPosition;`
       from.y = roofY - 1.4;
       const hit = physics.raycast(from, this._v.copy(u).multiplyScalar(-1), 13, physics.MASK.WORLD);
       if (hit?.hit) facadeU = 9 - hit.distance;
+      /**
+       * CLAMPED, because that ray can find the wrong wall.
+       *
+       * It is fired from 9 m out over the lane, and on a narrow lane 9 m out is
+       * INSIDE the building on the other side — the ray then reports a facade
+       * 8.3 m proud of the building line (measured at WEST) and the skin and
+       * balcony get hung in mid-air over the middle of the street. The offset
+       * this is for is a recessed shopfront or a proud pilaster, which is
+       * decimetres; anything past 1.5 m is the ray having found somebody else's
+       * wall, and the authored building line is the better answer.
+       */
+      if (Math.abs(facadeU) > 1.5) facadeU = 0;
       logFacade(spec.id, roofY, facadeU);
     }
 
     /* ---- cut the mass ------------------------------------------------- */
-    const chunks = [[], []]; // by material index
-    for (const part of MASS) {
+    const surfaces = SURFACE_FOR[kind];
+    const chunks = surfaces.map(() => []);
+    for (const part of MASS_FOR[kind]) {
       const shift = FACADE_PARTS.has(part.id) ? facadeU : 0;
       fracture(part, shift, rng, (c) => chunks[part.mat].push(c));
     }
@@ -404,6 +533,10 @@ gl_Position = projectionMatrix * mvPosition;`
       id: spec.id,
       name: spec.name,
       index,
+      kind,
+      /** Per-site blast, so a parapet is not a storey. */
+      radius: spec.radius ?? (kind === 'route' ? RULES.routeStrikeRadius : RULES.airstrikeRadius),
+      damage: spec.damage ?? (kind === 'route' ? RULES.routeStrikeDamage : RULES.airstrikeDamage),
       /** Where the HUD/markers should point: the impact, not the roof. */
       position: ground.clone(),
       blast: blast.clone(),
@@ -415,7 +548,7 @@ gl_Position = projectionMatrix * mvPosition;`
       yaw,
       roofY,
       meshes: [],
-      chunkCount: chunks[0].length + chunks[1].length,
+      chunkCount: chunks.reduce((n, c) => n + c.length, 0),
       /** Cached collision handle + the triangle range it owns in the BVH. */
       proxyId: -1,
       triStart: -1,
@@ -436,12 +569,9 @@ gl_Position = projectionMatrix * mvPosition;`
         uAnim: { value: 1 },
       },
     };
-    site.materials = [
-      this._makeMaterial('plaster', site.uniforms),
-      this._makeMaterial('concrete', site.uniforms),
-    ];
+    site.materials = surfaces.map((name) => this._makeMaterial(name, site.uniforms));
 
-    for (let m = 0; m < 2; m++) {
+    for (let m = 0; m < chunks.length; m++) {
       if (!chunks[m].length) continue;
       site.meshes.push(this._buildMesh(site, chunks[m], m, base, u, v, blast, moundC, rng, physics));
     }
@@ -485,11 +615,15 @@ gl_Position = projectionMatrix * mvPosition;`
     const ax = new THREE.Vector3();
     const tint = new THREE.Color();
 
-    /** Two families of tint per material, so the pile is not one colour. */
-    const palette =
-      matIndex === 0
-        ? [0xc9b294, 0xb9a184, 0xd6c6ab, 0xa8836a]
-        : [0x9a9691, 0x86837e, 0xa7a29a, 0x6e6a64];
+    /**
+     * Two families of tint per material, so the pile is not one colour. Keyed
+     * off the SURFACE, not the slot index: a route site has only one material
+     * and it is the concrete one, so keying off `matIndex === 0` would render
+     * every route mound in render plaster.
+     */
+    const palette = SURFACE_FOR[site.kind][matIndex] === 'plaster'
+      ? [0xc9b294, 0xb9a184, 0xd6c6ab, 0xa8836a]
+      : [0x9a9691, 0x86837e, 0xa7a29a, 0x6e6a64];
 
     for (let i = 0; i < n; i++) {
       const c = chunks[i];
@@ -634,7 +768,7 @@ gl_Position = projectionMatrix * mvPosition;`
       }
     }
     const geo = mergeGeometries(geos);
-    const mesh = new THREE.Mesh(geo, site.materials[1]);
+    const mesh = new THREE.Mesh(geo, site.materials[site.materials.length - 1]);
     mesh.name = `airstrike_${site.id}_rubble_proxy`;
     mesh.visible = false; // it is collision, the chunks are the picture
     mesh.matrixAutoUpdate = false;
@@ -804,8 +938,8 @@ gl_Position = projectionMatrix * mvPosition;`
     //    `audio` all do what they already do for the C4.
     const b = this._blast;
     b.position = site.position;
-    b.radius = RULES.airstrikeRadius;
-    b.damage = RULES.airstrikeDamage;
+    b.radius = site.radius;
+    b.damage = site.damage;
     ctx.events.emit('explosion', b);
 
     // 3. the show. Every one of these writes into a preallocated ring in `fx`.
@@ -817,6 +951,13 @@ gl_Position = projectionMatrix * mvPosition;`
       audio.play('strike_tail', site.position, { level: 1.25, maxDist: 400, gain: 2.2, occlusion: 0 });
       audio.play('strike_rubble', site.mound, { level: 1.1, dur: 3.4, extraDelay: 0.34, maxDist: 220 });
     }
+
+    // 5. one line per strike, so "it never happens" is answerable from a log
+    //    rather than from memory. This is the only console write in the frame.
+    console.info(
+      `[airstrike] IMPACT ${site.id} (${site.kind}) at t=${ctx.time.elapsed.toFixed(1)}s ` +
+        `— ${site.chunkCount} chunks, ${site.damage} dmg / ${site.radius} m, roof ${site.roofY.toFixed(1)} m`
+    );
 
     this._emit('impact', site);
     return true;
@@ -835,7 +976,7 @@ gl_Position = projectionMatrix * mvPosition;`
     const v = site.v;
 
     // The roof burst — the one you actually see, up where the mass is.
-    fx.explosion({ position: b, radius: RULES.airstrikeRadius * 0.62 });
+    fx.explosion({ position: b, radius: site.radius * 0.62 });
     fx.hazeRing(b.x, b.y, b.z, 3.2, 26, 0.55, 2.9);
 
     // Dust boiling out along the facade, both ways, plus one rolling into the
@@ -931,20 +1072,45 @@ gl_Position = projectionMatrix * mvPosition;`
     this._scheduleNext();
   }
 
+  /** True while anything of ours is falling or inbound. */
+  get busy() {
+    return this._pending.length > 0 || this._live.length > 0;
+  }
+
   _scheduleNext() {
     // Never two at once: a second whistle while the first is still falling is
-    // noise, not information.
-    if (this._pending.length || this._live.length) {
+    // noise, not information. `coBusy` is the bomber, so an airstrike and a
+    // bomber run can never be in the air together either.
+    if (this.busy || this.coBusy?.busy) {
       this._next = 4;
       return;
     }
+    if (this._fired >= RULES.airstrikeMaxPerRound) {
+      this._next = Infinity;
+      return;
+    }
+    /**
+     * Weighted pick, route points 2:1 over the map changers.
+     *
+     * The route points are the ones the brief is about — they are what makes
+     * pushing cost something — and there are five of them against three, so an
+     * unweighted draw would still spend a third of a round's strikes on the
+     * three big ones. Weighting is a repeat in the candidate list rather than a
+     * cumulative-weight search: eight entries, boot-free, no allocation beyond
+     * the array this method already built.
+     */
     const free = [];
-    for (const s of this.sites) if (!s.struck) free.push(s);
+    for (const s of this.sites) {
+      if (s.struck) continue;
+      free.push(s);
+      if (s.kind === 'route') free.push(s);
+    }
     if (!free.length) {
       this._next = Infinity;
       return;
     }
     this.call(free[this.rng.u32() % free.length].index);
+    this._fired++;
     const [lo, hi] = RULES.airstrikeInterval;
     this._next = this.rng.range(lo, hi);
   }
@@ -957,6 +1123,7 @@ gl_Position = projectionMatrix * mvPosition;`
   armRound() {
     const [lo, hi] = RULES.airstrikeInterval;
     this._next = RULES.airstrikeFirstDelay + this.rng.range(0, (hi - lo) * 0.5);
+    this._fired = 0;
   }
 
   disarm() {
@@ -1065,7 +1232,7 @@ gl_Position = projectionMatrix * mvPosition;`
  * The boundaries tile the box exactly, so the chunks reassemble with no seam —
  * before the strike this has to look like a wall, not like a stack of blocks.
  */
-function fracture(part, shiftU, rng, emit) {
+export function fracture(part, shiftU, rng, emit) {
   const [dx, dy, dz] = part.size;
   const [nx, ny, nz] = part.cut;
   const bx = splits(nx, dx, rng);
@@ -1088,7 +1255,7 @@ function fracture(part, shiftU, rng, emit) {
 }
 
 /** n+1 boundaries across [-d/2, d/2], interior ones jittered. */
-function splits(n, d, rng) {
+export function splits(n, d, rng) {
   const out = new Float64Array(n + 1);
   const step = d / n;
   out[0] = -d * 0.5;
@@ -1103,7 +1270,7 @@ function splits(n, d, rng) {
  * than a perfect box. One geometry, shared by every chunk in the level — the
  * variety comes from the per-instance scale, rotation, tint and uv offset.
  */
-function chunkGeometry() {
+export function chunkGeometry() {
   const g = new THREE.BoxGeometry(1, 1, 1);
   const p = g.attributes.position.array;
   const uv = g.attributes.uv.array;
@@ -1139,7 +1306,7 @@ function chunkGeometry() {
  * `world` because a subsystem never imports another subsystem's module
  * (ARCHITECTURE.md rule 2) — the same reason `bomb.js` has its own copy.
  */
-function mergeGeometries(list) {
+export function mergeGeometries(list) {
   let vtx = 0;
   let idx = 0;
   for (const g of list) {
@@ -1217,6 +1384,6 @@ function logFacade(id, roofY, facadeU) {
   console.info(`[airstrike] ${id}: roof ${roofY.toFixed(2)} m, facade offset ${facadeU.toFixed(2)} m`);
 }
 
-function clamp(v, lo, hi) {
+export function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
