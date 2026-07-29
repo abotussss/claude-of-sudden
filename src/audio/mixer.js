@@ -179,7 +179,14 @@ export class Mixer {
      * missing some. The per-voice sends below stay as CHARACTER — a blast is
      * still wetter than a magazine catch — they are just all quieter now.
      */
-    this.reverbReturn = gain(actx, 0.42);
+    /**
+     * 0.24 — a SECOND cut. 0.9 -> 0.42 was reported as still too wet, and the
+     * measurement in the block above says why: reverb was carrying about HALF
+     * the level of every near-field sound, so halving the return once took it
+     * from dominant to merely prominent. 0.24 puts the tail at roughly a quarter
+     * of where it started.
+     */
+    this.reverbReturn = gain(actx, 0.24);
     this.reverbReturn.connect(this.worldSum);
     this._irReady = false;
 

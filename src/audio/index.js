@@ -998,7 +998,14 @@ export class AudioSystem {
     const lp = this.field.listenerPos;
     const x = pos?.x ?? lp.x, y = pos?.y ?? lp.y - 1.6, z = pos?.z ?? lp.z;
     const dist = this.field.distanceTo(x, y, z);
-    if (dist > 45) return;
+    /**
+     * 26 m, down from 45. A boot on gravel is not audible at 45 m across a
+     * firefight, and on a 114x141 m map with thirty men walking it was 45 m of
+     * radius admitting most of the roster at once — measured as 50 of 72
+     * emitters held by foley. What you actually need to hear is the man about to
+     * come round your corner.
+     */
+    if (dist > 26) return;
     // Within arm's reach of the listener it is the local player's own foot.
     const own = dist < 2.6;
     if (!own && !this._allow('step')) return;

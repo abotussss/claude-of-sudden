@@ -260,12 +260,75 @@ export class SpatialField {
    *
    * opts: { x,y,z, bus, send, priority, endTime, occlusion, dist, atten }
    */
+  /**
+   * PER-BUS QUOTA. No one bus may hold more than its share of the field.
+   *
+   * MEASURED in a live 15v15: of 72 emitters, **50 were foley** and only 14 were
+   * weapons. The flood is not gunfire — it is footsteps, impacts, casings and
+   * bodyfalls from thirty men, and I spent a pass tightening the gunfire budget
+   * on the assumption that shots were the problem. They were not.
+   *
+   * A global pool with a global steal rule cannot express "a firefight must
+   * always be audible over the boots", because the boots outnumber the shots
+   * three to one and win on sheer arrival rate. A quota can: foley may hold 60%
+   * of the field and no more, so 29 slots are always there for weapons, voice
+   * and ambience however many people are walking.
+   */
+  _busCap(bus) {
+    /**
+     * EVERY bus has a share, not just foley.
+     *
+     * Capping foley alone was measured and is wrong: it freed the slots and
+     * WEAPONS immediately took 42 to 50 of 72 while foley collapsed to 1, so the
+     * footsteps went inaudible again and 145 voices started being DROPPED rather
+     * than stolen — a dropped voice never plays at all, which is strictly worse.
+     * Moving the shortage around is not fixing it.
+     *
+     * The pool is simply smaller than thirty men need, so the only honest answer
+     * is to decide what each category is worth and guarantee it. A firefight
+     * needs to be heard over the boots (weapons 45%), the boots need to be heard
+     * at all because they are how you find someone (foley 40%), callouts are how
+     * you read the fight (voice 12%), and ambience is mostly `tracked` beds that
+     * the steal loop already refuses to touch (8%).
+     *
+     * They sum over 100% on purpose: a bus only cannibalises itself once it is
+     * over ITS cap, so an idle category's slots stay available to the others.
+     */
+    const n = this.emitters.length;
+    switch (bus) {
+      case 'weapons': return Math.floor(n * 0.45);
+      case 'foley': return Math.floor(n * 0.4);
+      case 'voice': return Math.max(4, Math.floor(n * 0.12));
+      case 'ambience': return Math.max(4, Math.floor(n * 0.08));
+      default: return n;
+    }
+  }
+
+  _busLoad(bus) {
+    let n = 0;
+    for (let i = 0; i < this.emitters.length; i++) {
+      const e = this.emitters[i];
+      if (!e.free && e.busName === bus) n++;
+    }
+    return n;
+  }
+
   acquire(opts) {
     const now = this.actx.currentTime;
     let em = null;
-    for (let i = 0; i < this.emitters.length; i++) {
-      const e = this.emitters[i];
-      if (e.free) { em = e; break; }
+    /**
+     * Over quota, this bus steals from ITSELF rather than from the field. The
+     * `em` search below is skipped so the steal path runs, and the steal is
+     * restricted to the same bus — a footstep can evict a quieter footstep, but
+     * it can no longer evict the shot that is about to kill you.
+     */
+    const bus = opts.bus ?? 'foley';
+    const overQuota = this._busLoad(bus) >= this._busCap(bus);
+    if (!overQuota) {
+      for (let i = 0; i < this.emitters.length; i++) {
+        const e = this.emitters[i];
+        if (e.free) { em = e; break; }
+      }
     }
     if (!em) {
       // Steal the least important voice that is closest to finishing.
@@ -274,6 +337,8 @@ export class SpatialField {
       for (let i = 0; i < this.emitters.length; i++) {
         const e = this.emitters[i];
         if (e.tracked) continue; // never steal a bed/loop
+        // Over quota: only cannibalise your own bus. @see _busCap
+        if (overQuota && e.busName !== bus) continue;
         const score = e.priority * 4 + Math.max(0, e.endTime - now);
         if (score < worstScore) { worstScore = score; worst = e; }
       }
