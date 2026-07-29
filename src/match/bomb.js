@@ -257,7 +257,9 @@ export class Bomb {
       return 'detonate';
     }
 
-    // Blink and beep accelerate as the fuse burns: 1 Hz at 40 s, ~7 Hz at the end.
+    // Blink and beep accelerate as the fuse burns, expressed as a fraction of
+    // `RULES.bombTime` rather than against a literal: 1 Hz on the plant, ~7 Hz
+    // on the last second, whatever the fuse is set to.
     const t = 1 - this.fuse / RULES.bombTime;
     const hz = 1 + t * t * 6.2;
     this._blink += dt * hz;

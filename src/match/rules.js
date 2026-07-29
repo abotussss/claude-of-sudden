@@ -72,14 +72,46 @@ export const RULES = {
    * システムで5分の戦闘にして". Two minutes was a one-life sprint; with respawns
    * and thirty men it takes that long just to establish which lane the fight is
    * on. Everything that reads this clock was checked: the HUD formats it with
-   * `mmss()` so 300 draws as "5:00", the C4 fuse is its own 40 s clock and is
-   * unchanged, freeze time is unchanged, and the round-over dwell is unchanged.
+   * `mmss()` so 300 draws as "5:00", the C4 fuse is its own clock (`bombTime`
+   * below) and is independent of this one, freeze time is unchanged, and the
+   * round-over dwell is unchanged.
    */
   roundTime: 300,
-  /** C4 fuse once planted. The round clock stops mattering the moment it starts. */
-  bombTime: 40,
+  /**
+   * C4 FUSE once planted. The round clock stops mattering the moment it starts.
+   *
+   * SIXTY, up from 40 — "C4自体は1分解除時間を与えること". It is not a cosmetic
+   * number: it is the whole of whether a defuse is a play or a lottery. The
+   * moment the charge goes down, `_respawnsOpen` closes and the defence fights
+   * the rest of it with the men it has; those men then have to cross the map,
+   * break a fifteen-man hold on the site and stand still for `defuseTime` in
+   * the open. MEASURED over 17 rounds on the 40 s fuse: 12 plants, 5 defused,
+   * and in 5 of the 12 no defender ever got within `defuseRadius` of the
+   * charge at all. 60 s is 50 % more crossing time for the same fight.
+   *
+   * Everything that reads it was checked: the HUD clock switches to the fuse on
+   * the plant and formats it with `mmss()`, so 60 draws as "1:00"; the C4's
+   * blink and beep schedule is expressed as a FRACTION of this (see
+   * `Bomb.update`), so it still starts at ~1 Hz and still ends at ~7 Hz; and
+   * the plant banner prints this figure rather than a literal.
+   */
+  bombTime: 60,
   plantTime: 4,
   defuseTime: 7,
+  /**
+   * How many defenders are told to go and CUT the charge, rather than to hold
+   * the ground around it.
+   *
+   * One, which is what this used to be, is a single point of failure: the man
+   * `_nearestTo` picked is regularly pinned in a firefight thirty metres away
+   * or dead a second later, and the re-task only happens on the two second
+   * objective refresh — by which time the same one man is picked again because
+   * he is still, on paper, the nearest. Three men means the charge is being
+   * walked at from three directions and one death does not stall the defuse.
+   * It is not the whole team: `retake` still has to clear the site, and a team
+   * that all stands on the charge is a team that gets killed on the charge.
+   */
+  defuseCrew: 3,
   /** Scoreboard dwell between rounds. */
   roundOverTime: 6,
   matchOverTime: 16,

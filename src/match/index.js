@@ -206,6 +206,9 @@ export class MatchSystem {
     this._objectiveTimer = 0;
     /** The attacker tasked with fetching a dropped charge. */
     this._fetcher = null;
+    /** The defenders told to cut the charge. Reused; see `_nearestInto`. */
+    this._crew = [];
+    this._crewDist = [];
     /** Where each side comes from, so a held position is actually watched. */
     this._approach = [new THREE.Vector3(), new THREE.Vector3()];
 
@@ -632,11 +635,25 @@ export class MatchSystem {
 
     // ---- defenders ----------------------------------------------------
     if (armed) {
-      // One man works the charge; the rest clear and cover the other entries.
-      const defuser = this._nearestTo(this._botsByTeam[def], this.bomb.position);
+      /**
+       * A CREW works the charge; the rest clear and cover the other entries.
+       *
+       * This used to be one man — `_nearestTo`, singular — and one man is a
+       * single point of failure against fifteen attackers holding the site:
+       * he gets shot on the approach, and the two second objective refresh
+       * then picks the same profile of man again while the fuse burns. See
+       * `RULES.defuseCrew`. The rest are `retake`, which is what actually
+       * makes the defuse possible: somebody has to be shooting at the hold.
+       */
+      const crew = this._nearestInto(
+        this._botsByTeam[def],
+        this.bomb.position,
+        RULES.defuseCrew,
+        this._crew
+      );
       for (const a of this._botsByTeam[def]) {
         if (!a.alive) continue;
-        if (a === defuser) a.setObjective('defuse', this.bomb.position, this.bomb.site);
+        if (crew.includes(a)) a.setObjective('defuse', this.bomb.position, this.bomb.site);
         else a.setObjective('retake', this.bomb.position, this.bomb.site, defFace);
       }
     } else {
@@ -701,6 +718,39 @@ export class MatchSystem {
   _otherSite(site) {
     for (const s of this.sites) if (s !== site) return s;
     return site;
+  }
+
+  /**
+   * The `n` live actors of `list` closest to `point`, written into `out`.
+   *
+   * Insertion into a preallocated array rather than a sort: `n` is three and
+   * the list is fifteen, so this is a couple of dozen comparisons and — the
+   * part that matters — it allocates nothing, which a `.sort().slice()` on an
+   * objective refresh that runs every two seconds would not manage.
+   */
+  _nearestInto(list, point, n, out) {
+    out.length = 0;
+    const d = this._crewDist ?? (this._crewDist = []);
+    d.length = 0;
+    for (const a of list) {
+      if (!a.alive) continue;
+      const dist = a.position.distanceToSquared(point);
+      let i = out.length;
+      while (i > 0 && d[i - 1] > dist) i--;
+      if (i >= n) continue;
+      // Shift the tail down by one and drop whatever falls off the end. No
+      // `splice`: splice returns a fresh array of what it removed.
+      const last = Math.min(out.length, n - 1);
+      for (let k = last; k > i; k--) {
+        out[k] = out[k - 1];
+        d[k] = d[k - 1];
+      }
+      // Writing past the end grows both arrays by exactly one, which is the
+      // only growth there is; they never exceed `n`.
+      out[i] = a;
+      d[i] = dist;
+    }
+    return out;
   }
 
   /** @param {boolean} freeOnly  skip anyone currently engaged */
