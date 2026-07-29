@@ -906,8 +906,14 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
     // the floor the flight LEAVES: the approach and the first third of the run
     // (past that the treads are already above furniture height)
     if (floorClear[g.floor]) {
+      // THE WHOLE RUN, not the first third of it. The first attempt stopped at
+      // 35 % on the theory that past there the treads are above furniture
+      // height — which is true of the treads and false of the man standing on
+      // them. `floorcheck --climb` found W1's upper flight stopped dead 1.26 m
+      // up, at a wardrobe standing beside tread six. The staircase occupies
+      // that floor area; nothing else belongs in it.
       chain(floorClear[g.floor], g.ox - ax * 1.5, g.oz - az * 1.5,
-        g.ox + ax * g.D * 0.35, g.oz + az * g.D * 0.35, r);
+        g.ox + ax * (g.D + 0.3), g.oz + az * (g.D + 0.3), r);
     }
     // the floor it ARRIVES at: the landing, and the walk-off in front of it
     const up = floorClear[g.floor + 1];
