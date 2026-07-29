@@ -169,6 +169,17 @@ const STRIKE_SITES = [
 const ROOF_INSET = 3.0;
 
 /**
+ * Metres of the lane a settled mound must leave walkable.
+ *
+ * The nav agent's radius is well under a metre, so this is not a clearance
+ * figure — it is a GAMEPLAY one. A lane you can only file through in single
+ * file is a lane the defence holds with one man, and the point of dropping a
+ * building into the attackers' route is to make it cost something, not to close
+ * it. 3.6 m is about two men wide.
+ */
+const LANE_CLEAR = 3.6;
+
+/**
  * The mass that comes down, in the site's own frame:
  *   +u  out over the lane      +v  along the facade      +y  up from the roof
  *
@@ -247,6 +258,11 @@ export class Airstrike {
   constructor(ctx, opts = {}) {
     this.ctx = ctx;
     this.rng = opts.rng ?? ctx.rng.fork();
+    /**
+     * The spawn/target pairs `tools/navcheck.mjs` asserts on, handed in by
+     * `match` because `match` owns the layout. Used once, by `_verifyRoutes`.
+     */
+    this._routes = opts.routes ?? [];
     this.enabled = true;
     this.sites = [];
     this.ready = false;
@@ -309,6 +325,7 @@ export class Airstrike {
     // Nav patches are solved LAST, because they need the proxies in the BVH.
     const ai = ctx.peek('ai');
     for (const s of this.sites) this._bakeNavPatch(s, ai, physics);
+    this._verifyRoutes(ai);
 
     this.ready = this.sites.length > 0;
     this.buildMs = performance.now() - t0;
@@ -403,15 +420,62 @@ export class Airstrike {
     }
     const base = new THREE.Vector3(anchor.x, roofY, anchor.z);
 
+    /* ---- how wide is the lane it falls into? --------------------------- */
+    /**
+     * A STRIKE MAY NOT SEAL A LANE, and `reach` on its own cannot promise that.
+     *
+     * The mound is a disc centred `reach * 0.52` out from the wall with radius
+     * `reach * 0.92`, so it occupies `reach * 1.44` metres of the street — 6.3 m
+     * at EAST. `tools/navcheck.mjs` run WITH every strike settled caught what
+     * that does on a lane narrower than about ten metres: attack spawn 10 (and
+     * on some dressing seeds spawn 1 as well) lost its route to site B entirely,
+     * three boots out of three. From the outside that is a bot walking into a
+     * rubble pile and standing there, which is the exact failure navcheck was
+     * written for.
+     *
+     * So the lane is MEASURED — one ray across it at chest height — and the
+     * mound is scaled to leave `LANE_CLEAR` metres of it walkable. It is the
+     * same shape, just never wider than the street it is in.
+     */
+    const lane = (() => {
+      /**
+       * The ray has to START IN THE STREET, and that is the whole subtlety.
+       *
+       * Fired from just off the building line it starts at ROOF height — the
+       * anchor is on the facade plane and half a metre out is still over the
+       * parapet — so it sails over everything and reports a 40 m lane on a 12 m
+       * street. That is exactly what EAST did, which is why EAST was the one
+       * site that sealed its lane. So step out until the ground under the ray
+       * is street rather than roof, then measure from there.
+       */
+      for (const out of [2.5, 4.0, 6.0, 8.0]) {
+        const p = this._v.copy(base).addScaledVector(u, out);
+        const g = physics.groundHeight(p.x, p.z, roofY + 2);
+        if (!Number.isFinite(g) || g > roofY - 2.5) continue; // still on the roof
+        p.y = g + 1.2;
+        const hit = physics.raycast(p, u, 40, physics.MASK.WORLD);
+        return (hit?.hit ? hit.distance : 40) + out;
+      }
+      return 40;
+    })();
+
     /* ---- where the rubble ends up ------------------------------------ */
-    const moundC = new THREE.Vector3()
-      .copy(base)
-      .addScaledVector(u, spec.reach * 0.52);
+    let moundR = spec.reach * 0.92;
+    let moundOut = spec.reach * 0.52;
+    {
+      const maxOut = Math.max(1.4, lane - LANE_CLEAR);
+      const span = moundOut + moundR;
+      if (span > maxOut) {
+        const k = maxOut / span;
+        moundR *= k;
+        moundOut *= k;
+      }
+    }
+    const moundC = new THREE.Vector3().copy(base).addScaledVector(u, moundOut);
     const streetY = physics.groundHeight(moundC.x, moundC.z, roofY + 2);
     moundC.y = Number.isFinite(streetY) ? streetY : world.groundHeight(moundC.x, moundC.z);
-    /** Mound footprint: a squashed disc pressed against the building line. */
-    const moundR = spec.reach * 0.92;
     const moundH = MOUND_H[kind];
+    logLane(spec.id, lane, moundOut + moundR);
 
     /** Where the bomb goes off — at the roof line on the lane side. */
     const blast = new THREE.Vector3().copy(base).addScaledVector(u, 1.2);
@@ -481,6 +545,11 @@ export class Airstrike {
       triStart: -1,
       triEnd: -1,
       nav: null,
+      /**
+       * May this site's mound become solid ground? Cleared by `_verifyRoutes`
+       * when the mound would cost somebody a route. Visual-only from then on.
+       */
+      blocking: true,
       struck: false,
       t: -1,
       baked: false,
@@ -817,6 +886,74 @@ export class Airstrike {
     if (obj) obj.mask = m;
   }
 
+  /**
+   * PROVE, AT BOOT, THAT NO SITE CAN COST ANYBODY A ROUTE.
+   *
+   * `tools/navcheck.mjs` asserts that every spawn of both teams can A* to every
+   * bomb site and hold point — and it boots, measures and exits, so it only
+   * ever sees the INTACT map. That is a real hole: the mounds are the one thing
+   * in the game that changes navigation mid-round, and they are exactly what
+   * navcheck was written to catch. Running the gate with the strikes settled is
+   * how EAST was caught sealing the B lane.
+   *
+   * So the gate is inside the feature now. `match` hands us the same
+   * spawn/target pairs navcheck uses; a site that costs a route the intact map
+   * had loses its ability to block. `blocking = false` means the rubble still
+   * falls, still reads and still hurts — the mound proxy is simply never made
+   * solid and the nav patch never applied. The map's navigation is then
+   * provably no worse than the one navcheck signed off.
+   *
+   * IT HAS TO BE CUMULATIVE, and testing one site at a time is the version of
+   * this that does not work. Measured: with each of the eight applied ALONE,
+   * all 90 routes survive every time; with all eight applied together, attack
+   * spawn 10 loses site B on four boots out of four. Two mounds a lane apart
+   * each leave a way past and together leave none. So the sites are walked in
+   * order and each is judged against the ones already KEPT — which is the state
+   * the map is actually in late in a round, when five have come down.
+   *
+   * A* only reads the grid, so this needs no collision change and no rebuild.
+   * It costs about 0.6 s at boot, inside the loading state, and buys the one
+   * invariant nothing else in the repo can check.
+   */
+  _verifyRoutes(ai) {
+    const grid = ai?.grid;
+    const routes = this._routes;
+    if (!grid || !routes?.length) return;
+    const t0 = performance.now();
+    const out = [];
+    const reach = () => {
+      let n = 0;
+      for (const [from, to] of routes) if (grid.findPath(from, to, out) > 0) n++;
+      return n;
+    };
+    const intact = reach();
+    const kept = [];
+    for (const site of this.sites) {
+      if (!site.nav) continue;
+      this._applyNav(site, true);
+      const withIt = reach();
+      if (withIt >= intact) {
+        kept.push(site);
+        continue;
+      }
+      this._applyNav(site, false);
+      site.blocking = false;
+      console.error(
+        `[airstrike] ${site.id}: on top of ${kept.map((s) => s.id).join('+') || 'nothing'}, its ` +
+          `mound costs ${intact - withIt} of ${routes.length} spawn/target routes — COLLISION ` +
+          'AND NAV DISABLED for this site. The rubble still falls; it just cannot be stood on ' +
+          'or walked round. Widen the lane or lower `reach`.'
+      );
+    }
+    // Back to the intact map — the round has not started.
+    for (const site of kept) this._applyNav(site, false);
+    console.info(
+      `[airstrike] route gate: ${intact}/${routes.length} routes intact, ` +
+        `${kept.length}/${this.sites.length} sites keep their collision with ALL of them down ` +
+        `(${(performance.now() - t0).toFixed(0)}ms)`
+    );
+  }
+
   _applyNav(site, solid) {
     const n = site.nav;
     if (!n) return;
@@ -1092,8 +1229,10 @@ export class Airstrike {
       mesh.userData.owNoShadow = false;
       mesh.userData.owNoPrepass = false;
     }
-    this._setProxySolid(site, true);
-    this._applyNav(site, true);
+    if (site.blocking) {
+      this._setProxySolid(site, true);
+      this._applyNav(site, true);
+    }
     site.uniforms.uAnim.value = 0;
     this._emit('settled', site);
   }
@@ -1103,7 +1242,7 @@ export class Airstrike {
     this.disarm();
     this._live.length = 0;
     for (const site of this.sites) {
-      if (site.struck) {
+      if (site.struck && site.blocking) {
         this._setProxySolid(site, false);
         this._applyNav(site, false);
       }
@@ -1307,6 +1446,13 @@ function probeCell(g, phys, ix, iz) {
 }
 
 /** Boot diagnostics: if either number looks wrong the site is in the wrong place. */
+function logLane(id, lane, span) {
+  console.info(
+    `[airstrike] ${id}: lane ${lane.toFixed(1)} m, mound reaches ${span.toFixed(1)} m into it ` +
+      `(${(lane - span).toFixed(1)} m left walkable)`
+  );
+}
+
 function logFacade(id, roofY, facadeU) {
   console.info(`[airstrike] ${id}: roof ${roofY.toFixed(2)} m, facade offset ${facadeU.toFixed(2)} m`);
 }

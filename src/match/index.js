@@ -178,7 +178,24 @@ export class MatchSystem {
      * is about to be theirs — so each one's scheduler stands down while the
      * other has something inbound.
      */
-    this.airstrike = new Airstrike(ctx, { rng: this.rng.fork() }).build();
+    /**
+     * The strike's own copy of `tools/navcheck.mjs`'s invariant.
+     *
+     * navcheck asserts every spawn of both sides can A* to every site and hold
+     * point, and it measures the INTACT map — which is the one state the mounds
+     * are guaranteed not to be in. Handing the pairs to `Airstrike.build()`
+     * lets it run the same assertion per site with that site's nav patch
+     * applied, at boot, and disable any mound that would cost a route. See
+     * `Airstrike._verifyRoutes`.
+     */
+    const navRoutes = [];
+    for (const site of this.sites) {
+      for (const kind of ['attack', 'defend']) {
+        for (const sp of this.spawns[kind]) navRoutes.push([sp.position, site.position]);
+      }
+      for (const sp of this.spawns.defend) navRoutes.push([sp.position, site.hold]);
+    }
+    this.airstrike = new Airstrike(ctx, { rng: this.rng.fork(), routes: navRoutes }).build();
     if (patcher) for (const site of this.airstrike.sites) for (const m of site.materials) patcher.patch(m);
     this.bomber = new Bomber(ctx, { rng: this.rng.fork() }).build();
     this.airstrike.coBusy = this.bomber;
