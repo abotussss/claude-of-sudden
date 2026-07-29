@@ -182,6 +182,24 @@ export class AiSystem {
      *  rotating offset so the ration is round-robin. Without that, no ration is
      *  large enough — the tail of the array is starved every frame regardless. */
     this.pathsPerFrame = ctx.has('match') ? 9 : 2;
+    /**
+     * THE RATION IS REALLY A MILLISECOND BUDGET, and a solve count is only a
+     * proxy for it. That proxy broke the moment the level changed size: the
+     * table above was measured on a 221x221 grid at 0.33 ms a solve, and when
+     * `world` scaled the map by 1.5 the grid became 328x329 with 86k walkable
+     * cells and a solve became 1.50 ms — same ration, 9.76 ms a frame of A*,
+     * and the AI subsystem's mean went from 5.5 ms to 12.6 ms without a line of
+     * this file changing.
+     *
+     * So the count is now a CAP and this is the actual budget: the effective
+     * ration each frame is `pathMsBudget / (measured cost of a solve)`, clamped
+     * into 3..pathsPerFrame. `_pathCostMs` is an exponential mean maintained by
+     * `requestPath`, so it costs one multiply-add per solve and needs no
+     * knowledge of the map at all. A bigger level automatically buys fewer
+     * solves per frame rather than silently costing four times as much.
+     */
+    this.pathMsBudget = 4.5;
+    this._pathCostMs = 0.4;
     this.stats.pathsDeferred = 0;
     /**
      * CORPSE BUDGET. With one life a round there were at most 30 bodies on the
@@ -1064,8 +1082,13 @@ export class AiSystem {
     // `match` flips playerTeam at the half; hostile and friendly swap with it.
     if (this._rimTeam !== this.playerTeam) this._applyTeamRims();
 
-    // Per-frame A* budget: see requestPath().
-    this._pathBudget = this.pathsPerFrame;
+    // Per-frame A* budget: a millisecond allowance turned into a solve count at
+    // whatever a solve costs on THIS level. See `pathMsBudget`.
+    this._pathBudget = Math.max(
+      3,
+      Math.min(this.pathsPerFrame, Math.round(this.pathMsBudget / Math.max(0.06, this._pathCostMs)))
+    );
+    this.stats.pathBudget = this._pathBudget;
     this._updateRelevance(ctx);
 
     for (const s of this.squads) s.update(dt);
@@ -1227,7 +1250,13 @@ export class AiSystem {
       return -1;
     }
     this._pathBudget--;
-    return this.grid.findPath(from, dest, out);
+    const t0 = performance.now();
+    const n = this.grid.findPath(from, dest, out);
+    // What a solve costs on this level, as an exponential mean. One multiply-add
+    // per solve, and it is what turns `pathMsBudget` into a ration — see there.
+    this._pathCostMs += (performance.now() - t0 - this._pathCostMs) * 0.05;
+    this.stats.pathCostMs = this._pathCostMs;
+    return n;
   }
 
   /** Unit vector pointing AT the sun, however the sky exposes itself. */
