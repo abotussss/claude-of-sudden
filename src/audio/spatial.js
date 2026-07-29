@@ -30,7 +30,24 @@ import { airCutoff, clamp, gain, biquad } from './dsp.js';
  * headroom so a genuine four-way firefight is not fighting the pool as well.
  * Each emitter is a panner plus three filters and a gain, built once at boot.
  */
-const MAX_EMITTERS = 48;
+/**
+ * 72, up from 48, which was up from 40.
+ *
+ * Sized against the ROSTER each time, and the roster is now fifteen a side.
+ * MEASURED in a live 15v15 match: with the budgets retuned (see `_rate` and the
+ * 60 m shot cull in index.js) the field still sat at 48/48 with 429 voices
+ * stolen in two minutes — better than the 818 before the retune, but pinned is
+ * pinned, and a pinned field is what the player hears as the effects
+ * disappearing. Thirty actors need more slots than thirteen; no amount of
+ * budgeting turns 48 into enough when the map is 114x141 m and half of it is
+ * shooting.
+ *
+ * Emitters are Web Audio node chains, built once and recycled. They cost graph
+ * nodes on the audio thread, not frame time on the main one, which is why this
+ * is the cheap half of the fix and the budgets above are the important half —
+ * raising this alone would just buy a slightly later collapse.
+ */
+const MAX_EMITTERS = 72;
 
 /** Reference distance for the attenuation curve, in metres. */
 const REF = 2.0;

@@ -170,7 +170,22 @@ export class AudioSystem {
      * The player's OWN weapon is not in this table on purpose — it goes through
      * `_playDry`, head-locked, outside the spatial pool entirely.
      */
-    this._rate = { shot: 8, impact: 6, step: 4, shell: 3, whizz: 3, reload: 4, bodyfall: 3 };
+    /**
+     * RE-BUDGETED FOR FIFTEEN A SIDE.
+     *
+     * The comment under `_onFire` describes this exact failure being fixed once
+     * already, for 7v7: the spatial field pinned at capacity, thousands of
+     * voices stolen, and from the player's seat "the audio glitches and then
+     * goes away". It came back the moment the roster went to 15v15 — MEASURED in
+     * a live match, the 48-emitter field sat at 48/48 with 818 voices stolen
+     * inside two minutes, against 0 stolen at 7v7.
+     *
+     * Of course it did: the three rules that fixed it were sized against
+     * THIRTEEN actors on a 76x94 m map. There are thirty now, on 114x141 m.
+     * Eight remote shots a second was one every 1.6 shooters; it is now one
+     * every 3.75, so the same wall of noise costs 2.3x the slots.
+     */
+    this._rate = { shot: 5, impact: 5, step: 4, shell: 2, whizz: 2, reload: 4, bodyfall: 2 };
     this._rateNext = { shot: 0, impact: 0, step: 0, shell: 0, whizz: 0, reload: 0, bodyfall: 0 };
     this._lastBarkTime = -99;
     this._lastEnemyFire = -99;
@@ -753,7 +768,14 @@ export class AudioSystem {
        *      longer steal the slot from a footstep at 3 m
        */
       if (!this._allow('shot')) return;
-      if (dist > 80) return;
+      /**
+       * 60 m, down from 80. Rule 2 above says distant volleys are `ambience`'s
+       * job and a single crack from across the map is not information — that
+       * argument gets STRONGER as the map grows, not weaker: 80 m was 85% of the
+       * old map's length and is 57% of this one, so the same rule now admits far
+       * more shooters. 60 m keeps every shot that is tactically about you.
+       */
+      if (dist > 60) return;
       const shotPriority = clamp(0.95 - dist * 0.006, 0.4, 0.95);
       // One upward ray from the muzzle decides whether this shot is a rifle in
       // a room or a rifle in the street. See `_wetnessAt`.
@@ -987,7 +1009,15 @@ export class AudioSystem {
       occlusion: own ? 0 : undefined,
       // Your own webbing and sling are on your chest, not across the street.
       gear: own ? (gait === 'crouch' ? 0.3 : gait === 'walk' ? 0.45 : 0.9) : undefined,
-    }, 'foley', own ? 0.85 : 0.4);
+      /**
+       * YOUR OWN FOOTSTEPS OUTRANK EVERYTHING. At 0.85 they lost to any remote
+       * shot inside ~20 m (0.95 falling at 0.006/m), and with thirty shooters
+       * that is continuous — which is precisely why the reported symptom was
+       * "the sound effects are gone" rather than "the sound is muddy". A sound
+       * made by your own body, 0 m from the listener, is the one thing in the
+       * mix that must never be evicted.
+       */
+    }, 'foley', own ? 0.99 : 0.4);
   }
 
   /**
