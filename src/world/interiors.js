@@ -358,30 +358,44 @@ function dressWalls(A, rng, r) {
       );
     }
 
-    // ---- objects standing against the skirting ------------------------------
+    /**
+     * ---- objects standing against the skirting ---------------------------
+     *
+     * Three of these are SOLID (a crate, a cardboard box and a wooden drum —
+     * see `collide` in props.js), and this loop drops them anywhere along any
+     * wall of any room, which includes the 1.2 m of wall a doorway is cut out
+     * of. `throughcheck` went from 21/21 exits to 17/21 on the strength of it:
+     * the anchor cell just inside a door found itself in a three-cell pocket
+     * with a drum across the threshold. Route them the way everything else in
+     * this file that can seal a room is routed, and drop the ones with nowhere
+     * to go — a shop with four sacks against the wall instead of five is not a
+     * worse shop.
+     */
     const nBase = rng.int(2, 5);
     for (let i = 0; i < nBase; i++) {
       const bt = rng.range(-half, half);
       const [bx, bz] = at(s, bt, rng.range(0.18, 0.42));
-      A.put(
-        rng.pick([
-          'sandbag_a',
-          'sandbag_b',
-          'crate_b',
-          'box_card_a',
-          'box_card_b',
-          'bucket',
-          'jerry_can',
-          'tyre_small',
-          'barrel_wood',
-        ]),
-        bx,
-        y + 0.01,
-        bz,
-        rng.float() * 6.28,
-        rng.range(0.8, 1.05),
-        [1, 1.2, 1]
-      );
+      const id = rng.pick([
+        'sandbag_a',
+        'sandbag_b',
+        'crate_b',
+        'box_card_a',
+        'box_card_b',
+        'bucket',
+        'jerry_can',
+        'tyre_small',
+        'barrel_wood',
+      ]);
+      const bry = rng.float() * 6.28;
+      const bs = rng.range(0.8, 1.05);
+      let px = bx, pz = bz;
+      if (A.isSolid(id)) {
+        const sp = shiftClear(r, bx, bz, x0 + 0.25, z0 + 0.25, x1 - 0.25, z1 - 0.25, 0.4);
+        if (!sp) continue;
+        px = sp[0];
+        pz = sp[1];
+      }
+      A.put(id, px, y + 0.01, pz, bry, bs, [1, 1.2, 1]);
     }
 
     // ---- swept dust and plaster fall in the junction ------------------------
@@ -589,22 +603,22 @@ function furnishShop(A, rng, r, cx, cz, w, d, m) {
       const sz = z0 + 0.8 + i * 1.35;
       if (sz > z1 - 0.7) break;
       if (rng.float() < 0.25) continue;
-      A.put(
-        'shelf',
-        cx + sx * (w / 2 - 0.22),
-        y,
-        sz,
-        sx > 0 ? -Math.PI / 2 : Math.PI / 2,
-        rng.range(0.92, 1.08),
-        [1, rng.range(0.8, 1.4), 1]
-      );
+      // A shelf unit is solid now, and a run of them down the side wall of a
+      // shop stands across whatever door that wall has. Same treatment as the
+      // counter and the crate stack: it moves.
+      const shx = cx + sx * (w / 2 - 0.22);
+      const sh = shiftClear(r, shx, sz, x0 + 0.3, z0 + 0.4, x1 - 0.3, z1 - 0.4, 0.4);
+      const shScale = rng.range(0.92, 1.08);
+      const shMask = rng.range(0.8, 1.4);
+      if (!sh) continue;
+      A.put('shelf', sh[0], y, sh[1], sx > 0 ? -Math.PI / 2 : Math.PI / 2, shScale, [1, shMask, 1]);
       // goods on the shelves
       for (let k = 0; k < 3; k++) {
         A.put(
           rng.pick(['box_card_b', 'bottle', 'can']),
-          cx + sx * (w / 2 - 0.24) + rng.range(-0.1, 0.1),
+          sh[0] + rng.range(-0.1, 0.1),
           y + 0.25 + k * 0.55,
-          sz + rng.range(-0.35, 0.35),
+          sh[1] + rng.range(-0.35, 0.35),
           rng.float() * 6.28,
           rng.range(0.7, 1.1),
           [1, 1.2, 1]
@@ -628,13 +642,16 @@ function furnishShop(A, rng, r, cx, cz, w, d, m) {
       [1, 1.2, 1]
     );
   }
-  A.put('barrel_wood', x1 - 0.6, y, z0 + 0.7, rng.float() * 6.28, 1, [1, 1.2, 1]);
+  // Solid since props.js declared it so, therefore routed like everything else
+  // in here that can stand in a doorway.
+  const bw = shiftClear(r, x1 - 0.6, z0 + 0.7, x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, 0.4);
+  const bwRy = rng.float() * 6.28;
+  if (bw) A.put('barrel_wood', bw[0], y, bw[1], bwRy, 1, [1, 1.2, 1]);
   // Table and chair — a 1.0 x 0.8 collision box, so it moves off the route too.
   const tb = shiftClear(r, cx - w * 0.28, cz - d * 0.28, x0 + 0.7, z0 + 0.7, x1 - 0.7, z1 - 0.7, 0.5);
   if (tb) {
     A.put('table_small', tb[0], y, tb[1], rng.range(-0.4, 0.4), 1, [1, 1, 1]);
     A.put('chair', tb[0] + 0.7, y, tb[1] + d * 0.08, rng.range(2, 4), 1, [1, 1.2, 1]);
-    A.box('wood', tb[0], y + 0.4, tb[1], 1.0, 0.8, 0.8);
   }
 }
 
@@ -664,14 +681,33 @@ function furnishLiving(A, rng, r, cx, cz, w, d, m) {
   const cab = shiftClear(r, x1 - 0.35, cz + rng.range(-0.6, 0.6), x1 - 0.55, z0 + 0.6, x1 - 0.3, z1 - 0.6, 0.5);
   if (cab) {
     A.put('cabinet', cab[0], y, cab[1], -Math.PI / 2, 1, [1, 1, 1]);
-    A.box('wood', cab[0], y + 0.6, cab[1], 0.5, 1.2, 0.9);
   }
-  A.put('table_small', cx + 0.4, y, cz - 0.8, rng.range(0, 0.4), 1, [1, 1, 1]);
-  A.put('chair', cx - 0.8, y, cz - 1.2, rng.range(1.5, 2.5), 1, [1, 1.2, 1]);
-  A.put('chair', cx + 1.4, y, cz - 0.4, rng.range(-1.5, -0.5), 1, [1, 1.2, 1]);
-  // stuff on the small table
-  A.put('bottle', cx + 0.4, y + 0.74, cz - 0.8, 0, 1, [1, 1, 1]);
-  A.put('can', cx + 0.6, y + 0.74, cz - 0.7, 1, 1, [1, 1, 1]);
+  /**
+   * The table and its two chairs.
+   *
+   * All three are solid now — that is the whole point of `collide` in props.js
+   * — and a solid thing dropped at a fixed offset from the room centre is
+   * exactly what `shiftClear` exists for: `throughcheck` went from 21/21 exits
+   * to 17/21 the moment this furniture started existing to physics, because a
+   * living room whose corridor runs down the middle had a chair standing in it.
+   * Each piece is nudged off the route on its own, with its own half-depth as
+   * the pad, and the bottle and can follow the table rather than staying at
+   * coordinates the table has left.
+   */
+  const tRy = rng.range(0, 0.4);
+  const c1Ry = rng.range(1.5, 2.5);
+  const c2Ry = rng.range(-1.5, -0.5);
+  const tbl = shiftClear(r, cx + 0.4, cz - 0.8, x0 + 0.7, z0 + 0.7, x1 - 0.7, z1 - 0.7, 0.5);
+  if (tbl) {
+    A.put('table_small', tbl[0], y, tbl[1], tRy, 1, [1, 1, 1]);
+    // stuff on the small table
+    A.put('bottle', tbl[0], y + 0.74, tbl[1], 0, 1, [1, 1, 1]);
+    A.put('can', tbl[0] + 0.2, y + 0.74, tbl[1] + 0.1, 1, 1, [1, 1, 1]);
+  }
+  const ch1 = shiftClear(r, cx - 0.8, cz - 1.2, x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, 0.35);
+  if (ch1) A.put('chair', ch1[0], y, ch1[1], c1Ry, 1, [1, 1.2, 1]);
+  const ch2 = shiftClear(r, cx + 1.4, cz - 0.4, x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, 0.35);
+  if (ch2) A.put('chair', ch2[0], y, ch2[1], c2Ry, 1, [1, 1.2, 1]);
   // wall-hung rug / poster
   const wall = clothGeometry(1.7, 1.1, { segX: 8, segY: 7, sag: 0.04, wrinkle: 0.05, thickness: 0.0036, fray: 0.02, bow: -1, rng });
   A.addOnce('fabric_red', wall, LL(IDENT, cx - 0.4, y + 1.65, z0 + 0.09, 0, 1, 1, 1), {
@@ -709,7 +745,6 @@ function furnishStorage(A, rng, r, cx, cz, w, d, m) {
       A.put(rng.pick(['barrel_rust', 'barrel_blue', 'barrel_wood']), sx, y, sz, rng.float() * 6.28, 1, [
         1, 1.2, 1,
       ]);
-      A.box('metal', sx, y + 0.45, sz, 0.62, 0.9, 0.62);
     } else if (pick < 0.85) {
       A.put('tyre', sx, y, sz, rng.float() * 6.28, 1, [1, 1.3, 1]);
       if (rng.float() < 0.6) {
@@ -756,9 +791,11 @@ function furnishRuin(A, rng, r, cx, cz, w, d, m) {
       1, 1.4, 1,
     ]);
   }
-  A.put('chair', rng.range(x0 + 0.6, x1 - 0.6), y + 0.05, rng.range(z0 + 0.6, z1 - 0.6), rng.float() * 6.28, 1, [
-    1, 1.5, 1,
-  ]);
+  // Solid, and dropped anywhere in the room — so route it.
+  const rc = shiftClear(r, rng.range(x0 + 0.6, x1 - 0.6), rng.range(z0 + 0.6, z1 - 0.6),
+                        x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, 0.35);
+  const rcRy = rng.float() * 6.28;
+  if (rc) A.put('chair', rc[0], y + 0.05, rc[1], rcRy, 1, [1, 1.5, 1]);
   // dust sheet snagged on the rubble
   const sheet = clothGeometry(1.4, 1.1, { segX: 7, segY: 7, sag: 0.24, wrinkle: 0.075, twist: 0.08, fray: 0.02, rng });
   A.addOnce(
@@ -805,7 +842,10 @@ export function stackCrates(A, rng, x, y, z, n) {
       s,
       [1, rng.range(0.7, 1.4), 1]
     );
-    A.box('wood', x, cy + (hh * s) / 2, z, 0.7, hh * s, 0.7);
+    // (no A.box here any more: every crate carries its own proxy at its own
+    //  jittered position and rotation — see `collide` in props.js. The single
+    //  0.7 m column that used to stand in for the whole pile was both coarser
+    //  and, on a shop floor, wider than the crates it represented.)
     cy += hh * s;
     if (rng.float() < 0.2) break;
   }
