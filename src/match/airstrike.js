@@ -92,10 +92,23 @@ import { RULES } from './rules.js';
  * site or a spawn — the demolition layout is untouched by all three.
  */
 const STRIKE_SITES = [
-  { id: 'MID', name: 'MID STREET', level: [8.6, -3.0], face: [-1, 0], reach: 6.2 },
-  { id: 'WEST', name: 'A LANE CORNER', level: [-19.4, -10.6], face: [0, -1], reach: 6.0 },
-  { id: 'EAST', name: 'B LANE NORTH', level: [19.4, 17.5], face: [1, 0], reach: 6.0 },
+  // east row, west face, on the mid street between connector 2 and E3
+  { id: 'MID', name: 'MID STREET', level: [6.5, -16.0], face: [-1, 0], reach: 5.2 },
+  // west row, west face, on the A lane's south run just below connector 2
+  { id: 'WEST', name: 'A LANE', level: [-20.5, -14.5], face: [-1, 0], reach: 4.2 },
+  // east row, east face, on the B lane's north run below E1
+  { id: 'EAST', name: 'B LANE', level: [20.5, 17.5], face: [1, 0], reach: 4.4 },
 ];
+
+/**
+ * How far INSIDE the building line the roof height is probed.
+ *
+ * `level` is authored ON the facade plane, which is exactly where a downward
+ * ray is ambiguous — a metre either way and it lands on the pavement instead of
+ * the roof, and the whole mass ends up sitting in the gutter. Three metres in is
+ * past every parapet and cornice in the kit and still inside every footprint.
+ */
+const ROOF_INSET = 3.0;
 
 /**
  * The mass that comes down, in the site's own frame:
@@ -107,23 +120,31 @@ const STRIKE_SITES = [
  */
 const MASS = [
   // the added storey itself: the big one, and the only piece with real depth
-  { id: 'storey', mat: 0, size: [4.6, 3.4, 8.4], at: [-1.9, 1.7, 0], cut: [4, 4, 7] },
+  { id: 'storey', mat: 0, size: [4.6, 3.4, 8.4], at: [-2.0, 1.7, 0], cut: [7, 6, 13] },
   // its crown course, proud of the storey on every side
-  { id: 'crown', mat: 1, size: [5.2, 0.62, 9.0], at: [-1.8, 3.72, 0], cut: [4, 1, 8] },
+  { id: 'crown', mat: 1, size: [5.2, 0.62, 9.0], at: [-1.9, 3.72, 0], cut: [7, 1, 13] },
   // stair penthouse, set back and off to one side
-  { id: 'hut', mat: 0, size: [2.4, 2.3, 2.7], at: [-3.4, 5.2, 2.4], cut: [3, 3, 3] },
+  { id: 'hut', mat: 0, size: [2.4, 2.3, 2.7], at: [-3.5, 5.2, 2.4], cut: [4, 4, 5] },
   // water tank on a low stand — the silhouette that reads from across the map
-  { id: 'tank', mat: 1, size: [1.9, 1.7, 1.9], at: [-3.2, 4.9, -2.3], cut: [3, 3, 3] },
-  { id: 'stand', mat: 1, size: [2.1, 0.9, 2.1], at: [-3.2, 3.6, -2.3], cut: [2, 1, 2] },
+  { id: 'tank', mat: 1, size: [1.9, 1.7, 1.9], at: [-3.3, 4.9, -2.3], cut: [4, 4, 4] },
+  { id: 'stand', mat: 1, size: [2.1, 0.9, 2.1], at: [-3.3, 3.6, -2.3], cut: [3, 1, 3] },
   // two chimney stacks
-  { id: 'flueA', mat: 1, size: [0.68, 1.6, 0.68], at: [-2.2, 4.85, -0.2], cut: [2, 3, 2] },
-  { id: 'flueB', mat: 1, size: [0.6, 1.2, 0.6], at: [-2.6, 4.65, 3.9], cut: [2, 2, 2] },
+  { id: 'flueA', mat: 1, size: [0.68, 1.6, 0.68], at: [-2.3, 4.85, -0.2], cut: [2, 5, 2] },
+  { id: 'flueB', mat: 1, size: [0.6, 1.2, 0.6], at: [-2.7, 4.65, 3.9], cut: [2, 4, 2] },
   // a strip of the facade below the roof line, so the wound runs down the wall
-  { id: 'skin', mat: 0, size: [0.34, 2.2, 8.4], at: [0.25, -1.3, 0], cut: [1, 3, 8] },
+  { id: 'skin', mat: 0, size: [0.34, 2.4, 8.4], at: [-0.17, -1.4, 0], cut: [1, 5, 13] },
   // and the balcony that was hanging off it
-  { id: 'balcony', mat: 1, size: [1.3, 0.24, 3.6], at: [0.95, -1.9, -1.4], cut: [2, 1, 5] },
-  { id: 'rail', mat: 1, size: [0.14, 0.85, 3.6], at: [1.55, -1.4, -1.4], cut: [1, 2, 6] },
+  { id: 'balcony', mat: 1, size: [1.3, 0.24, 3.6], at: [0.65, -2.1, -1.4], cut: [2, 1, 7] },
+  { id: 'rail', mat: 1, size: [0.14, 0.9, 3.6], at: [1.25, -1.6, -1.4], cut: [1, 2, 9] },
 ];
+
+/**
+ * Parts whose `at[0]` is measured from the REAL facade plane found by the boot
+ * probe rather than from the authored building line. The skin and the balcony
+ * have to be flush with the wall they hang off; the mass on the roof does not
+ * care to the centimetre, and moving it would push it off the parapet.
+ */
+const FACADE_PARTS = new Set(['skin', 'balcony', 'rail']);
 
 /** Seconds of telegraph: jet first, then the whistle, then it lands. */
 const JET_LEAD = 4.4;
@@ -315,15 +336,26 @@ gl_Position = projectionMatrix * mvPosition;`
 
     /* ---- frame ------------------------------------------------------- */
     const anchor = world.levelToWorld(spec.level[0], 0, spec.level[1], new THREE.Vector3());
-    // Roof height under the anchor. Dropped from 40 m, which is over everything.
-    const roofY = physics.groundHeight(anchor.x, anchor.z, 40);
+    // The face direction is authored in level space and has to be rotated with
+    // the level, like every other gameplay-authored facing in `match`.
+    const yaw = Math.atan2(spec.face[0], spec.face[1]) + (world.levelYaw ?? 0);
+    // Roof height, probed INSIDE the footprint. Dropped from 40 m, over everything.
+    const probe = new THREE.Vector3(
+      anchor.x - Math.sin(yaw) * ROOF_INSET,
+      0,
+      anchor.z - Math.cos(yaw) * ROOF_INSET
+    );
+    const roofY = physics.groundHeight(probe.x, probe.z, 40);
     if (!Number.isFinite(roofY)) {
       console.warn(`[airstrike] ${spec.id}: nothing under the anchor — skipped`);
       return null;
     }
-    // The face direction is authored in level space and has to be rotated with
-    // the level, like every other gameplay-authored facing in `match`.
-    const yaw = Math.atan2(spec.face[0], spec.face[1]) + (world.levelYaw ?? 0);
+    if (roofY < 3) {
+      console.warn(
+        `[airstrike] ${spec.id}: roof probe came back at ${roofY.toFixed(2)} m — ` +
+          'the anchor is not on a building. Fix the level coordinates.'
+      );
+    }
     const u = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)); // out over the lane
     const v = new THREE.Vector3(u.z, 0, -u.x); // along the facade
     const base = new THREE.Vector3(anchor.x, roofY, anchor.z);
@@ -345,10 +377,27 @@ gl_Position = projectionMatrix * mvPosition;`
     const ground = new THREE.Vector3().copy(moundC);
     ground.y += 0.6;
 
+    /* ---- where the real wall is --------------------------------------- */
+    /**
+     * The authored `level` point is the building LINE, and the kit does not put
+     * every facade exactly on it — a shopfront is recessed, a pilaster is proud.
+     * One horizontal ray finds the plane the skin and the balcony have to be
+     * flush with, so they never hang in mid air. Measured at boot, once.
+     */
+    let facadeU = 0;
+    {
+      const from = new THREE.Vector3().copy(base).addScaledVector(u, 9);
+      from.y = roofY - 1.4;
+      const hit = physics.raycast(from, this._v.copy(u).multiplyScalar(-1), 13, physics.MASK.WORLD);
+      if (hit?.hit) facadeU = 9 - hit.distance;
+      logFacade(spec.id, roofY, facadeU);
+    }
+
     /* ---- cut the mass ------------------------------------------------- */
     const chunks = [[], []]; // by material index
     for (const part of MASS) {
-      fracture(part, rng, (c) => chunks[part.mat].push(c));
+      const shift = FACADE_PARTS.has(part.id) ? facadeU : 0;
+      fracture(part, shift, rng, (c) => chunks[part.mat].push(c));
     }
 
     const site = {
@@ -458,7 +507,13 @@ gl_Position = projectionMatrix * mvPosition;`
         rng.range(-0.022, 0.022)
       );
       q.multiply(q2);
-      scale.set(c.hx * 2, c.hy * 2, c.hz * 2);
+      // AXIS ORDER MATTERS AND IT IS NOT THE OBVIOUS ONE. The chunk's local +X
+      // ends up along the facade (`v`) and its local +Z out over the lane (`u`)
+      // once the site yaw is applied, so the u/v half-extents cross over here.
+      // Getting this backwards makes the facade skin 0.65 m deep and 0.34 m
+      // wide instead of the other way round — which shows up as 30 cm black
+      // gaps between every column of the intact wall.
+      scale.set(c.hz * 2, c.hy * 2, c.hx * 2);
       m4.compose(pos, q, scale);
       m4.toArray(mesh.instanceMatrix.array, i * 16);
 
@@ -468,7 +523,7 @@ gl_Position = projectionMatrix * mvPosition;`
       const distToBlast = Math.max(0.6, dir.length());
       dir.y = 0;
       if (dir.lengthSq() < 1e-4) dir.copy(u);
-      dir.normalize().addScaledVector(u, 0.75).normalize();
+      dir.normalize().addScaledVector(u, 1.35).normalize();
 
       // 72% of the mass piles up; the rest is thrown clear down the lane.
       const scatter = rng.float() < 0.28;
@@ -1004,7 +1059,7 @@ gl_Position = projectionMatrix * mvPosition;`
  * The boundaries tile the box exactly, so the chunks reassemble with no seam —
  * before the strike this has to look like a wall, not like a stack of blocks.
  */
-function fracture(part, rng, emit) {
+function fracture(part, shiftU, rng, emit) {
   const [dx, dy, dz] = part.size;
   const [nx, ny, nz] = part.cut;
   const bx = splits(nx, dx, rng);
@@ -1014,7 +1069,7 @@ function fracture(part, rng, emit) {
     for (let j = 0; j < ny; j++) {
       for (let k = 0; k < nz; k++) {
         emit({
-          cx: part.at[0] + (bx[i] + bx[i + 1]) * 0.5,
+          cx: part.at[0] + shiftU + (bx[i] + bx[i + 1]) * 0.5,
           cy: part.at[1] + (by[j] + by[j + 1]) * 0.5,
           cz: part.at[2] + (bz[k] + bz[k + 1]) * 0.5,
           hx: (bx[i + 1] - bx[i]) * 0.5,
@@ -1050,7 +1105,7 @@ function chunkGeometry() {
   // and has to move identically in all of them or the chunk tears open.
   const bite = (sx, sy, sz) => {
     const h = ((sx + 1) * 9 + (sy + 1) * 3 + (sz + 1)) * 0.618;
-    return 0.055 + (h - Math.floor(h)) * 0.11;
+    return 0.018 + (h - Math.floor(h)) * 0.05;
   };
   for (let i = 0; i < p.length; i += 3) {
     const sx = Math.sign(p[i]);
@@ -1149,6 +1204,11 @@ function probeCell(g, phys, ix, iz) {
   }
   _probe.enclosure = blocked;
   return _probe;
+}
+
+/** Boot diagnostics: if either number looks wrong the site is in the wrong place. */
+function logFacade(id, roofY, facadeU) {
+  console.info(`[airstrike] ${id}: roof ${roofY.toFixed(2)} m, facade offset ${facadeU.toFixed(2)} m`);
 }
 
 function clamp(v, lo, hi) {
