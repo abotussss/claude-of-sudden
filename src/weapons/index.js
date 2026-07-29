@@ -558,10 +558,65 @@ export class WeaponSystem {
   }
 
   /**
+   * SCAVENGE — put a dead man's ammunition into your own pouches.
+   *
+   * `match` owns WHERE this comes from (a pouch on a body, see
+   * src/match/ammo.js); this owns what it is worth, because ammunition is this
+   * subsystem's state and nothing outside it may write `reserve`.
+   *
+   * Three decisions, each of which could have gone the other way:
+   *
+   *   IT IS NOT CALIBRE-MATCHED. One pouch tops up EVERY magazine-fed weapon in
+   *   the loadout rather than only the one in your hands. A body on this map
+   *   carries whatever `src/ai` gave it, the player carries five different
+   *   guns, and a pickup that is usually the wrong ammunition is a pickup the
+   *   player learns to walk past — which is the opposite of the point.
+   *
+   *   IT CANNOT EXCEED THE ROUND-START BUDGET. Every weapon is capped at its
+   *   own `def.reserve`, so scavenging can only ever CLAW BACK what you have
+   *   already spent. A five minute round with respawns and thirty men produces
+   *   enough bodies that an uncapped pickup would mean infinite ammunition,
+   *   which deletes the reload economy the whole weapon feel is built on.
+   *
+   *   GRENADES ARE NOT IN IT. `resetAmmo` documents that the round's frags are
+   *   the round's budget, and that is a balance rule about the strongest thing
+   *   in the loadout, not an oversight. "弾" is bullets.
+   *
+   * @param {number} mags magazines' worth per weapon, per pouch
+   * @returns {number} rounds actually added across the loadout — 0 means the
+   *   player was already full and the pouch should be left where it is
+   */
+  scavenge(mags = 1) {
+    let added = 0;
+    for (const s of this.states.values()) {
+      const def = s.def;
+      if (def.class === 'melee' || def.class === 'grenade') continue;
+      const cap = def.reserve ?? 0;
+      if (s.reserve >= cap) continue;
+      const want = Math.max(1, Math.round((def.magSize ?? 0) * mags));
+      const take = Math.min(want, cap - s.reserve);
+      s.reserve += take;
+      added += take;
+    }
+    return added;
+  }
+
+  /** True when at least one magazine-fed weapon is below its starting reserve. */
+  get needsAmmo() {
+    for (const s of this.states.values()) {
+      const def = s.def;
+      if (def.class === 'melee' || def.class === 'grenade') continue;
+      if (s.reserve < (def.reserve ?? 0)) return true;
+    }
+    return false;
+  }
+
+  /**
    * Full loadout, as if you had just walked out of spawn: every magazine
    * topped off, every reserve refilled, no half-finished animation. Called by
-   * `match` at the top of each round — there are no ammo pickups in this mode,
-   * so the round's ammunition is the round's budget.
+   * `match` at the top of each round — the round's ammunition is the round's
+   * budget, and `scavenge()` above is the only thing that adds to it inside a
+   * round (never above this same starting figure).
    */
   resetAmmo() {
     for (const s of this.states.values()) {

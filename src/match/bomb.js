@@ -299,7 +299,7 @@ function withTransform(g, x, y, z) {
  * another subsystem's module (ARCHITECTURE.md rule 2), and BufferGeometryUtils
  * would be a second entry point into three's addons.
  */
-function mergeAll(list) {
+export function mergeAll(list) {
   let vtx = 0;
   let idx = 0;
   for (const g of list) {

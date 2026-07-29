@@ -65,6 +65,7 @@ import { Bomb, BOMB } from './bomb.js';
 import { Spectator } from './spectate.js';
 import { SiteMarks } from './sitemark.js';
 import { Airstrike } from './airstrike.js';
+import { AmmoDrops } from './ammo.js';
 
 const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', MATCH_OVER: 'matchover' };
 
@@ -135,9 +136,18 @@ export class MatchSystem {
     // always where the plant trigger is even when `resolveLayout` has had to
     // move a site off sealed geometry. See src/match/sitemark.js.
     this.marks = new SiteMarks(ctx, this.sites);
+    /**
+     * Ammunition on the bodies. The round's budget is still what you walk out
+     * of spawn with (`weapons.resetAmmo`), but a five minute round with
+     * respawns is long enough to spend it, and every man who goes down leaves
+     * his pouches. See src/match/ammo.js for why it is walk-over rather than a
+     * key, and why a pouch can never take you above your starting reserve.
+     */
+    this.ammoDrops = new AmmoDrops(ctx);
     const patcher = ctx.peek('render')?.patcher;
     if (patcher) {
       for (const m of this.bomb.materials) patcher.patch(m);
+      for (const m of this.ammoDrops.materials) patcher.patch(m);
       patcher.patch(this.marks.paint);
     }
     this.spectator = new Spectator(ctx);
@@ -230,6 +240,18 @@ export class MatchSystem {
     const wasVisible = this.bomb.group.visible;
     this.bomb.group.visible = true;
     scene.add(this.bomb.group);
+    /**
+     * One pouch has to be VISIBLE for this to be worth anything: three's
+     * `compile()` walks the scene with `traverseVisible`, and every drop in the
+     * pool starts hidden. Without this the first man to die in the first round
+     * compiles two materials on that frame.
+     */
+    const drop = this.ammoDrops?.slots?.[0]?.mesh ?? null;
+    const dropWasVisible = drop?.visible ?? false;
+    if (drop) {
+      drop.visible = true;
+      scene.add(this.ammoDrops.group);
+    }
     try {
       await renderer.compileAsync(scene, ctx.camera, ctx.scene);
       const depth = render.csm?.depthMaterial;
@@ -245,6 +267,11 @@ export class MatchSystem {
     scene.remove(this.bomb.group);
     ctx.scene.add(this.bomb.group);
     this.bomb.group.visible = wasVisible;
+    if (drop) {
+      scene.remove(this.ammoDrops.group);
+      ctx.scene.add(this.ammoDrops.group);
+      drop.visible = dropWasVisible;
+    }
     return { ok: true, compiled: (renderer.info.programs?.length ?? 0) - before };
   }
 
@@ -310,6 +337,10 @@ export class MatchSystem {
     this.airstrike?.reset();
 
     // ---- the charge ---------------------------------------------------
+    // Last round's pouches go with last round's bodies: `_resetPlayer` has
+    // already refilled the reserve, so leaving them would be free ammunition
+    // for a budget that is already full.
+    this.ammoDrops.clear();
     this.bomb.reset();
     if (this.playerTeam === atk) {
       // The human gets the C4 when their side attacks: the mode is only
@@ -793,6 +824,15 @@ export class MatchSystem {
     this._pushKillfeed(kr, vr, !!e.headshot);
     if (vr) this._queueRespawn(vr);
 
+    // He was carrying magazines. They are still there. Both sides drop — see
+    // the "EVERY BODY" note in src/match/ammo.js.
+    if (this.phase === PHASE.LIVE && victim.position) {
+      this.ammoDrops.drop(
+        victim.position,
+        this.ai.groundAt(victim.position.x, victim.position.z, victim.position.y + 2)
+      );
+    }
+
     // The carrier going down drops the charge where they fell.
     if (this.bomb.carrier === victim) {
       this._v.copy(victim.position ?? this._bombPos);
@@ -896,6 +936,7 @@ export class MatchSystem {
         }
         this._updateBotObjectiveWork(dt);
         this._updatePlayerInteraction(dt);
+        this._updateAmmoDrops(dt, audio);
         this._checkWinConditions();
         break;
 
@@ -1020,6 +1061,27 @@ export class MatchSystem {
           this._endRound(this.defenders, 'C4 DEFUSED');
         }
       }
+    }
+  }
+
+  /**
+   * Age the pouches on the floor and let the player walk into one.
+   *
+   * The pickup itself is `AmmoDrops.update` — it only fires when the player is
+   * genuinely short (`weapons.needsAmmo`), so this branch is silent on every
+   * frame the player runs over a body with full pouches. The feedback lives
+   * here rather than in `ammo.js` because `ui` and `audio` are the match's to
+   * drive; the readout's own reaction (the reserve figure flashing) is
+   * ui/ammo.js's business and needs nothing plumbed to it.
+   */
+  _updateAmmoDrops(dt, audio) {
+    const got = this.ammoDrops.update(dt, this.player.dead ? null : this.player, this.weapons);
+    if (got <= 0) return;
+    this.ui.banner.show('AMMUNITION', `+${got} ROUNDS`, 0.9);
+    try {
+      audio?.play?.('hit_armour', this.player.position, { level: 0.35 });
+    } catch {
+      /* audio is optional feedback */
     }
   }
 
@@ -1313,6 +1375,7 @@ export class MatchSystem {
     if (this.weapons) this.weapons.locked = false;
     if (this.ai) this.ai.combatEnabled = true;
     this.bomb?.dispose();
+    this.ammoDrops?.dispose();
     this.marks?.dispose();
     this.airstrike?.dispose();
     if (typeof window !== 'undefined' && window.__STRIKE__ === this.airstrike) delete window.__STRIKE__;

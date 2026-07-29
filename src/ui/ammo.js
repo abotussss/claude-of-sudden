@@ -84,6 +84,19 @@ export class AmmoPanel {
     this.reloadBar = bar;
 
     this.punch = 0;
+    /**
+     * RESERVE GAIN, 0..1, decaying. The reserve figure only ever went DOWN
+     * before — a reload moved rounds out of it — so it was drawn as a dead
+     * number and nothing in the panel could tell you a pickup had landed.
+     * `match` can now hand the player a dead man's magazines (src/match/ammo.js)
+     * and this is what says so: the figure swells and warms for half a second.
+     *
+     * It needs NOTHING plumbed to it. The panel already receives `reserve`
+     * every frame, so "it went up" is a fact this file can observe on its own,
+     * and no other subsystem has to know the readout reacts.
+     */
+    this.resGain = 0;
+    this._lastRes = -1;
     this._lastAmmo = -1;
     this._lastPips = -1;
     this._lastCount = -1;
@@ -189,7 +202,23 @@ export class AmmoPanel {
       this._lastAmmo = ammo;
       setText(this.cur, ammo);
     }
-    setText(this.res, Math.max(0, s.reserve | 0));
+    const res = Math.max(0, s.reserve | 0);
+    if (res !== this._lastRes) {
+      // A reload takes rounds OUT of the reserve; only a pickup puts them back.
+      if (this._lastRes >= 0 && res > this._lastRes) this.resGain = 1;
+      this._lastRes = res;
+      setText(this.res, res);
+    }
+    if (this.resGain > 0) {
+      this.resGain = Math.max(0, this.resGain - dt * 2);
+      const g = ease.outQuad(this.resGain);
+      setStyle(this.res, 'transform', `scale(${(1 + 0.16 * g).toFixed(3)})`);
+      setStyle(this.res, 'color', g > 0.02 ? `rgba(255,204,110,${(0.35 + 0.65 * g).toFixed(3)})` : '');
+      if (this.resGain === 0) {
+        setStyle(this.res, 'transform', '');
+        setStyle(this.res, 'color', '');
+      }
+    }
     this._fitName(String(s.weaponName ?? s.name ?? 'M4A1'));
     setText(this.mode, s.fireMode ?? 'AUTO');
 
