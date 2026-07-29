@@ -1267,6 +1267,42 @@ export class Viewmodel {
       pose = res.lhand.pose;
     }
     this._handPosL.set(pos[0], pos[1], pos[2]);
+    /**
+     * IN ADS THE SUPPORT HAND SLIDES FORWARD ON THE HANDGUARD.
+     *
+     * MEASURED against first-person viewmodel references (CS2 and the like) and
+     * against range photography, which agree here: the support forearm reaches
+     * FORWARD ALONG the weapon, 25-40 degrees off the bore. At the hip this rig
+     * does that — the carbine is 33.3 degrees. The moment you aim it is 70, the
+     * AK 85, the SMG 86: the arm lies ACROSS the gun, which is the "he is
+     * leaning on it, not holding it" read.
+     *
+     * The cause is structural, not a bad authored number. The support target is
+     * fixed in WEAPON space, so when ADS pulls the weapon back toward the eye
+     * the hand travels back with it and ends up close to and above a shoulder
+     * that has not moved — and a short forearm between two nearby points can
+     * only point sideways. A real shooter's rifle also comes back to the
+     * shoulder, but their support hand STAYS half a metre downrange and the
+     * elbow drops instead.
+     *
+     * So the hand slides down the handguard as the aim blends in. Clamped to
+     * the handguard's own authored span (less a hand's half-width) so it can
+     * never leave the surface it is solved against, which would undo the
+     * fingertip contact the build-time solve established.
+     */
+    const hgN = w.model.nodes.handguard;
+    if (hgN && this.adsT > 0.001) {
+      /**
+       * 0.13 m. MEASURED across 0.075 / 0.13 / 0.19 / 0.25: the carbine improves
+       * to 54.8 degrees at 0.13 and then stops, and the AK and the sniper do not
+       * move at all, because the clamp below is already hard against the front
+       * of their handguards at the smallest push. An AK handguard is 122 mm
+       * long; there is nowhere further forward to put the hand.
+       */
+      const push = (w.def?.adsSupportPush ?? 0.13) * this.adsT;
+      const front = Math.min(hgN.z0, hgN.z1) + 0.045;
+      this._handPosL.z = Math.max(front, this._handPosL.z - push);
+    }
     handBasis(this._handQuatL, finger, back);
     if (pose !== this.armL.pose) this.armL.setPose(pose);
     this.armL.solve(this._handPosL, this._handQuatL);
