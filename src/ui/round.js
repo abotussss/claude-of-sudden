@@ -1,7 +1,14 @@
 import { el, setText, setStyle, setClass, clamp01, damp, ease, mmss } from './util.js';
 
-const MAX_TEAM = 8;
-const MAX_ROWS = 16;
+/**
+ * Pip and scoreboard-row capacity. Both are hard caps: `_pips` hides the
+ * surplus and the scoreboard hides surplus rows, so a roster larger than these
+ * is silently truncated on screen. `RULES.teamSize` is 15, so at 8 the strip
+ * drew half a team and the scoreboard eight of fifteen men — the count is the
+ * most decision-relevant number on the HUD and it was wrong.
+ */
+const MAX_TEAM = 16;
+const MAX_ROWS = 32;
 
 /**
  * ROUND STRIP — who is left, and how long you have.

@@ -89,6 +89,7 @@ it drives expose exactly these hooks and nothing more:
 ai.playerTeam / ai.friendlyFire / ai.combatEnabled / ai.matchControlled / ai.skill
 ai.clearAgents()            ai.spawn(variant, pos, yaw, { team, name, role })
 ai.teamOf(actor)            ai.getHudActors()
+ai.protect(actor, seconds)  ai.targetable(actor)      ai.corpseLimit
 agent.setObjective(mode, position, site, facing)   agent.working
 player.team / player.name / player.alive
 player.respawnAt(position, yaw)     player.health.regenEnabled
@@ -96,6 +97,15 @@ weapons.locked              weapons.resetAmmo()
 ui.setRound(state)          ui.matchDriven      ui.isFriendlyTarget(actor)
 world.levelYaw              world.levelToWorld(x, y, z, out)
 ```
+
+`ai.protect(actor, seconds)` is SPAWN PROTECTION, and it takes the local player
+as happily as it takes an `Agent` — `match` calls it on every respawn, so bots
+and the human are protected by one code path on one timer. It is implemented as
+"not a valid target" (the actor is dropped from `ai.hostilesOf` for the
+duration), NOT as damage immunity: nobody chooses to shoot at a man in his
+spawn, but a grenade or a burst already down the lane still kills him. `player`
+neither sets nor reads the field. `ai.corpseLimit` caps how many bodies stay on
+the map — with respawns inside a round, a five minute round makes hundreds.
 
 If a rule needs a hook that is not on that list, add the hook to the owning
 subsystem and add a line here — do not reach into another subsystem's internals
@@ -128,6 +138,8 @@ Emit and listen via `ctx.events`. Payloads are plain objects. The canonical set:
 | `match:round` | `{ round, phase, attackers, score }` | match |
 | `match:bomb` | `{ state, site, fuse, carrier }` | match |
 | `match:result` | `{ winner, reason, score, matchOver }` | match |
+| `match:respawn` | `{ name, team, isPlayer }` | match |
+| ↳ | somebody is back on their feet inside the round. Fires for a bot and for the local player on the same path, `RULES.respawnDelay` after the death. A respawned bot is a NEW `Agent`; anything holding the old one has a corpse. | |
 | `match:airstrike` | `{ phase: 'inbound'\|'impact'\|'settled', site, position }` | match |
 | ↳ | an airstrike on one of the three fixed strike sites. `inbound` is the telegraph (4.4 s of jet and whistle before it lands), `impact` is the frame it goes off, `settled` is when the rubble stops moving and becomes collision. The blast itself is a normal `explosion` event, so nothing has to listen to this to take damage. The payload object is REUSED — copy what you need. See `src/match/airstrike.js`. | |
 
