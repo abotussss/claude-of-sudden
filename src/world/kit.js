@@ -781,23 +781,41 @@ export function parapet(A, key, cx, cz, w, d, y, rng, opts = {}) {
 export function stairRun(A, pm, x, y, z, w, steps, rise, run, opts = {}) {
   const key = opts.key ?? 'concrete';
   const box = BOX(A);
+  /**
+   * EACH STEP IS A SOLID PIER FROM THE FLOOR UP TO ITS OWN TREAD, so the flight
+   * has a stepped underside and every riser is a visible edge.
+   *
+   * What was here was a `rise`-tall slab per tread PLUS a single "stringer" box
+   * `w * 1.02` wide spanning the FULL height and the FULL length of the flight.
+   * That box is not a stringer, it is a wall: it is wider than the treads and
+   * as tall at the bottom as it is at the top, so every step below the last is
+   * inside it and a staircase renders as a blank grey slab. Screenshotted from
+   * the foot of W2's flight, the only thing in frame is a flat panel.
+   *
+   * That is almost certainly the whole of "２回構造は？？上がれないけど" —
+   * `floorcheck --climb` proves the controller walks up these flights, so the
+   * player was not being stopped by the map, he was being stopped by not being
+   * able to SEE that the thing in the corner was a staircase. Nothing about the
+   * collision changes here; the per-step proxies below are untouched.
+   */
   for (let i = 0; i < steps; i++) {
-    const sy = y + (i + 0.5) * rise;
+    const top = y + (i + 1) * rise;
     const sz = z + (i + 0.5) * run;
-    A.add(key, box, LL(pm, x, sy, sz, 0, w, rise, run), {
+    // visual: floor to tread top
+    A.add(key, box, LL(pm, x, (y + top) / 2, sz, 0, w, top - y, run), {
       masks: [0.7, 0.35, 0.15],
     });
-    const wp = worldOf(pm, x, sy, sz);
+    // a lip proud of the riser, which is the edge that catches the light and is
+    // what actually reads as "step" from across a dark room
+    A.add(key, box, LL(pm, x, top - rise * 0.16, sz - run / 2 + 0.02, 0, w * 0.99, rise * 0.32, 0.05), {
+      masks: [0.85, 0.3, 0.1],
+    });
+    // collision: the tread itself, exactly as before
+    const wp = worldOf(pm, x, y + (i + 0.5) * rise, sz);
     A.box(A.surfaceOf(key), wp[0], wp[1], wp[2], w, rise, run, ryOf(pm));
   }
-  // side stringer / spine so it doesn't read as floating slabs
   const H = steps * rise;
   const D = steps * run;
-  if (opts.stringer !== false) {
-    A.add(key, box, LL(pm, x, y + H / 2 - 0.1, z + D / 2, 0, w * 1.02, H, D * 0.99), {
-      masks: [0.4, 0.6, 0.4],
-    });
-  }
   if (opts.railing) {
     const bar = BOX_THIN(A);
     const ang = Math.atan2(H, D);

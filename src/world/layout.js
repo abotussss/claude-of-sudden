@@ -275,6 +275,14 @@ export const KEEPOUT = [
  * between them are the four cross links, and the outer faces (x ∓20.5) are the
  * lane's inner wall while the inner faces (x ∓6.5) are the mid street's.
  */
+/**
+ * ROOF CLUTTER ON THE SIX ENTERABLE BUILDINGS IS ROUGHLY DOUBLED, because
+ * their roofs stopped being skyline and became FLOOR. `roofProps` was set when
+ * nothing could stand up there and it is a count, not a density — so a roof
+ * that is 2.25x the area at 1.5x, and that a player now walks out onto through
+ * a stairhead, was reading as an empty concrete plate. Screenshotted from W3's
+ * roof: one water tank and 600 square metres of screed.
+ */
 export const BUILDINGS = [
   // ------------------------------------------------------------- west row --
   {
@@ -326,7 +334,7 @@ export const BUILDINGS = [
     },
     enterable: true,
     roofAccess: true,
-    roofProps: 4,
+    roofProps: 8,
     /**
      * A lane -> mid street across the north half, with the side-0 door off
      * connector 1 and the A-lane window feeding into the same corridor. The
@@ -391,7 +399,7 @@ export const BUILDINGS = [
     bayKinds: { 1: { 0: { 1: { kind: 'shop', drop: 0 } } } },
     enterable: true,
     roofAccess: true,
-    roofProps: 5,
+    roofProps: 9,
     /** The covered way from mid straight into site A — the claim this building
      *  was authored to make, now measured rather than asserted. */
     route: [['s3', [0.16, 0.84], [0.34, 0.8], [0.5, 0.76], [0.7, 0.8], [0.88, 0.85], 's1']],
@@ -451,7 +459,7 @@ export const BUILDINGS = [
     },
     enterable: true,
     roofAccess: true,
-    roofProps: 2,
+    roofProps: 7,
     /** Across the south end lane-to-street, plus a spur north up the west side
      *  from the vault window to the same crossing the plan already had. */
     route: [
@@ -540,7 +548,7 @@ export const BUILDINGS = [
     },
     enterable: true,
     roofAccess: true,
-    roofProps: 6,
+    roofProps: 10,
     /** Mirror of W1: street -> B lane, with the connector door and the lane
      *  window joining the same spine. */
     route: [
@@ -605,7 +613,7 @@ export const BUILDINGS = [
     },
     enterable: true,
     roofAccess: true,
-    roofProps: 5,
+    roofProps: 9,
     /** Mid street -> site B, and the mid-street vault window down at the south
      *  end feeding into it up the west side of the plan. */
     route: [
@@ -668,7 +676,7 @@ export const BUILDINGS = [
     },
     enterable: true,
     roofAccess: true,
-    roofProps: 2,
+    roofProps: 7,
     /** Mirror of W3. The window spur runs down the EAST side here, so the
      *  cross-wall's opening moves with it. */
     route: [
