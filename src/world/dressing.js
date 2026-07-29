@@ -790,7 +790,9 @@ function streetFloor(A, rng) {
         lying ? Math.PI / 2 : 0,
         lying ? 0 : rng.range(-0.03, 0.03)
       );
-      A.box('metal', px, y + (lying ? 0.3 : 0.45), pz, 0.64, lying ? 0.6 : 0.9, 0.64);
+      // (the drums bring their own proxy now — see `collide` in props.js. The
+      //  hand-written one here was always upright, so a drum lying on its side
+      //  had a 0.9 m box standing where the drum was not.)
       if (!lying) {
         groundSkirt(A, rng, px, y, pz, 0.36, { pebbles: rng.int(2, 5) });
         if (!tallest) tallest = [px, y, pz];
@@ -972,7 +974,6 @@ function marketStalls(A, rng) {
     const sideZ = z - Math.sin(ry) * (w / 2 + 0.5);
     if (isOpen(sideX, sideZ, 0.4)) {
       A.put('barrel_wood', sideX, groundY(sideX, sideZ), sideZ, rng.float() * 6.28, 1, [1, 1.2, 1]);
-      A.box('wood', sideX, y + 0.4, sideZ, 0.66, 0.8, 0.66);
     }
     A.put('stool', x - Math.sin(ry) * 0.95, y, z - Math.cos(ry) * 0.95, rng.float() * 6.28, 1, [
       1,
@@ -1550,7 +1551,8 @@ function coverClusters(A, rng) {
         1.2,
         1,
       ]);
-      A.box('wood', bx, y + 0.4, bz, 0.8, 0.8, 0.8);
+      // One 0.8 m cube stood in for all three of those, upright and unrotated.
+      // Each of them carries its own proxy now — see `collide` in props.js.
       groundSkirt(A, rng, bx, groundY(bx, bz), bz, 0.5, { pebbles: rng.int(3, 6) });
     }
     for (let i = 0; i < rng.int(3, 6); i++) {
@@ -1773,7 +1775,6 @@ function dressBuilding(A, rng, info) {
     const pick = rng.float();
     if (pick < 0.22) {
       A.put('water_tank', px, roofY, pz, rng.float() * 6.28, rng.range(0.9, 1.15), [1, rng.range(0.9, 1.3), 1]);
-      A.box('metal', px, roofY + 0.55, pz, 1.2, 1.1, 1.2);
     } else if (pick < 0.45) {
       A.put('sat_dish', px, roofY, pz, rng.float() * 6.28, rng.range(0.85, 1.15), [1, rng.range(0.8, 1.3), 1]);
     } else if (pick < 0.6) {
@@ -1791,7 +1792,8 @@ function dressBuilding(A, rng, info) {
           [1, rng.range(1.0, 1.4), 1]
         );
       }
-      A.box('wood', px, roofY + n * 0.26, pz, 0.7, n * 0.53, 0.7);
+      // Every crate in the stack is solid on its own, at its own jittered
+      // position, instead of one 0.7 m column standing in for the pile.
     } else {
       A.put(
         rng.pick(['stool', 'chair', 'tyre', 'barrel_rust', 'pallet', 'gas_bottle']),
@@ -2014,9 +2016,10 @@ export function scatterDebris(A, rng) {
       else if (pick < 0.9) id = rng.pick(['tyre', 'tyre_small']);
       else if (pick < 0.95) id = rng.pick(['box_card_a', 'box_card_b', 'bucket', 'jerry_can']);
       else id = rng.pick(['slab_shard', 'rebar', 'gas_bottle']);
-      // big items get a collision box; scatter does not — and anything that
-      // gets one is barred from the plant areas and the spawn pockets.
-      const solid = id.startsWith('barrel') || id.startsWith('crate');
+      // Anything that carries collision is barred from the plant areas and the
+      // spawn pockets. Ask the prototype rather than pattern-matching the id:
+      // the list of solid props lives in props.js and nowhere else.
+      const solid = A.isSolid(id);
       if (solid && !keepClear(x, z)) continue;
       const y = groundY(x, z);
       A.put(id, x, y + 0.015, z, rng.float() * 6.28, rng.range(0.7, 1.2), [
@@ -2024,8 +2027,6 @@ export function scatterDebris(A, rng) {
         rng.range(1.0, 1.5),
         1,
       ]);
-      if (id.startsWith('barrel')) A.box('metal', x, y + 0.45, z, 0.62, 0.9, 0.62);
-      else if (id.startsWith('crate')) A.box('wood', x, y + 0.3, z, 0.62, 0.6, 0.62);
     }
     // a skip-load of rubble at one end of each alley
     if (rng.float() < 0.7) {

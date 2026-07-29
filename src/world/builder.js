@@ -22,7 +22,10 @@ import { PALETTE } from './palette.js';
  */
 
 const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
+const EMPTY = Object.freeze({});
 const _m = new THREE.Matrix4();
+/** Scratch for the per-instance collision proxy; never escapes `_collideProto`. */
+const _cm = new THREE.Matrix4();
 const _xm = new THREE.Matrix4();
 const _v = new THREE.Vector3();
 const _sph = new THREE.Sphere();
@@ -181,6 +184,43 @@ export class Assembler {
       id,
       geo: spec.geo,
       /**
+       * COLLISION IS A PROPERTY OF THE PROTOTYPE.
+       *
+       * This field has been in the signature above since the Assembler was
+       * written and `proto()` never read it, so collision for an instanced prop
+       * had to be authored by hand — one `A.box(surface, cx, cy, cz, sx, sy,
+       * sz)` typed next to each `A.put(id, x, y, z)`, with the numbers written
+       * out a second time. Nothing bound the two. That is not a style problem,
+       * it is the bug: `tools/solidcheck.mjs` found ~280 prop instances a
+       * player walks straight through, and they were not oversights scattered
+       * one by one. They were WHOLE CATEGORIES. Every satellite dish and roof
+       * vent on the map. Every chair, table and shelf indoors. The oil drums in
+       * one of the three places drums are placed but not in the other two. A
+       * category is missed once, by one person, in one function, and then it is
+       * invisible forever, because the thing that is missing is a line that was
+       * never typed.
+       *
+       * Declaring it here makes it structural instead: a prototype is solid or
+       * it is not, `place()` emits the proxy under the SAME matrix that draws
+       * the mesh, and a prop can no longer be dressed into the level without
+       * its collision because there is no longer a second thing to remember.
+       * The yaw, tilt, sink and scale jitter `put()` applies come along for
+       * free, which the hand-typed boxes never did — a drum lying on its side
+       * had an upright 0.9 m box standing where it used to be.
+       *
+       *   collide: true                  box the prototype's own bounding box
+       *   collide: { shrink, h, surface }
+       *     shrink   metres taken off EACH horizontal side, so the proxy never
+       *              stands proud of the skin it stands in for. Default 0.03,
+       *              about one chamfer.
+       *     h        solid height from the base, for a prop whose top is not
+       *              something you can lean on.
+       *     surface  overrides the surface of the prototype's palette key.
+       */
+      collide: spec.collide ?? null,
+      /** Derived from `geo` on first placement — see `_protoBox`. */
+      _cbox: undefined,
+      /**
        * How far a loose object of this kind is allowed to be knocked out of
        * true, in radians, and how far to sink it so the raised corner does not
        * float. 0 (the default) means "this prop is fixed" — a lamp post, a
@@ -214,6 +254,23 @@ export class Assembler {
     return this._protos.has(id);
   }
 
+  /**
+   * Does an instance of this prototype come with collision?
+   *
+   * `dressing.js` needs the answer to keep solid props out of the bomb-plant
+   * circles and the spawn pockets, and it used to answer it with its own
+   * `id.startsWith('barrel') || id.startsWith('crate')`. That was a second,
+   * private copy of "which props are solid" living three files away from the
+   * declaration — the same shape of mistake as the missing proxies themselves.
+   * Ask the prototype.
+   */
+  isSolid(id) {
+    const p = this._protos.get(id);
+    if (!p || !p.collide) return false;
+    if (p._cbox === undefined) p._cbox = this._protoBox(p);
+    return !!p._cbox;
+  }
+
   /** Add an instance. `masks` scales the geometry's [wear, grime, ao]. */
   place(id, matrix, masks = null) {
     const p = this._protos.get(id);
@@ -221,9 +278,61 @@ export class Assembler {
       console.warn(`[world] no prop prototype "${id}"`);
       return this;
     }
-    p.matrices.push(this._x(matrix).clone());
+    const wm = this._x(matrix).clone();
+    p.matrices.push(wm);
     p.masks.push(masks ? [masks[0], masks[1], masks[2]] : null);
+    // Solid prototypes get their proxy from the very matrix that draws them —
+    // see the `collide` field on `proto()` for why this is not optional.
+    if (p.collide) this._collideProto(p, wm);
     return this;
+  }
+
+  /**
+   * The prototype's collision box in ITS OWN space, derived once from the
+   * geometry it is standing in for. Returns null when the prop is too small to
+   * be worth a proxy: under `STANCE.stand.stepHeight` (0.42) the character
+   * controller steps over it without the player ever feeling the contact, so a
+   * box there is BVH triangles nobody can touch — and, worse, a bump in the
+   * bot height field, which is sampled by dropping one ray per cell and cannot
+   * tell a 0.2 m cinder block from a 0.2 m step.
+   */
+  _protoBox(p) {
+    const geo = p.geo;
+    if (!geo) return null;
+    if (!geo.boundingBox) geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    if (!bb) return null;
+    const o = p.collide === true ? EMPTY : p.collide;
+    const shrink = o.shrink ?? 0.03;
+    const sx = Math.max(0.04, bb.max.x - bb.min.x - shrink * 2);
+    const sz = Math.max(0.04, bb.max.z - bb.min.z - shrink * 2);
+    const sy = Math.min(o.h ?? Infinity, bb.max.y - bb.min.y);
+    if (sy < 0.42) return null;
+    return {
+      sx, sy, sz,
+      cx: (bb.min.x + bb.max.x) / 2,
+      cy: bb.min.y + sy / 2,
+      cz: (bb.min.z + bb.max.z) / 2,
+      surface: o.surface ?? this.surfaceOf(p.key),
+    };
+  }
+
+  /** Emit one instance's proxy. `wm` is already in WORLD space. */
+  _collideProto(p, wm) {
+    if (p._cbox === undefined) p._cbox = this._protoBox(p);
+    const c = p._cbox;
+    if (!c) return;
+    _cm.makeScale(c.sx, c.sy, c.sz);
+    _cm.setPosition(c.cx, c.cy, c.cz);
+    _cm.premultiply(wm);
+    this._accum(c.surface).add(UNIT_BOX, _cm);
+  }
+
+  /** The collision accumulator for a surface, created on demand. */
+  _accum(surface) {
+    let a = this._collide.get(surface);
+    if (!a) this._collide.set(surface, (a = new Accum(`collide:${surface}`)));
+    return a;
   }
 
   /**
@@ -273,23 +382,13 @@ export class Assembler {
   // ------------------------------------------------------------ collision --
   /** Axis-aligned (or Y-rotated) box collision proxy. */
   box(surface, cx, cy, cz, sx, sy, sz, ry = 0) {
-    let a = this._collide.get(surface);
-    if (!a) {
-      a = new Accum(`collide:${surface}`);
-      this._collide.set(surface, a);
-    }
-    a.add(UNIT_BOX, this._x(trs(_m, cx, cy, cz, ry, sx, sy, sz)));
+    this._accum(surface).add(UNIT_BOX, this._x(trs(_m, cx, cy, cz, ry, sx, sy, sz)));
     return this;
   }
 
   /** Register real triangles as collision (ramps, terrain, odd shapes). */
   collideGeo(surface, geo, matrix = null) {
-    let a = this._collide.get(surface);
-    if (!a) {
-      a = new Accum(`collide:${surface}`);
-      this._collide.set(surface, a);
-    }
-    a.add(geo, this._x(matrix));
+    this._accum(surface).add(geo, this._x(matrix));
     return this;
   }
 
@@ -297,12 +396,7 @@ export class Assembler {
   slabBox(surface, panelMatrix, x, y, w, h, t) {
     trs(_m, x, y, t * 0.5, 0, w, h, t);
     _m.premultiply(panelMatrix);
-    let a = this._collide.get(surface);
-    if (!a) {
-      a = new Accum(`collide:${surface}`);
-      this._collide.set(surface, a);
-    }
-    a.add(UNIT_BOX, this._x(_m));
+    this._accum(surface).add(UNIT_BOX, this._x(_m));
     return this;
   }
 

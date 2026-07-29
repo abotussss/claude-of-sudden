@@ -245,12 +245,22 @@ const scan = await page.evaluate(() => {
       if (permeable) continue;
 
       /**
-       * Can the player stand where the prop is? The capsule spans STEP..H at
-       * the prop's own centre, shaved 5 mm exactly as `CharacterController`
-       * does. `checkCapsule` returns TRUE when the capsule is CLEAR — i.e.
-       * TRUE here means the prop is not there.
+       * Can the player stand where the prop is?
+       *
+       * The capsule is built ON THE FLOOR BESIDE THE PROP, not on the prop's
+       * own origin — the player is standing on the ground, and it is the
+       * ground that decides where his capsule is. `CharacterController._move`
+       * lifts a grounded move by `stepHeight` before sliding it, so the lowest
+       * point of the moving capsule is exactly `floor + 0.42`; that is what
+       * `throughcheck` models and it is modelled the same way here, shaved
+       * 5 mm the way the controller shaves it. Anchoring on the prop instead
+       * put the capsule ABOVE a low prop and reported 14 air-conditioning
+       * units as walk-throughs after they had been made solid.
+       *
+       * `checkCapsule` returns TRUE when the capsule is CLEAR — so TRUE here
+       * means the prop is not there.
        */
-      const base = Math.max(oy, fy);
+      const base = fy;
       _a.set(cx, base + STEP + R, cz);
       _b.set(cx, base + H - R + 0.02, cz);
       if (!phys.checkCapsule(_a, _b, R - 0.005, MASK)) continue;
