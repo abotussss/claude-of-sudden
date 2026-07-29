@@ -768,7 +768,18 @@ function stairGeometry(spec, info, fl, t, groundH, upperH, floors) {
   const headroom = nextY - slabT - 1.78 - 0.06;
   let firstOpen = 0;
   while (firstOpen < steps && base + (firstOpen + 1) * rise <= headroom) firstOpen++;
-  const openAt = Math.max(0, firstOpen * run - 0.15);
+  /**
+   * …pulled back by a capsule radius, a tread and a hand's breadth.
+   *
+   * A PLAYER IS NOT A POINT. Cutting the soffit at the first tread whose top
+   * exceeds the headroom leaves the climber's shoulders under the slab while
+   * his feet are past it, and `floorcheck --climb` measured exactly that: the
+   * real controller stopped dead 1.98 m short on eight of fourteen flights
+   * while the capsule flood — which samples one column at a time — walked
+   * straight past it. The flood said yes and the player said no, which is the
+   * whole reason the driven climb is part of this gate.
+   */
+  const openAt = Math.max(0, firstOpen * run - (sw / 2 + run + 0.32));
   /** …and 0.22 m of side clearance for the railing and the capsule's shoulder. */
   const sideR = sw / 2 + 0.22;
   const fwd = D + landing;
