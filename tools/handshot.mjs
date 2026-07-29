@@ -106,6 +106,40 @@ for (const id of list) {
       }
       return out;
     });
+    /**
+     * SUPPORT FOREARM AGAINST THE BORE — the reference check.
+     *
+     * Photographs of a carbine at the shoulder (Wikimedia Commons, US and NATO
+     * range imagery) all show the same thing: the support forearm reaches
+     * FORWARD ALONG the weapon, 25-40 degrees off the bore, with the elbow
+     * tucked down. An arm that comes in across the gun at 60 degrees or more is
+     * the "he is not holding it, he is leaning on it" read, and it is the one
+     * thing about the support arm that no contact or wrist number sees.
+     *
+     * Measured here rather than in a second tool: a separate harness I wrote for
+     * this reported arm extension 1.029 on the carbine where this one reports
+     * 0.897, i.e. it was sampling before the arm had re-solved after the weapon
+     * switch. Two measuring instruments that disagree are worse than one.
+     */
+    const fore = await page.evaluate((id) => {
+      const vm = window.__ENGINE__.ctx.peek('weapons').viewmodel;
+      const arm = vm.armL;
+      /**
+       * Only meaningful when the support hand is on the WEAPON. A pistol's
+       * support hand cups the firing hand, and the knife and the grenade have
+       * no support hand on the weapon at all, so an angle to the bore says
+       * nothing about them and flagging it is noise.
+       */
+      if (!arm || !vm.weapons.get(id)?.model?.nodes?.handguard) return null;
+      const V = arm.elbow.constructor;
+      const d = arm.hand.position.clone().sub(arm.elbow).normalize();
+      const deg = (Math.acos(Math.max(-1, Math.min(1, d.dot(new V(0, 0, -1))))) * 180) / Math.PI;
+      return +deg.toFixed(1);
+    }, id);
+    if (fore !== null) {
+      console.log(`             ${kind.padEnd(4)} support forearm vs bore  ${fore} deg` +
+        (fore > 50 ? '   <-- ACROSS THE GUN, reference is 25-40' : ''));
+    }
     console.log(`             ${kind.padEnd(4)} wrist bend  R=${wrist.R} deg  L=${wrist.L} deg` +
       (Math.max(wrist.R ?? 0, wrist.L ?? 0) > 70 ? '   <-- BEYOND A HUMAN WRIST' : ''));
     const elb = await page.evaluate(() => {
