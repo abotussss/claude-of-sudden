@@ -113,6 +113,31 @@ export function setDoorways(infos, specs) {
       const o = OUT[d.side];
       DOORWAYS.push([d.wp[0] + o[0] * 1.15, d.wp[2] + o[1] * 1.15, 1.5]);
     }
+    /**
+     * A LOW GLASSLESS WINDOW IS A THRESHOLD TOO.
+     *
+     * `tools/vaultcheck.mjs` drives the player at these: `bayKinds` authors
+     * five wide, low, unbarred openings as the way into a building that does
+     * not cost you the walk round to its door, and another forty-odd roll
+     * glassless. The rule for a doorway is exactly the rule for one of these —
+     * a prop with a collision proxy parked on the threshold is a bricked-up
+     * opening — and it only had to be written down here once the props under
+     * the facades started existing to physics: vaultcheck went from 48
+     * passable incidental openings to 39, and one of the five AUTHORED entries
+     * was sealed by a piece of alley scatter 0.3 m outside it.
+     *
+     * `MOVE.mantle.maxHeight` is 1.85, so a sill above that is a window you
+     * were never getting through and nothing has to keep clear of it. The
+     * circle is smaller than a door's: a facade with nothing whatsoever under
+     * any of its windows reads as swept.
+     */
+    for (const win of infos[i]?.windows ?? []) {
+      if (win.f !== 0 || win.state !== 'open') continue;
+      if (win.y - win.h / 2 > 1.85) continue;
+      const o = OUT[win.side];
+      _v.set(win.x, 0, 0).applyMatrix4(win.pm);
+      DOORWAYS.push([_v.x + o[0] * 0.95, _v.z + o[1] * 0.95, 1.25]);
+    }
   }
 }
 
