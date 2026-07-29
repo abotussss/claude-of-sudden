@@ -21,7 +21,11 @@ export class Squad {
     this.peekHolders = new Set();
     this.peekTimer = 0;
     this.grenadeCooldown = 6;
+    /** Kept for anything that reads it; `flankers` is what the gate uses now. */
     this.flanker = null;
+    /** ids currently out wide. Size is capped by `flankTokens`. */
+    this.flankers = new Set();
+    this.flankTokens = 1;
     this.contact = new THREE.Vector3();
     this.hasContact = false;
     this.contactAge = Infinity;
@@ -31,8 +35,45 @@ export class Squad {
   add(agent) {
     agent.squad = this;
     this.members.push(agent);
-    this.peekTokens = Math.max(1, Math.round(this.members.length * 0.5));
+    this._retoken();
     return agent;
+  }
+
+  /**
+   * Drop the dead. `match` calls this whenever it respawns somebody: with
+   * respawns on, a five minute round adds a member per death for ever, and
+   * every one of them is walked by `update()`, by `canFlank()` and by the
+   * squad-spacing term in `CoverMap.pick` — an O(members) cost that would grow
+   * without bound while the number of men actually fighting stayed at fifteen.
+   */
+  prune() {
+    let w = 0;
+    for (let i = 0; i < this.members.length; i++) {
+      if (this.members[i].alive) this.members[w++] = this.members[i];
+    }
+    if (w === this.members.length) return;
+    this.members.length = w;
+    this._retoken();
+    if (this.flanker && !this.flanker.alive) this.flanker = null;
+    for (const id of this.flankers) {
+      let found = false;
+      for (const m of this.members) if (m.id === id) { found = true; break; }
+      if (!found) this.flankers.delete(id);
+    }
+  }
+
+  /**
+   * How many men may be leaning out at once, and how many may be moving wide.
+   *
+   * Half the squad peeks — unchanged. FLANKERS used to be exactly one, which is
+   * right for a four-man fireteam and wrong for fifteen: with one token the
+   * other fourteen have no manoeuvre available at all and the fight roots. One
+   * per five men, minimum one, so a fifteen-man side always has three men trying
+   * to get round the side of something.
+   */
+  _retoken() {
+    this.peekTokens = Math.max(1, Math.round(this.members.length * 0.5));
+    this.flankTokens = Math.max(1, Math.round(this.members.length / 5));
   }
 
   get alive() {
@@ -46,6 +87,14 @@ export class Squad {
     this.grenadeCooldown -= dt;
     this.contactAge += dt;
     if (this.flanker && (!this.flanker.alive || this.flanker.state !== 'flank')) this.flanker = null;
+    // Hand a flank token back the moment the man stops using it, or the squad
+    // spends the round holding tokens for people who are dead or in cover.
+    if (this.flankers.size) {
+      for (const m of this.members) {
+        if (!this.flankers.has(m.id)) continue;
+        if (!m.alive || m.state !== 'flank') this.flankers.delete(m.id);
+      }
+    }
 
     // contact sharing: whoever can see the player broadcasts, with a delay
     for (const m of this.members) {
@@ -90,9 +139,13 @@ export class Squad {
     this.peekHolders.delete(agent.id);
   }
 
-  /** One flanker at a time, and only if someone else is holding attention. */
+  /**
+   * May this man go wide? Only while somebody else is holding the enemy's
+   * attention, and only up to `flankTokens` of them at once.
+   */
   canFlank(agent) {
-    if (this.flanker) return false;
+    if (this.flankers.has(agent.id)) return true;
+    if (this.flankers.size >= this.flankTokens) return false;
     let shooting = 0;
     for (const m of this.members) {
       if (m !== agent && m.alive && (m.state === 'combat' || m.state === 'suppressed')) shooting++;
@@ -102,6 +155,7 @@ export class Squad {
 
   claimFlank(agent) {
     this.flanker = agent;
+    this.flankers.add(agent.id);
   }
 
   requestGrenade() {

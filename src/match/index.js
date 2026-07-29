@@ -27,6 +27,21 @@
  *   over    scoreboard dwell, bodies left where they fell
  *
  * ────────────────────────────────────────────────────────────────────────────
+ * RESPAWNS
+ * ────────────────────────────────────────────────────────────────────────────
+ * Death inside a round costs `RULES.respawnDelay` seconds, not the round. The
+ * queue is one entry per dead ROSTER RECORD, so a bot and the human come back
+ * on identical rules and the scoreboard row survives the death — a respawned
+ * bot is a NEW `Agent` (the old one is a ragdoll and cannot be un-died), so the
+ * record's `actor` is re-pointed and everything that looks a man up by his
+ * record keeps working.
+ *
+ * Respawns CLOSE when the charge is armed or the clock drops under
+ * `RULES.respawnCutoff`, which is what keeps the win condition intact: only
+ * once the queue can no longer refill can a side be eliminated, so the last
+ * stretch of every round is the one-life mode this is a version of.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
  * PUBLIC API — `const m = ctx.get('match')`
  * ────────────────────────────────────────────────────────────────────────────
  *   m.phase / m.round / m.score      -> [red, blue]
@@ -44,7 +59,7 @@
  */
 
 import * as THREE from 'three';
-import { RULES, TEAM, TEAM_NAME, TEAM_COLOR, ROLE, attackingTeam, BOT_NAMES, TEAM_VARIANTS } from './rules.js';
+import { RULES, TEAM, TEAM_NAME, TEAM_COLOR, ROLE, attackingTeam, roleOf, BOT_NAMES, TEAM_VARIANTS } from './rules.js';
 import { resolveLayout } from './sites.js';
 import { Bomb, BOMB } from './bomb.js';
 import { Spectator } from './spectate.js';
@@ -92,6 +107,10 @@ export class MatchSystem {
     /** One record per participant for the scoreboard. Never reallocated. */
     this.roster = [];
     this._botsByTeam = [[], []];
+    /** The Squad each side's bots belong to, so a respawn joins the right one. */
+    this._squads = [null, null];
+    /** Pending respawns: { rec, at } sorted by nothing — the list is tiny. */
+    this._respawnQueue = [];
 
     /* ---- hand the rules to the systems that enforce them --------------- */
     this.ai.playerTeam = this.playerTeam;
@@ -156,8 +175,11 @@ export class MatchSystem {
       working: '',
       roster: this.roster,
     };
+    this._hud.respawnIn = 0;
     this._interact = { held: 0, kind: null };
     this._playerWasDead = false;
+    /** Scratch for `_safeSpawn`, which runs on a respawn and must not allocate. */
+    this._spawnPick = new THREE.Vector3();
     this._playerLastAttacker = null;
     this._objectiveTimer = 0;
     /** The attacker tasked with fetching a dropped charge. */
@@ -178,7 +200,11 @@ export class MatchSystem {
 
     console.info(
       `[match] SUDDEN CLAUDE — demolition ${RULES.teamSize}v${RULES.teamSize}, ` +
-        `first to ${RULES.roundsToWin}, sides swap after round ${RULES.swapAfterRound}`
+        `${RULES.roundTime | 0}s rounds, first to ${RULES.roundsToWin}, ` +
+        `sides swap after round ${RULES.swapAfterRound}` +
+        (RULES.respawns
+          ? ` · respawn ${RULES.respawnDelay}s, closes at ${RULES.respawnCutoff}s or on the plant`
+          : ' · one life')
     );
   }
 
@@ -255,6 +281,7 @@ export class MatchSystem {
     this.roster.length = 0;
     this._botsByTeam[0].length = 0;
     this._botsByTeam[1].length = 0;
+    this._respawnQueue.length = 0;
 
     // Attackers commit to one site; defenders split, weighted to the site the
     // attackers did NOT pick only by chance, because they do not know either.
@@ -302,34 +329,44 @@ export class MatchSystem {
     const names = BOT_NAMES[team];
     const squad = this.ai.createSquad();
     squad.team = team;
+    this._squads[team] = squad;
 
     // Slot 0 of the human's own team is the human. Bots fill the rest.
     const human = team === this.playerTeam;
     if (human) {
       this.roster.push({
         name: 'YOU', team, kills: 0, deaths: 0, alive: true, isPlayer: true, actor: this.player,
+        /** Kept so a respawn can rebuild exactly this man. */
+        role, variant: null, slot: 0,
       });
     }
     const bots = RULES.teamSize - (human ? 1 : 0);
     for (let i = 0; i < bots; i++) {
-      const sp = spawns[(i + (human ? 1 : 0)) % spawns.length];
-      const jitterA = this.rng.range(0, Math.PI * 2);
-      const jitterR = this.rng.range(0, 1.1);
-      this._v
-        .copy(sp.position)
-        .add(this._v2.set(Math.cos(jitterA) * jitterR, 0, Math.sin(jitterA) * jitterR));
-      this._v.y = this.ai.groundAt(this._v.x, this._v.z, sp.position.y + 3);
-      const agent = this.ai.spawn(variants[i % variants.length], this._v, sp.yaw, {
+      const slot = i + (human ? 1 : 0);
+      const sp = spawns[slot % spawns.length];
+      this._jitterOnto(sp, this._v);
+      const variant = variants[i % variants.length];
+      const agent = this.ai.spawn(variant, this._v, sp.yaw, {
         team,
-        name: names[i % names.length],
+        name: names[slot % names.length],
         role,
       });
       squad.add(agent);
       this._botsByTeam[team].push(agent);
       this.roster.push({
         name: agent.name, team, kills: 0, deaths: 0, alive: true, isPlayer: false, actor: agent,
+        role, variant, slot,
       });
     }
+  }
+
+  /** A spawn point plus a metre of scatter, dropped onto the floor. */
+  _jitterOnto(sp, out) {
+    const a = this.rng.range(0, Math.PI * 2);
+    const r = this.rng.range(0, 1.1);
+    out.copy(sp.position).add(this._v2.set(Math.cos(a) * r, 0, Math.sin(a) * r));
+    out.y = this.ai.groundAt(out.x, out.z, sp.position.y + 3);
+    return out;
   }
 
   _resetPlayer() {
@@ -342,6 +379,163 @@ export class MatchSystem {
     this.weapons.resetAmmo();
     this.spectator.stop();
     this._playerWasDead = false;
+  }
+
+  /* ==================================================================== */
+  /* respawns                                                             */
+  /* ==================================================================== */
+
+  /**
+   * Is the respawn window open?
+   *
+   * Two gates, and both of them exist to protect the win condition rather than
+   * the balance. Once the C4 is armed the fuse is the only clock and a defuse
+   * has to be *possible*, which it is not against an attack that refills for
+   * ever; and inside the last `respawnCutoff` seconds the round has to be able
+   * to end, which it cannot while either side can replace a loss.
+   */
+  _respawnsOpen() {
+    return (
+      RULES.respawns &&
+      this.phase === PHASE.LIVE &&
+      !this.bomb.armed &&
+      this.roundClock > RULES.respawnCutoff
+    );
+  }
+
+  /** Men of `team` waiting to come back. Reads as "not eliminated yet". */
+  _queuedFor(team) {
+    let n = 0;
+    for (const q of this._respawnQueue) if (q.rec.team === team) n++;
+    return n;
+  }
+
+  /**
+   * Put a dead roster record in the queue. Called from both death paths, which
+   * is the whole reason bots and the human respawn on identical rules: there is
+   * one queue and one timer, and neither of them knows which is which.
+   */
+  _queueRespawn(rec) {
+    if (!rec || rec.alive) return;
+    if (!this._respawnsOpen()) return;
+    for (const q of this._respawnQueue) if (q.rec === rec) return;
+    this._respawnQueue.push({ rec, at: this.ctx.time.elapsed + RULES.respawnDelay });
+  }
+
+  _updateRespawns() {
+    const q = this._respawnQueue;
+    if (!q.length) return;
+    // The window can close while men are already queued (the charge goes down,
+    // the clock runs under the cutoff). Those men stay dead — that is the point
+    // of the cutoff, and dropping the queue here is what lets the round end.
+    if (!this._respawnsOpen()) {
+      q.length = 0;
+      return;
+    }
+    const now = this.ctx.time.elapsed;
+    let changed = false;
+    for (let i = q.length - 1; i >= 0; i--) {
+      if (q[i].at > now) continue;
+      const rec = q[i].rec;
+      q.splice(i, 1);
+      if (rec.isPlayer) this._respawnPlayer(rec);
+      else this._respawnBot(rec);
+      changed = true;
+    }
+    if (changed) {
+      this._pruneDead();
+      this._assignObjectives();
+    }
+  }
+
+  /**
+   * The emptiest spawn point of a side's cluster, as a world position.
+   *
+   * "A respawn that puts you in front of an enemy" is the single thing that
+   * makes respawning feel unfair, so this scores every point of the cluster by
+   * the distance to the NEAREST live enemy and takes the largest. With fifteen
+   * points spread over a 13 x 10 m pocket that is a real choice rather than a
+   * formality. `RULES.respawnSafeRadius` is only a report threshold: if every
+   * point is worse than that the best of a bad set is still used, because a
+   * delayed respawn is worse than a contested one.
+   */
+  _safeSpawn(team, role, outYaw) {
+    const spawns = role === ROLE.ATTACK ? this.spawns.attack : this.spawns.defend;
+    const foes = this._botsByTeam[1 - team];
+    const playerIsFoe = this.playerTeam !== team && !this.player.dead;
+    let best = spawns[0];
+    let bestD = -Infinity;
+    for (const sp of spawns) {
+      let nearest = Infinity;
+      for (const f of foes) {
+        if (!f.alive) continue;
+        const d = f.position.distanceToSquared(sp.position);
+        if (d < nearest) nearest = d;
+      }
+      if (playerIsFoe) {
+        const d = this.player.position.distanceToSquared(sp.position);
+        if (d < nearest) nearest = d;
+      }
+      // Break ties randomly so fifteen men do not queue on the same square.
+      const score = nearest + this.rng.range(0, 36);
+      if (score > bestD) {
+        bestD = score;
+        best = sp;
+      }
+    }
+    outYaw.yaw = best.yaw;
+    return this._jitterOnto(best, this._spawnPick);
+  }
+
+  _respawnBot(rec) {
+    const team = rec.team;
+    const role = roleOf(team, this.round);
+    const yawOut = this._yawOut ?? (this._yawOut = { yaw: 0 });
+    const pos = this._safeSpawn(team, role, yawOut);
+    const agent = this.ai.spawn(rec.variant ?? TEAM_VARIANTS[team][0], pos, yawOut.yaw, {
+      team,
+      name: rec.name,
+      role,
+    });
+    this._squads[team]?.add(agent);
+    this._botsByTeam[team].push(agent);
+    rec.actor = agent;
+    rec.alive = true;
+    this.ai.protect(agent, RULES.spawnProtect);
+    this.ctx.events.emit('match:respawn', { name: rec.name, team, isPlayer: false });
+  }
+
+  _respawnPlayer(rec) {
+    const role = this.playerRole;
+    const yawOut = this._yawOut ?? (this._yawOut = { yaw: 0 });
+    const pos = this._safeSpawn(this.playerTeam, role, yawOut);
+    this.spectator.stop();
+    this.player.respawnAt(pos, yawOut.yaw);
+    this.player.setControlEnabled(true);
+    this.weapons.resetAmmo();
+    rec.alive = true;
+    this._playerWasDead = false;
+    this.ai.protect(this.player, RULES.spawnProtect);
+    this.ui.banner.show('RESPAWN', `${RULES.spawnProtect | 0}S PROTECTED`, 1.6);
+    this.ctx.events.emit('match:respawn', { name: rec.name, team: this.playerTeam, isPlayer: true });
+  }
+
+  /**
+   * Drop corpses out of the per-team lists.
+   *
+   * `_botsByTeam` is walked every frame by objective assignment, the defuse
+   * search and `_safeSpawn`; over a five minute round with respawns it would
+   * otherwise grow to every body that has ever fallen. The Agent objects
+   * themselves are reaped by `ai` (see `ai.corpseLimit`); this is only the
+   * match's own bookkeeping.
+   */
+  _pruneDead() {
+    for (const list of this._botsByTeam) {
+      let w = 0;
+      for (let i = 0; i < list.length; i++) if (list[i].alive) list[w++] = list[i];
+      list.length = w;
+    }
+    for (const s of this._squads) s?.prune();
   }
 
   /**
@@ -442,6 +636,8 @@ export class MatchSystem {
     this.bomb.frozen = true;
     this.bomb.worker = null;
     this.bomb.workKind = null;
+    // Nobody comes back after the round is decided.
+    this._respawnQueue.length = 0;
     for (const a of this.ai.agents) a.working = null;
     this.score[winner]++;
     this.result = { winner, reason };
@@ -521,6 +717,7 @@ export class MatchSystem {
     const kr = killer ? this._record(killer) : null;
     if (kr && kr !== vr) kr.kills++;
     this._pushKillfeed(kr, vr, !!e.headshot);
+    if (vr) this._queueRespawn(vr);
 
     // The carrier going down drops the charge where they fell.
     if (this.bomb.carrier === victim) {
@@ -542,6 +739,7 @@ export class MatchSystem {
       const killer = this._record(this._playerLastAttacker);
       if (killer && killer !== pr) killer.kills++;
       this._pushKillfeed(killer, pr, false);
+      this._queueRespawn(pr);
     }
     if (this.bomb.carrier === this.player) {
       this._v.copy(this.player.position);
@@ -558,7 +756,12 @@ export class MatchSystem {
     this.player.setControlEnabled(false);
     this.spectator.start(this.ctx.camera.position);
     this._playerWasDead = true;
-    this.ui.banner.show('ELIMINATED', 'NO RESPAWN THIS ROUND', 2.6);
+    const q = this._respawnQueue.find((r) => r.rec === pr);
+    this.ui.banner.show(
+      'ELIMINATED',
+      q ? `RESPAWN IN ${RULES.respawnDelay | 0}S` : 'NO RESPAWN — PLAY IT OUT',
+      2.6
+    );
   }
 
   _pushKillfeed(killer, victim, headshot) {
@@ -610,9 +813,11 @@ export class MatchSystem {
         // firefight and nobody else was ever told to. Two seconds is short
         // enough that the nearest free attacker picks it up and long enough that
         // nobody oscillates between two orders.
+        this._updateRespawns();
         this._objectiveTimer -= dt;
         if (this._objectiveTimer <= 0) {
           this._objectiveTimer = 2;
+          this._pruneDead();
           this._assignObjectives();
         }
         this._updateBotObjectiveWork(dt);
@@ -876,13 +1081,17 @@ export class MatchSystem {
     const aAlive = this.aliveCount(atk);
     const dAlive = this.aliveCount(def);
 
-    if (dAlive === 0) {
+    // ELIMINATION STILL SCORES, but a man in the respawn queue is not dead — he
+    // is late. Counting him would end the round the instant a fifteen-man side
+    // happened to be between waves, which with a six second delay is most of
+    // the time. This is the whole of what respawns change about the rules.
+    if (dAlive === 0 && this._queuedFor(def) === 0) {
       this._endRound(atk, 'DEFENDERS ELIMINATED');
       return;
     }
     // Attackers wiped only loses the round if the charge is not already down —
     // this is the rule that makes a planted C4 worth trading lives for.
-    if (aAlive === 0 && !this.bomb.armed) {
+    if (aAlive === 0 && this._queuedFor(atk) === 0 && !this.bomb.armed) {
       this._endRound(def, 'ATTACKERS ELIMINATED');
       return;
     }
@@ -917,6 +1126,10 @@ export class MatchSystem {
     h.rosterUs = this._rosterSize(this.playerTeam);
     h.rosterThem = this._rosterSize(1 - this.playerTeam);
     h.dead = this.player.dead;
+    // Seconds until the human is back, 0 when nothing is pending. `ui` reads it
+    // if it wants to; the banner at the moment of death carries it either way.
+    const mine = this._respawnQueue.find((q) => q.rec.isPlayer);
+    h.respawnIn = mine ? Math.max(0, mine.at - this.ctx.time.elapsed) : 0;
     h.spectating = this.spectator.active ? this.spectator.targetName : '';
     h.progress = b.progress;
     h.working = b.workKind ?? '';

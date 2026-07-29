@@ -76,29 +76,41 @@ export const SITES = [
  * THE SEPARATION IS LOAD-BEARING. An actor's view range is 58 m
  * (`Agent.viewRange`). At the first spacing tried on the old map — closest pair
  * 51 m — both sides acquired a target on the spawn frame and spent the round
- * trading shots down the middle instead of playing the objective. The closest
- * pair here is 72 m, and the two cross streets are blind to each other because
- * the mid street's median (`K1`, `K2`) stands between them, so the round opens
- * with two teams walking rather than two teams already shooting.
+ * trading shots down the middle instead of playing the objective. The two cross
+ * streets are also blind to each other because the mid street's median (`K1`,
+ * `K2`) stands between them, so the round opens with two teams walking rather
+ * than two teams already shooting.
+ *
+ * FIFTEEN A SIDE NEEDS FIFTEEN POINTS. `_spawnTeam` walks this list modulo its
+ * length, so seven points for fifteen men stacks two bodies per point inside a
+ * 1.1 m jitter — they spend the freeze shoving each other out of the way and
+ * the first thing the round does is look broken. Five ranks of three, filling
+ * the mid-lane pocket the seven-man version only sampled:
+ *
+ *   x  -5.0    0.0    +5.0        (the mid lane's kerb line is x ±6.5)
+ *   z  44.6  42.0  39.4  36.8  34.2   attack   (north cross street is z 24..32)
+ *   z -44.6 -42.0 -39.4 -36.8 -34.2   defence  (south cross street is z -34..)
+ *
+ * The closest attack/defence pair is 68.4 m, still comfortably outside the 58 m
+ * view range, so the opening frame is still two teams walking. These are also
+ * the RESPAWN points — `MatchSystem._safeSpawn` picks whichever of the fifteen
+ * has the most empty ground around it, which only works if there are enough of
+ * them to choose between.
  */
 export const SPAWNS = {
   attack: [
-    [-3.6, 43.0, Math.PI],
-    [0.0, 44.6, Math.PI],
-    [3.6, 43.0, Math.PI],
-    [-2.2, 39.6, Math.PI],
-    [2.2, 39.6, Math.PI],
-    [-4.6, 36.2, Math.PI],
-    [4.6, 36.2, Math.PI],
+    [-5.0, 44.6, Math.PI], [0.0, 44.6, Math.PI], [5.0, 44.6, Math.PI],
+    [-5.0, 42.0, Math.PI], [0.0, 42.0, Math.PI], [5.0, 42.0, Math.PI],
+    [-5.0, 39.4, Math.PI], [0.0, 39.4, Math.PI], [5.0, 39.4, Math.PI],
+    [-5.0, 36.8, Math.PI], [0.0, 36.8, Math.PI], [5.0, 36.8, Math.PI],
+    [-5.0, 34.2, Math.PI], [0.0, 34.2, Math.PI], [5.0, 34.2, Math.PI],
   ],
   defend: [
-    [-3.6, -43.0, 0],
-    [0.0, -44.4, 0],
-    [3.6, -43.0, 0],
-    [-2.2, -39.6, 0],
-    [2.2, -39.6, 0],
-    [-4.6, -36.2, 0],
-    [4.6, -36.2, 0],
+    [-5.0, -44.6, 0], [0.0, -44.6, 0], [5.0, -44.6, 0],
+    [-5.0, -42.0, 0], [0.0, -42.0, 0], [5.0, -42.0, 0],
+    [-5.0, -39.4, 0], [0.0, -39.4, 0], [5.0, -39.4, 0],
+    [-5.0, -36.8, 0], [0.0, -36.8, 0], [5.0, -36.8, 0],
+    [-5.0, -34.2, 0], [0.0, -34.2, 0], [5.0, -34.2, 0],
   ],
 };
 

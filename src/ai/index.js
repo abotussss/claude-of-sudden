@@ -76,7 +76,12 @@ export class AiSystem {
     });
     // Contact occlusion under every actor. Without it the cast shadow alone
     // leaves them hovering: see grounding.js.
-    this.ground = new GroundShadows(this.root, 16);
+    //
+    // The capacity is a HARD CAP — `addActor` silently drops quads past it, so
+    // at 16 a 15v15 would have had half the men on the map floating. 40 covers
+    // thirty live actors plus the corpse budget. It is two InstancedMeshes and
+    // the count is set per frame, so an unused slot costs nothing to draw.
+    this.ground = new GroundShadows(this.root, 40);
     this._variants = new Map();
     this.agents = [];
     this.squads = [];
@@ -151,9 +156,27 @@ export class AiSystem {
      *  rather than 6, and a headless match measured 12k deferred solves across
      *  4.1k frames — three requests a frame going unanswered, which reads as
      *  bots hesitating at every corner. 4 solves is ~3 ms worst case and the
-     *  worst case does not happen on consecutive frames. */
-    this.pathsPerFrame = ctx.has('match') ? 4 : 2;
+     *  worst case does not happen on consecutive frames.
+     *
+     *  Raised again to 7 for the 15v15: thirty actors ask for rather more than
+     *  twice what thirteen did, because more of them are in contact at once. The
+     *  budget is a RATION, not a target — a frame only pays for the solves that
+     *  were actually asked for, and `stats.pathsDeferred` is the number to watch.
+     *  `match` re-tunes this from the roster size in `MatchSystem.init` if it
+     *  ever moves; see `ai.scaleBudgets`. */
+    this.pathsPerFrame = ctx.has('match') ? 7 : 2;
     this.stats.pathsDeferred = 0;
+    /**
+     * CORPSE BUDGET. With one life a round there were at most 30 bodies on the
+     * map and they all appeared in the last few seconds. With respawns a five
+     * minute round produces hundreds, and each one is a live ragdoll in the
+     * physics solver plus a skinned mesh in the scene — the frame time walks
+     * upward for the whole round and never comes back. The oldest bodies are
+     * disposed once there are more than this many; the newest stay, because the
+     * body you care about is the one that just fell in front of you.
+     */
+    this.corpseLimit = ctx.has('match') ? 14 : 64;
+    this._corpses = [];
     this._frustum = new THREE.Frustum();
     this._mvp = new THREE.Matrix4();
     this._sphere = new THREE.Sphere();
@@ -438,6 +461,36 @@ export class AiSystem {
     return ta >= 0 && tb >= 0 && ta !== tb;
   }
 
+  /**
+   * SPAWN PROTECTION — `match` calls this on every respawn, for a bot and for
+   * the human alike.
+   *
+   * It is implemented as "not a valid target", not as damage immunity, and the
+   * difference is the whole design. Immunity means rounds visibly hitting a man
+   * and doing nothing, which reads as a bug or a cheat depending on which end of
+   * it you are on; this instead means nobody chooses to shoot at him, which is
+   * what a real spawn area does. A protected man who walks into a grenade, or
+   * into fire already going down a lane, still dies — protection buys the two
+   * seconds it takes to get out of the spawn, and no more.
+   *
+   * The field lives on the actor rather than in a map here so it costs one
+   * number compare in `hostilesOf` and nothing at all when it has expired. It is
+   * namespaced to this subsystem: `player` neither sets nor reads it.
+   *
+   * @param {object} actor an Agent, or the player system
+   * @param {number} seconds
+   */
+  protect(actor, seconds) {
+    if (!actor || !(seconds > 0)) return;
+    actor.aiProtectedUntil = this.ctx.time.elapsed + seconds;
+  }
+
+  /** False while `actor` is inside its spawn protection window. */
+  targetable(actor) {
+    const t = actor?.aiProtectedUntil;
+    return !(t !== undefined && this.ctx.time.elapsed < t);
+  }
+
   /** Chest position of any actor — what perception aims at. Writes into `out`. */
   actorChest(actor, out) {
     if (!actor) return null;
@@ -458,12 +511,12 @@ export class AiSystem {
       this._hostiles[1].length = 0;
       for (let i = 0; i < this.agents.length; i++) {
         const a = this.agents[i];
-        if (!a.alive) continue;
+        if (!a.alive || !this.targetable(a)) continue;
         const t = a.team === 1 ? 1 : 0;
         this._hostiles[1 - t].push(a);
       }
       const p = this.ctx.peek('player');
-      if (p && p.dead !== true) {
+      if (p && p.dead !== true && this.targetable(p)) {
         const t = this.teamOf(p) === 1 ? 1 : 0;
         this._hostiles[1 - t].push(p);
       }
@@ -500,7 +553,8 @@ export class AiSystem {
     let best = null;
     let bestD = Infinity;
     const cur = agent.targetActor;
-    if (cur && cur.alive !== false && cur.dead !== true && this.isHostile(agent, cur)) {
+    if (cur && cur.alive !== false && cur.dead !== true && this.targetable(cur) &&
+        this.isHostile(agent, cur)) {
       const d = this._sightTo(agent, cur, eye, fx, fz, cone);
       if (d >= 0) {
         best = cur;
@@ -1020,9 +1074,48 @@ export class AiSystem {
       }
     }
     this._updateGrenades(dt);
+    this._reapCorpses();
     this._updateSpotting(ctx);
     this.stats.agents = this.agents.length;
     this.stats.alive = alive;
+    this.stats.corpses = this.agents.length - alive;
+  }
+
+  /**
+   * Keep at most `corpseLimit` bodies on the map, oldest out first.
+   *
+   * A ragdoll is not free once it has settled: physics still steps it, `render`
+   * still draws a skinned mesh with its own material set, and `lateUpdate` still
+   * puts a contact shadow under it. Thirty men respawning on a six second timer
+   * for five minutes is a few hundred of those, and the cost is monotonic — the
+   * round starts at 60 fps and ends somewhere else.
+   *
+   * Reaping by AGE rather than by distance is deliberate: a body that vanishes
+   * because you looked away and looked back is worse than one that vanishes
+   * thirty seconds after it fell, and the age rule is the same wherever you
+   * happen to be standing. `deadTime` is accumulated above; a body is only
+   * eligible once it has had four seconds to settle and be seen, so nothing
+   * ever disappears in the same beat it fell in.
+   */
+  _reapCorpses() {
+    const list = this._corpses;
+    list.length = 0;
+    for (let i = 0; i < this.agents.length; i++) {
+      const a = this.agents[i];
+      if (!a.alive && a.deadTime !== undefined) list.push(a);
+    }
+    if (list.length <= this.corpseLimit) return;
+    list.sort((a, b) => b.deadTime - a.deadTime); // oldest first
+    let toRemove = list.length - this.corpseLimit;
+    for (let i = 0; i < list.length && toRemove > 0; i++) {
+      const a = list[i];
+      if (a.deadTime < 4) break; // nothing dies twice in front of you
+      const k = this.agents.indexOf(a);
+      if (k >= 0) this.agents.splice(k, 1);
+      this.cover?.release(a.id);
+      a.dispose();
+      toRemove--;
+    }
   }
 
   /**
@@ -1066,7 +1159,13 @@ export class AiSystem {
       const a = this.agents[i];
       a.syncHitboxes();
       // Dead men keep their contact: a ragdoll on the floor needs it most.
-      g.addActor(a);
+      //
+      // An actor `_updateRelevance` proved cannot reach a pixel is skipped: its
+      // contact quad is a screen-space sprite lying under it, so if the actor's
+      // inflated sphere misses the frustum the quad does too. That is worth two
+      // `bonePos` calls per actor per frame, which at thirty actors is the
+      // difference between the cap mattering and not.
+      if (!a.lodIrrelevant) g.addActor(a);
     }
     g.end();
   }

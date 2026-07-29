@@ -1,9 +1,16 @@
 /**
  * MATCH — the ruleset.
  *
- * Sudden Attack's 폭파미션 (demolition), which is where the game's whole feel
- * comes from: no respawn inside a round, one life, a 2 minute clock, and a bomb
- * that turns a lost gunfight into a won round if the C4 is already down.
+ * Sudden Attack's 폭파미션 (demolition), retuned into a WAR rather than a duel:
+ * fifteen a side, a five minute clock, and respawns inside the round the way a
+ * team deathmatch runs them. The bomb is still the only thing that wins it early
+ * and the clock is still the only thing that ends it late — respawning changes
+ * the TEXTURE of the fight, not the win condition.
+ *
+ * WHAT CHANGED FROM THE ONE-LIFE VERSION, and why each number is what it is:
+ *   teamSize 7 -> 15      thirty actors on the map; see the LOD notes in src/ai
+ *   roundTime 120 -> 300  a 15v15 execute needs minutes, not seconds
+ *   respawns  off -> on   a death is a 6 second penalty, not the end of a round
  *
  * Everything a designer would want to turn is here. Nothing else in `src/match`
  * hardcodes a duration or a count.
@@ -18,8 +25,23 @@ export const ROLE = { ATTACK: 'attack', DEFEND: 'defend' };
 
 export const RULES = {
   /* ---- teams ---- */
-  /** Players per side, INCLUDING the human on their team. 7v7, as SA runs it. */
-  teamSize: 7,
+  /**
+   * Players per side, INCLUDING the human on their team.
+   *
+   * 15, not the 7 SA runs: the brief was "敵も15-15で戦いたい / もっと戦争的に" —
+   * make it read as a war. Thirty actors is more than double the thirteen this
+   * mode was tuned at, and it is NOT free. What pays for it, measured in
+   * `src/ai`:
+   *   • A* is rationed per frame (`ai.pathsPerFrame`), scaled with the roster.
+   *   • Line of sight is two rays per actor per frame on a rotating cursor, so
+   *     perception is O(actors), not O(actors²).
+   *   • An actor that cannot reach a pixel this frame animates at a third rate
+   *     and leaves the shadow cascades (`ai._updateRelevance`).
+   *   • Corpses are reaped (`ai.corpseLimit`) — with respawns on, a five minute
+   *     round produces far more bodies than ragdoll solving can carry.
+   * Raise this further only with `matchprobe`-style numbers in hand.
+   */
+  teamSize: 15,
   /** The human's team. The other side is bots either way. */
   playerTeam: TEAM.RED,
 
@@ -43,8 +65,17 @@ export const RULES = {
    * removed rather than left to mislead.
    */
   freeze: 10,
-  /** Round clock. Runs out ⇒ defenders win, exactly as SA scores it. */
-  roundTime: 120,
+  /**
+   * Round clock. Runs out ⇒ defenders win, exactly as SA scores it.
+   *
+   * 300 (five minutes), up from 120. The brief: "時間内に爆破できなかったら終了
+   * システムで5分の戦闘にして". Two minutes was a one-life sprint; with respawns
+   * and thirty men it takes that long just to establish which lane the fight is
+   * on. Everything that reads this clock was checked: the HUD formats it with
+   * `mmss()` so 300 draws as "5:00", the C4 fuse is its own 40 s clock and is
+   * unchanged, freeze time is unchanged, and the round-over dwell is unchanged.
+   */
+  roundTime: 300,
   /** C4 fuse once planted. The round clock stops mattering the moment it starts. */
   bombTime: 40,
   plantTime: 4,
@@ -79,6 +110,34 @@ export const RULES = {
   blastRadius: 22,
   blastDamage: 600,
 
+  /* ---- airstrike ---- */
+  /**
+   * THE AIRSTRIKE IS NOT A SECOND C4, and these are deliberately not
+   * `blastRadius` / `blastDamage`.
+   *
+   * The C4's 22 m / 600 is a round-ENDING blast: it is meant to be unsurvivable
+   * anywhere near the site, because the round is over when it goes off. An
+   * airstrike lands mid-round with fourteen people alive, so at those numbers a
+   * single strike would routinely take four men off the board for standing in
+   * the wrong street — which is not a hazard, it is a coin flip.
+   *
+   * 15 m / 260 keeps the same falloff `src/player/index.js` and `src/ai` already
+   * apply to the C4 (linear in distance) and makes the strike lethal inside
+   * about 6 m, badly hurtful to 10 m, and survivable at the edge. You die if you
+   * ignored the whistle; you limp if you were slow.
+   */
+  airstrikeRadius: 15,
+  airstrikeDamage: 260,
+  /**
+   * Seconds into a LIVE round before the first strike may be called, on top of
+   * which the whole telegraph (jet at -4.4 s, whistle at -2.6 s) still runs. The
+   * opening of a round is when both teams are walking out of spawn with no
+   * information; dropping a building on that is the one moment it is unfair.
+   */
+  airstrikeFirstDelay: 26,
+  /** Gap between strikes, seconds. Three sites, so at most three a round. */
+  airstrikeInterval: [34, 62],
+
   /* ---- combat ---- */
   /**
    * SA has no health regeneration — the 100 HP you spawn with is the 100 HP you
@@ -88,6 +147,47 @@ export const RULES = {
   regen: false,
   friendlyFire: false,
   /** Rounds that connect with a teammate still make noise; they just do no harm. */
+
+  /* ---- respawns ---- */
+  /**
+   * RESPAWNS INSIDE THE ROUND — "爆破ミッションシステムだけど、チームデスマッチ
+   * みたいにもっとリスポーンを許容して".
+   *
+   * The one-life rule is what made SA cautious, and it is exactly what a 15v15
+   * cannot carry: at thirty men the first thirty seconds decide the round and
+   * twenty-eight people then watch. So death costs `respawnDelay` seconds and
+   * nothing else.
+   *
+   * THE WIN CONDITION IS UNCHANGED. A round is still won by the C4 going off,
+   * by the C4 being cut, or by the clock. Elimination still scores — but only
+   * when a side has nobody alive AND nobody queued, which is only reachable once
+   * respawns have closed. See `MatchSystem._checkWinConditions`.
+   */
+  respawns: true,
+  /** Seconds from death to being back on your feet. */
+  respawnDelay: 6,
+  /**
+   * RESPAWNS CLOSE for the last stretch of the round, and the moment the charge
+   * is armed. Without a close, a planted C4 is undefusable (the attack feeds men
+   * onto it for ever) and the round can never end early — both of which make the
+   * clock the only thing that ever decides anything. With it, the endgame is the
+   * one-life mode the mode is named after.
+   */
+  respawnCutoff: 45,
+  /**
+   * SPAWN PROTECTION, in seconds. Implemented in `src/ai` as "you are not a
+   * valid target": a freshly spawned actor is skipped by enemy target selection
+   * for this long. It is deliberately NOT damage immunity — a man who walks into
+   * a grenade still dies — because immunity you can shoot through is the thing
+   * that makes spawn protection feel like a cheat.
+   */
+  spawnProtect: 4,
+  /**
+   * A spawn point is only used if the nearest live enemy is at least this far
+   * away. `MatchSystem._safeSpawn` scores every point of the side's cluster and
+   * takes the emptiest; this is the bar below which it will keep looking.
+   */
+  respawnSafeRadius: 26,
 
   /* ---- bots ---- */
   /**
@@ -118,10 +218,18 @@ export function roleOf(team, round) {
   return attackingTeam(round) === team ? ROLE.ATTACK : ROLE.DEFEND;
 }
 
-/** Callsigns, so the killfeed and scoreboard read like a real server. */
+/**
+ * Callsigns, so the killfeed and scoreboard read like a real server.
+ *
+ * There must be at least `RULES.teamSize` of them per side or two men share a
+ * name and the killfeed stops being readable — `_spawnTeam` indexes this modulo
+ * its length. Sixteen each, which covers 15 plus the slot the human occupies.
+ */
 export const BOT_NAMES = [
-  ['HAWK', 'VIPER', 'RONIN', 'SABLE', 'KILO', 'ORCA', 'ZENITH', 'DRIFT', 'CINDER'],
-  ['FROST', 'TALON', 'NOMAD', 'AZURE', 'ECHO', 'MAKO', 'VECTOR', 'SPARK', 'GLACIER'],
+  ['HAWK', 'VIPER', 'RONIN', 'SABLE', 'KILO', 'ORCA', 'ZENITH', 'DRIFT', 'CINDER',
+   'BASALT', 'QUARRY', 'TINDER', 'HALYARD', 'OBSIDIAN', 'RAMPART', 'JACKAL'],
+  ['FROST', 'TALON', 'NOMAD', 'AZURE', 'ECHO', 'MAKO', 'VECTOR', 'SPARK', 'GLACIER',
+   'COBALT', 'MERIDIAN', 'HALCYON', 'TUNDRA', 'PELAGIC', 'BOREAL', 'KESTREL'],
 ];
 
 /**
