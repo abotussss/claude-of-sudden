@@ -53,6 +53,17 @@ const POSES = [
   { id: 'B-plant', from: [42, -10.5], look: [42, 4], doc: 'standing ON the plant spot, looking back up the attack lane' },
   { id: 'B-defend-hold', from: [36, -18], look: [42, -8], doc: "the defence's ground hold, looking at the plant zone" },
   { id: 'B-overwatch', from: [52, -5], look: [42, -10.5], dy: 2.9 + 1.62, doc: 'the B-deck, looking down at the plant spot' },
+  { id: 'B-south-overwatch', from: [32.3, -19.6], look: [42, -10.5], dy: 3.0 + 1.62, doc: "the defence's own south catwalk" },
+  { id: 'A-south-overwatch', from: [-32.3, -19.6], look: [-42, -10.5], dy: 3.0 + 1.62, doc: "the defence's own south catwalk" },
+  /**
+   * Close range, for judging the masonry rather than the layout. The SITEWORKS
+   * table authors in unscaled level space and these are in scaled — the
+   * coordinates `world.worldToLevel` hands back — so each is 1.5x its entry:
+   * the A south plinth is authored at (-26.8, -9.8) and stands at (-40.2, -14.7).
+   */
+  { id: 'A-close-plinth', from: [-40.2, -19.4], look: [-40.2, -14.7], lookY: 0.7, doc: 'the south plinth at 4.7 m' },
+  { id: 'A-close-spine', from: [-42.1, -9.6], look: [-42.1, -6.0], lookY: 0.9, doc: 'the spine wall at 3.6 m' },
+  { id: 'A-close-gate', from: [-38.4, 9.6], look: [-43.8, 4.8], lookY: 1.8, doc: 'the north gatehouse at 7 m' },
 ];
 
 const browser = await chromium.launch({

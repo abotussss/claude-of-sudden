@@ -375,12 +375,23 @@ function buildPier(A, rng, p) {
 }
 
 /**
- * A PLINTH — a waist-high concrete pad, kerbed, with the corners knocked off it.
+ * A PLINTH — a waist-high cast concrete pad. The cover 3 m off the charge.
  *
- * The cover 3 m off the charge. Cast concrete rather than masonry so it does not
- * read as a third low wall: a poured pad with a chamfered kerb, one spalled
- * corner with the bar showing, and the streaked staining a pad gets from
- * standing in weather.
+ * THE FIRST VERSION OF THIS WAS THE WEAKEST THING IN EITHER COURTYARD, and it
+ * took a screenshot to see it: from the defence's hold at 6 m it read as two
+ * smooth grey boxes. Every surface it had was one uncut plane a metre and a half
+ * across, and no amount of material detail rescues a silhouette that is a
+ * rectangle. So it is now built the way a machine base actually is:
+ *
+ *   - a STEP. The pad pours at two heights, the taller two thirds at `h` and the
+ *     rest 0.35 m down, which gives it a profile from every angle and gives the
+ *     player a choice between standing cover and something to shoot over.
+ *   - FORMWORK. Bolt pockets down each long face on the 0.6 m grid a shutter is
+ *     actually tied on, and the horizontal seam where the two lifts met.
+ *   - a KERB that overhangs, so the top edge catches the sun as a line rather
+ *     than as the end of a face.
+ *   - one corner knocked off with the bar showing, and the pipe stubs cast into
+ *     the top that say the thing used to carry something.
  */
 function buildPlinth(A, rng, p) {
   const w = p.w;
@@ -390,30 +401,113 @@ function buildPlinth(A, rng, p) {
   const z0 = p.z - d / 2;
   const z1 = p.z + d / 2;
   const key = p.key ?? 'concrete';
+  /** Which end steps down, and how far along. */
+  const stepSide = rng.float() < 0.5 ? -1 : 1;
+  const alongX = w >= d;
+  const cut = rng.range(0.58, 0.7);
+  const lowH = p.h - rng.range(0.3, 0.4);
 
-  A.box('concrete', p.x, p.h / 2, p.z, w, p.h, d);
+  // ---- collision: the tall part at full height, the step at its own
+  const tall = (alongX ? w : d) * cut;
+  const low = (alongX ? w : d) - tall;
+  const tallC = (alongX ? p.x : p.z) - stepSide * low / 2;
+  const lowC = (alongX ? p.x : p.z) + stepSide * tall / 2;
+  A.box('concrete', alongX ? tallC : p.x, p.h / 2, alongX ? p.z : tallC, alongX ? tall : w, p.h, alongX ? d : tall);
+  A.box('concrete', alongX ? lowC : p.x, lowH / 2, alongX ? p.z : lowC, alongX ? low : w, lowH, alongX ? d : low);
 
   // ---- the pour, in two lifts with a visible day joint between them
-  const lift = p.h * 0.56;
+  const lift = lowH * 0.62;
   A.add(key, BOX(A), LL(IDENT, p.x, lift / 2, p.z, 0, w, lift, d), {
     masks: [0.55, 0.8, 0.55],
   });
-  A.add(key, BOX(A), LL(IDENT, p.x, lift + (p.h - lift) / 2, p.z, 0, w - 0.03, p.h - lift, d - 0.03), {
-    masks: [0.45, 0.6, 0.3],
-  });
+  A.add(
+    key,
+    BOX(A),
+    LL(
+      IDENT,
+      alongX ? tallC : p.x,
+      lift + (p.h - lift) / 2,
+      alongX ? p.z : tallC,
+      0,
+      alongX ? tall - 0.03 : w - 0.03,
+      p.h - lift,
+      alongX ? d - 0.03 : tall - 0.03
+    ),
+    { masks: [0.45, 0.6, 0.3] }
+  );
+  A.add(
+    key,
+    BOX(A),
+    LL(
+      IDENT,
+      alongX ? lowC : p.x,
+      lift + (lowH - lift) / 2,
+      alongX ? p.z : lowC,
+      0,
+      alongX ? low - 0.03 : w - 0.03,
+      lowH - lift,
+      alongX ? d - 0.03 : low - 0.03
+    ),
+    { masks: [0.5, 0.7, 0.4] }
+  );
   A.add('concrete_dark', BOX_THIN(A), LL(IDENT, p.x, lift, p.z, 0, w + 0.01, 0.03, d + 0.01), {
     masks: [0.9, 0.9, 0.4],
   });
-  // ---- kerb: a chamfered cap standing proud of the pad
-  const kg = chamferBox(w + 0.12, 0.14, d + 0.12, 0.03);
+
+  // ---- kerbs: a chamfered cap standing proud of each level
+  const kg = chamferBox(alongX ? tall + 0.12 : w + 0.12, 0.14, alongX ? d + 0.12 : tall + 0.12, 0.03);
   fillMasks(kg, 0.95, 0.35, 0.06);
-  A.addOnce('concrete_dark', kg, LL(IDENT, p.x, p.h - 0.04, p.z));
+  A.addOnce('concrete_dark', kg, LL(IDENT, alongX ? tallC : p.x, p.h - 0.04, alongX ? p.z : tallC));
+  const kg2 = chamferBox(alongX ? low + 0.1 : w + 0.1, 0.12, alongX ? d + 0.1 : low + 0.1, 0.028);
+  fillMasks(kg2, 0.95, 0.45, 0.06);
+  A.addOnce('concrete_dark', kg2, LL(IDENT, alongX ? lowC : p.x, lowH - 0.03, alongX ? p.z : lowC));
+
+  // ---- formwork bolt pockets, on the 0.6 m grid a shutter is tied on
+  for (const side of [0, 1, 2, 3]) {
+    const [ox, oz] = OUT[side];
+    const faceAlongX = ox === 0;
+    const a = faceAlongX ? x0 : z0;
+    const b = faceAlongX ? x1 : z1;
+    const fixed = ox > 0 ? x1 : ox < 0 ? x0 : oz > 0 ? z1 : z0;
+    const n = Math.max(1, Math.round((b - a) / 0.6));
+    for (let i = 0; i < n; i++) {
+      for (const hy of [lift * 0.55, lift + (lowH - lift) * 0.6]) {
+        if (hy > lowH - 0.16) continue;
+        const t = a + ((i + 0.5) / n) * (b - a);
+        A.add(
+          'concrete_dark',
+          BOX_THIN(A),
+          LL(
+            IDENT,
+            faceAlongX ? t : fixed + ox * 0.006,
+            hy,
+            faceAlongX ? fixed + oz * 0.006 : t,
+            0,
+            faceAlongX ? 0.075 : 0.006,
+            0.075,
+            faceAlongX ? 0.006 : 0.075
+          ),
+          { masks: [1, 0.95, 0.35] }
+        );
+      }
+    }
+  }
+
+  // ---- pipe stubs cast into the tall top: this used to carry something
+  for (let i = 0; i < rng.int(2, 3); i++) {
+    const px = alongX ? tallC + rng.range(-tall / 2 + 0.2, tall / 2 - 0.2) : p.x + rng.range(-w / 2 + 0.2, w / 2 - 0.2);
+    const pz = alongX ? p.z + rng.range(-d / 2 + 0.2, d / 2 - 0.2) : tallC + rng.range(-tall / 2 + 0.2, tall / 2 - 0.2);
+    const ph = rng.range(0.1, 0.22);
+    A.add('metal_rust', BOX_THIN(A), LL(IDENT, px, p.h + ph / 2, pz, rng.float() * 6.28, 0.055, ph, 0.055), {
+      masks: [1, 0.85, 0.15],
+    });
+  }
 
   // ---- one corner spalled off, with bar
   const sx = rng.float() < 0.5 ? x0 : x1;
   const sz = rng.float() < 0.5 ? z0 : z1;
-  for (let i = 0; i < 9; i++) {
-    const g = rockGeometry(rng, rng.range(0.06, 0.16), 1, rng.range(0.45, 0.8));
+  for (let i = 0; i < 11; i++) {
+    const g = rockGeometry(rng, rng.range(0.06, 0.17), 1, rng.range(0.45, 0.8));
     fillMasks(g, 0.9, rng.range(0.4, 0.9), 0.12);
     A.addOnce(
       'concrete_dark',
@@ -421,27 +515,27 @@ function buildPlinth(A, rng, p) {
       LL(
         IDENT,
         sx + (sx < p.x ? 1 : -1) * rng.range(0.02, 0.34),
-        rng.range(p.h - 0.42, p.h - 0.04),
+        rng.range(lowH - 0.42, lowH - 0.02),
         sz + (sz < p.z ? 1 : -1) * rng.range(0.02, 0.34),
         rng.float() * 6.28
       )
     );
   }
-  rebar(A, rng, sx + (sx < p.x ? 0.16 : -0.16), p.h - 0.3, sz + (sz < p.z ? 0.16 : -0.16), 2, 0.24);
+  rebar(A, rng, sx + (sx < p.x ? 0.16 : -0.16), lowH - 0.26, sz + (sz < p.z ? 0.16 : -0.16), 2, 0.24);
 
   // ---- streaked staining down the faces
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 8; i++) {
     const side = rng.int(0, 3);
     const [ox, oz] = OUT[side];
-    const alongX = ox === 0;
+    const faceAlongX = ox === 0;
     const t = rng.range(0.15, 0.85);
-    const px = alongX ? x0 + w * t : (ox > 0 ? x1 : x0) + ox * 0.008;
-    const pz = alongX ? (oz > 0 ? z1 : z0) + oz * 0.008 : z0 + d * t;
-    const len = rng.range(0.25, p.h * 0.8);
+    const px = faceAlongX ? x0 + w * t : (ox > 0 ? x1 : x0) + ox * 0.008;
+    const pz = faceAlongX ? (oz > 0 ? z1 : z0) + oz * 0.008 : z0 + d * t;
+    const len = rng.range(0.25, lowH * 0.8);
     A.add(
       'concrete_dark',
       BOX_THIN(A),
-      LL(IDENT, px, p.h - 0.14 - len / 2, pz, 0, alongX ? rng.range(0.08, 0.26) : 0.007, len, alongX ? 0.007 : rng.range(0.08, 0.26)),
+      LL(IDENT, px, lowH - 0.14 - len / 2, pz, 0, faceAlongX ? rng.range(0.08, 0.26) : 0.007, len, faceAlongX ? 0.007 : rng.range(0.08, 0.26)),
       { masks: [1, 1, 0.06] }
     );
   }
