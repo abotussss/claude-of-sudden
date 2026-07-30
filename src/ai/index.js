@@ -754,7 +754,13 @@ export class AiSystem {
     bounds.expandByScalar(2);
     const t0 = performance.now();
     this.grid = new NavGrid(phys, { bounds, cell: 0.8, radius: 0.36, height: 1.78 });
-    this.grid.build();
+    /**
+     * `world.interiorVolumes` is the ground storey of every enterable building,
+     * and handing it over is what puts an INDOORS in the height field at all —
+     * without it the sweep finds those cells' roofs and no bot on this map can
+     * ever be inside one. @see `NavGrid._carveInteriors`.
+     */
+    this.grid.build(world?.interiorVolumes ?? null);
     this.cover = new CoverMap(this.grid, phys);
     this.cover.build({ step: 1, reach: 1.3 });
     this.stats.navMs = performance.now() - t0;
@@ -762,7 +768,8 @@ export class AiSystem {
     this.stats.walkable = this.grid.walkableCount;
     this._navPending = false;
     console.info(
-      `[ai] nav ${this.grid.nx}x${this.grid.nz} cells · ${this.grid.walkableCount} walkable · ` +
+      `[ai] nav ${this.grid.nx}x${this.grid.nz} cells · ${this.grid.walkableCount} walkable ` +
+        `(${this.grid.interiorCells ?? 0} indoor) · ` +
         `${this.cover.points.length} cover points · ${this.stats.navMs.toFixed(0)}ms`
     );
   }

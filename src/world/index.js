@@ -61,6 +61,10 @@ import {
  *                             pickup, `ai` binds the interest. See features.js.
  *   world.links               the rooftop gangways: [{ id, from, to, a, b,
  *                             width, span, fall }] in world space. See links.js.
+ *   world.interiorVolumes     the GROUND FLOOR of every enterable building, as
+ *                             an oriented box the bot height field can re-sample
+ *                             itself against: [{ building, cx, cz, c, s, hw, hd,
+ *                             floorY, probeY }]. See `_interiorVolumes()`.
  *   world.prewarmMaterials()  compile every shader permutation the world can
  *                             produce, before the frame loop starts. Awaitable.
  *                             Call it from src/core/prewarm.js — see the method.
@@ -182,6 +186,7 @@ export class WorldSystem {
      */
     this.features = buildFeatures(A, infos);
     this.links = buildLinks(A, infos);
+    this.interiorVolumes = this._interiorVolumes(infos);
 
     this._addLights(A);
 
@@ -251,6 +256,68 @@ export class WorldSystem {
         `${(A.stats.instTris / 1000).toFixed(0)}k instanced tris in ${A.stats.instances} instances, ` +
         `${A.stats.drawCalls} draw calls, ${(A.stats.collideTris / 1000).toFixed(1)}k collision tris`
     );
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * THE GROUND FLOORS, PUBLISHED AS SOMETHING THE BOT GRID CAN SAMPLE
+   * ────────────────────────────────────────────────────────────────────────────
+   * "もっと屋内戦闘をさせたいので屋内のエリアを作ってそこにもAIがいく利点やメリットを与えて
+   *  でないとAIが屋内戦闘しない"
+   *
+   * `src/ai/nav.js` is a 2.5D height field: ONE floor per (x, z) cell, found by
+   * dropping a single ray from above the level. Inside a footprint that ray can
+   * only ever hit the ROOF, so — measured, `_navin.mjs` — every one of the 3353
+   * walkable cells inside the eight enterable buildings was at 3.2 / 6.5 / 9.6 m
+   * and ZERO were at ground level. No bot on this map could be indoors, every
+   * "give the AI a reason to go in" feature was dead on arrival, and the one that
+   * was built measured bot-time-indoors at 0.00 %.
+   *
+   * This is `world`'s half of the fix. It publishes each enterable building's
+   * GROUND STOREY as an oriented box with the height to re-probe from, and `ai`
+   * re-samples those cells from INSIDE the building — under the roof, under every
+   * upper slab — so the storey the player has always been able to walk into
+   * appears in the height field too. `world` changes NO geometry and NO collision
+   * to do it: the roof is still a roof, an upper floor still stops a bullet, and
+   * nothing here is on `LAYER.CLIP`. It is a statement about where the map's
+   * interiors are, which is exactly the kind of thing `world` is allowed to know
+   * and `ai` is not.
+   *
+   *   cx, cz    the footprint centre in WORLD space
+   *   c, s      cos/sin of the level yaw, so a consumer can put a world point
+   *             back on the building's own axes without knowing the transform
+   *   hw, hd    half extents along those axes — the OUTER footprint, walls
+   *             included, because the doorway a bot enters through is in the wall
+   *   floorY    the walking surface of the ground storey
+   *   probeY    where a downward ray must START to find that floor: above the
+   *             tallest thing worth standing on, BELOW the head of a 2.16 m
+   *             doorway (or the threshold cells sample the lintel and the storey
+   *             is an island), and far below the ceiling.
+   */
+  _interiorVolumes(infos) {
+    const c = Math.cos(LEVEL_YAW);
+    const s = Math.sin(LEVEL_YAW);
+    const out = [];
+    for (const info of infos) {
+      const spec = info.spec;
+      if (!spec.enterable) continue;
+      const p = this.A.toWorld(spec.x, 0, spec.z, new THREE.Vector3());
+      /** The interior slab tops out 0.14 above the storey's own datum. */
+      const floorY = (info.floorY?.[0] ?? 0) + 0.14;
+      /**
+       * The underside of whatever is over the ground storey — the first floor's
+       * slab and its exposed joists, or the roof slab in a single-storey block.
+       */
+      const ceil = (info.floorY?.[1] ?? info.roofY) - 0.44;
+      out.push({
+        building: spec.id,
+        cx: p.x, cz: p.z, c, s,
+        hw: spec.w / 2, hd: spec.d / 2,
+        floorY,
+        probeY: Math.min(floorY + 1.56, ceil),
+      });
+    }
+    return out;
   }
 
   // ----------------------------------------------------------------- lights --
