@@ -405,7 +405,17 @@ function buildPlinth(A, rng, p) {
   const stepSide = rng.float() < 0.5 ? -1 : 1;
   const alongX = w >= d;
   const cut = rng.range(0.58, 0.7);
-  const lowH = p.h - rng.range(0.3, 0.4);
+  /**
+   * How far the step drops, and it is bounded from BELOW for a gameplay reason
+   * rather than a visual one. The first version dropped 0.30-0.40 m off a 1.2 m
+   * pad, which put the low third at 0.80-0.90 m — under the 0.9 m line
+   * `sitecheck` counts as cover and under the 1.32 m probe `CoverMap.build` uses
+   * to call a spot STANDING cover. Measured: site A's mass inside the plant zone
+   * went from 28.0 m² to 21.5 m², i.e. a quarter of the cover this whole pass
+   * exists to add was given back for a silhouette. 0.20-0.30 m keeps the low
+   * step at 0.90-1.00 m and still reads as a step from 3 m.
+   */
+  const lowH = p.h - rng.range(0.2, 0.3);
 
   // ---- collision: the tall part at full height, the step at its own
   const tall = (alongX ? w : d) * cut;
