@@ -1744,6 +1744,9 @@ export class AiSystem {
     for (const a of this.agents) a.dispose();
     this.agents.length = 0;
     this.squads.length = 0;
+    // Queued messages hold a speaker; without this the net keeps thirty
+    // disposed actors alive for as long as anything holds the system.
+    this.radio.reset();
     for (const g of this._grenades) {
       this.phys?.removeRigidBody(g.body);
       this.root.remove(g.mesh);
