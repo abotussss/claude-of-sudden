@@ -40,7 +40,9 @@ import {
   surfaceImpact, footstep, shellCasing, reloadPhase, explosion, bodyFall, uiSound,
   heartbeat, cloth, meleeSwing, meleeHit,
 } from './foley.js';
-import { strikeJet, strikeIncoming, strikeRubble, strikeTail, strafeCannon } from './airstrike.js';
+import {
+  strikeJet, strikeIncoming, strikeRubble, strikeTail, strafeCannon, rubbleCollapse,
+} from './airstrike.js';
 import { bark as voxBark, barkFor } from './vox.js';
 import { classifySpace } from './ir.js';
 
@@ -89,6 +91,7 @@ const BUS_FOR = {
   bark: 'voice', ambient: 'ambience',
   strike_jet: 'ambience', strike_incoming: 'weapons',
   strike_rubble: 'weapons', strike_tail: 'weapons',
+  strike_settle: 'weapons',
   strafe_cannon: 'weapons', strafe_walk: 'weapons',
 };
 
@@ -186,6 +189,9 @@ export class AudioSystem {
      * Eight remote shots a second was one every 1.6 shooters; it is now one
      * every 3.75, so the same wall of noise costs 2.3x the slots.
      */
+    /** Debounce state for `_onAirPhase`. Preallocated: nothing per frame. */
+    this._settle = { at: 0, x: 0, y: 0, z: 0 };
+    this._lastBomberRun = null;
     this._rate = { shot: 5, impact: 5, step: 4, shell: 2, whizz: 2, reload: 4, bodyfall: 2 };
     this._rateNext = { shot: 0, impact: 0, step: 0, shell: 0, whizz: 0, reload: 0, bodyfall: 0 };
     this._lastBarkTime = -99;
@@ -522,6 +528,11 @@ export class AudioSystem {
       case 'strike_incoming': return strikeIncoming(actx, bank, rng, { when, dur: o.dur, level: o.level });
       case 'strike_rubble': return strikeRubble(actx, bank, rng, { when, dur: o.dur, level: o.level, distance: dist });
       case 'strike_tail': return strikeTail(actx, bank, rng, { when, dur: o.dur, level: o.level });
+      /* the fifth stage nobody could hear: the pile finishing. @see _onAirPhase */
+      case 'strike_settle':
+        return rubbleCollapse(actx, bank, rng, {
+          when, dur: o.dur, level: o.level, size: o.size, distance: dist,
+        });
       /* the fighter's gun: at the aircraft, and again where it lands */
       case 'strafe_cannon':
         return strafeCannon(actx, bank, rng, { when, dur: o.dur, level: o.level, rate: o.rate });
@@ -709,8 +720,77 @@ export class AudioSystem {
     on('damage:dealt', (p) => this._onDamageDealt(p));
     on('damage:taken', (p) => this._onDamageTaken(p));
     on('actor:death', (p) => this._onDeath(p));
+    // THE AIR EVENTS. `src/match` plays the jet, the whistle, the blast and the
+    // airstrike's tail itself; what it never plays is the SETTLE, and it never
+    // plays a tail for the bomber. Both are ours because `src/match` is not.
+    on('match:airstrike', (p) => this._onAirPhase(p, 'airstrike'));
+    on('match:bomber', (p) => this._onAirPhase(p, 'bomber'));
+    on('match:strafe', (p) => this._onAirPhase(p, 'strafe'));
     // Optional: emitted by `ai` if it wants scripted chatter.
     on('ai:bark', (p) => this.bark(p?.kind ?? 'spot', p?.position, { voice: p?.voice ?? 0 }));
+  }
+
+  /**
+   * The two things the air events do not carry their own sound for.
+   *
+   * 1. `settled` — 「瓦礫の崩れる音も追加してリアルにして」. `src/match/airstrike.js`
+   *    settles its chunks at impact + 6.5 s and emits this phase when the rubble
+   *    becomes collision; the bomber and the strafe emit it for their debris. It
+   *    was SILENT, all three of them. `rubbleCollapse` is sized per source,
+   *    because the events are not the same size: an airstrike takes a storey off
+   *    a building, a bomb leaves a crater, a cannon pass leaves grit.
+   *
+   * 2. `impact` on a BOMBER RUN — the bomber plays the jet and then relies on the
+   *    `explosion` event for everything else, so a stick of 5-8 bombs walking a
+   *    line had no rolling report at all. One tail for the run, on the first bomb,
+   *    at stick length: a stick reads as one continuous roll, not as eight tails.
+   *
+   * THE VOICE BUDGET IS WHY THIS IS DEBOUNCED. The weapons bus is capped at 45 %
+   * of the 40-emitter field (18 slots) and a bigger explosion must not evict the
+   * firefight. A salvo settles three sites and a stick settles 5-8 bombs, all
+   * within a second or two, so `_settleAt` collapses anything inside 1.2 s and
+   * 40 m into ONE voice and grows its `size` instead. Worst case is therefore two
+   * or three settle voices for a salvo, not eleven.
+   */
+  _onAirPhase(p, source) {
+    if (!this.running || !p) return;
+    const pos = p.position;
+    if (!isVec(pos)) return;
+    const now = this.actx.currentTime;
+
+    if (p.phase === 'impact') {
+      if (source !== 'bomber') return;
+      // One roll per run, keyed on the run object the payload carries.
+      const run = p.run ?? null;
+      if (run && run === this._lastBomberRun) return;
+      this._lastBomberRun = run;
+      this._playAt('strike_tail', pos.x, pos.y, pos.z, {
+        level: 1.35, dur: 7.0, maxDist: 400, gain: 2.3, occlusion: 0,
+      }, 'weapons', 0.98);
+      return;
+    }
+    if (p.phase !== 'settled') return;
+
+    /** How much came down, per source. See `rubbleCollapse`'s `size`. */
+    const size = source === 'airstrike' ? 1 : source === 'bomber' ? 0.6 : 0.28;
+    const s = this._settle;
+    if (
+      s.at > 0 && now - s.at < 1.2 &&
+      Math.hypot(s.x - pos.x, s.y - pos.y, s.z - pos.z) < 40
+    ) {
+      // Same collapse, arriving as several events. Nothing new to play.
+      return;
+    }
+    s.at = now; s.x = pos.x; s.y = pos.y; s.z = pos.z;
+    this._playAt('strike_settle', pos.x, pos.y, pos.z, {
+      size, level: 1.1, maxDist: 200, gain: 1.9,
+      // The pile does not stop all at once, and a settle that starts on the exact
+      // frame the collision appears reads as a switch being thrown.
+      extraDelay: 0.12,
+    }, 'weapons',
+    // Below a footstep at 3 m on purpose: this is scenery, and it must never be
+    // the thing that takes the last weapons slot off a shot.
+    0.55);
   }
 
   _onFire(p) {
@@ -1227,6 +1307,28 @@ export class AudioSystem {
     this._distantBoom();
     this._distantChatter();
     ev.emit('explosion', { position: at(6, 0, -7), radius: 8, damage: 120 });
+    /**
+     * THE AIR EVENTS, ALL THREE, EVERY PHASE. They were missing from the storm,
+     * which is part of why the silent `settled` phase went unnoticed for as long
+     * as it did: the live gate fired one of every event through the real bus and
+     * these were not in the set.
+     *
+     * `salvo` and `stick` are the debounce cases — three sites and six bombs
+     * arriving within a frame of each other. They must come out as two or three
+     * voices, not nine. @see _onAirPhase
+     */
+    ev.emit('explosion', { position: at(9, 1, -14), radius: 15, damage: 260 });
+    for (const src of ['match:airstrike', 'match:bomber', 'match:strafe']) {
+      for (const phase of ['inbound', 'impact', 'settled']) {
+        ev.emit(src, { phase, site: 'MID', run: { id: 1 }, position: at(11, 0, -18) });
+      }
+    }
+    for (let i = 0; i < 3; i++) {
+      ev.emit('match:airstrike', { phase: 'settled', site: `S${i}`, position: at(12 + i * 4, 0, -19) });
+    }
+    for (let i = 0; i < 6; i++) {
+      ev.emit('match:bomber', { phase: 'settled', run: { id: 2 }, position: at(-14 - i * 3, 0, 22) });
+    }
     return { ok: true, voices: this.field.stats.active, errors: this.stats.errors };
   }
 

@@ -103,10 +103,16 @@ try {
   if (VERBOSE) {
     const rows = offline.results ?? [];
     const pad = (s, n) => String(s).padEnd(n);
-    console.log(`${pad('case', 26)}${pad('peak', 9)}${pad('rms', 10)}${pad('dc', 10)}${pad('centroidHz', 12)}ms`);
+    console.log(
+      `${pad('case', 26)}${pad('peak', 9)}${pad('rms', 10)}${pad('dc', 10)}` +
+        `${pad('centroidHz', 12)}${pad('d20s', 8)}${pad('d40s', 8)}ms`
+    );
     for (const r of rows) {
       if (r.error) { console.log(`${pad(r.name, 26)}ERROR ${r.error}`); continue; }
-      console.log(`${pad(r.name, 26)}${pad(r.peak, 9)}${pad(r.rms, 10)}${pad(r.dc, 10)}${pad(r.centroid, 12)}${r.ms}`);
+      console.log(
+        `${pad(r.name, 26)}${pad(r.peak, 9)}${pad(r.rms, 10)}${pad(r.dc, 10)}${pad(r.centroid, 12)}` +
+          `${pad(r.d20, 8)}${pad(r.d40, 8)}${r.ms}`
+      );
     }
     console.log('\nspace classifier:', JSON.stringify(offline.spaces, null, 1));
   }

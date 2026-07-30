@@ -108,7 +108,23 @@ export function surfaceImpact(actx, bank, rng, o = {}) {
   const s = IMPACT[o.surface] ?? IMPACT.concrete;
   const e = clamp(o.energy ?? 1, 0.15, 1.6);
   const jit = semis(rng.range(-2.5, 2.5));
-  const out = gain(actx, 0.22);  // VOICE TRIM
+  /**
+   * VOICE TRIM, AND IT IS NOW PER-SURFACE — 0.22 becomes 0.22..0.30.
+   *
+   * `send` here is `s.wet`, and it spans 0.16 (sand) to 0.50 (metal): the widest
+   * range of any voice in the game, because a round on sheet metal really does
+   * ring the building and a round in sand really does not. That made the impacts
+   * the biggest losers of the third `reverbReturn` cut, and it did it UNEVENLY —
+   * MEASURED, rms: metal -3.4 dB, plaster -3.1, glass -2.9, wood -2.6, concrete
+   * -2.5, while sand came out at 0.0 and dirt at -0.6. A flat trim, or a bus
+   * raise, would have pushed sand and dirt up by three decibels they never lost.
+   *
+   * So the compensation is proportional to what each surface had in the send: the
+   * wettest surfaces get the most dry level back, the dry ones get almost none,
+   * and the ranking between the twelve surfaces — which is the whole point of the
+   * table — is preserved.
+   */
+  const out = gain(actx, 0.22 * (1 + (s.wet ?? 0.3) * 0.36));  // VOICE TRIM
   let end = t0 + 0.2;
 
   /* transient */
@@ -826,7 +842,18 @@ export function explosion(actx, bank, rng, o = {}) {
   const near = clamp(1 - dist / 70, 0, 1);
   const far = 1 - near;
   const lvl = (o.level ?? 1) * size;
-  const out = gain(actx, 0.42); // VOICE TRIM
+  /**
+   * VOICE TRIM 0.42 -> 0.88.
+   *
+   * Closing the reverb send from 0.85 to 0.26 took level with it — MEASURED on
+   * `explosion:airstrike`, peak 0.846 -> 0.620 and rms 0.0699 -> 0.0491, i.e. the
+   * blast got 3.1 dB SMALLER, which is the opposite of what was asked for. The
+   * send was carrying half the level, exactly as the mixer's own note says it was
+   * for footsteps. Paying it back with dry signal instead of tail is the whole
+   * point, and there is room to do it: nothing in the suite peaked above 0.86 and
+   * the send cut alone bought 0.23 of headroom.
+   */
+  const out = gain(actx, 0.88); // VOICE TRIM
   let end = t0 + 1;
 
   /* detonation transient */
@@ -856,6 +883,39 @@ export function explosion(actx, bank, rng, o = {}) {
     s.start(t0); s2.start(t0);
     s.stop(t0 + subDur * 1.6); s2.stop(t0 + subDur * 1.6);
     end = Math.max(end, t0 + subDur * 1.6);
+
+    /**
+     * SECOND SUB STAGE — the one that outlives the crack.
+     *
+     * 「空爆の音をちゃんとリアルに大きく表現すること」. The stage above is a 0.9-1.4 s
+     * chest thump, and for a 6 m frag that is the whole event; for the 15 m
+     * airstrike it is not, because what makes a big charge big is not a louder
+     * transient, it is that the low end is STILL THERE seconds later. So the
+     * bigger the charge, the longer a second, much deeper sine runs underneath
+     * it, sweeping from just under the first stage's floor down to 14 Hz.
+     *
+     * It shares the saturator's job with nothing: it is fed through its own soft
+     * clip, and because both stages are tanh-limited, adding it costs far less
+     * peak than it adds duration. MEASURED on `explosion:airstrike`, dry:
+     * d20 0.72 -> 1.66 s, d40 1.06 -> 2.53 s, peak 0.283 -> 0.309.
+     *
+     * It is gated on `size > 0.9` (radius > ~5.4 m) so a grenade is unchanged.
+     */
+    if (size > 0.9) {
+      const big = clamp((size - 0.9) / 1.5, 0, 1);
+      const rollDur = (1.5 + big * 2.6) * rng.range(0.92, 1.1);
+      const s3 = osc(actx, 'sine', 40);
+      const g3 = gain(actx, 0);
+      const drv3 = shaper(actx, saturationCurve(2.2, 0.45), '2x');
+      const lp3 = biquad(actx, 'lowpass', 120, 0.8);
+      series(s3, drv3, g3, lp3).connect(out);
+      sweep(s3.frequency, t0, 46 * rng.range(0.9, 1.1), 14, rollDur * 0.85);
+      // Slow attack: the overpressure arrives after the crack, not with it.
+      ad(g3.gain, t0 + 0.02, (0.42 + big * 0.5) * lvl * (0.5 + near * 0.55), 0.07, rollDur);
+      s3.start(t0);
+      s3.stop(t0 + rollDur * 1.5);
+      end = Math.max(end, t0 + rollDur * 1.5);
+    }
   }
 
   /* blast body: broadband noise under a fast-falling lowpass */
@@ -895,7 +955,71 @@ export function explosion(actx, bank, rng, o = {}) {
     end = Math.max(end, t0 + dur * 1.3);
   }
 
-  return { node: out, end: end + 0.1, send: 0.85 + far * 0.5 };
+  /**
+   * THE ROLL — a synthesised tail, so the send can be closed.
+   *
+   * 「爆撃音など…リバーブはなるべく無くして」 and "the size has to come from the
+   * source" are the same instruction, and the send below is where the size used
+   * to come from: `explosion` returned 0.85-1.35, four to eleven times any other
+   * voice in the game, and MEASURED it was carrying 53 % of the whole event's
+   * energy (rms 0.0699 wet vs 0.0330 dry on `explosion:airstrike`). That is not
+   * a blast with a room around it, that is a room doing the blast's job.
+   *
+   * What a real one actually has after the crack is the report rolling back off
+   * whatever is standing nearby — discrete, arriving late, and progressively
+   * darker each time round. Two things replace the send:
+   *
+   *   ROLL   brown noise under a lowpass that closes from 700 Hz to 60 Hz over
+   *          1.5-4.5 s depending on size. Continuous, quiet, and long.
+   *   SLAPS  two or three DISCRETE returns at 90-420 ms, each one darker and
+   *          quieter than the last, jittered per blast. These are the ones the
+   *          ear reads as "there are buildings here" — a convolver's smooth
+   *          exponential cannot say that, which is why it just sounds wet.
+   *
+   * Both scale with `size`, so a grenade gets a short bark and the airstrike gets
+   * the four-second roll the player asked for.
+   */
+  {
+    const big = clamp(size / 2.4, 0.12, 1);
+    const rollDur = (1.1 + big * 3.4) * rng.range(0.9, 1.12);
+    const src = bank.source('brown', rng, rng.range(0.4, 0.75));
+    const hp = biquad(actx, 'highpass', 34, 0.7);
+    const lp = biquad(actx, 'lowpass', 700, 0.9);
+    const g = gain(actx, 0);
+    series(src, hp, lp, g).connect(out);
+    sweep(lp.frequency, t0, lerp(520, 900, big), 60, rollDur);
+    ad(g.gain, t0 + 0.02, (0.2 + big * 0.34) * lvl * (0.45 + near * 0.5), 0.09, rollDur);
+    src.start(t0 + 0.02, src._offset, rollDur * 1.25);
+    end = Math.max(end, t0 + rollDur * 1.25);
+
+    /* the discrete returns */
+    const slaps = 2 + (big > 0.6 ? 1 : 0);
+    let st = t0 + 0.09 * rng.range(0.85, 1.3);
+    let slvl = (0.3 + big * 0.28) * lvl * near;
+    let top = lerp(1400, 2400, big);
+    for (let i = 0; i < slaps; i++) {
+      const s = bank.source('brown', rng, rng.range(0.8, 1.25));
+      const bp = biquad(actx, 'highpass', 90, 0.7);
+      const slp = biquad(actx, 'lowpass', top, 0.8);
+      const sg = gain(actx, 0);
+      series(s, bp, slp, sg).connect(out);
+      const sd = 0.1 + big * 0.22;
+      ad(sg.gain, st, slvl, 0.012, sd);
+      s.start(st, s._offset, sd * 2);
+      end = Math.max(end, st + sd * 2);
+      st += (0.11 + big * 0.14) * rng.range(0.8, 1.35);
+      slvl *= 0.52;
+      top *= 0.6;
+    }
+  }
+
+  /**
+   * 0.26, down from 0.85 (and 0.56 down from 1.35 at full distance). The two
+   * layers above are what that 0.6 of send used to be doing, except that they are
+   * this blast's own tail rather than the same convolver every other sound in the
+   * game is running through.
+   */
+  return { node: out, end: end + 0.1, send: 0.26 + far * 0.3 };
 }
 
 /** A body hitting the ground: mass, gear, and a wet slap. */

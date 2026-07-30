@@ -424,13 +424,73 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
     }
   }
 
+  /* ---- 8. slap-back, the gun's own room -------------------------- */
+  /**
+   * 「もっと銃声をリアルに」 and 「リバーブはなるべく無くして」 pull in opposite
+   * directions until you look at what a rifle in a street actually sounds like.
+   * It is not a smooth exponential decay. It is the report and then two or three
+   * DISCRETE returns off the facades — a wall 12 m away answers 70 ms later, one
+   * across the street at 30 m answers 175 ms later, and each return has lost its
+   * top end. That is the sound of a gun outdoors, and a convolver cannot make it:
+   * the IRs here are dense stochastic tails, so asking them for it gives a wash
+   * that arrives immediately and never resolves into separate events.
+   *
+   * MEASURED, `shot:rifle@2m` rendered dry (send scaled to 0) through the real
+   * mixer: d20 0.06 s, d40 0.11 s. Wet, with the send open: 0.36 and 0.78. So
+   * 83 % of the decay of every shot in the game was the reverb bus, which is the
+   * measurement behind 「銃声がなんでこんなリバーブかかってるの」.
+   *
+   * These taps are real delays on the shot's own signal, so they carry the
+   * weapon's own timbre — an AK's returns are an AK's, which is the thing a
+   * shared convolver flattens. Three of them, jittered per shot, each one 8 dB
+   * down and an octave darker. `echoBoost` (0.12 outdoors, 0.97 indoors, from
+   * `_wetnessAt`) scales the whole set and shortens the spacing indoors, because
+   * a room's first reflection arrives in 8 ms and a street's in 70.
+   *
+   * Cost: three DelayNodes, three biquads and three gains per shot, on a voice
+   * that already builds ~40 nodes, and only when the shot is close enough for
+   * them to be audible at all.
+   */
+  const room = clamp(o.echoBoost ?? 0.2, 0, 1.4);
+  let node = out;
+  if (nearP > 0.06 && room > 0.02) {
+    const sum = gain(actx, 1);
+    out.connect(sum);
+    // Indoors the walls are close: 9-40 ms. Outdoors they are the far side of
+    // the street: 55-260 ms. Interpolate on the room term itself.
+    const inside = clamp(room / 0.9, 0, 1);
+    let t = lerp(0.062, 0.011, inside) * rng.range(0.8, 1.3);
+    // The first return is well down on the direct sound even in a small room.
+    let lvl = clamp(0.3 + room * 0.34, 0.1, 0.62) * nearP;
+    let top = lerp(2600, 4200, inside);
+    for (let i = 0; i < 3; i++) {
+      const dl = actx.createDelay(0.6);
+      dl.delayTime.value = Math.min(0.55, t);
+      const lp = biquad(actx, 'lowpass', top, 0.7);
+      const hp = biquad(actx, 'highpass', lerp(200, 130, inside), 0.7);
+      const g = gain(actx, lvl);
+      series(out, dl, hp, lp, g).connect(sum);
+      t += lerp(0.075, 0.014, inside) * rng.range(0.75, 1.4);
+      lvl *= 0.4;
+      top *= 0.55;
+    }
+    node = sum;
+    // `t` is a delay time, not an instant: the last tap is still arriving that
+    // long after the direct sound has finished.
+    end += t + 0.05;
+  }
+
   // WET = character x room x distance. `profile.send` is the weapon's share,
   // `o.echoBoost` is the room the SHOOTER is standing in (see `_wetnessAt` in
   // index.js) and `far` is the fact that a distant shot reaches you as tail.
   // There is exactly one space term in this product now; there used to be two,
   // one here and one in the caller, and they multiplied.
-  const send = profile.send * (1 + far * 1.4) * (o.echoBoost ?? 1);
-  return { node: out, end: end + 0.05, send };
+  //
+  // 0.62, because layer 8 above now carries the near field: the send is what the
+  // rest of the level does with the shot, not what the street directly in front
+  // of the muzzle does with it.
+  const send = profile.send * 0.62 * (1 + far * 1.4) * (o.echoBoost ?? 1);
+  return { node, end: end + 0.05, send };
 }
 
 /**

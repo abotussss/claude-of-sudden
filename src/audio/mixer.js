@@ -67,10 +67,28 @@ const BUS_DEFS = {
    * 小さくしろ" asked for it quieter, so it keeps both the wet cut and the
    * level cut.
    */
+  /**
+   * FOLEY 2.0 -> 2.25 AND VOICE 1.15 -> 1.30, for the third `reverbReturn` cut.
+   *
+   * Same argument as the block above, third time round, and measured the same
+   * way. Taking the return 0.24 -> 0.15 cost the near-field foley 1.3 dB of RMS
+   * (`step:concrete` 0.00227 -> 0.00196) and the barks 0.6 dB (`bark:contact`
+   * 0.00705 -> 0.00661), because a fraction of every one of those sounds was
+   * still arriving via the convolvers. +1.0 dB and +1.1 dB of DRY trim put them
+   * back where they were.
+   *
+   * The weapons bus is deliberately NOT compensated: `weaponShot`'s new slap-back
+   * layer already replaced the level the send was carrying (`shot:rifle@2m` peak
+   * 0.0831 and rms 0.00365 against 0.0831 and 0.00367 before), so raising the bus
+   * as well would just make the guns louder than the reference they set. The
+   * explosion voice pays its own way in `foley.js` for the same reason.
+   *
+   * `ambience` stays uncompensated for the third time — 「環境音…もっと小さくしろ」.
+   */
   weapons:  { trim: 1.6, comp: { threshold: -7, knee: 8, ratio: 2.6, attack: 0.003, release: 0.16 } },
-  foley:    { trim: 2.0, comp: { threshold: -14, knee: 10, ratio: 2.0, attack: 0.004, release: 0.2 } },
+  foley:    { trim: 2.25, comp: { threshold: -14, knee: 10, ratio: 2.0, attack: 0.004, release: 0.2 } },
   ambience: { trim: 0.2,  comp: { threshold: -24, knee: 12, ratio: 2.0, attack: 0.05, release: 0.5 } },
-  voice:    { trim: 1.15, comp: { threshold: -18, knee: 8, ratio: 3.0, attack: 0.006, release: 0.22 } },
+  voice:    { trim: 1.3, comp: { threshold: -18, knee: 8, ratio: 3.0, attack: 0.006, release: 0.22 } },
   ui:       { trim: 1.3,  comp: null },
 };
 
@@ -180,13 +198,31 @@ export class Mixer {
      * still wetter than a magazine catch — they are just all quieter now.
      */
     /**
-     * 0.24 — a SECOND cut. 0.9 -> 0.42 was reported as still too wet, and the
-     * measurement in the block above says why: reverb was carrying about HALF
-     * the level of every near-field sound, so halving the return once took it
-     * from dominant to merely prominent. 0.24 puts the tail at roughly a quarter
-     * of where it started.
+     * 0.15 — a THIRD cut, and this one comes with the tails moved into the
+     * sources so that "drier" does not have to mean "smaller".
+     *
+     * 「今のリバーブの強い効果音系はリバーブはなるべく無くして、爆撃音など」. The two cuts
+     * above went 0.9 -> 0.42 -> 0.24 and were still reported as too wet, and the
+     * measurement that explains it is not in this file: rendered offline through
+     * this exact graph, 83 % of a rifle shot's decay to -20 dB was the convolvers
+     * (d20 0.36 s wet, 0.06 s dry) and 53 % of an airstrike blast's total energy
+     * was (rms 0.0699 wet, 0.0330 dry). Turning the return down alone had always
+     * traded the complaint for a thinner, shorter game, which is why it kept
+     * coming back up in the bus trims.
+     *
+     * This pass takes it down AND pays it back in the synthesis, in the same
+     * commit, so the trims do not have to move:
+     *   - `weaponShot` layer 8: three discrete slap-backs off the facades,
+     *     carrying the weapon's own timbre. The gun's near field is now the gun's.
+     *   - `explosion`: a 1.1-4.5 s synthesised roll plus two or three discrete
+     *     returns, and its send closed from 0.85-1.35 to 0.26-0.56.
+     *   - `strikeTail`: 7.6 s, two beating subs, three darkening reports.
+     *
+     * What is left going into the convolvers is what a convolver is good for —
+     * the rest of the level answering, late and diffuse — at 1/6 of the level it
+     * started at.
      */
-    this.reverbReturn = gain(actx, 0.24);
+    this.reverbReturn = gain(actx, 0.15);
     this.reverbReturn.connect(this.worldSum);
     this._irReady = false;
 

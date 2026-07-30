@@ -13,6 +13,12 @@
  *   nan      any non-finite samples (bad exponentialRamp targets, /0, ...)
  *   centroid rough spectral centre of mass in Hz (via zero-crossing rate),
  *            enough to prove a "distant" shot is darker than a near one
+ *   d20/d40  ENVELOPE. Seconds from the loudest 10 ms block until the RMS
+ *            envelope has fallen 20 dB and 40 dB below it. This is the only
+ *            number that can tell "the blast has a long tail" apart from "the
+ *            blast is loud", and it is the one that says whether that tail is
+ *            coming out of the synthesis or out of the convolvers: render the
+ *            same voice with the send scaled to 0 and compare.
  *
  * Usage from a page (see probe.mjs):
  *   const { runAudioSelfTest } = await import('/src/audio/selftest.js');
@@ -27,6 +33,9 @@ import {
   surfaceImpact, footstep, shellCasing, reloadPhase, explosion, bodyFall, uiSound,
   heartbeat, cloth, meleeSwing, meleeHit,
 } from './foley.js';
+import {
+  strikeJet, strikeIncoming, strikeRubble, strikeTail, strafeCannon, rubbleCollapse,
+} from './airstrike.js';
 import { bark, BARKS } from './vox.js';
 import { ambientOneShot, ONE_SHOTS } from './ambience.js';
 import { IR_SPECS, generateIR, classifySpace } from './ir.js';
@@ -56,13 +65,55 @@ function measure(buf) {
   const rms = Math.sqrt(sumSq / total);
   // Zero crossing rate -> a crude but stable spectral centre indicator.
   const centroid = (crossings / (n / SR)) * 0.5;
+  const env = decay(buf);
   return {
     peak: +peak.toFixed(4),
     rms: +rms.toFixed(5),
     dc: +(sum / total).toFixed(5),
     nan,
     centroid: Math.round(centroid),
+    d20: env.d20,
+    d40: env.d40,
   };
+}
+
+/** 10 ms RMS envelope, in blocks. Coarse on purpose: it has to be stable. */
+const ENV_BLOCK = Math.round(SR * 0.01);
+
+/**
+ * Seconds from the loudest envelope block until the envelope has fallen 20 dB
+ * and 40 dB below it. `-1` means it never got that far inside the render, which
+ * is itself information — a six second tail in a six second render will say -1
+ * for d40 and that is not a failure.
+ */
+function decay(buf) {
+  const d = buf.getChannelData(0);
+  const blocks = Math.floor(d.length / ENV_BLOCK);
+  if (blocks < 3) return { d20: -1, d40: -1 };
+  const env = new Float64Array(blocks);
+  let peakAt = 0;
+  for (let b = 0; b < blocks; b++) {
+    let s = 0;
+    const o = b * ENV_BLOCK;
+    for (let i = 0; i < ENV_BLOCK; i++) { const v = d[o + i]; s += v * v; }
+    env[b] = Math.sqrt(s / ENV_BLOCK);
+    if (env[b] > env[peakAt]) peakAt = b;
+  }
+  const pk = env[peakAt];
+  if (pk <= 0) return { d20: -1, d40: -1 };
+  const after = (frac) => {
+    const target = pk * frac;
+    // First block at or below the target that STAYS there — a single quiet block
+    // between two loud ones is a gap in the grain, not the end of the sound.
+    for (let b = peakAt + 1; b < blocks; b++) {
+      if (env[b] > target) continue;
+      let held = true;
+      for (let k = b; k < Math.min(blocks, b + 5); k++) if (env[k] > target) { held = false; break; }
+      if (held) return +(((b - peakAt) * ENV_BLOCK) / SR).toFixed(3);
+    }
+    return -1;
+  };
+  return { d20: after(0.1), d40: after(0.01) };
 }
 
 /** One offline render: build a fresh mixer, run `fn`, measure the master out. */
@@ -119,6 +170,14 @@ export async function runAudioSelfTest(opts = {}) {
   for (const key of Object.keys(WEAPON_PROFILES)) {
     await push(`shot:${key}@2m`, 3.5, ({ bank, rng, mixer, t }) => {
       route(mixer, weaponShot(mixer.actx, bank, rng, WEAPON_PROFILES[key], { when: t, distance: 2, firstPerson: true }));
+    });
+  }
+  /* The gun with no room at all — the slapback in layer 8 has to carry it. */
+  for (const key of ['rifle', 'ak', 'sniper']) {
+    await push(`shot:${key}@2m:dry`, 3.5, ({ bank, rng, mixer, t }) => {
+      route(mixer, weaponShot(mixer.actx, bank, rng, WEAPON_PROFILES[key], {
+        when: t, distance: 2, firstPerson: true,
+      }), 'weapons', 0);
     });
   }
   await push('shot:rifle@120m', 4.5, ({ bank, rng, mixer, t }) => {
@@ -190,6 +249,55 @@ export async function runAudioSelfTest(opts = {}) {
   await push('explosion@180m', 7, ({ bank, rng, mixer, t }) => {
     route(mixer, explosion(mixer.actx, bank, rng, { when: t, distance: 180, radius: 12 }));
   });
+  /* The airstrike's own numbers: RULES.airstrikeRadius 15. And the same voice
+   * with no reverb at all, which is where its size has to survive. */
+  await push('explosion:airstrike', 9, ({ bank, rng, mixer, t }) => {
+    route(mixer, explosion(mixer.actx, bank, rng, { when: t, distance: 12, radius: 15, level: 1.43 }));
+  });
+  await push('explosion:airstrike:dry', 9, ({ bank, rng, mixer, t }) => {
+    route(mixer, explosion(mixer.actx, bank, rng, { when: t, distance: 12, radius: 15, level: 1.43 }), 'weapons', 0);
+  });
+  await push('explosion@5m:dry', 6, ({ bank, rng, mixer, t }) => {
+    route(mixer, explosion(mixer.actx, bank, rng, { when: t, distance: 5, radius: 8 }), 'weapons', 0);
+  });
+  /**
+   * THE AIR EVENTS HAD NO COVERAGE AT ALL. Six voices in src/audio/airstrike.js
+   * — the jet, the whistle, the rubble, the tail and both halves of the strafe —
+   * were never rendered by this suite, which is why nothing noticed that the
+   * `settled` phase of every air event was silent.
+   *
+   * The `:dry` pairs are the ones that matter for the brief "a blast's size must
+   * come from the synthesis and not from the room": the same voice with its
+   * reverb send scaled to zero. If d20/d40 hold up dry, the tail is real.
+   */
+  await push('air:jet', 6, ({ bank, rng, mixer, t }) => {
+    route(mixer, strikeJet(mixer.actx, bank, rng, { when: t, dur: 3.4 }), 'ambience');
+  });
+  await push('air:incoming', 4, ({ bank, rng, mixer, t }) => {
+    route(mixer, strikeIncoming(mixer.actx, bank, rng, { when: t, dur: 2.4 }));
+  });
+  await push('air:rubble', 6, ({ bank, rng, mixer, t }) => {
+    route(mixer, strikeRubble(mixer.actx, bank, rng, { when: t, dur: 3.4, distance: 20 }));
+  });
+  await push('air:tail', 9, ({ bank, rng, mixer, t }) => {
+    route(mixer, strikeTail(mixer.actx, bank, rng, { when: t }));
+  });
+  await push('air:tail:dry', 9, ({ bank, rng, mixer, t }) => {
+    route(mixer, strikeTail(mixer.actx, bank, rng, { when: t }), 'weapons', 0);
+  });
+  await push('air:settle', 8, ({ bank, rng, mixer, t }) => {
+    route(mixer, rubbleCollapse(mixer.actx, bank, rng, { when: t, distance: 18, size: 1 }));
+  });
+  await push('air:settle:small', 6, ({ bank, rng, mixer, t }) => {
+    route(mixer, rubbleCollapse(mixer.actx, bank, rng, { when: t, distance: 40, size: 0.35 }));
+  });
+  await push('strafe:air', 4, ({ bank, rng, mixer, t }) => {
+    route(mixer, strafeCannon(mixer.actx, bank, rng, { when: t, dur: 1.2, rate: 22 }));
+  });
+  await push('strafe:ground', 4, ({ bank, rng, mixer, t }) => {
+    route(mixer, strafeCannon(mixer.actx, bank, rng, { when: t, dur: 1.2, rate: 22, ground: true }));
+  });
+
   await push('bodyfall', 2, ({ bank, rng, mixer, t }) => {
     route(mixer, bodyFall(mixer.actx, bank, rng, { when: t }), 'foley');
   });

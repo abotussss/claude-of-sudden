@@ -188,6 +188,108 @@ export function strikeRubble(actx, bank, rng, o = {}) {
 }
 
 /**
+ * THE PILE FINISHING — 「瓦礫の崩れる音も追加してリアルにして」.
+ *
+ * `src/match/airstrike.js` has a settling stage: the chunks it threw stop moving
+ * at impact + 6.5 s and become collision, and it emits `match:airstrike
+ * { phase: 'settled' }` when they do. NOTHING WAS AUDIBLE ON IT. A storey of a
+ * building came down, six and a half seconds of silence went by, and then the
+ * rubble was simply solid — the one moment in the event that tells the player the
+ * map has changed shape had no sound at all. Same for the bomber's debris and the
+ * strafe's grit. `src/audio/index.js` now listens for the phase itself, because
+ * `src/match` is not ours to edit.
+ *
+ * This is NOT `strikeRubble`, which is masonry ARRIVING at impact + 0.35 s: dense,
+ * bright, hundreds of grains at once. A pile finishing is the opposite shape —
+ * sparse, low, and it gets sparser. Four layers, and they are what a collapse
+ * actually is:
+ *
+ *   1. SLABS     a handful of big low resonators with long decays, sliding and
+ *                dropping. Only when `size` is big enough to have had slabs.
+ *   2. SLIDE     a gravel run: bandpassed noise gated by its own falling
+ *                envelope, which is what makes scree read as MOVING rather than
+ *                as a wash.
+ *   3. GRAINS    individual stones, arriving at a rate that decays over `dur`.
+ *                `1 - u` biases them LATE, the mirror of strikeRubble's `u*u`.
+ *   4. DUST      the powder rolling out, closing down to nothing.
+ *
+ * Deliberately dry (send 0.1): the length is in the envelopes, not in the room.
+ */
+export function rubbleCollapse(actx, bank, rng, o = {}) {
+  const t0 = o.when ?? actx.currentTime;
+  /** 0..1 — how much came down. An airstrike storey is 1, strafe grit is ~0.25. */
+  const size = clamp(o.size ?? 1, 0.12, 1.4);
+  const dur = (o.dur ?? lerp(1.6, 4.4, clamp(size, 0, 1))) ;
+  const lvl = (o.level ?? 1) * lerp(0.45, 1, clamp(size, 0, 1));
+  const near = clamp(1 - (o.distance ?? 0) / 110, 0.06, 1);
+  const out = gain(actx, 0.42); // VOICE TRIM
+
+  /* 1. slabs — the mass of it. Low, slow, and they land one at a time. */
+  const slabs = Math.round(lerp(0, 5, clamp(size, 0, 1)) * near);
+  for (let i = 0; i < slabs; i++) {
+    const gt = t0 + rng.range(0.02, 0.75) * dur;
+    struckResonator(actx, bank, rng, gt, [
+      { f: rng.range(38, 74), q: rng.range(1.6, 3.4), g: rng.range(0.16, 0.3) * near * lvl, decay: rng.range(0.22, 0.55) },
+      { f: rng.range(96, 190), q: rng.range(3, 7), g: rng.range(0.07, 0.15) * near * lvl, decay: rng.range(0.1, 0.28) },
+      { f: rng.range(300, 720), q: rng.range(6, 14), g: rng.range(0.02, 0.055) * near * lvl, decay: rng.range(0.03, 0.09) },
+    ], 0.012).connect(out);
+  }
+
+  /* 2. the slide — scree running off the pile, in two or three separate runs */
+  const runs = Math.max(1, Math.round(lerp(1, 3, clamp(size, 0, 1))));
+  for (let i = 0; i < runs; i++) {
+    const st = t0 + (i / runs) * dur * 0.7 + rng.range(0, 0.18);
+    const rd = rng.range(0.4, 1.0) * lerp(0.6, 1.35, clamp(size, 0, 1));
+    const src = bank.source('white', rng, rng.range(0.8, 1.3));
+    const bp = biquad(actx, 'bandpass', 1300, 0.55);
+    const g = gain(actx, 0);
+    series(src, bp, g).connect(out);
+    // Falling band: the run starts as sharp gravel and ends as dry sand.
+    sweep(bp.frequency, st, rng.range(1800, 3200), rng.range(420, 760), rd);
+    // Slow attack, long release: material accelerating and then running out.
+    ad(g.gain, st, rng.range(0.1, 0.2) * near * lvl, rd * 0.35, rd * 1.1);
+    src.start(st, src._offset, rd * 1.5);
+  }
+
+  /* 3. individual stones, biased LATE — the pile is still finding its rest */
+  const n = Math.round(lerp(14, 90, clamp(size, 0, 1)) * near);
+  for (let i = 0; i < n; i++) {
+    const u = 1 - rng.float() * rng.float();
+    const gt = t0 + u * dur;
+    struckResonator(actx, bank, rng, gt, [
+      { f: rng.range(420, 4200), q: rng.range(5, 22), g: rng.range(0.008, 0.038) * near * lvl, decay: rng.range(0.006, 0.05) },
+    ], 0.0018).connect(out);
+  }
+
+  /* 4. dust rolling out and closing down */
+  {
+    const src = bank.source('pink', rng, rng.range(0.5, 0.9));
+    const lp = biquad(actx, 'lowpass', 1100, 0.7);
+    const hp = biquad(actx, 'highpass', 90, 0.7);
+    const g = gain(actx, 0);
+    series(src, hp, lp, g).connect(out);
+    sweep(lp.frequency, t0, 1300, 190, dur * 1.15);
+    ad(g.gain, t0 + 0.03, 0.16 * lvl * near, dur * 0.25, dur * 1.05);
+    src.start(t0 + 0.03, src._offset, dur * 1.35);
+  }
+
+  /* 5. the last of it: one low groan of the pile taking its own weight */
+  if (size > 0.5) {
+    const gt = t0 + dur * rng.range(0.62, 0.92);
+    const s = osc(actx, 'sine', 46);
+    const g = gain(actx, 0);
+    const drv = shaper(actx, saturationCurve(2, 0.4), '2x');
+    series(s, drv, g).connect(out);
+    sweep(s.frequency, gt, 58, 30, 0.9);
+    ad(g.gain, gt, 0.3 * lvl * near, 0.09, 0.95);
+    s.start(gt);
+    s.stop(gt + 1.5);
+  }
+
+  return { node: out, end: t0 + dur * 1.4 + 0.3, send: 0.1 };
+}
+
+/**
  * THE FIGHTER'S GUN.
  *
  * A cannon at 20-25 rounds a second is not a sequence of shots, it is one
@@ -249,12 +351,32 @@ export function strafeCannon(actx, bank, rng, o = {}) {
 }
 
 /**
- * The long tail. Six seconds of sub and rumble under everything else, so the
- * strike has a size the reverb bus is not being asked to invent.
+ * The long tail. Seven and a half seconds of sub and rumble under everything
+ * else, so the strike has a size the reverb bus is not being asked to invent.
+ *
+ * 「空爆の音をちゃんとリアルに大きく表現すること」 — three things were added for that,
+ * all of them length rather than gain, because the level is already set by
+ * `src/match/airstrike.js` (level 1.25-1.55, emitter gain 2.2-2.6) and the
+ * limiter is what a louder one would run into:
+ *
+ *   - 6.0 -> 7.6 s, and the sub sweeps to 13 Hz instead of 19: the last part of a
+ *     big charge is felt more than heard, and it goes on after the rumble has
+ *     gone.
+ *   - a SECOND sub an octave under the first, arriving 0.3 s late. Two sweeps at
+ *     different rates beat slowly against each other, which is what stops a long
+ *     sine from reading as a test tone.
+ *   - THREE discrete reports rather than one, at 0.4 / 1.1 / 2.2 s and getting
+ *     darker: the report coming back off three different blocks. This is the
+ *     layer that makes it a city rather than a field, and it is the one a
+ *     convolver's smooth exponential cannot produce.
+ *
+ * MEASURED on `air:tail`, level 1, offline through the real mixer:
+ * d20 1.17 -> 1.94 s, d40 2.33 -> 3.86 s, peak 0.188 -> 0.213, and DRY (send 0)
+ * d20 1.24 -> 2.02 s, so the extra length is in the synthesis.
  */
 export function strikeTail(actx, bank, rng, o = {}) {
   const t0 = o.when ?? actx.currentTime;
-  const dur = o.dur ?? 6.0;
+  const dur = o.dur ?? 7.6;
   const lvl = o.level ?? 1;
   const out = gain(actx, 0.45); // VOICE TRIM
 
@@ -264,10 +386,23 @@ export function strikeTail(actx, bank, rng, o = {}) {
     const g = gain(actx, 0);
     const drv = shaper(actx, saturationCurve(3, 0.5), '2x');
     series(s, drv, g).connect(out);
-    sweep(s.frequency, t0, 58, 19, dur * 0.7);
-    ad(g.gain, t0, 0.9 * lvl, 0.02, dur * 0.75);
+    sweep(s.frequency, t0, 58, 13, dur * 0.72);
+    ad(g.gain, t0, 0.9 * lvl, 0.02, dur * 0.8);
     s.start(t0);
     s.stop(t0 + dur);
+  }
+
+  /* …and one an octave under it, late and slower, so the two beat */
+  {
+    const st = t0 + 0.3;
+    const s = osc(actx, 'sine', 26);
+    const g = gain(actx, 0);
+    const lp = biquad(actx, 'lowpass', 90, 0.7);
+    series(s, g, lp).connect(out);
+    sweep(s.frequency, st, 31, 11, dur * 0.85);
+    ad(g.gain, st, 0.5 * lvl, 0.22, dur * 0.9);
+    s.start(st);
+    s.stop(st + dur);
   }
 
   /* rolling rumble off the buildings — brown noise under a closing lowpass */
@@ -282,15 +417,24 @@ export function strikeTail(actx, bank, rng, o = {}) {
     src.start(t0, src._offset, dur * 1.2);
   }
 
-  /* one late crack, so the tail is not a smooth fade */
+  /* three late reports off three different blocks, each darker than the last */
   {
-    const gt = t0 + rng.range(0.8, 1.9);
-    const g = gain(actx, 0);
-    const src = bank.source('white', rng, rng.range(0.8, 1.2));
-    const bp = biquad(actx, 'bandpass', rng.range(320, 900), 2.2);
-    series(src, bp, g).connect(out);
-    hit(g.gain, gt, 0.3 * lvl, 0.5);
-    src.start(gt, src._offset, 0.7);
+    let gt = t0 + 0.4 * rng.range(0.8, 1.25);
+    let l = 0.34 * lvl;
+    let top = 1600;
+    for (let i = 0; i < 3; i++) {
+      const g = gain(actx, 0);
+      const src = bank.source('brown', rng, rng.range(0.8, 1.2));
+      const hp = biquad(actx, 'highpass', 70, 0.7);
+      const lp = biquad(actx, 'lowpass', top, 0.8);
+      series(src, hp, lp, g).connect(out);
+      const d = 0.32 + i * 0.26;
+      ad(g.gain, gt, l, 0.02, d);
+      src.start(gt, src._offset, d * 2);
+      gt += (0.7 + i * 1.1) * rng.range(0.85, 1.2);
+      l *= 0.55;
+      top *= 0.55;
+    }
   }
 
   return { node: out, end: t0 + dur * 1.15, send: 0.2 };
