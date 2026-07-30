@@ -84,7 +84,11 @@ for (let boot = 1; boot <= BOOTS; boot++) {
       for (let d = 0; d < 8; d++) {
         const ix = cxi + DX[d], iz = czi + DZ[d];
         if (!g.walkable(ix, iz)) continue;
-        if (!g._canStep(cur, cxi, czi, d)) continue;
+        // `_canStep` is the grid's own rule; a build without the interior pass
+        // only has the corner rule, so fall back to it and stay comparable.
+        if (g._canStep
+          ? !g._canStep(cur, cxi, czi, d)
+          : (DX[d] && DZ[d] && (!g.walkable(cxi + DX[d], czi) || !g.walkable(cxi, czi + DZ[d])))) continue;
         const ni = g.index(ix, iz);
         if (seen[ni] || Math.abs(g.floor[ni] - cy) > g.maxStep) continue;
         seen[ni] = 1;
@@ -94,32 +98,76 @@ for (let boot = 1; boot <= BOOTS; boot++) {
     const path = [];
     const rows = [];
     /**
-     * Sweep every leg of a solved path with the capsule the bot actually is.
-     * A leg that fails is a route through geometry — the thing to be afraid of
-     * once the inside of a building is in the grid.
+     * WALK every leg of a solved path with the capsule the bot actually is.
+     *
+     * NOT a single long capsule sweep: the ground is not flat, and a 20 m sweep
+     * at one height reports every kerb, ramp and rubble mound on the map as a
+     * blockage (measured: 802 of 1393 legs, all of them outdoors and all of them
+     * nonsense). A man walks by re-grounding every step, so this samples the leg
+     * every 0.4 m, drops onto the floor under that point and asks whether he
+     * fits standing there. What survives is the real question — does a route go
+     * through a wall — and the answer is reported separately for the legs that
+     * are inside a footprint, which are the new ones.
      */
     const phys = e.ctx.peek('physics');
     const R = 0.36;
-    const legs = { total: 0, blocked: 0, worst: [] };
-    const a0 = new V3(), a1 = new V3(), dir = new V3();
+    const mk = () => ({ total: 0, blocked: 0, samples: 0, brushed: 0, deep: 0,
+                        indoorSamples: 0, indoorBlocked: 0, indoorDeep: 0, worst: [] });
+    const legs = mk();
+    /** The same walk on the routes every build has: spawn -> capture zone. */
+    const zlegs = mk();
+    const a0 = new V3(), a1 = new V3(), lv = new V3();
+    const indoorAt = (x, z) => {
+      world.worldToLevel(x, 0, z, lv);
+      for (const b of B) {
+        if (Math.abs(lv.x - b.x) < b.w / 2 && Math.abs(lv.z - b.z) < b.d / 2) return true;
+      }
+      return false;
+    };
+    let acc = legs;
     const walkLegs = (from, pts, count, tag) => {
       let px = from.x, py = from.y, pz = from.z;
       for (let i = 0; i < count; i++) {
         const w = pts[i];
         const dx = w.x - px, dz = w.z - pz;
         const dist = Math.hypot(dx, dz);
-        if (dist > 0.05) {
-          const fy = Math.max(py, w.y);
-          a0.set(px, fy + R + 0.06, pz);
-          a1.set(px, fy + 1.78 - R, pz);
-          dir.set(dx / dist, 0, dz / dist);
-          legs.total++;
-          const hit = phys.capsuleCast(a0, a1, R, dir, dist, phys.MASK.WORLD);
-          if (hit.hit && hit.distance < dist - 0.05) {
-            legs.blocked++;
-            if (legs.worst.length < 6) {
-              legs.worst.push(`${tag} leg ${i} of ${count}: ${hit.distance.toFixed(2)}m of ${dist.toFixed(2)}m`);
+        const steps = Math.ceil(dist / 0.4);
+        let bad = 0;
+        let y = py;
+        for (let t = 1; t <= steps; t++) {
+          const x = px + (dx * t) / steps;
+          const z = pz + (dz * t) / steps;
+          const gy = phys.groundHeight(x, z, y + 1.4, phys.MASK.WORLD);
+          if (Number.isFinite(gy) && Math.abs(gy - y) < 1.2) y = gy;
+          a0.set(x, y + R + 0.06, z);
+          a1.set(x, y + 1.78 - R, z);
+          const inside = indoorAt(x, z);
+          acc.samples++;
+          if (inside) acc.indoorSamples++;
+          if (!phys.checkCapsule(a0, a1, R, phys.MASK.WORLD)) {
+            bad++;
+            acc.brushed++;
+            if (inside) acc.indoorBlocked++;
+            /**
+             * A 0.36 m capsule that does not fit is a man brushing a jamb, a
+             * crate or a kerb — the grid has never promised 0.36 m of clearance
+             * along the line BETWEEN two cells, only at each cell. A 0.08 m one
+             * that does not fit is a point INSIDE the geometry, i.e. a route
+             * through a wall, which is the only failure that matters here.
+             */
+            a0.set(x, y + 0.9, z);
+            a1.set(x, y + 1.4, z);
+            if (!phys.checkCapsule(a0, a1, 0.08, phys.MASK.WORLD)) {
+              acc.deep++;
+              if (inside) acc.indoorDeep++;
             }
+          }
+        }
+        if (steps > 0) acc.total++;
+        if (bad > 0) {
+          acc.blocked++;
+          if (acc.worst.length < 6) {
+            acc.worst.push(`${tag} leg ${i}: ${bad}/${steps} samples`);
           }
         }
         px = w.x; py = w.y; pz = w.z;
@@ -158,7 +206,17 @@ for (let boot = 1; boot <= BOOTS; boot++) {
         ` (${(ground * 0.64).toFixed(0).padStart(3)} m2)  flood=${String(reached).padStart(4)}` +
         `  A* to the middle ${routes}/30`);
       }
+    acc = zlegs;
+    for (const site of m.sites) {
+      for (const kind of ['attack', 'defend']) {
+        for (const spn of m.spawns[kind]) {
+          const np = g.findPath(spn.position, site.position, path);
+          if (np > 0) walkLegs(spn.position, path, np, site.id);
+        }
+      }
+    }
     return {
+      zlegs,
       head: `grid ${g.nx}x${g.nz} · walkable ${g.walkableCount} · indoor ${g.interiorCells}` +
         ` · apron ${g.apronCells} · diagonals re-opened ${g.diagCells} · build ${g.buildMs.toFixed(0)}ms`,
       rows, totalGround, totalReach,
@@ -172,8 +230,16 @@ for (let boot = 1; boot <= BOOTS; boot++) {
   console.log(`  TOTAL ground cells ${out.totalGround} (${(out.totalGround * 0.64).toFixed(0)} m2), ` +
     `${out.totalReach} of them reachable from a spawn by flood`);
   console.log(`  ${out.caches}`);
-  console.log(`  path legs swept with the 0.36 m capsule: ${out.legs.total}, ` +
-    `${out.legs.blocked} blocked${out.legs.worst.length ? ' — ' + out.legs.worst.join('; ') : ''}`);
+  console.log(`  path legs walked with the 0.36 m capsule: ${out.legs.total}, ` +
+    `${out.legs.blocked} with a sample the capsule does not fit` +
+    `${out.legs.worst.length ? ' — ' + out.legs.worst.join('; ') : ''}`);
+  console.log(`  ${out.legs.samples} samples: ${out.legs.brushed} where the 0.36 m capsule grazes something, ` +
+    `${out.legs.deep} INSIDE geometry (a route through a wall)`);
+  console.log(`  of the ${out.legs.indoorSamples} samples inside a footprint: ${out.legs.indoorBlocked} graze, ` +
+    `${out.legs.indoorDeep} inside geometry`);
+  console.log(`  CONTROL, the spawn->zone routes every build has: ${out.zlegs.samples} samples, ` +
+    `${out.zlegs.brushed} graze, ${out.zlegs.deep} inside geometry ` +
+    `(${out.zlegs.indoorSamples} of the samples are inside a footprint)`);
   await page.close();
 }
 if (errors.length) console.log('\n[indoornav] errors', errors.slice(0, 4));
