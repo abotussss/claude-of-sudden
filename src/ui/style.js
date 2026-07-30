@@ -641,8 +641,9 @@ const CSS = `
   box-shadow: 0 1px 3px rgba(0,0,0,.7), inset 0 1px 0 rgba(255,255,255,.14);
   text-shadow: var(--sh-hard);
 }
-.ow-prompt-txt { font-size: calc(12px * var(--k)); letter-spacing:.2em; text-shadow: var(--sh); }
-.ow-prompt-sub { font-size: calc(9.5px * var(--k)); letter-spacing:.2em; color:var(--ink-2); }
+.ow-prompt-txt { font-size: calc(13.5px * var(--k)); letter-spacing:.2em; text-shadow: var(--sh-o1); }
+.ow-prompt-sub { font-size: calc(10.5px * var(--k)); letter-spacing:.2em; color:var(--ink-2);
+  text-shadow: var(--sh-o1); }
 .ow-prompt-arc { position:absolute; left:calc(-6px * var(--k)); top:50%; }
 
 /* ================================================================ banner */
@@ -826,21 +827,21 @@ const CSS = `
 .ow-cap::before {
   content:''; position:absolute; inset:0; z-index:-1;
   background: linear-gradient(to bottom,
-    rgba(4,7,10,0) 0%, rgba(4,7,10,.58) 18%, rgba(4,7,10,.58) 82%, rgba(4,7,10,0) 100%);
+    rgba(4,7,10,0) 0%, rgba(4,7,10,.66) 18%, rgba(4,7,10,.66) 82%, rgba(4,7,10,0) 100%);
   -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,0) 0%, #000 18%, #000 82%, rgba(0,0,0,0) 100%);
           mask-image: linear-gradient(to right, rgba(0,0,0,0) 0%, #000 18%, #000 82%, rgba(0,0,0,0) 100%);
 }
 .ow-cap-head { display:flex; align-items:center; gap: calc(var(--u) * 2.4); }
 .ow-cap-verb {
   font-family: var(--fd);
-  font-size: calc(25px * var(--k)); letter-spacing:.28em; font-weight:700;
+  font-size: calc(29px * var(--k)); letter-spacing:.28em; font-weight:700;
   text-shadow: var(--sh-o2);
 }
-.ow-cap-badge-wrap { position:relative; width: calc(30px * var(--k)); height: calc(30px * var(--k)); }
+.ow-cap-badge-wrap { position:relative; width: calc(34px * var(--k)); height: calc(34px * var(--k)); }
 .ow-cap-badge {
   position:absolute; inset:0;
   display:flex; align-items:center; justify-content:center;
-  font-family: var(--fd); font-size: calc(20px * var(--k)); font-weight:700;
+  font-family: var(--fd); font-size: calc(23px * var(--k)); font-weight:700;
   letter-spacing:.02em; color:#07100f;
   box-shadow: 0 calc(1px * var(--k)) calc(4px * var(--k)) rgba(0,0,0,.75);
 }
@@ -855,7 +856,7 @@ const CSS = `
   color: var(--ink-2); text-shadow: var(--sh-o1);
 }
 .ow-cap-track {
-  position:relative; width: calc(440px * var(--k)); height: calc(16px * var(--k));
+  position:relative; width: calc(520px * var(--k)); height: calc(20px * var(--k));
   background: rgba(5,8,11,.62);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
   overflow:hidden;
@@ -882,7 +883,7 @@ const CSS = `
 .ow-cap-pct {
   position:absolute; inset:0;
   display:flex; align-items:center; justify-content:center;
-  font-family: var(--fd); font-size: calc(12px * var(--k)); letter-spacing:.14em;
+  font-family: var(--fd); font-size: calc(15px * var(--k)); letter-spacing:.14em;
   color: var(--ink); text-shadow: var(--o1);
 }
 .ow-cap-foot {

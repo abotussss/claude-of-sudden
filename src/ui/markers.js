@@ -317,7 +317,13 @@ export class WorldMarkers {
     this._cacheT = (this._cacheT ?? 0) + dt;
     const beat = 0.5 + 0.5 * Math.sin(this._cacheT * Math.PI * 3.2);
     const items = this.cachePool.items;
-    const margin = 68 * k;
+    /**
+     * 96 px, and it is a MEASURED number: at 68 the cache the player is standing
+     * at — which is below his eye line, so it clamps to the bottom edge — put its
+     * glyph on the last scanline and its "HOLD F" off the screen entirely. The
+     * marker for the crate you are touching was the one being cut off.
+     */
+    const margin = 96 * k;
     let n = 0;
     if (list) {
       for (let i = 0; i < list.length && n < items.length; i++) {
@@ -330,7 +336,8 @@ export class WorldMarkers {
           setStyle(it.node, 'display', '');
         }
         const node = it.node;
-        setStyle(node, 'transform', `translate(${p.x.toFixed(1)}px,${p.y.toFixed(1)}px)`);
+        // Centred ON the point, not hung down-right off it.
+        setStyle(node, 'transform', `translate(${p.x.toFixed(1)}px,${p.y.toFixed(1)}px) translate(-50%,-50%)`);
         const gi = this._cacheGlyph[o.kind] ?? 1;
         for (let g = 0; g < node._glyphs.length; g++) {
           setStyle(node._glyphs[g], 'display', g === gi && !p.offscreen ? '' : 'none');

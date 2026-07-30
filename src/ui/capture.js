@@ -219,14 +219,19 @@ export class CapturePanel {
     const rate = z ? z.rate ?? 0 : 0;
     // Which side the bar belongs to, and therefore what filling it MEANS.
     const forMe = z ? z.capture === 'mine' : mode === 'won';
+    /**
+     * CONTESTED IS AMBER, BEFORE IT IS ANYTHING ELSE. The first cut asked "is
+     * this bar mine" first, so a contested point I was winning drew in friendly
+     * blue and the one state the mode has that means DO SOMETHING looked like
+     * the state that means it is going fine. Photographed on the first pass:
+     * "CONTESTED A 51 % DEADLOCK" in the same blue as an uncontested capture.
+     */
     const tint =
-      mode === 'won' || (forMe && mode !== 'threat')
-        ? 'var(--friend)'
-        : mode === 'contest'
-          ? 'var(--amber)'
-          : mode === 'hold'
-            ? 'var(--friend)'
-            : 'var(--enemy)';
+      mode === 'contest'
+        ? 'var(--amber)'
+        : mode === 'won' || ((forMe || mode === 'hold') && mode !== 'threat')
+          ? 'var(--friend)'
+          : 'var(--enemy)';
 
     setClass(this.root, 'threat', mode === 'threat' || mode === 'lost');
     setClass(this.root, 'contest', mode === 'contest');
