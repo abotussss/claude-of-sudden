@@ -13,6 +13,7 @@ import { PALETTE } from './palette.js';
  *   proto(id, spec)               declare an instanced prop prototype
  *   place(id, matrix, masks)      add one instance
  *   box(surface, ...)             add an axis-aligned collision proxy
+ *   clipBox(surface, ...)         …one the BOT HEIGHT FIELD cannot see (see below)
  *   light(light, opts)            register a punctual light with `render`
  *
  * Collision is authored separately from the visual mesh: proxies are cheap
@@ -50,6 +51,11 @@ export class Assembler {
     this._static = new Map(); // palette key -> Accum
     this._protos = new Map(); // id -> { geo, key, instances[], masks[], opts }
     this._collide = new Map(); // surface -> Accum
+    /**
+     * CLIP collision: surface -> Accum, registered on `LAYER.CLIP` instead of
+     * `LAYER.STATIC`. See `clipBox()`.
+     */
+    this._clip = new Map();
     this._geoCache = new Map(); // kit piece key -> BufferGeometry
     this.lights = [];
     this.meshes = [];
@@ -386,6 +392,45 @@ export class Assembler {
     return this;
   }
 
+  /**
+   * A CHARACTER-ONLY collision proxy. Stops the player and the bots; INVISIBLE to
+   * `MASK.WORLD`, which is to say invisible to the bot height field.
+   *
+   * WHY THIS EXISTS, and it is a navigation fact, not a convenience.
+   * `src/ai/nav.js` builds its 2.5D grid by dropping ONE ray per cell from
+   * `bounds.max.y + 4` and keeping the FIRST hit under `MASK.WORLD`. So any
+   * overhead structure on `LAYER.STATIC` becomes the floor of every cell under
+   * it: a 1.4 m wide gangway thrown across a connector at roof height turns a
+   * 1.4 m strip of that connector into an island at 6.5 m, and the rotation
+   * through it stops existing for every bot on the map. Measured against the
+   * balconies, which already do this to 1.2 m of pavement and get away with it
+   * only because the road beside them is clear.
+   *
+   * `MASK.CHARACTER` includes `LAYER.CLIP` and `MASK.WORLD` does not, so a deck
+   * authored here holds the player up and leaves the ground below it walkable
+   * ground as far as A*, `world.groundHeight`, `physics.groundHeight` and the
+   * bomb-site resolve rays are concerned. Bullets and sightlines pass through it
+   * too (`MASK.BULLET`/`MASK.SIGHT` exclude CLIP) — which is the honest trade: a
+   * scaffold plank you can be shot through, rather than bullet-proof floating
+   * cover nobody can contest.
+   */
+  clipBox(surface, cx, cy, cz, sx, sy, sz, ry = 0, rx = 0) {
+    this._clipAccum(surface).add(UNIT_BOX, this._x(trs(_m, cx, cy, cz, ry, sx, sy, sz, rx)));
+    return this;
+  }
+
+  /** Arbitrary triangles as CLIP collision — a sloped gangway, a ramp. */
+  clipGeo(surface, geo, matrix = null) {
+    this._clipAccum(surface).add(geo, this._x(matrix));
+    return this;
+  }
+
+  _clipAccum(surface) {
+    let a = this._clip.get(surface);
+    if (!a) this._clip.set(surface, (a = new Accum(`clip:${surface}`)));
+    return a;
+  }
+
   /** Register real triangles as collision (ramps, terrain, odd shapes). */
   collideGeo(surface, geo, matrix = null) {
     this._accum(surface).add(geo, this._x(matrix));
@@ -509,6 +554,21 @@ export class Assembler {
       this.stats.collideTris += geo.index.count / 3;
       if (physics) this.handles.push(physics.addStatic(mesh, surface));
     }
+    // --- CLIP proxies: characters only, invisible to the bot height field ---
+    for (const [surface, acc] of this._clip) {
+      if (acc.empty) continue;
+      const geo = acc.build();
+      const mesh = new THREE.Mesh(geo, INVISIBLE);
+      mesh.name = `clip_${surface}`;
+      mesh.visible = false;
+      mesh.matrixAutoUpdate = false;
+      mesh.updateMatrix();
+      this.collisionRoot.add(mesh);
+      this.stats.collideTris += geo.index.count / 3;
+      if (physics) {
+        this.handles.push(physics.addStatic(mesh, surface, { layer: physics.LAYER.CLIP }));
+      }
+    }
     if (physics) physics.rebuildStatic();
 
     // --- lights ---
@@ -545,6 +605,7 @@ export class Assembler {
     this._protos.clear();
     this._static.clear();
     this._collide.clear();
+    this._clip.clear();
   }
 }
 

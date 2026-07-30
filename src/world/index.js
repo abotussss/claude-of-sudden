@@ -5,6 +5,8 @@ import { buildGround } from './ground.js';
 import { buildBuilding, collapseRoof } from './buildings.js';
 import { buildRelief } from './relief.js';
 import { buildCordon } from './cordon.js';
+import { buildFeatures } from './features.js';
+import { buildLinks } from './links.js';
 import { buildSiteWorks } from './sitework.js';
 import { registerProps } from './props.js';
 import {
@@ -51,6 +53,14 @@ import {
  *   world.groundHeight(x, z)  cheap analytic floor height (physics is exact)
  *   world.isOpen(x, z)        true where a character can stand outdoors
  *   world.stats               { staticTris, instTris, instances, drawCalls }
+ *   world.features            the authored REASONS to go indoors and upstairs:
+ *                             [{ id, kind:'ammo'|'weapon'|'grenade'|'vantage',
+ *                                building, floor:0..2|'roof', indoor,
+ *                                botReachable, position:Vector3, level, yaw }].
+ *                             `world` gives nothing away — `match` binds the
+ *                             pickup, `ai` binds the interest. See features.js.
+ *   world.links               the rooftop gangways: [{ id, from, to, a, b,
+ *                             width, span, fall }] in world space. See links.js.
  *   world.prewarmMaterials()  compile every shader permutation the world can
  *                             produce, before the frame loop starts. Awaitable.
  *                             Call it from src/core/prewarm.js — see the method.
@@ -155,6 +165,24 @@ export class WorldSystem {
     dressBuildings(A, rng, infos);
     scatterDebris(A, rng);
 
+    /**
+     * WHY YOU WOULD EVER GO IN, AND WHY YOU WOULD EVER GO UP.
+     *
+     * Both of these run LAST and on their own rng streams, so neither can move a
+     * prop the dressing has already placed:
+     *
+     *   `features` — 22 caches, one per level of every enterable building and one
+     *     on every reachable roof. Published as `world.features` for `match`/`ai`
+     *     to bind pickups to; the world only guarantees the place exists, is
+     *     reachable, is marked and looks deliberate. See src/world/features.js.
+     *   `links` — the four rooftop gangways that turn six separate roofs into two
+     *     continuous upper routes. Their decks are `LAYER.CLIP`, so the four
+     *     connectors they cross are still open ground to the bot height field.
+     *     See src/world/links.js.
+     */
+    this.features = buildFeatures(A, infos);
+    this.links = buildLinks(A, infos);
+
     this._addLights(A);
 
     A.finalize(this.root, physics);
@@ -170,6 +198,19 @@ export class WorldSystem {
       yaw: yaw + LEVEL_YAW,
       tag,
     }));
+    /**
+     * The published feature list gets its WORLD position here, where the
+     * transform exists. `level` is kept beside it because every tool in
+     * `tools/` authors and reports in level space.
+     */
+    for (const f of this.features) {
+      f.position = A.toWorld(f.level.x, f.level.y, f.level.z);
+      f.yaw += LEVEL_YAW;
+    }
+    for (const l of this.links) {
+      l.a = A.toWorld(l.x, l.y0, l.z0);
+      l.b = A.toWorld(l.x, l.y1, l.z1);
+    }
     /**
      * The playable box. `src/ai/index.js` builds its nav grid straight off
      * this, so it is also the nav grid's extent and therefore its memory and

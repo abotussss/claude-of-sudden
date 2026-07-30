@@ -597,6 +597,260 @@ if (climbs) {
   }
 }
 
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * WHAT IS OVER YOUR HEAD ON THE STAIRS, WHERE THE STAIRS ARRIVE, AND WHETHER
+ * THERE IS ANYTHING THERE WHEN YOU GET THERE.
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * The flood above passed 24/24 levels and 8/8 roofs while the player was
+ * reporting "階段も上がれるけど天井が塞がってるように見えます" — you can climb the
+ * stairs but the ceiling above looks sealed. Both can be true, and this is the
+ * gap: the flood samples ONE COLUMN AT A TIME and links columns that are within
+ * a step of each other, so it will happily walk up a flight whose soffit is
+ * 1.2 m over the treads — the capsule test it runs is the standing room in the
+ * column, and a climber's head is not in the column his feet are in.
+ *
+ * `stairGeometry` in src/world/buildings.js cuts the void in the slab above a
+ * flight at `nextY - slabT - 1.78 - 0.06`, pulled back by a capsule radius, a
+ * tread and a hand's breadth, and the ONLY thing that has ever checked that
+ * arithmetic is the arithmetic itself. So: walk every authored flight tread by
+ * tread with the real BVH, cast up from each tread, and require 1.9 m of air.
+ *
+ * Then the other half of the complaint, which is the same complaint: a stair
+ * that arrives at a slab. Every flight's top landing is tested for standing
+ * room, for head clearance, for a walkable floor CONTINUING past it, and for
+ * something worth arriving at — the nearest published `world.features` cache.
+ * A flight whose top has no authored content is a flight nobody has a reason to
+ * climb, which is the whole of "屋上だったり３階のエリアなどにもメリットを与えて".
+ *
+ * The four rooftop gangways in `world.links` get the same treatment: the deck is
+ * walked end to end and every sample must be standable, or the link is a hole.
+ */
+const extra = await page.evaluate(() => {
+  const c = window.__ENGINE__.ctx;
+  const w = c.peek('world'), phys = c.peek('physics');
+  const V = c.camera.position.constructor;
+  const MASK = phys.MASK.CHARACTER;
+  const R = 0.32, H = 1.78, STEP = 0.42;
+  /** A climbing man needs his own height plus a little. */
+  const HEAD = 1.9;
+  const _a = new V(), _b = new V(), _p = new V(), _q = new V();
+
+  const world = (lx, ly, lz) => w.levelToWorld(lx, ly, lz, _p);
+  /** Standing room with the real capsule, feet at (lx, ly, lz) in LEVEL space. */
+  const stands = (lx, ly, lz, up = 0) => {
+    world(lx, ly, lz);
+    _a.set(_p.x, _p.y + up + R, _p.z);
+    _b.set(_p.x, _p.y + H - R + 0.02, _p.z);
+    return phys.checkCapsule(_a, _b, R - 0.02, MASK);
+  };
+  /** Metres of air over a point; Infinity when nothing is above it at all. */
+  const headroom = (lx, ly, lz) => {
+    world(lx, ly, lz);
+    const hit = phys.raycast(_p.x, _p.y + 0.12, _p.z, 0, 1, 0, 6, MASK);
+    return hit.hit ? hit.distance + 0.12 : Infinity;
+  };
+  /** The floor under a point, searching down from `from`. */
+  const floorAt = (lx, ly, lz, from = 1.2) => {
+    world(lx, ly, lz);
+    const hit = phys.raycast(_p.x, _p.y + from, _p.z, 0, -1, 0, from + 1.6, MASK);
+    return hit.hit && hit.normal.y > 0.5 ? hit.point.y : null;
+  };
+
+  const features = (w.features ?? []).map((f) => ({ id: f.id, kind: f.kind, ...f.level }));
+  const nearestFeature = (lx, ly, lz) => {
+    let best = null, bd = Infinity;
+    for (const f of features) {
+      const d = Math.hypot(f.x - lx, (f.y - ly) * 1.5, f.z - lz);
+      if (d < bd) { bd = d; best = f; }
+    }
+    return { d: bd, f: best };
+  };
+
+  // ------------------------------------------------------------- flights --
+  const flights = [];
+  for (const info of w.buildings ?? []) {
+    const spec = info.spec;
+    if (!spec.enterable) continue;
+    for (const g of info.stairs ?? []) {
+      const ax = Math.sin(g.ry), az = Math.cos(g.ry);
+      let minHead = Infinity, minAt = 0, blocked = 0;
+      for (let i = 0; i < g.steps; i++) {
+        const along = (i + 0.5) * g.run;
+        const lx = g.ox + ax * along, lz = g.oz + az * along;
+        const ly = g.base + (i + 1) * g.rise;
+        const hr = headroom(lx, ly, lz);
+        if (hr < minHead) { minHead = hr; minAt = i; }
+        if (!stands(lx, ly, lz, STEP)) blocked++;
+      }
+      // the landing at the top, and the floor it is supposed to deliver you to
+      const fwd = g.D + g.landing / 2 + 0.1;
+      const lx = g.ox + ax * fwd, lz = g.oz + az * fwd;
+      const topY = g.top;
+      const landHead = headroom(lx, topY, lz);
+      const landStand = stands(lx, topY, lz, 0.1);
+      let onward = 0;
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const px = lx + dx * 1.3, pz = lz + dz * 1.3;
+        const fy = floorAt(px, topY + 0.5, pz, 0.9);
+        if (fy === null) continue;
+        const wy = world(lx, topY, lz).y;
+        if (Math.abs(fy - wy) <= STEP && stands(px, topY + (fy - wy), pz, 0.05)) onward++;
+      }
+      /**
+       * IS THERE DAYLIGHT AT THE TOP? The player's words were "階段も上がれるけど
+       * 天井が塞がっているように見えます" — the treads all measure 2.6 m of clearance,
+       * so what he was looking at was the stairhead's own lid closing the top of
+       * the shaft. A flight that arrives on the roof has to show sky.
+       */
+      const up = phys.raycast(world(lx, topY + 0.5, lz).x, _p.y, _p.z, 0, 1, 0, 14, MASK);
+      const sky = !up.hit;
+      const nf = nearestFeature(lx, topY, lz);
+      /**
+       * A REASON TO CLIMB IT, asked of the LEVEL and not of a radius. The first
+       * cut of this used "a cache within 12 m of the landing" and failed W1's
+       * flights at 12.8 m — W1 is 21 m across, so the cache on the floor the
+       * stair arrives at is the length of the building away and that is fine.
+       * What matters is that the storey you come out on has something in it.
+       */
+      const arriveFloor = g.floor + 1 >= (spec.floors ?? 1) ? 'roof' : g.floor + 1;
+      const onLevel = (w.features ?? []).find((f) => f.building === spec.id && String(f.floor) === String(arriveFloor));
+      flights.push({
+        id: spec.id, floor: g.floor, steps: g.steps, arrive: String(arriveFloor),
+        levelCache: onLevel?.id ?? null,
+        base: +g.base.toFixed(2), top: +topY.toFixed(2),
+        minHead: minHead === Infinity ? 99 : +minHead.toFixed(2), minAt, blocked,
+        landHead: landHead === Infinity ? 99 : +landHead.toFixed(2), landStand, onward, sky,
+        feature: nf.f?.id ?? null, featureD: +nf.d.toFixed(1),
+      });
+    }
+  }
+
+  // --------------------------------------------------------------- links --
+  const links = [];
+  for (const l of w.links ?? []) {
+    const len = Math.hypot(l.z1 - l.z0, l.y1 - l.y0);
+    const n = Math.max(4, Math.round(len / 0.35));
+    let ok = 0, worstGap = 0, run = 0;
+    const bad = [];
+    /**
+     * INSET both ends by 0.6 m of span. The last 0.9 m at each end is laid OVER
+     * the building's own parapet and its boarding steps — the deck's end face,
+     * the top step and the roof are all within a few centimetres of each other
+     * there, and sampling the corner of the end face measured a hole in a deck
+     * that is continuous. The ends are proven by the roof flood above; what this
+     * walk is for is the part with nothing under it.
+     */
+    const INSET = 0.6 / Math.max(1, len);
+    for (let i = 0; i <= n; i++) {
+      const f = INSET + (i / n) * (1 - INSET * 2);
+      const lz = l.z0 + (l.z1 - l.z0) * f;
+      const ly = l.y0 + (l.y1 - l.y0) * f;
+      const fy = floorAt(l.x, ly + 0.6, lz, 0.9);
+      const wy = world(l.x, ly, lz).y;
+      const good = fy !== null && Math.abs(fy - wy) < 0.5 && stands(l.x, ly + (fy - wy) + 0.02, lz);
+      if (good) { ok++; run = 0; } else {
+        run++; if (run * (len / n) > worstGap) worstGap = run * (len / n);
+        bad.push({ i, f: +f.toFixed(2), lz: +lz.toFixed(2), want: +ly.toFixed(2), got: fy === null ? null : +(fy - world(l.x, 0, lz).y + 0).toFixed(2) });
+      }
+    }
+    const nf = nearestFeature(l.x, l.y1, l.z1);
+    links.push({
+      id: l.id, span: l.span, fall: l.fall, samples: n + 1, ok,
+      worstGap: +worstGap.toFixed(2), bad: bad.slice(0, 6), feature: nf.f?.id ?? null, featureD: +nf.d.toFixed(1),
+    });
+  }
+
+  // ------------------------------------------------------------ features --
+  const feats = [];
+  for (const f of w.features ?? []) {
+    /**
+     * Room to stand AT it, on a ring at arm's length, and the head clearance
+     * measured THERE. Measuring it over the cache itself measures the crate: the
+     * first run of this reported 0.47 m of headroom over a grenade box, which is
+     * the height of the grenade box.
+     */
+    /**
+     * The ring is 1.25 m for a dump and 1.9 m for a VANTAGE, because a vantage's
+     * own sandbags stand at 1.05 and 1.2 m: measured at 1.25 m the nest scored
+     * 1-3 of 8 and the tool was reporting the cover as an obstruction. A firing
+     * position is used from the middle, so that is tested too.
+     */
+    const ring = f.kind === 'vantage' ? 1.9 : 1.25;
+    let around = 0, head = 0;
+    if (f.kind === 'vantage' && stands(f.level.x, f.level.y, f.level.z, STEP)) {
+      around++;
+      head = Math.max(head, headroom(f.level.x, f.level.y, f.level.z));
+    }
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const px = f.level.x + Math.cos(a) * ring, pz = f.level.z + Math.sin(a) * ring;
+      if (!stands(px, f.level.y, pz, STEP)) continue;
+      around++;
+      const hr = headroom(px, f.level.y, pz);
+      if (hr > head) head = hr;
+    }
+    feats.push({
+      id: f.id, kind: f.kind, floor: String(f.floor), indoor: f.indoor,
+      bot: f.botReachable, around, head: head === Infinity ? 99 : +head.toFixed(2),
+    });
+  }
+  return { flights, links, feats };
+});
+
+console.log('\n  EVERY FLIGHT — head clearance over the treads, and what is at the top');
+console.log('  building  flight  treads  min head   at   blocked   landing head/stand/ways  sky  arrives  cache on that level');
+let stairFail = 0;
+for (const f of extra.flights) {
+  const bad = f.minHead < 1.9 || f.blocked > 0 || !f.landStand || f.landHead < 1.9 || f.onward < 1
+    || !f.levelCache || (f.arrive === 'roof' && !f.sky);
+  if (bad) stairFail++;
+  console.log(
+    `  ${f.id.padEnd(9)} f${f.floor}      ${String(f.steps).padStart(6)}  ${String(f.minHead).padStart(8)}  ` +
+    `${String(f.minAt).padStart(3)}  ${String(f.blocked).padStart(7)}   ` +
+    `${String(f.landHead).padStart(5)} / ${f.landStand ? 'yes' : 'NO '} / ${f.onward}   ` +
+    `${(f.sky ? 'yes' : ' - ').padEnd(4)} ${f.arrive.padEnd(6)}   ${(f.levelCache ?? '-').padEnd(20)} (nearest ${f.featureD} m)` +
+    (bad ? '   <-- ' + [
+      f.minHead < 1.9 ? `SEALED CEILING over tread ${f.minAt}` : null,
+      f.blocked ? `NO ROOM ON ${f.blocked} TREAD(S)` : null,
+      !f.landStand ? 'LANDING BLOCKED' : null,
+      f.landHead < 1.9 ? 'LANDING CEILING' : null,
+      f.onward < 1 ? 'ARRIVES AT NOTHING' : null,
+      !f.levelCache ? 'NOTHING ON THE LEVEL IT ARRIVES AT' : null,
+      f.arrive === 'roof' && !f.sky ? 'NO DAYLIGHT AT THE TOP — it reads as sealed' : null,
+    ].filter(Boolean).join(', ') : '')
+  );
+}
+
+console.log('\n  BUILDING TO BUILDING — the real capsule walked across every published link');
+console.log('  link       span   fall   standable samples   worst gap   nearest cache');
+let linkFail = 0;
+for (const l of extra.links) {
+  const bad = l.ok < l.samples || l.worstGap > 0;
+  if (bad) linkFail++;
+  console.log(
+    `  ${l.id.padEnd(10)} ${String(l.span).padStart(5)}  ${String(l.fall).padStart(5)}   ` +
+    `${String(l.ok).padStart(9)}/${String(l.samples).padEnd(6)}   ${String(l.worstGap).padStart(9)}   ` +
+    `${(l.feature ?? '-').padEnd(20)} ${String(l.featureD).padStart(5)} m` +
+    (bad ? '   <-- A HOLE IN THE DECK ' + JSON.stringify(l.bad) : '')
+  );
+}
+if (!extra.links.length) console.log('        (world publishes no links)');
+
+console.log('\n  THE CACHES — is there room to stand at one, and can a bot reach it');
+console.log('  cache                     kind      floor   indoor  bot   standable ring   head');
+let featFail = 0;
+for (const f of extra.feats) {
+  const bad = f.around < 3 || f.head < 1.9;
+  if (bad) featFail++;
+  console.log(
+    `  ${f.id.padEnd(25)} ${f.kind.padEnd(9)} ${f.floor.padEnd(6)}  ${(f.indoor ? 'yes' : 'no').padEnd(6)}  ` +
+    `${(f.bot ? 'yes' : '-').padEnd(4)}  ${String(f.around).padStart(9)}/8      ${String(f.head).padStart(5)}` +
+    (bad ? '   <-- ' + (f.around < 3 ? 'BURIED' : 'NO HEADROOM') : '')
+  );
+}
+
 if (args.map) {
   const want = args.map === true ? rows.map((b) => b.id) : String(args.map).split(',');
   for (const b of rows) {
@@ -618,10 +872,16 @@ console.log(`  levels with two ways out:    ${got.length - culdesac}/${got.lengt
 if (VERBOSE) console.log('\n[floorcheck] raw', JSON.stringify(rows, null, 1));
 if (errs.length) console.log('\n[floorcheck] page errors', errs.slice(0, 4));
 const climbFail = climbs ? climbs.filter((c) => c.gained <= c.need - 0.35).length : 0;
+console.log(`  flights with head clearance, a landing and a reason: ${extra.flights.length - stairFail}/${extra.flights.length}`);
+console.log(`  building-to-building links you can walk across:      ${extra.links.length - linkFail}/${extra.links.length}`);
+console.log(`  caches with room to stand at them:                   ${extra.feats.length - featFail}/${extra.feats.length}`);
+const fails = unreached || culdesac || climbFail || stairFail || linkFail || featFail;
 console.log(
-  unreached || culdesac || climbFail
-    ? `\n[floorcheck] FAIL — ${unreached} level(s) unreachable, ${culdesac} cul-de-sac(s), ${climbFail} flight(s) not climbable`
-    : `\n[floorcheck] PASS — every standable level of all ${rows.length} enterable buildings is reachable and has two ways out`
+  fails
+    ? `\n[floorcheck] FAIL — ${unreached} level(s) unreachable, ${culdesac} cul-de-sac(s), ${climbFail} flight(s) not climbable, ` +
+      `${stairFail} flight(s) sealed/pointless, ${linkFail} broken link(s), ${featFail} buried cache(s)`
+    : `\n[floorcheck] PASS — every standable level of all ${rows.length} enterable buildings is reachable and has two ways out; ` +
+      `every flight has 1.9 m over its treads and something at the top; every link walks`
 );
 await browser.close();
-process.exit(unreached || culdesac || climbFail || errs.length ? 1 : 0);
+process.exit(fails || errs.length ? 1 : 0);

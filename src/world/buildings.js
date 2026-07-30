@@ -21,6 +21,7 @@ import {
 } from './kit.js';
 import { chamferBox, clothGeometry, fbm3, patchGeometry, runoffStreak } from './util.js';
 import { furnishRoom } from './interiors.js';
+import { featureKeepClear } from './features.js';
 
 /**
  * WORLD — building assembly.
@@ -894,6 +895,17 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
    */
   const floorClear = [];
   for (let f = 0; f < floors; f++) floorClear.push(f === 0 ? doorSpots.slice() : []);
+  /**
+   * …AND KEEP THE CACHES CLEAR. `src/world/features.js` authors one loot cache
+   * per floor of every enterable building, and a shelf dropped on top of one is
+   * the same failure as a shelf dropped on a stair: the thing the player came up
+   * here for is inside a wardrobe. The spots are pure geometry off this same
+   * spec, so the furnishing pass and the cache cannot disagree about where they
+   * are. See `featureSpots`.
+   */
+  for (const k of featureKeepClear(spec, info, t)) {
+    if (floorClear[k.floor]) floorClear[k.floor].push({ x: k.x, z: k.z, r: k.r });
+  }
   const chain = (list, ax, az, bx, bz, r) => {
     const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 0.5));
     for (let i = 0; i <= n; i++) {
@@ -1277,10 +1289,70 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
         warp: 0.015,
       });
     }
-    A.add('concrete', BOX(A), LL(IDENT, px, y + 2.7, pz, 0, pw + 0.3, 0.2, pd + 0.3), {
-      masks: [0.5, 0.45, 0.2],
+    /**
+     * THE STAIRHEAD'S LID HAS A HOLE IN IT, AND THAT IS THE ANSWER TO
+     * "階段も上がれるけど天井が塞がっているように見えます".
+     *
+     * `floorcheck` now walks every flight tread by tread and reports 2.6-2.85 m
+     * of air over every single one, so the stairwell is not sealed and never was.
+     * What IS sealed is what you see: the void runs up through the roof slab into
+     * the stairhead, and the stairhead had a solid concrete lid 2.7 m over the
+     * roof. Standing on the first floor looking up the stairwell — which is
+     * exactly what a player does before he decides whether to climb — the last
+     * thing at the top of the shaft was a ceiling. No daylight, so no route.
+     *
+     * A light well changes what the shaft looks like from the bottom without
+     * changing a single thing about how it plays: the lid becomes a frame around
+     * a 1.0 x 1.3 m opening, offset toward the door so the sky is in the same
+     * direction as the way out, with a raised kerb and a sheet of corrugated iron
+     * lying half over it, weighted down — which is how a real one on a flat roof
+     * is covered.
+     */
+    const holeW = Math.min(1.0, pw * 0.42);
+    const holeD = Math.min(1.3, pd * 0.34);
+    const OUT4 = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+    const [ex, ez] = OUT4[exitSide];
+    const hx = px + ex * (pw / 2 - holeW / 2 - 0.55);
+    const hz = pz + ez * (pd / 2 - holeD / 2 - 0.55);
+    const LID = y + 2.7;
+    const lidW = pw + 0.3, lidD = pd + 0.3;
+    const parts = [
+      [px - lidW / 2, pz - lidD / 2, px + lidW / 2, hz - holeD / 2],
+      [px - lidW / 2, hz + holeD / 2, px + lidW / 2, pz + lidD / 2],
+      [px - lidW / 2, hz - holeD / 2, hx - holeW / 2, hz + holeD / 2],
+      [hx + holeW / 2, hz - holeD / 2, px + lidW / 2, hz + holeD / 2],
+    ];
+    for (const [ax, az, bx, bz] of parts) {
+      const w = bx - ax, d = bz - az;
+      if (w < 0.05 || d < 0.05) continue;
+      A.add('concrete', BOX(A), LL(IDENT, (ax + bx) / 2, LID, (az + bz) / 2, 0, w, 0.2, d), {
+        masks: [0.5, 0.45, 0.2],
+      });
+      A.box('concrete', (ax + bx) / 2, LID, (az + bz) / 2, w, 0.2, d);
+    }
+    // the kerb round the opening, so the hole has a lip rather than a cut edge
+    for (const [ox, oz, kw, kd] of [
+      [0, -holeD / 2 - 0.06, holeW + 0.24, 0.12],
+      [0, holeD / 2 + 0.06, holeW + 0.24, 0.12],
+      [-holeW / 2 - 0.06, 0, 0.12, holeD + 0.24],
+      [holeW / 2 + 0.06, 0, 0.12, holeD + 0.24],
+    ]) {
+      A.add('concrete', BOX_SOFT(A), LL(IDENT, hx + ox, LID + 0.16, hz + oz, 0, kw, 0.14, kd), {
+        masks: [0.8, 0.4, 0.15],
+      });
+    }
+    // a sheet of corrugated iron lying over part of it, with a block on it
+    /**
+     * The tilt and the yaw are derived from the position, NOT drawn from `rng`.
+     * `buildBuilding` shares the level's one stream with every prop, stain and
+     * pock placed after it, so three draws here would move the whole set dressing
+     * of the map sideways for a sheet of iron on a shed.
+     */
+    const j = (px * 7.31 + pz * 3.17) % 1;
+    A.add('corrugated', BOX(A), LL(IDENT, hx - ex * holeW * 0.32, LID + 0.24, hz - ez * holeD * 0.32, 0, holeW * 0.9, 0.05, holeD * 0.55, (j - 0.5) * 0.1, (j - 0.5) * 0.08), {
+      masks: [0.8, 0.6, 0.2],
     });
-    A.box('concrete', px, y + 2.7, pz, pw + 0.3, 0.2, pd + 0.3);
+    A.put('block_small', hx - ex * holeW * 0.3, LID + 0.28, hz - ez * holeD * 0.3, j * 6.28, 1);
   }
 }
 
