@@ -138,6 +138,41 @@ const CACHE_NEAR_ZONE = 26;
 const RESUPPLY_AFTER = 40;
 const RESUPPLY_RANGE = 22;
 /**
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND THE THREE THE NEED-DRIVEN LEGS ADDED. @see `_assignCacheLegs`
+ * ────────────────────────────────────────────────────────────────────────────
+ * `RESUPPLY_AFTER` above is a proxy — "he has been alive 40 s so he has been
+ * shooting" — and it was the best `match` could do while `src/ai` had no
+ * ammunition to run out of. It does now (`Agent.reserve`, see its constructor),
+ * so the proxy is demoted to the LAST reason a man is sent to a crate and the
+ * real one goes first.
+ *
+ * `NEED_RANGE` is deliberately larger than `RESUPPLY_RANGE`: a man who is DRY
+ * is not a rifle any more, and walking him 38 m to become one again is worth
+ * more than whatever he was going to do standing where he is. A man who is
+ * merely low is not, which is why the two are ranked and not merged.
+ */
+const NEED_RANGE = 38;
+/** Kinds that hand a bot rounds. @see `Caches.takeForBot` for what each gives. */
+const AMMO_KINDS = new Set(['ammo', 'vantage', 'weapon']);
+const GRENADE_KINDS = new Set(['grenade']);
+/**
+ * A FIRING POSITION IS A PERSONALITY, NOT A REWARD, and this is the one rule in
+ * the set that currently selects nothing. A `vantage` is a nest with an
+ * ordnance box in it; the men who want one are the men who fight long and hold
+ * still, which is `traits.patience` high and `traits.range` long — the marksman
+ * and the anchor. ALL EIGHT VANTAGE NESTS ON THIS MAP ARE `floor: 'roof'` AND
+ * NO BOT CAN REACH ONE (`src/ai/nav.js` is a 2.5D height field: one floor per
+ * cell, so a stair is zero waypoints). `Caches.prove` therefore keeps none of
+ * them and `nearestBotCache(..., VANTAGE_KINDS)` returns null every time it is
+ * called. It is written, it is measured returning zero, and it is left in
+ * because the day a nest is published on a ground floor it is already wired —
+ * not because it does anything today. @see `Caches.takeForBot`.
+ */
+const VANTAGE_KINDS = new Set(['vantage']);
+const VANTAGE_PATIENCE = 0.62;
+const VANTAGE_RANGE = 24;
+/**
  * Seconds a man keeps the cache he was given. The plan is re-cut every two
  * seconds and re-tasks EVERY live man, so without this a leg is re-chosen from
  * scratch on every refresh and a bot walking to a door is turned round in the
@@ -1390,35 +1425,117 @@ export class MatchSystem {
       if (!a._matchCacheHeld && a.position.distanceTo(c.stand) < CACHE_ARRIVE) {
         a._matchCacheHeld = true;
         a._matchCacheUntil = now + CACHE_DWELL;
+        /**
+         * AND HE OPENS IT. Until this line the errand had no reward and the
+         * whole feature measured footfall — see `Caches.takeForBot`, which is
+         * the same decision table `take()` runs for the player, addressed to
+         * `src/ai`'s hooks instead of `src/weapons`'s.
+         *
+         * On arrival, ONCE, and only for the man who was sent: the cooldown it
+         * burns is the same per-cache `RULES.cacheCooldown` the player's hold
+         * burns, so a bot and a human racing for one crate is a real race and
+         * the loser gets nothing. A man who needed nothing takes nothing and
+         * the crate stays armed — `takeForBot` returns null and does not stamp
+         * `readyAt`, exactly as `take()` refuses to burn a cooldown on a full
+         * pouch.
+         */
+        this.caches.takeForBot(c, a, this.ai, now);
       }
       legs--;
       this._orderCache(a, c, face);
     }
-    // 2. and the spare bodies fill what is left of the cap.
-    for (let i = 0; i < live.length && legs > 0; i++) {
-      const a = live[i];
-      if (a._matchCache) continue;
-      /**
-       * `_matchSpawnedAt` is stamped by `_stampSpawn`, not read out of `src/ai`:
-       * the agent object is replaced wholesale on a respawn (`match:respawn` says
-       * a respawned bot is a NEW Agent), so a field of our own on the actor is
-       * the only honest clock for "how long has this man been in it".
-       */
-      const veteran = now - (a._matchSpawnedAt ?? now) > RESUPPLY_AFTER;
-      const zone = this._focus[team] ?? null;
-      let c = null;
-      // 1. contest: a cache beside the point this side is trying to take.
-      if (zone) c = caches.nearestBotCache(zone.position, claimed, CACHE_NEAR_ZONE);
-      // 2. resupply: the nearest one to a man who has been out here a while.
-      if (!c && veteran) c = caches.nearestBotCache(a.position, claimed, RESUPPLY_RANGE);
-      if (!c) continue;
-      claimed.add(c);
-      legs--;
-      a._matchCache = c;
-      a._matchCacheUntil = now + CACHE_HOLD;
-      a._matchCacheHeld = false;
-      this._orderCache(a, c, face);
+    /**
+     * 2. AND THE SPARE BODIES FILL WHAT IS LEFT OF THE CAP — in two passes,
+     *    because the men are not interchangeable any more.
+     *
+     * The first pass takes only men who WANT something a crate has: dry, low,
+     * out of frags, or a marksman who would rather be in a nest. The second
+     * takes anybody, on the old contest/veteran rules. Two passes rather than a
+     * sort: `live` is walked twice at thirty men and nothing is allocated,
+     * where a comparator would allocate a closure every two seconds for the
+     * length of the match.
+     *
+     * The order matters and it is the whole point of this pass. Contest legs
+     * used to be first and they always match — `_focus[team]` is almost never
+     * null — so the three legs a side has were spent on proximity before need
+     * was ever consulted. A man who is out of ammunition now outranks a man who
+     * is near a door.
+     */
+    for (let pass = 0; pass < 2 && legs > 0; pass++) {
+      for (let i = 0; i < live.length && legs > 0; i++) {
+        const a = live[i];
+        if (a._matchCache) continue;
+        const c = pass === 0 ? this._needCache(a, claimed) : this._spareCache(a, team, claimed, now);
+        if (!c) continue;
+        claimed.add(c);
+        legs--;
+        a._matchCache = c;
+        a._matchCacheUntil = now + CACHE_HOLD;
+        a._matchCacheHeld = false;
+        this._orderCache(a, c, face);
+      }
     }
+  }
+
+  /**
+   * THE CRATE THIS MAN ACTUALLY WANTS, or null.
+   *
+   * Everything here is asked through a published `ai` hook — `needsAmmo`,
+   * `needsGrenade`, `ammoState` — and never read off the agent: `Agent.reserve`
+   * is `src/ai`'s state exactly as `reserve` is `src/weapons`'s, and `match`
+   * has no more business reading one than the other.
+   *
+   * Ranked, hardest need first:
+   *  1. DRY (`ammoState` 0) — he cannot shoot at all. `NEED_RANGE`, 38 m.
+   *  2. LOW — half a magazine of reserve. `RESUPPLY_RANGE`, on his way.
+   *  3. NO FRAGS, and only for a man aggressive enough to use one. A grenade in
+   *     an anchor's pouch at the end of the round is a walk that bought nothing.
+   *  4. A NEST, for the men whose personality is a firing position. Selects
+   *     nothing on this map and is measured doing so. @see `VANTAGE_KINDS`.
+   */
+  _needCache(a, claimed) {
+    const ai = this.ai;
+    const caches = this.caches;
+    const st = caches.stats;
+    if (ai.needsAmmo(a)) {
+      const dry = ai.ammoState(a) <= 0.001;
+      const c = caches.nearestBotCache(a.position, claimed,
+        dry ? NEED_RANGE : RESUPPLY_RANGE, AMMO_KINDS);
+      if (c) { st.legsAmmo++; return c; }
+    }
+    if (ai.needsGrenade(a) && (a.traits?.aggression ?? 0.5) > 0.45) {
+      const c = caches.nearestBotCache(a.position, claimed, RESUPPLY_RANGE, GRENADE_KINDS);
+      if (c) { st.legsGrenade++; return c; }
+    }
+    const tr = a.traits;
+    if (tr && tr.patience > VANTAGE_PATIENCE && tr.range > VANTAGE_RANGE) {
+      const c = caches.nearestBotCache(a.position, claimed, CACHE_NEAR_ZONE, VANTAGE_KINDS);
+      if (c) { st.legsVantage++; return c; }
+    }
+    return null;
+  }
+
+  /** The old two rules, unchanged, for a man who needs nothing in particular. */
+  _spareCache(a, team, claimed, now) {
+    const caches = this.caches;
+    const zone = this._focus[team] ?? null;
+    // 1. contest: a cache beside the point this side is trying to take.
+    if (zone) {
+      const c = caches.nearestBotCache(zone.position, claimed, CACHE_NEAR_ZONE);
+      if (c) { caches.stats.legsContest++; return c; }
+    }
+    /**
+     * 2. resupply by PROXY. `_matchSpawnedAt` is stamped by `_stampSpawn`, not
+     * read out of `src/ai`: the agent object is replaced wholesale on a respawn
+     * (`match:respawn` says a respawned bot is a NEW Agent), so a field of our
+     * own on the actor is the only honest clock for "how long has this man been
+     * in it". It is last now — `_needCache` asks the real question.
+     */
+    if (now - (a._matchSpawnedAt ?? now) > RESUPPLY_AFTER) {
+      const c = caches.nearestBotCache(a.position, claimed, RESUPPLY_RANGE);
+      if (c) { caches.stats.legsVeteran++; return c; }
+    }
+    return null;
   }
 
   /**

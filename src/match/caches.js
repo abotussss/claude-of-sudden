@@ -216,7 +216,13 @@ export class Caches {
     };
 
     /** Reported by `_publishHud`; written in place. */
-    this.stats = { taken: 0, weapons: 0, ammo: 0, frags: 0, beacons: 0, beaconSpawns: 0 };
+    this.stats = {
+      taken: 0, weapons: 0, ammo: 0, frags: 0, beacons: 0, beaconSpawns: 0,
+      /** Of `taken`, how many were opened by a BOT. @see `takeForBot`. */
+      botTakes: 0,
+      /** Cache legs handed out, split by the reason. @see `_assignCacheLegs`. */
+      legsContest: 0, legsAmmo: 0, legsGrenade: 0, legsVantage: 0, legsVeteran: 0,
+    };
     this._v = new THREE.Vector3();
 
     /**
@@ -473,6 +479,80 @@ export class Caches {
   }
 
   /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE SAME CRATE, OPENED BY A BOT
+   * ══════════════════════════════════════════════════════════════════════════
+   * "ここのメリットもっとAIに覚えさせて" — the merit has to be a merit for the AI
+   * too, and until this method the errand had NO reward at all. `_orderCache`
+   * walked a man to `stand`, he stood on it for `CACHE_DWELL` and he walked
+   * away with exactly what he arrived with. What was measured was footfall.
+   *
+   * `take()` above is the PLAYER's path and it is not reusable, because every
+   * verb in it belongs to `src/weapons` — `pickUpPrimary`, `resupplyGrenades`,
+   * `scavenge` — and a bot's ammunition is `src/ai`'s (`Agent.reserve`), which
+   * `weapons` has never heard of. So this is the same decision table addressed
+   * to the other subsystem's hooks: `ai.resupply(actor, mags, grenades)`, whose
+   * cap ("cannot exceed what he spawned with") is the same rule
+   * `weapons.scavenge` applies to the player.
+   *
+   * WHAT A BOT CAN ACTUALLY BE HANDED, on this map, measured at boot rather
+   * than assumed — and the honest answer is TWO of the four kinds:
+   *
+   *   ammo      seven of the eight ground-floor caches. Six or seven survive
+   *             `prove()` depending on where the dressing dice fall.
+   *   grenade   ONE (K2's ground floor). E1/E2's grenade stacks are on the
+   *             SECOND floor and are the player's.
+   *   weapon    NONE. Every one of the eight weapon racks is on floor 1, and
+   *             `src/ai/nav.js` is a 2.5D height field — one floor per cell —
+   *             so a stair is zero waypoints and no bot on this map can reach
+   *             one. The branch below is written and it is dead today; it will
+   *             stop being dead the day a rack is published on a ground floor,
+   *             and NOT before. A bot cannot "take a weapon upgrade" here.
+   *   vantage   NONE. All eight are `floor: 'roof'`. Same reason, same answer.
+   *
+   * That is the whole reachable set and it is why `_assignCacheLegs` ranks men
+   * by ammunition and by frags and by nothing else: those are the two rewards
+   * that exist.
+   *
+   * @returns {{rounds:number, grenade:boolean, weapon:boolean}|null} null when
+   *          the man needed nothing, which must NOT burn the cooldown — the
+   *          same rule `take()` applies to a player with a full pouch.
+   */
+  takeForBot(c, actor, ai, now) {
+    if (!c || !actor || !ai || !this.ready(c, now)) return null;
+    let rounds = 0;
+    let grenade = false;
+    if (c.kind === 'grenade') {
+      const got = ai.resupply(actor, 1, RULES.cacheGrenades);
+      rounds = got?.rounds ?? 0;
+      grenade = !!got?.grenade;
+    } else if (c.kind === 'weapon') {
+      /**
+       * A RACK IS A BOX OF ROUNDS TO A BOT AND NOTHING ELSE. `src/ai` has one
+       * abstract weapon per variant — `weaponDamage`, `fireRate`, `spread` are
+       * drawn from the persona, and there is no second gun for an agent to
+       * swap onto. Handing him the rack's `weaponId` would change a number on
+       * the HUD and nothing a player could see or hear, which is precisely the
+       * kind of pretend reward this file exists to not write. Unreachable
+       * today in any case. @see the table above.
+       */
+      const got = ai.resupply(actor, RULES.cacheAmmoMags, 0);
+      rounds = got?.rounds ?? 0;
+    } else {
+      // `ammo` and `vantage` — both are a box of rounds, exactly as for the player.
+      const got = ai.resupply(actor, RULES.cacheAmmoMags, 0);
+      rounds = got?.rounds ?? 0;
+    }
+    if (rounds <= 0 && !grenade) return null;
+    c.readyAt = now + RULES.cacheCooldown;
+    this.stats.taken++;
+    this.stats.botTakes++;
+    if (rounds > 0) this.stats.ammo += rounds;
+    if (grenade) this.stats.frags++;
+    return { rounds, grenade, weapon: false };
+  }
+
+  /**
    * Plant the beacon at `c` for `team`. Returns true if it went down.
    *
    * The position is the CACHE's, not the player's: a beacon is a thing you
@@ -508,13 +588,19 @@ export class Caches {
    *
    * `maxDist` keeps an order local: sending a man sixty metres across the map to
    * a crate is sending him out of the match.
+   *
+   * `kinds` is an optional Set: a man who is out of frags wants the grenade
+   * stack and not the nearest crate of rounds, and a marksman who wants a
+   * firing position wants a `vantage` and nothing else. Null means "any".
+   * Passing one is how `_assignCacheLegs` expresses NEED rather than proximity.
    */
-  nearestBotCache(point, claimed, maxDist) {
+  nearestBotCache(point, claimed, maxDist, kinds = null) {
     let best = null;
     let bestD = maxDist * maxDist;
     for (let i = 0; i < this.botList.length; i++) {
       const c = this.botList[i];
       if (claimed.has(c)) continue;
+      if (kinds && !kinds.has(c.kind)) continue;
       const d = c.stand.distanceToSquared(point);
       if (d < bestD) {
         bestD = d;
@@ -522,5 +608,12 @@ export class Caches {
       }
     }
     return best;
+  }
+
+  /** How many of the proved bot caches are of each kind. Reported, not gameplay. */
+  botKindCounts() {
+    const out = { ammo: 0, weapon: 0, grenade: 0, vantage: 0 };
+    for (const c of this.botList) out[c.kind] = (out[c.kind] ?? 0) + 1;
+    return out;
   }
 }
