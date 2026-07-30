@@ -87,6 +87,7 @@ const sample = () =>
 
 const t0 = Date.now();
 let results = 0;
+let shot = false;
 const series = [];
 while ((Date.now() - t0) / 1000 < SECONDS) {
   const s = await sample();
@@ -95,6 +96,13 @@ while ((Date.now() - t0) / 1000 < SECONDS) {
     if (l.ev === 'result' && l.matchOver) results++;
   }
   series.push({ t: s.elapsed, score: s.score, zones: s.zones.map((z) => z.own).join(''), fwd: s.fwd });
+  // One screenshot the first time the map is genuinely split, so the HUD is
+  // captured with a zone in each side's colour rather than all neutral.
+  if (args.shot && !shot && s.zones.some((z) => z.own === 0) && s.zones.some((z) => z.own === 1)) {
+    shot = true;
+    await page.screenshot({ path: args.shot });
+    console.log(`[dom] screenshot -> ${args.shot}`);
+  }
   console.log(
     `t=${String(s.elapsed).padStart(6)} ${s.phase.padEnd(9)} clock=${String(s.clock).padStart(5)} ` +
       `score=${s.score.join('-')} ` +
