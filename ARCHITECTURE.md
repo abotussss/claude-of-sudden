@@ -103,6 +103,7 @@ weapons.resupplyGrenades(n) weapons.needsGrenades   weapons.grenadeCapacity
 ui.setRound(state)          ui.matchDriven      ui.isFriendlyTarget(actor)
 ui.airAlert(a)              ui.airImpact(title)   ui.clearAirAlert()
 ui.airDanger(position, life, label)
+ui.setCaches(list)          ui.pickup(title, sub, kind)
 world.levelYaw              world.levelToWorld(x, y, z, out)
 world.features              world.links          world.interiorVolumes
 ```
@@ -179,6 +180,24 @@ strip then runs its own clock, points an arrow at the impact in the player's own
 frame and puts itself away; `airDanger` is one world-space impact reticle per
 impact point in the event, so a salvo or a gun line reads as an area to leave
 rather than as a dot to look at. See `src/ui/airalert.js`.
+
+`ui.setCaches` and `ui.pickup` are THE PICKUPS, ANNOUNCED, and they exist for the
+same reason `ui.airAlert` does: the caches shipped, worked, and were reported as
+"武器落ち・F長押しで交換・グレネード補充・30秒ビーコン、これらはもっとハイライトして…
+ユーザーが気付けるように". `setCaches` is the nearest few caches, published every
+frame from `match` (`RULES.cacheMarkerRange`), drawn as a world marker per kind
+with its cooldown on it; `pickup(title, sub, kind)` is the RECEIPT — `'supply'`,
+`'weapon'`, `'beacon'` or, the case that was invisible, `'deny'`, which is how a
+refusal (a full pouch, a cache still resupplying, the player's own one-minute
+frag clock) says so instead of a hold that silently does nothing. The two-verb
+prompt (`hold` + `alt`) and the DOMINATION capture panel are the other half; see
+`src/ui/pickups.js` and `src/ui/capture.js`.
+
+`RULES.grenadeResupplyCooldown` is 60 s PER PLAYER — "グレネードの補充は1分に一回
+まで 補充できすぎるとゲーム性崩壊する" — and it is a different rule from
+`cacheCooldown`, which is per cache: with six grenade stacks on the map, forty
+seconds per crate is a circuit a man can walk for ever. `Caches.grenadeReadyAt`
+is only spent when frags actually change hands.
 
 `weapons.scavenge(mags)` is AMMUNITION OFF A BODY — "スカベンジャー". `match`
 leaves a pouch where every man falls (`src/match/ammo.js`) and the player walks
