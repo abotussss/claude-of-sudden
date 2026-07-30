@@ -36,20 +36,63 @@ const APRON = 1.6;
 /* Binary heap for A*                                                  */
 /* ------------------------------------------------------------------ */
 
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * IT GROWS, AND THAT IS THE WHOLE FIX
+ * ────────────────────────────────────────────────────────────────────────────
+ * This heap used to be FIXED at `min(n, 1 << 18)` entries and `push` returned
+ * silently when it was full, so an overflow reported "no route" rather than
+ * failing. Sizing it to the cell count looked like the answer and is not, and
+ * the reason is one line of A*: THERE IS NO DECREASE-KEY HERE. `findPath`
+ * re-pushes a cell every time it finds a cheaper `g` for it, so the open list
+ * holds EDGES RELAXED, not cells — up to 8 entries per cell on an 8-connected
+ * grid, not one. `n` is a floor on the requirement, never a bound on it.
+ *
+ * MEASURED on the 453 x 453 grid (n = 205209, so the old cap was n itself):
+ * routes up to ~185 m solved and everything past that returned 0 waypoints
+ * while a 4-neighbour flood proved the two ends were in the same connected
+ * component. Raising `maxNodes` could not fix it because `maxNodes` was never
+ * the thing that ran out. From the outside it read as the LEVEL being broken:
+ * `src/match/sites.js` would report a zone "walkable but NOT reachable" and
+ * `ensureReachable` would drag it tens of metres back toward the middle of the
+ * map, which is exactly how the two corner districts got abandoned.
+ *
+ * So it doubles instead. Growth is amortised and bounded by the search — it
+ * settles after the first few long queries of a session and never allocates
+ * again, so `update()` stays allocation-free once warm. `peakN` is kept so the
+ * cost is visible rather than assumed.
+ */
 class Heap {
   constructor(cap) {
     this.idx = new Int32Array(cap);
     this.key = new Float32Array(cap);
     this.n = 0;
+    /** High-water mark across the whole session, for reporting. */
+    this.peakN = 0;
+    /** How many times the arrays have been reallocated. */
+    this.grows = 0;
   }
 
   clear() {
     this.n = 0;
   }
 
+  /** Double the backing arrays. Called only from `push`, only when full. */
+  _grow() {
+    const cap = this.idx.length * 2;
+    const idx = new Int32Array(cap);
+    const key = new Float32Array(cap);
+    idx.set(this.idx);
+    key.set(this.key);
+    this.idx = idx;
+    this.key = key;
+    this.grows++;
+  }
+
   push(i, k) {
-    if (this.n >= this.idx.length) return;
+    if (this.n >= this.idx.length) this._grow();
     let c = this.n++;
+    if (this.n > this.peakN) this.peakN = this.n;
     this.idx[c] = i;
     this.key[c] = k;
     while (c > 0) {
@@ -149,21 +192,62 @@ export class NavGrid {
     this.gScore = new Float32Array(n);
     this.came = new Int32Array(n);
     this.visitStamp = new Int32Array(n);
+    /**
+     * THE CLOSED SET, and its absence was the most expensive bug in this file.
+     *
+     * This A* has no decrease-key: when a cheaper `g` is found for a cell it is
+     * PUSHED AGAIN, leaving the stale entry in the heap. Without a closed set
+     * that stale entry is popped later and the cell is EXPANDED A SECOND TIME,
+     * with all eight neighbours relaxed again — and each of those re-pushes its
+     * own neighbours. On open ground with a near-tie heuristic that compounds:
+     * MEASURED on the 453 x 453 grid, north base to south base (196 m) over a
+     * connected component of 121 871 cells needed TWO MILLION expansions and
+     * 175 ms, and stopped dead against a 143 646 ceiling long before that.
+     *
+     * That single missing test is what made every symptom this file has notes
+     * about: the open list overflowing (a heap holding sixteen entries per cell
+     * is not a heap sized to the grid), the node ceiling looking too small, and
+     * long routes "silently failing" while a flood fill proved the two ends were
+     * in the same component. Closing on pop bounds expansions by the number of
+     * REACHABLE CELLS, which is what an A* expansion count is supposed to mean.
+     *
+     * Stamped, not cleared, exactly like `visitStamp` — a search costs no memset.
+     */
+    this.closedStamp = new Int32Array(n);
     this.stamp = 0;
     /**
      * The open list. Capped at 65536 it was comfortably larger than the whole
      * 221 x 221 grid; the level is 1.5x and the grid is 109k cells, so the cap
-     * became a SILENT one — `Heap.push` returns without pushing when it is
-     * full, and a search that overflows quietly reports "no route" instead of
-     * failing loudly. Sized to the grid.
+     * became a SILENT one — `Heap.push` returned without pushing when it was
+     * full, and a search that overflowed quietly reported "no route" instead of
+     * failing loudly.
+     *
+     * SIZING IT TO THE GRID DID NOT FIX THAT, it only moved the wall out to
+     * ~185 m. A* here has no decrease-key, so the open list counts EDGES
+     * RELAXED and not cells, and no multiple of `n` is a correct bound. This is
+     * a STARTING size for a heap that grows — see the note over `Heap`. An
+     * eighth of the grid is comfortably past every route this map has, so the
+     * doubling path is dead code on a normal boot and is there for the next map
+     * change rather than for this one.
      */
-    this.open = new Heap(Math.min(n, 1 << 18));
+    this.open = new Heap(Math.max(4096, Math.min(n, 1 << 18) >> 3));
     /**
      * A*'s expansion ceiling, derived from the grid for the same reason the open
      * list is. @see `findPath`, which has the measurements: a fixed 24000 became
      * a silent "no route" for every long query the moment the map grew.
+     *
+     * IT IS THE CELL COUNT NOW, not 70 % of it. With the closed set above, an
+     * expansion means a cell SETTLED ONCE, so a search cannot expand more than
+     * the cells reachable from its start and the ceiling can be the only number
+     * that is guaranteed to be enough. 70 % was already under the 152 716
+     * walkable cells this grid has — the largest component is 122 242 so nothing
+     * hit it today, but "the ceiling happens to exceed the biggest component" is
+     * the same accident that broke this file twice already, and it is the one
+     * remaining way a search can report "no route" for a route that exists.
+     * Costs nothing: a hopeless query terminates when its component is swept,
+     * which is what the 33 ms full sweep below actually measures.
      */
-    this.maxNodes = Math.max(24000, Math.round(n * 0.7));
+    this.maxNodes = n;
 
     this._v = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
@@ -579,6 +663,9 @@ export class NavGrid {
     let found = false;
     while (this.open.n > 0 && expanded < maxNodes) {
       const cur = this.open.pop();
+      // A stale duplicate of a cell already settled. @see `closedStamp`.
+      if (this.closedStamp[cur] === stamp) continue;
+      this.closedStamp[cur] = stamp;
       if (cur === goal) {
         found = true;
         break;
@@ -594,6 +681,8 @@ export class NavGrid {
         // no corner cutting, unless the interior pass measured this diagonal
         if (dx && dz && !this._canStep(cur, cxi, czi, d)) continue;
         const ni = this.index(ix, iz);
+        // Already settled: its g is final and cannot be improved from here.
+        if (this.closedStamp[ni] === stamp) continue;
         const dy = this.floor[ni] - cy;
         if (Math.abs(dy) > this.maxStep) continue;
         let cost = (dx && dz ? SQRT2 : 1) * cell;
