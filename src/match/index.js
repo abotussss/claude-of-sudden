@@ -404,6 +404,12 @@ export class MatchSystem {
         progress: 0,
         capture: 'none',
         contested: false,
+        /**
+         * Bar-units per second, signed, as `capture.js` advanced it THIS frame.
+         * `src/ui/capture.js` turns it into the countdown and the GAINING /
+         * LOSING read — the two things a bar alone cannot say.
+         */
+        rate: 0,
         /** Live bodies inside the circle, from the player's point of view. */
         mine: 0,
         theirs: 0,
@@ -2670,6 +2676,7 @@ export class MatchSystem {
       r.progress = z.progress;
       r.capture = z.capTeam < 0 ? 'none' : z.capTeam === me ? 'mine' : 'theirs';
       r.contested = z.contested;
+      r.rate = z.rate ?? 0;
       r.mine = z.counts[me];
       r.theirs = z.counts[1 - me];
       r.here = z === here;

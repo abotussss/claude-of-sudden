@@ -15,6 +15,7 @@ import { AirAlert } from './airalert.js';
 import { PauseMenu } from './menu.js';
 import { ScopeOverlay } from './scope.js';
 import { RoundStrip, ZoneStrip, BombPanel, Scoreboard, SpectateBar } from './round.js';
+import { CapturePanel } from './capture.js';
 import { CombatDemo } from './demo.js';
 
 const MAX_BLIPS = 48;
@@ -124,6 +125,12 @@ export class UiSystem {
     // needs `mode === 'domination'`, the C4 panel needs a charge in play.
     this.roundStrip = new RoundStrip(this.chromeLayer);
     this.zoneStrip = new ZoneStrip(this.chromeLayer);
+    /**
+     * The point under your feet, at the size the moment deserves. Inert unless
+     * the running mode is domination and there is something happening on a zone
+     * — see the header of src/ui/capture.js for what it exists to fix.
+     */
+    this.capturePanel = new CapturePanel(this.chromeLayer, (id, gain) => this.sfx(id, gain));
     this.bombPanel = new BombPanel(this.chromeLayer);
     this.spectateBar = new SpectateBar(this.chromeLayer);
     this.scoreboard = new Scoreboard(this.root);
@@ -635,6 +642,7 @@ export class UiSystem {
     this.roundStrip.update(dt, r);
     setStyle(this.roundStrip.root, 'display', r ? '' : 'none');
     this.zoneStrip.update(dt, r);
+    this.capturePanel.update(dt, r);
     this.bombPanel.update(dt, r);
     this.spectateBar.update(dt, r);
     // Held on Tab, and shown for free between rounds — which is when you
@@ -740,6 +748,7 @@ export class UiSystem {
     this.airAlertStrip.dispose();
     this.roundStrip.dispose();
     this.zoneStrip.dispose();
+    this.capturePanel.dispose();
     this.bombPanel.dispose();
     this.spectateBar.dispose();
     this.scoreboard.dispose();

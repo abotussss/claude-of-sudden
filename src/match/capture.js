@@ -94,6 +94,7 @@ export class CaptureZones {
       z.contested = false;
       z.counts[0] = 0;
       z.counts[1] = 0;
+      z.rate = 0;
       z.ownedSince = elapsed;
     }
     this.score[0] = 0;
@@ -173,6 +174,21 @@ export class CaptureZones {
     }
     z.counts[0] = n[0];
     z.counts[1] = n[1];
+    /**
+     * HOW FAST THE BAR IS MOVING, in bar-units per second, signed: positive is
+     * filling toward `capTeam`, negative is bleeding back toward empty, zero is
+     * a deadlock. Written every frame by every branch below.
+     *
+     * It exists for the HUD and for nothing else. "占領してる感" is mostly a
+     * question a player asks in seconds — HOW LONG until this is mine, and am I
+     * gaining or losing right now — and a bar alone cannot answer either: 8 % of
+     * a 15 s capture with four men behind it and 8 % of one man being pushed off
+     * look identical for the frame you glance at them. `src/ui/capture.js` turns
+     * this into the countdown and the GAINING / LOSING / DEADLOCK read. The rate
+     * is the one the zone was ACTUALLY advanced at this frame, not a re-derived
+     * guess, so the two can never disagree.
+     */
+    z.rate = 0;
 
     /**
      * ---- contested: both sides in the circle -------------------------
@@ -209,6 +225,7 @@ export class CaptureZones {
         // The holder is winning the fight on his own point: push the enemy's
         // leftover bar back down.
         if (z.capTeam < 0) return;
+        z.rate = -this._rate(edge);
         z.progress -= this._rate(edge) * dt;
         if (z.progress <= 0) {
           z.progress = 0;
@@ -224,6 +241,7 @@ export class CaptureZones {
     // ---- empty: the bar bleeds back ------------------------------------
     if (n[0] === 0 && n[1] === 0) {
       if (z.capTeam < 0) return;
+      z.rate = -RULES.captureDecay;
       z.progress -= RULES.captureDecay * dt;
       if (z.progress <= 0) {
         z.progress = 0;
@@ -239,6 +257,7 @@ export class CaptureZones {
       // He already owns it. Any progress on the bar is the ENEMY's leftover, and
       // standing on your own point is what pushes it back down.
       if (z.capTeam < 0) return;
+      z.rate = -RULES.captureDecay * 4;
       z.progress -= RULES.captureDecay * 4 * dt;
       if (z.progress <= 0) {
         z.progress = 0;
@@ -265,12 +284,14 @@ export class CaptureZones {
       // The other side had a bar going: burn it down first rather than snapping
       // to zero.
       if (z.capTeam >= 0 && z.progress > 0) {
+        z.rate = -this._rate(count);
         z.progress -= this._rate(count) * dt;
         if (z.progress > 0) return;
       }
       z.capTeam = team;
       z.progress = 0;
     }
+    z.rate = this._rate(count);
     z.progress += this._rate(count) * dt;
     if (z.progress < 1) return;
 

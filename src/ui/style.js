@@ -684,6 +684,123 @@ const CSS = `
 .ow-aa.salvo .ow-aa-bar > i { background: var(--amber); }
 .ow-aa.landed .ow-aa-t { color: #fff; }
 
+/* ============================================================== capture
+   DOMINATION's centrepiece — see src/ui/capture.js. It is deliberately the
+   biggest thing on the HUD after the banner: the zone strip reports all three
+   points at 30 px, and the one you are STANDING IN needed to be an event.
+   Low centre (74% of height) so it is clear of the crosshair, clear of the
+   interaction prompt at 58%, and nowhere near the corners the ammo, health and
+   minimap own. */
+.ow-cap {
+  position:absolute; left:50%; top:74%;
+  transform: translate(-50%,0);
+  transform-origin: 50% 50%;
+  display:flex; flex-direction:column; align-items:center;
+  gap: calc(var(--u) * 1.4);
+  padding: calc(var(--u) * 2.6) calc(var(--u) * 9) calc(var(--u) * 2.2);
+  will-change: opacity, transform;
+}
+/* Flat feathered band, same construction as the banner's: a radial haze cannot
+   seat white type on a 236-luma sky. */
+.ow-cap::before {
+  content:''; position:absolute; inset:0; z-index:-1;
+  background: linear-gradient(to bottom,
+    rgba(4,7,10,0) 0%, rgba(4,7,10,.58) 18%, rgba(4,7,10,.58) 82%, rgba(4,7,10,0) 100%);
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,0) 0%, #000 18%, #000 82%, rgba(0,0,0,0) 100%);
+          mask-image: linear-gradient(to right, rgba(0,0,0,0) 0%, #000 18%, #000 82%, rgba(0,0,0,0) 100%);
+}
+.ow-cap-head { display:flex; align-items:center; gap: calc(var(--u) * 2.4); }
+.ow-cap-verb {
+  font-family: var(--fd);
+  font-size: calc(25px * var(--k)); letter-spacing:.28em; font-weight:700;
+  text-shadow: var(--sh-o2);
+}
+.ow-cap-badge-wrap { position:relative; width: calc(30px * var(--k)); height: calc(30px * var(--k)); }
+.ow-cap-badge {
+  position:absolute; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  font-family: var(--fd); font-size: calc(20px * var(--k)); font-weight:700;
+  letter-spacing:.02em; color:#07100f;
+  box-shadow: 0 calc(1px * var(--k)) calc(4px * var(--k)) rgba(0,0,0,.75);
+}
+/* The heartbeat, and the shockwave on a capture. Scaled from update(). */
+.ow-cap-ring {
+  position:absolute; inset: calc(-3px * var(--k));
+  border: calc(1.6px * var(--k)) solid var(--friend);
+  will-change: transform, opacity;
+}
+.ow-cap-name {
+  font-size: calc(11px * var(--k)); letter-spacing:.26em;
+  color: var(--ink-2); text-shadow: var(--sh-o1);
+}
+.ow-cap-track {
+  position:relative; width: calc(440px * var(--k)); height: calc(16px * var(--k));
+  background: rgba(5,8,11,.62);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+  overflow:hidden;
+}
+.ow-cap-fill {
+  position:absolute; left:0; top:0; width:100%; height:100%;
+  transform-origin:left; transform:scaleX(0);
+  will-change: transform;
+}
+/* The lit leading edge: where the bar IS this second, not where it has been. */
+.ow-cap-edge {
+  position:absolute; top:0; height:100%;
+  width: calc(3px * var(--k)); margin-left: calc(-1.5px * var(--k));
+  box-shadow: 0 0 calc(9px * var(--k)) currentColor;
+  will-change: left, opacity;
+}
+/* Quarter ticks — a bar with no scale on it cannot be read as "nearly". */
+.ow-cap-ticks {
+  position:absolute; inset:0;
+  background: repeating-linear-gradient(to right,
+    rgba(0,0,0,0) 0, rgba(0,0,0,0) calc(25% - 1px),
+    rgba(4,7,10,.55) calc(25% - 1px), rgba(4,7,10,.55) 25%);
+}
+.ow-cap-pct {
+  position:absolute; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  font-family: var(--fd); font-size: calc(12px * var(--k)); letter-spacing:.14em;
+  color: var(--ink); text-shadow: var(--o1);
+}
+.ow-cap-foot {
+  display:flex; align-items:center; gap: calc(var(--u) * 1.8);
+  font-size: calc(10.5px * var(--k)); letter-spacing:.2em;
+}
+.ow-cap-pips { display:flex; gap: calc(var(--u) * .8); align-items:center; }
+.ow-cap-pips.them { flex-direction: row-reverse; }
+.ow-cap-pip {
+  width: calc(7px * var(--k)); height: calc(7px * var(--k));
+  box-shadow: 0 1px 2px rgba(0,0,0,.8);
+}
+.ow-cap-n {
+  font-family: var(--fd); font-size: calc(17px * var(--k)); font-weight:700;
+  min-width: calc(14px * var(--k)); text-align:center; text-shadow: var(--sh-o1);
+}
+.ow-cap-read {
+  min-width: calc(168px * var(--k)); text-align:center;
+  text-shadow: var(--sh-o1);
+}
+.ow-cap-clock {
+  font-size: calc(11px * var(--k)); letter-spacing:.3em; font-weight:700;
+  color: var(--amber); text-shadow: var(--sh-o1);
+}
+/* One of yours going, and you are not on it. Same panel, different alarm. */
+.ow-cap.threat .ow-cap-verb { color: var(--enemy); }
+.ow-cap.threat .ow-cap-clock { color: var(--enemy); }
+.ow-cap.threat::before {
+  background: linear-gradient(to bottom,
+    rgba(26,5,4,0) 0%, rgba(26,5,4,.62) 18%, rgba(26,5,4,.62) 82%, rgba(26,5,4,0) 100%);
+}
+.ow-cap.contest .ow-cap-clock { color: var(--amber); }
+.ow-cap.won .ow-cap-verb { color: var(--ink); letter-spacing:.36em; }
+.ow-cap.won .ow-cap-clock { color: var(--ok); }
+.ow-cap.won::before {
+  background: linear-gradient(to bottom,
+    rgba(6,18,26,0) 0%, rgba(6,18,26,.62) 18%, rgba(6,18,26,.62) 82%, rgba(6,18,26,0) 100%);
+}
+
 /* ================================================================== menu */
 .ow-menu {
   position:absolute; inset:0; pointer-events:auto;
