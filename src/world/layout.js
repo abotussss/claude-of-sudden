@@ -310,94 +310,206 @@ export const RELIEF = {
  * Re-run `navcheck`, `lanecheck` and `sitecheck` after touching any number here.
  * Every one of these is on ground A* has to cross.
  */
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THESE WERE AUTHORED AROUND THE BOMB SITES, AND THE BOMB SITES ARE NOT THE
+ * ZONES. RE-CENTRED ONTO `ZONES`.
+ * ════════════════════════════════════════════════════════════════════════════
+ * Everything below was laid out for `SITES[].level` — the demolition plant
+ * circles at level (∓28, -7). The mode is DOMINATION now and
+ * `src/match/sites.js` publishes `ZONES` on the equidistant line at level
+ * (∓28, 0) and (0, 0), for the reason its own long note gives: domination never
+ * swaps sides, so a 22 m route advantage stops being a round's tension and
+ * becomes a permanent property of the map.
+ *
+ * Seven authored units of z — 10.5 m of real ground — is not a tweak. `sitecheck`
+ * measured the consequence directly: the spine wall, the charge screen and both
+ * plinths all sat SOUTH of the circle they were built to protect, so the mass
+ * inside zone A's circle was 10.0 m² against a floor of 12, and the two pieces
+ * that are supposed to stand between the attack and the point (the spine) were
+ * 10 m behind it. The player's complaint was "爆破サイトが剥き出しで、攻撃側有利
+ * すぎる" and the conversion put it straight back.
+ *
+ * SO THE RULE FOR THE BAND. Every piece meant to be cover ON the point is
+ * authored between 3.2 and 5.0 units of the zone centre, and that is not a taste:
+ *
+ *   `RULES.captureRadius` is 8 m of ground = 5.33 authored units. Mass outside
+ *   that is in the ring, not on the point, and `sitecheck`'s `coverIn` will not
+ *   count it.
+ *   `standRing` in src/match/sites.js cuts the zone's eight STANDING POINTS —
+ *   which are also its FORWARD SPAWNS — at 0.5 r, i.e. 4 m of ground = 2.67
+ *   authored units. Mass inside that radius eats the points fifteen men are
+ *   spread over and the squares they respawn on.
+ *
+ * 3.2 clears the standing ring with a capsule's margin; 5.0 stays inside the
+ * circle end to end. The mouth pieces (gatehouse, baffle, blockhouse) are NOT in
+ * the band — they guard a courtyard entry, which has not moved.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND THE HEIGHT BAND IS A SEPARATE RULE
+ * ────────────────────────────────────────────────────────────────────────────
+ * `sitecheck` counts mass 0.9-2.8 m over the zone floor and nothing else: under
+ * 0.9 m is litter, over 2.8 m is a building and not something you fight the
+ * point from. So every `wall` and `plinth` here is 1.2-1.65 m and every `pier`
+ * is over 2.8 — a pier is a CHOKEPOINT, deliberately not counted as cover.
+ *
+ * A wall in this band also cannot block a man's line to another man's eyes
+ * (both at 1.62 m), only his line to the FLOOR of the point. That is what makes
+ * the mass asymmetric in the defence's favour without closing a mouth: the
+ * `seenGround` figures on every mouth stay where they were, and the fraction of
+ * the point the far side can read drops.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
 export const SITEWORKS = [
-  // ═══════════════════════════════════════════════════════ SITE A (west) ═══
+  // ═══════════════════════════════════════════════════════ ZONE A (west) ═══
   /**
    * THE NORTH MOUTH — the attack's own lane, and the widest thing on the map
    * that was not a street. Measured 15.2 m of walkable entry. The gatehouse goes
    * flush to the west kerb (x -31, which is also BW1's east face, so it reads as
    * part of the block rather than a lump in a field) and the baffle stands off
-   * the east wall with a slot behind it. What is left to cross is 2.7 m and
-   * 1.8 m authored — 4.0 m and 2.7 m on the ground, 6.7 m of a 15.75 m lane —
-   * offset in Z from each other, so you cannot see the plant spot through either
-   * one until you are through it.
+   * the east wall with a slot behind it.
    *
-   * THE BAFFLE WAS 1.2 m WIDE AND THAT WAS NOT ENOUGH. `sitecheck` measured the
-   * mouth at 11.6 m after the gatehouse went in and did not see the baffle at
-   * all: its mouth walk probes 1.4 m either side of the boundary and takes the
-   * nearest nav cell within one ring, so an obstacle 1.8 m wide on the ground is
-   * something the grid routes round without noticing. An obstacle a route does
-   * not notice is not a chokepoint. 2.4 m authored — 3.6 m on the ground, five
-   * nav cells — is.
+   * NEITHER MOVES. They are the courtyard's entry, and an entry does not care
+   * where inside the courtyard the objective is. What HAS changed is that they
+   * are now 3.4 and 6.2 units off the zone instead of 10 — the chokepoint is at
+   * the point, which is what a gatehouse is for.
    */
   { id: 'A north gatehouse', kind: 'pier', x: -29.2, z: 3.2, w: 3.6, d: 3.2, h: 3.2, key: 'plaster_sand' },
   { id: 'A north baffle', kind: 'wall', x: -23.5, z: 4.2, w: 2.4, d: 2.8, h: 1.6, key: 'brick' },
   /**
-   * THE CONNECTOR — the flank from the mid street. The blockhouse sits INSIDE
-   * connector 2's west arm, flush to its south kerb (W3's north face at z -8),
-   * not in the courtyard: the flank then has to come round a solid 2.6 m mass
-   * before it can see the site at all, instead of stepping out of an alley with
-   * the plant spot already in its sights. Kept 4.2 m clear of `flankLevel`
-   * (-13, -4.5) so the staging point stays walkable ground.
+   * THE CONNECTOR — the rotation from the mid street, which in domination is the
+   * A↔C leg and the busiest 14 m on the map. The blockhouse sits INSIDE
+   * connector 2's west arm (z -8..-1), and it is pulled from z -6.8 to the arm's
+   * CENTRE at -4.5: at -6.8 it was flush to W3's north face and a man rotating
+   * simply walked the north half of the arm past it in a straight line. Centred,
+   * the arm is two 2.3-unit slots and the rotation is a dog-leg both ways.
+   * `flankLevel` is null in domination so nothing stages here any more.
    */
-  { id: 'A connector blockhouse', kind: 'pier', x: -18.6, z: -6.8, w: 2.8, d: 2.4, h: 2.6, key: 'concrete' },
+  { id: 'A connector blockhouse', kind: 'pier', x: -18.6, z: -4.5, w: 2.8, d: 2.4, h: 2.6, key: 'concrete' },
   /**
-   * THE SPINE — the single most important piece here. A broken wall across the
-   * courtyard 2.7 m north of the plant spot, on the attack's line, in two runs:
+   * THE SPINE — the single most important piece here, and the one that was most
+   * wrong. A broken wall between the ATTACK'S LANE and the point, in two runs:
    *
-   *   [A-deck step -34..-32 @1.5]  gap 2.0  [Z1 -30..-26.2]  gap 1.6  [Z2 -24.6..-21.8]  gap 1.3
+   *   [west wall -36..-32.3]  gap 3.7  [W -32.3..-28.9]  gap 3.6  [E -25.3..-22.7]  gap 2.2
    *
-   * Z1 covers x -28, which IS the plant spot's line, so the charge is behind
-   * masonry from the north and the man planting it is not standing in the open.
-   * The three gaps are what keeps A* alive through it — and they are the three
-   * doors the defence holds, which is what a chokepoint inside a site is for.
+   * It was at z -4.0, which was 3 units north of a plant circle at z -7 and is
+   * 4 units SOUTH of a capture circle at z 0 — i.e. it was standing between the
+   * defence and the point it defends. At z 1.9 it is back on the attack's line:
+   * the whole `attackEyes` fan `sitecheck` samples for this site is at level
+   * z 4.2 and beyond, so the wall is between every one of them and the floor of
+   * the circle, while the defence's hold ring is south of it and reads the point
+   * clean.
+   *
+   * The three gaps are what keeps A* alive through it, and they are the three
+   * doors the defence holds. The middle one is on the zone's own north axis,
+   * which is where the fight for the point wants to be.
    */
-  { id: 'A spine west', kind: 'wall', x: -28.1, z: -4.0, w: 3.8, d: 0.55, h: 1.45, key: 'brick' },
-  { id: 'A spine east', kind: 'wall', x: -23.2, z: -4.0, w: 2.8, d: 0.55, h: 1.3, key: 'brick' },
+  { id: 'A spine west', kind: 'wall', x: -30.6, z: 1.9, w: 3.4, d: 0.55, h: 1.45, key: 'brick', revet: true },
+  { id: 'A spine east', kind: 'wall', x: -24.0, z: 1.9, w: 2.6, d: 0.55, h: 1.3, key: 'brick' },
   /**
-   * THE CHARGE SCREEN — a short run standing along Z between the charge and the
-   * connector mouth, so the flank's angle onto the plant spot is a corner rather
-   * than a corridor. 4.4 m off the charge on the ground.
+   * THE POINT SCREEN — a short run standing along Z between the point and the
+   * connector mouth, so the rotation's angle onto the circle is a corner rather
+   * than a corridor. 3.6 units off the centre; was at z -6.7, where it screened
+   * ground nobody stands on any more.
    */
-  { id: 'A charge screen', kind: 'wall', x: -24.8, z: -6.7, w: 0.55, d: 2.6, h: 1.3, key: 'plaster_cream' },
+  { id: 'A point screen', kind: 'wall', x: -24.3, z: -1.2, w: 0.55, d: 2.8, h: 1.35, key: 'plaster_cream' },
   /**
-   * THE TWO PLINTHS. Both are SOUTH of the charge on purpose: they are the cover
-   * a defender contests the plant from and the cover a retake walks up behind,
-   * and putting them north of it would only have given the attack somewhere to
-   * plant from that the defence cannot clear. 3.2 m and 3.3 m off the centre on
-   * the ground — outside `RULES.defuseRadius` (1.8 m), so three men can still
-   * stand on the charge and cut it.
+   * THE TWO PLINTHS — the waist-high mass ON the point. West and south of the
+   * centre, both in the 3.2-5.0 band, and between them they are 10.4 m² of the
+   * 12 m² floor on their own. South rather than north on purpose: the north half
+   * already has the spine, and cover on all four sides of a capture point is a
+   * point nobody can be cleared off.
+   *
+   * Kept clear of `RELIEF.blocks`'s A-deck step (x -34..-32, z -4.5..-2.5) and of
+   * A-deck itself (x -36..-34) — a plinth under a catwalk is a mantle nobody
+   * asked for and a nav cell nobody can use.
    */
-  { id: 'A plinth west', kind: 'plinth', x: -30.2, z: -9.3, w: 1.6, d: 1.4, h: 1.2, key: 'concrete' },
-  { id: 'A plinth south', kind: 'plinth', x: -26.8, z: -9.8, w: 2.0, d: 1.2, h: 1.2, key: 'concrete' },
+  { id: 'A plinth west', kind: 'plinth', x: -32.1, z: -1.4, w: 1.6, d: 1.4, h: 1.2, key: 'concrete' },
+  { id: 'A plinth south', kind: 'plinth', x: -28.6, z: -3.9, w: 2.0, d: 1.2, h: 1.2, key: 'concrete' },
   /**
-   * THE RETAKE WALL, in the south lane a metre outside the courtyard. Offset to
-   * the west so it leaves 7.1 m of the defence's own 10.5 m mouth open — the
-   * defence's approach is the one thing on this map that must not be choked, or
-   * arriving first stops being true. Kept 3.6 m clear of `holdLevel` (-24, -12).
+   * THE RETAKE WALL — what a side walks up behind to take the point back.
+   * `sitecheck` counts retake cover between 4 and 14 m of ground on the
+   * defence's own side, i.e. 2.7-9.3 authored units; at z -12.6 this was 12.6
+   * units out and counted for nothing. At -5.6 it is 5.6 out, inside the band
+   * and just outside the capture circle, and it still leaves the defence's own
+   * 10.5-unit mouth from the south lane completely open — the one approach on
+   * this map that must never be choked.
    */
-  { id: 'A retake wall', kind: 'wall', x: -29.1, z: -12.6, w: 3.0, d: 0.55, h: 1.3, key: 'plaster_blue' },
+  { id: 'A retake wall', kind: 'wall', x: -30.4, z: -5.6, w: 3.0, d: 0.55, h: 1.3, key: 'plaster_blue', revet: true },
 
-  // ═══════════════════════════════════════════════════════ SITE B (east) ═══
+  // ═══════════════════════════════════════════════════════ ZONE C (mid) ════
   /**
-   * The mirror, with two numbers that are NOT mirrored, for the same reason
-   * `flankLevel` is not: the east side's dressing is not the west side's.
+   * ────────────────────────────────────────────────────────────────────────────
+   * ZONE C HAD NOTHING AT ALL, AND IT IS THE POINT BOTH SIDES REACH FIRST
+   * ────────────────────────────────────────────────────────────────────────────
+   * `sitecheck` on the converted map: 2.8 m² of mass inside C's circle against a
+   * floor of 12, and the ATTACK reading 75.1 % of the point off the ground
+   * against the defence's 63.4 % — the only site on the map where the side coming
+   * in reads the objective better than the side holding it. C is 52 m from the
+   * north base and 55 m from the south, so it is also the point every match opens
+   * on. An open pan at the shortest range on the map is the worst version of
+   * "剥き出し" there is.
+   *
+   * WHAT THE GROUND ACTUALLY IS. The mid street runs x ±6.5 between the kerbs
+   * with two single-storey islands standing in it — K1 at (0, 12), 5.4 square,
+   * and K2 at (-0.4, -4.6), 5.6 x 6.2. K2's north face is at z -1.5 and K1's
+   * south face at z 9.3, so C's circle (5.33 units) is an open pocket 13 wide and
+   * z -1.5..5.33 deep, plus two 3.3-unit alleys either side of K2 that are the
+   * SOUTH side's only way on to it. Those alleys are this site's version of the
+   * courtyards' south mouth: nothing goes in them.
+   *
+   * SO C GETS A STREET CHECKPOINT, and its shape is decided by one measurement.
+   * Every point in `sitecheck`'s attack fan for C is NORTH of the centre (level
+   * z 4.2 to 12.2, because C has no `ALLEYS` rect and the tool falls back to a
+   * fan up the lane), and every defence eye is at or south of it. Mass on the
+   * NORTH ARC therefore costs the attack its read and costs the defence almost
+   * nothing, which is the only way to turn that 75.1/63.4 the right way up
+   * without closing the street.
+   *
+   *   the two SCREENS      x -4.6..-2.0 and 2.0..4.6 at z 3.4 — a 4.0-unit
+   *                        central door on the zone's north axis and a 1.9-unit
+   *                        slot at each kerb. Three ways through, none of them a
+   *                        straight line to the middle of the point.
+   *   the north PIER       2.2 square, 2.9 m tall, dead centre at z 5.0. Over the
+   *                        2.8 m line on purpose: it is not cover on the point,
+   *                        it is the thing that splits the attack's entry in two
+   *                        and takes the deep half of that fan's sightline away.
+   *                        Leaves 5.4 units of street either side of it.
+   *   the two PLINTHS      east and west at z -0.2, 3.3 units out, which is the
+   *                        band's inner edge and the only place on this point
+   *                        with room for waist-high mass: K2's face is 1.5 units
+   *                        south of the centre and the kerbs are 6.5 out.
+   *
+   * NOTHING IS AUTHORED SOUTH OF z -1.5. That is K2's wall, and the two alleys
+   * beside it are 3.3 units wide — one 2-unit run in either of them and the
+   * south side has no route on to its own point. @see `navcheck`.
+   */
+  { id: 'C north screen west', kind: 'wall', x: -3.3, z: 3.4, w: 2.6, d: 0.6, h: 1.65, key: 'brick', revet: true },
+  { id: 'C north screen east', kind: 'wall', x: 3.3, z: 3.4, w: 2.6, d: 0.6, h: 1.65, key: 'brick', revet: true },
+  { id: 'C north pier', kind: 'pier', x: 0.0, z: 5.0, w: 2.2, d: 2.2, h: 2.9, key: 'concrete' },
+  { id: 'C plinth west', kind: 'plinth', x: -4.2, z: -0.2, w: 1.8, d: 1.5, h: 1.25, key: 'concrete' },
+  { id: 'C plinth east', kind: 'plinth', x: 4.2, z: -0.2, w: 1.8, d: 1.5, h: 1.25, key: 'concrete' },
+
+  // ═══════════════════════════════════════════════════════ ZONE B (east) ═══
+  /**
+   * The mirror, with the same two numbers that were never mirrored, for the same
+   * reason they were not before: the east side's dressing is not the west side's.
    *   - the baffle is at z 4.2 like A's, but B's courtyard stall sits at
    *     (24, 1.6) rather than A's (-22.4, -1), so the clearance is checked
    *     against a different prop;
-   *   - the connector blockhouse is 0.6 m further from the kerb, because the
+   *   - the connector blockhouse is 0.6 units further from the kerb, because the
    *     jersey barrier at (16.7, -5.5) has no counterpart on the west side and a
    *     concrete barrier standing inside a blockhouse looks like a bug.
    */
   { id: 'B north gatehouse', kind: 'pier', x: 29.2, z: 3.2, w: 3.6, d: 3.2, h: 3.2, key: 'plaster_cream' },
   { id: 'B north baffle', kind: 'wall', x: 23.5, z: 4.2, w: 2.4, d: 2.8, h: 1.6, key: 'brick' },
-  { id: 'B connector blockhouse', kind: 'pier', x: 18.6, z: -6.8, w: 2.8, d: 2.4, h: 2.6, key: 'concrete' },
-  { id: 'B spine east', kind: 'wall', x: 28.1, z: -4.0, w: 3.8, d: 0.55, h: 1.45, key: 'brick' },
-  { id: 'B spine west', kind: 'wall', x: 23.2, z: -4.0, w: 2.8, d: 0.55, h: 1.3, key: 'brick' },
-  { id: 'B charge screen', kind: 'wall', x: 24.8, z: -6.7, w: 0.55, d: 2.6, h: 1.3, key: 'plaster_cream' },
-  { id: 'B plinth east', kind: 'plinth', x: 30.2, z: -9.3, w: 1.6, d: 1.4, h: 1.2, key: 'concrete' },
-  { id: 'B plinth south', kind: 'plinth', x: 26.8, z: -9.8, w: 2.0, d: 1.2, h: 1.2, key: 'concrete' },
-  { id: 'B retake wall', kind: 'wall', x: 29.1, z: -12.6, w: 3.0, d: 0.55, h: 1.3, key: 'plaster_pink' },
+  { id: 'B connector blockhouse', kind: 'pier', x: 18.6, z: -4.5, w: 2.8, d: 2.4, h: 2.6, key: 'concrete' },
+  { id: 'B spine east', kind: 'wall', x: 30.6, z: 1.9, w: 3.4, d: 0.55, h: 1.45, key: 'brick', revet: true },
+  { id: 'B spine west', kind: 'wall', x: 24.0, z: 1.9, w: 2.6, d: 0.55, h: 1.3, key: 'brick' },
+  { id: 'B point screen', kind: 'wall', x: 24.3, z: -1.2, w: 0.55, d: 2.8, h: 1.35, key: 'plaster_cream' },
+  { id: 'B plinth east', kind: 'plinth', x: 32.1, z: -1.4, w: 1.6, d: 1.4, h: 1.2, key: 'concrete' },
+  { id: 'B plinth south', kind: 'plinth', x: 28.6, z: -3.9, w: 2.0, d: 1.2, h: 1.2, key: 'concrete' },
+  { id: 'B retake wall', kind: 'wall', x: 30.4, z: -5.6, w: 3.0, d: 0.55, h: 1.3, key: 'plaster_pink', revet: true },
 ];
 
 /**
@@ -445,7 +557,53 @@ export const SITEWORKS = [
  * is now ground the dressing pass and `SITEWORKS` are allowed to put mass on,
  * which is the whole point.
  */
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * AND THEN THEY WENT STALE AGAIN, AND THIS TIME IT MADE THE ZONES MOVE BETWEEN
+ * BOOTS.
+ * ════════════════════════════════════════════════════════════════════════════
+ * The two entries below reserve the DEMOLITION plant circles at (∓28, -7). The
+ * mode is domination and `ZONES` in src/match/sites.js is at (∓28, 0) and
+ * (0, 0), so for the whole of the conversion the three squares that actually
+ * had to stay clear were not on this list at all.
+ *
+ * MEASURED, over four consecutive boots of the same build (`_zoneprobe.mjs`):
+ *
+ *   boot 1   zone A resolved at world (-34.4, 24.0)   7 standing points
+ *   boot 2   zone A resolved at world (-32.0, 25.6)   7 standing points
+ *            + "[match] site A: authored point is walkable but NOT reachable
+ *               from every attack/defend spawn — moved 2.2 m"
+ *   boot 3   zone A resolved at world (-34.4, 24.8)   8 standing points
+ *
+ * That is A CAPTURE POINT THAT IS IN A DIFFERENT PLACE EVERY TIME THE GAME
+ * STARTS, and a point that moves cannot have authored cover — which is why the
+ * regression report saw three different coordinates for the same zone.
+ *
+ * The cause is not `sites.js`. `src/core/engine.js` seeds `ctx.rng` from
+ * `Math.random()` unless `config.deterministic` is set, so the level is a
+ * DIFFERENT procedural level on every boot: 1273k / 1310k / 1294k static
+ * triangles and 86445 / 86455 / 86454 walkable nav cells across those same three
+ * runs. That is by design — it is what makes the map not the same map twice.
+ * What is NOT by design is that the dressing scatter was free to drop a
+ * collision-bearing crate on the middle of a capture point, because the middle
+ * of a capture point was not on this list. `groundPoint` then resolved the zone
+ * onto the crate's 0.6 m lid, `ensureReachable` found no route on to that lid
+ * and walked the whole zone 2.2 m sideways.
+ *
+ * So the three ZONE centres go on, at radius 3.0 rather than the 2.2 the plant
+ * circles use. 3.0 authored is 4.5 m of ground, and 4.5 m is not a taste either:
+ * `standRing` cuts a zone's eight STANDING POINTS at `radius * 0.5` = 4 m, and
+ * those points are also its FORWARD SPAWNS. A crate on one of them is a man
+ * respawning on top of a crate. The radius is sized to the ring, and `SITEWORKS`
+ * is authored from 3.2 units out precisely so the two never argue.
+ *
+ * The demolition entries stay: `RULES.mode` is still switchable and this file
+ * cannot see which one is running.
+ */
 export const KEEPOUT = [
+  [-28.0, 0.0, 3.0], // ZONE A — west courtyard, domination
+  [0.0, 0.0, 3.0], // ZONE C — mid street, domination
+  [28.0, 0.0, 3.0], // ZONE B — east courtyard, domination
   [-28.0, -7.0, 2.2], // site A plant area
   [28.0, -7.0, 2.2], // site B plant area
   /**

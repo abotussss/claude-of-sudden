@@ -3,11 +3,20 @@ import { chamferBox, patchGeometry, fillMasks, rockGeometry } from './util.js';
 import { SITEWORKS } from './layout.js';
 
 /**
- * WORLD — SITEWORKS: the mass that makes a bomb site defensible.
+ * WORLD — SITEWORKS: the mass that makes an OBJECTIVE defensible.
  *
- * The what and the why are in the long note over `SITEWORKS` in layout.js. This
- * file is the geometry, and it exists as its own module rather than as more
- * cases inside `relief.js` because it is a different contract:
+ * It says "bomb site" in a lot of places below and that word is now wrong: the
+ * mode is DOMINATION and these pieces stand on the three CAPTURE ZONES
+ * `src/match/sites.js` publishes as `ZONES`, not on the two plant circles it
+ * publishes as `SITES`. The zones are 10.5 m of ground north of where the plant
+ * circles were, and the whole table in layout.js moved with them — see the note
+ * over `SITEWORKS` there for the measurements, and for the 3.2-5.0 authored band
+ * every piece of cover now has to sit in. Zone C, the mid street, had no
+ * siteworks at all before that pass and now has five.
+ *
+ * The what and the why are in that long note. This file is the geometry, and it
+ * exists as its own module rather than as more cases inside `relief.js` because
+ * it is a different contract:
  *
  *   `relief.js`   TERRACES are ramped ground bots walk; DECKS and BLOCKS are
  *                 stacked, so they DELETE the nav cell under them and are a
@@ -181,6 +190,71 @@ function coursedFace(A, rng, key, x0, z0, x1, z1, side, top, course = 0.32) {
 }
 
 /**
+ * A SANDBAG REVETMENT along the fighting face of a wall.
+ *
+ * Two courses banked against the foot of the run on the side the fire comes
+ * from. It exists for a reason that is not decoration: the pieces that carry
+ * `revet: true` in `SITEWORKS` are the ones that now stand between an attack and
+ * a CAPTURE POINT — the two spines, the two retake walls and both of zone C's
+ * street screens — and a bare 1.45 m garden wall in the middle of a street does
+ * not read as somebody's fighting position. Bags at its foot say a side has been
+ * holding this and expects to keep holding it.
+ *
+ * It is 0.30-0.34 m tall, which is deliberately UNDER `sitecheck`'s 0.9 m cover
+ * line and under `CoverMap.build`'s 1.32 m standing-cover probe: this must not
+ * change a single measurement, only what the wall looks like from 2 m. It also
+ * carries no collision — the wall's own box already stands at full height right
+ * through it, so a bag cannot become a step, a ledge or a nav cell.
+ *
+ * `sandbag_a/b/c` are `src/world/props.js`'s own prototypes, registered at
+ * line 126 of index.js, long before `buildSiteWorks` runs at 163. Reusing them
+ * costs no new geometry, no new material and no new draw call. Building this
+ * here rather than importing `sandbagWall` from dressing.js is deliberate:
+ * dressing.js already imports `inSitework` from THIS file, and closing that loop
+ * would make world's module graph circular.
+ *
+ * @param {number} face  +1 to bank the bags on the +Z side of the run, -1 for -Z
+ */
+const BAG_IDS = ['sandbag_a', 'sandbag_b', 'sandbag_c'];
+function revetment(A, rng, p, face) {
+  const len = p.w - 0.25; // stop short of each end: a revetment is not a plinth
+  if (len < 0.6) return;
+  const zEdge = p.z + face * (p.d / 2 + 0.16);
+  let prev = -1;
+  for (let c = 0; c < 2; c++) {
+    /** The bottom course carries the top one and squats under it. */
+    const squash = c === 0 ? 0.9 : 1.0;
+    const spread = c === 0 ? 1.07 : 1.0;
+    const pitch = 0.5 - rng.range(0.02, 0.05);
+    const per = Math.max(2, Math.round(len / pitch));
+    const stagger = (c % 2) * pitch * 0.5 + rng.range(-0.03, 0.03);
+    for (let i = c; i < per - c; i++) {
+      const lx = p.x - len / 2 + stagger + (i + 0.5) * pitch;
+      if (Math.abs(lx - p.x) > len / 2) continue;
+      // Never the same silhouette twice running.
+      let pick = rng.int(0, 2);
+      if (pick === prev) pick = (pick + 1 + rng.int(0, 1)) % 3;
+      prev = pick;
+      /** Headers — bags turned across the run — are what stops a row of loaves. */
+      const header = rng.float() < 0.28;
+      A.putS(
+        BAG_IDS[pick],
+        lx,
+        0.01 + c * 0.15 * squash,
+        zEdge + rng.range(-0.04, 0.04) - face * (c * 0.05),
+        (header ? Math.PI / 2 : 0) + rng.range(-0.2, 0.2),
+        rng.range(0.9, 1.12) * spread,
+        rng.range(0.9, 1.06) * squash,
+        rng.range(0.94, 1.12) * spread,
+        [1, rng.range(0.7, 1.6), rng.range(0.85, 1.3)],
+        rng.range(-0.09, 0.09),
+        rng.range(-0.11, 0.11)
+      );
+    }
+  }
+}
+
+/**
  * A LOW WALL — chest high to a standing man, full cover to a crouching one.
  *
  * The piece the plant is made behind. Deliberately broken: the top steps between
@@ -258,6 +332,13 @@ function buildWall(A, rng, p) {
     fillMasks(g, 0.8, rng.range(0.3, 0.8), 0.2);
     A.addOnce(key, g, LL(IDENT, px, rng.range(0.03, 0.11), pz, rng.float() * 6.28));
   }
+
+  /**
+   * The bags, on the face the fire comes from. Every `revet` piece in SITEWORKS
+   * runs along X with the attack to its +Z, so that is the side; a run authored
+   * along Z is not revetted rather than revetted on a guess.
+   */
+  if (p.revet && alongX) revetment(A, rng, p, 1);
 
   footing(A, rng, p, x0, z0, x1, z1);
 }
