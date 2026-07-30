@@ -53,7 +53,7 @@ import { SoldierMaterials, TEAM_RIM } from './textures.js';
 import { buildSoldier, resolveMaterials, MATERIAL_SLOTS, VARIANTS } from './soldier.js';
 import { RIG } from './rig.js';
 import { NavGrid, CoverMap } from './nav.js';
-import { Agent, STATE } from './agent.js';
+import { Agent, STATE, drawPersona } from './agent.js';
 import { Squad } from './squad.js';
 import { GroundShadows } from './grounding.js';
 
@@ -102,6 +102,26 @@ export class AiSystem {
     this.combatEnabled = true;
     /** 0..1, scales reaction time and aim discipline. */
     this.skill = 0.62;
+    /**
+     * ADDED TO THE DEFENCE'S SKILL MEAN — "防衛側はもう少しAIの命中精度上げていい".
+     *
+     * The defence is the side that gets shot at while standing still, and it is
+     * the side the player spends most of a round pushing into, so it is the one
+     * that has to be worth pushing into. This shifts only the MEAN: the per-man
+     * gaussian (sd 0.19) is untouched, so a defence at `botSkill` 0.44 + 0.10
+     * still contains men from 0.2 to 0.9 and the round is still readable.
+     *
+     * It lives here rather than in `RULES` because nothing in `match` needs to
+     * know: `match` sets `ai.skill` and this is applied per actor from its role.
+     */
+    this.defenderSkill = 0.10;
+    /**
+     * Personality cache, `team:name:role` -> persona. A respawn is a new `Agent`
+     * (see `match._respawnBot`), so without this a callsign would draw a new
+     * character every death and no bot would be a recognisable person. Cleared
+     * with the level, not with the round.
+     */
+    this._personas = new Map();
     /** Actors hostile to team i, rebuilt at most once per frame. */
     this._hostiles = [[], []];
     this._hostileFrame = -1e9;
@@ -777,6 +797,31 @@ export class AiSystem {
   /* ================================================================== */
   /* spawning                                                           */
   /* ================================================================== */
+
+  /**
+   * This soldier's personality: an archetype, six behaviour traits and a
+   * marksmanship draw. See `drawPersona` in agent.js for what they mean.
+   *
+   * Cached per `team:callsign:role` so a man is the same man across his own
+   * respawns, and a different one after the sides swap at half time (the
+   * archetype mix is per role — the attack is weighted to men who move).
+   * A nameless actor — the debug tableau, the garrison — gets a fresh draw and
+   * is not cached, so `debugStage` cannot grow the map.
+   */
+  personaFor(agent) {
+    const rng = this._personaRng ?? (this._personaRng = this.rng.fork());
+    const mean = this.skill ?? 0.5;
+    if (!agent.name || agent.name.startsWith('BOT-')) {
+      return drawPersona(rng, agent.role, mean, this.defenderSkill);
+    }
+    const key = `${agent.team}:${agent.name}:${agent.role}`;
+    let p = this._personas.get(key);
+    if (!p) {
+      p = drawPersona(rng, agent.role, mean, this.defenderSkill);
+      this._personas.set(key, p);
+    }
+    return p;
+  }
 
   spawn(variantName, position, yaw = 0, opts = {}) {
     const a = new Agent(this, { variant: variantName, position, yaw, ...opts });

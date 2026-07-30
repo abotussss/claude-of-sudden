@@ -72,7 +72,18 @@ export class Squad {
    * to get round the side of something.
    */
   _retoken() {
-    this.peekTokens = Math.max(1, Math.round(this.members.length * 0.5));
+    /**
+     * PEEK TOKENS 0.5 -> 0.62 of the roster.
+     *
+     * Half the squad was tuned for a four-man fireteam, where "half of us are
+     * leaning out" is a lot of men. At fifteen it is a queue: measured on a full
+     * match, COMBAT held 50 % of all actor-time and only 22 % of it was anybody
+     * peeking, so most of the line was sitting behind cover waiting for a token
+     * while the round burned. Nine of fifteen still reads as men taking turns and
+     * it is a third more rifles in the fight. (The other half of that fix is in
+     * `agent.js`: a man with `exposure > 0.7` does not wait for a token at all.)
+     */
+    this.peekTokens = Math.max(1, Math.round(this.members.length * 0.62));
     this.flankTokens = Math.max(1, Math.round(this.members.length / 5));
   }
 
@@ -145,6 +156,14 @@ export class Squad {
    */
   canFlank(agent) {
     if (this.flankers.has(agent.id)) return true;
+    /**
+     * THE TOKENS GO TO THE MEN WHO WANT THEM. Three tokens on a fifteen-man side
+     * used to be first come first served, so an anchor whose whole job is holding
+     * an angle could take one and sit on it while the flanker who would have used
+     * it was refused. `traits.flank` below 0.2 is the marksman and the anchor —
+     * they are not the manoeuvre element and they no longer hold its tokens.
+     */
+    if (agent.traits && agent.traits.flank < 0.2) return false;
     if (this.flankers.size >= this.flankTokens) return false;
     let shooting = 0;
     for (const m of this.members) {

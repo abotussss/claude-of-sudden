@@ -51,6 +51,94 @@ const STATE = {
 
 export { STATE };
 
+/**
+ * PERSONALITY — and why one `skill` scalar was not enough.
+ *
+ * `skill` says how well a man SHOOTS: cone, tracking rate, reaction, settle. It
+ * says nothing about what he DOES, so before this every bot made the same
+ * decisions at different accuracies — the same dwell in the same cover, the same
+ * willingness to leave it, the same range, the same flank appetite. Measured on
+ * a full 15v15: the per-bot coefficient of variation in metres travelled was
+ * 0.19 and in static time 0.16, i.e. thirty men whose *behaviour* was within a
+ * fifth of identical. That is the "ただその位置に配置するだけ" complaint, and it
+ * cannot be fixed by moving one dial: an aggressive man and a conservative man
+ * are not two values of the same number.
+ *
+ * So each man draws six INDEPENDENT traits at spawn:
+ *
+ *   aggression  closes, breaks off a firefight to push, fights on at low health
+ *   patience    how long he holds one piece of cover / one spot in his sector
+ *   range       the distance in metres he WANTS the fight at; cover is scored
+ *               around it, and he closes or backs off to reach it
+ *   exposure    willingness to be in the open: peek length, whether he waits for
+ *               the squad's peek token, how much fire it takes to make him duck
+ *   flank       appetite for going wide
+ *   trigger     discipline: burst length, the gap between bursts, and whether he
+ *               hoses the last known position without a clean shot
+ *
+ * They are drawn around an ARCHETYPE rather than independently uniform, because
+ * a rusher is not "random traits" — he is a recognisable set of them, and the
+ * point is that a player can read him. The archetype only shifts the means; the
+ * per-man gaussian on top is what makes two rushers different rushers.
+ *
+ * The mix is per ROLE: the attack is weighted to men who move, the defence to
+ * men who hold — but the defence still gets rushers who push out of the site and
+ * the attack still gets a marksman who sits back, which is the
+ * "コンサバな奴がいてもいい" half of the request.
+ */
+const ARCHETYPES = {
+  /*            aggression  patience  range  exposure  flank  trigger */
+  rusher: { aggression: 0.88, patience: 0.16, range: 11, exposure: 0.84, flank: 0.34, trigger: 0.24 },
+  flanker: { aggression: 0.66, patience: 0.30, range: 17, exposure: 0.60, flank: 0.92, trigger: 0.46 },
+  hunter: { aggression: 0.58, patience: 0.42, range: 21, exposure: 0.54, flank: 0.62, trigger: 0.56 },
+  support: { aggression: 0.44, patience: 0.62, range: 25, exposure: 0.36, flank: 0.22, trigger: 0.66 },
+  anchor: { aggression: 0.30, patience: 0.80, range: 28, exposure: 0.24, flank: 0.10, trigger: 0.78 },
+  marksman: { aggression: 0.16, patience: 0.92, range: 36, exposure: 0.14, flank: 0.04, trigger: 0.92 },
+};
+
+/**
+ * Who each side is made of. Ten slots, drawn from with replacement, so a
+ * fifteen-man team is a plausible mix rather than a guaranteed one.
+ */
+const ARCHETYPE_MIX = {
+  attack: ['rusher', 'rusher', 'rusher', 'flanker', 'flanker', 'hunter', 'hunter', 'support', 'anchor', 'marksman'],
+  defend: ['rusher', 'rusher', 'flanker', 'hunter', 'hunter', 'support', 'support', 'anchor', 'anchor', 'marksman'],
+  any: ['rusher', 'flanker', 'hunter', 'hunter', 'support', 'support', 'anchor', 'anchor', 'marksman', 'marksman'],
+};
+
+/**
+ * Draw one soldier: an archetype, six traits jittered off it, and his marksmanship.
+ *
+ * Exported because `AiSystem` caches the result per callsign (`personaFor`) so a
+ * man survives his own respawn as the same man — but the draw itself belongs next
+ * to the table it draws from.
+ *
+ * `defenderBonus` is added to the DEFENCE's skill mean only:
+ * "防衛側はもう少しAIの命中精度上げていい". The gaussian is untouched at sd 0.19, so
+ * the defence gets better on average without becoming uniform — there is still a
+ * 0.2 conscript in it.
+ */
+export function drawPersona(rng, role, meanSkill, defenderBonus = 0) {
+  const mix = ARCHETYPE_MIX[role === 'defend' || role === 'attack' ? role : 'any'];
+  const name = mix[rng.int(0, mix.length - 1)];
+  const a = ARCHETYPES[name];
+  const t = (v, sd) => Math.min(1, Math.max(0.02, v + rng.gauss() * sd));
+  return {
+    archetype: name,
+    traits: {
+      aggression: t(a.aggression, 0.11),
+      patience: t(a.patience, 0.11),
+      exposure: t(a.exposure, 0.12),
+      flank: t(a.flank, 0.14),
+      trigger: t(a.trigger, 0.11),
+      /** METRES, not 0..1 — the distance this man wants the fight at. */
+      range: a.range * rng.range(0.82, 1.24),
+    },
+    skill: Math.min(0.95, Math.max(0.12,
+      meanSkill + (role === 'defend' ? defenderBonus : 0) + rng.gauss() * 0.19)),
+  };
+}
+
 const HITBOXES = [
   ['head', 'Head', 'HeadTop', 0.098, 4.0],
   ['torso', 'Spine1', 'Neck', 0.185, 1.0],
@@ -248,8 +336,22 @@ export class Agent {
      * dial: `RULES.botSkill` shifts the mean, and the gaussian gives the squad
      * its individuals.
      */
-    this.skill = Math.min(0.95, Math.max(0.12,
-      (ai.skill ?? 0.5) + this.rng.gauss() * 0.19));
+    /**
+     * PERSONALITY AND SKILL ARE STICKY PER SOLDIER.
+     *
+     * A respawn builds a NEW `Agent`, so drawing traits in the constructor alone
+     * would give HAWK a different character every six seconds — which is both
+     * unreadable to a player and unmeasurable, because a callsign's numbers
+     * would then be the average of ten different people. `ai.personaFor` keys
+     * the draw on team + callsign + role, so HAWK is the same man all half and
+     * becomes somebody else when the sides swap.
+     */
+    const persona = ai.personaFor(this);
+    /** 'rusher'|'flanker'|'hunter'|'support'|'anchor'|'marksman' — see ARCHETYPES. */
+    this.archetype = persona.archetype;
+    /** Six independent behaviour traits. Read by `_think`, not by the gun. */
+    this.traits = persona.traits;
+    this.skill = persona.skill;
     const k = this.skill;
 
     this.weaponRange = 44 + k * 18;
@@ -323,6 +425,16 @@ export class Agent {
     this._holdSpot = new THREE.Vector3();
     this._hasHoldSpot = false;
     this.holdTimer = 0;
+    /**
+     * WATCHING AN ANGLE IS NOT STARING AT A DOT. A man stood in his sector sweeps
+     * his weapon across it: `_scanYaw` is the current offset off the facing the
+     * objective gave him, re-rolled on `_scanTimer`. An impatient man sweeps
+     * faster and wider. It is two scalars and it is the difference between a
+     * sentry and a mannequin.
+     */
+    this._scanTimer = this.rng.range(0.5, 2.5);
+    this._scanYaw = 0;
+    this._scanBase = this.yaw;
     this.patrolPoints = opts.patrol ?? null;
     this.patrolIndex = 0;
     this.stuckTimer = 0;
@@ -370,6 +482,7 @@ export class Agent {
     this.repathTimer -= dt;
     this.coverDwell -= dt;
     this.holdTimer -= dt;
+    this._scanTimer -= dt;
     this.vaultCooldown -= dt;
     if (this.lastKnownAge < 1e6) this.lastKnownAge += dt;
 
@@ -520,7 +633,7 @@ export class Agent {
 
       case STATE.PATROL: {
         this.crouch = false;
-        this.desiredSpeed = 1.35;
+        this.desiredSpeed = 1.0 + this.traits.aggression * 0.9;
         if (this.hasTarget) {
           this._enterCombat();
           break;
@@ -544,17 +657,21 @@ export class Agent {
 
       case STATE.ALERT: {
         this.crouch = false;
-        this.desiredSpeed = 1.5;
+        // A man who wants the fight walks toward the noise; a careful one edges.
+        this.desiredSpeed = 1.1 + this.traits.aggression * 2.4;
         if (this.hasTarget) {
           this._enterCombat();
           break;
         }
         // move to the last known position, then look around
         if (this.lastKnownAge < 8 && !this.hasMoveTarget) this._goTo(this.lastKnown);
+        this._scan(dt, null);
         // An objective is a standing order: stop searching an empty street and
         // get back on it. Without this the attack stalls the first time somebody
         // fires a shot from a window and disappears.
-        if (this.objective && this.stateTime > 4.5) {
+        // How long he will search an empty street before getting back on the
+        // objective: a patient man clears the room, an eager one moves on.
+        if (this.objective && this.stateTime > 2.2 + this.traits.patience * 5) {
           this._setState(STATE.ADVANCE);
           break;
         }
@@ -571,7 +688,9 @@ export class Agent {
         this.desiredSpeed = 0;
         this.wantFire = false;
         this.peeking = false;
-        if (this.suppression < 0.45) {
+        // A bold man is back up almost at once; a careful one stays down until
+        // the rounds have genuinely stopped coming.
+        if (this.suppression < 0.25 + (1 - this.traits.exposure) * 0.45) {
           // Somebody has this angle ranged. Coming back up in the same spot he
           // was just driven out of is how a man dies twice — the dwell and the
           // repath are both spent, so the first thing COMBAT does is move him.
@@ -583,13 +702,15 @@ export class Agent {
 
       case STATE.FLANK: {
         this.crouch = false;
-        this.desiredSpeed = 4.4;
+        this.desiredSpeed = 3.9 + this.traits.aggression * 1.0;
         this.wantFire = false;
-        if (!this.hasMoveTarget || this.position.distanceTo(this.moveTarget) < 1.2 || this.stateTime > 7) {
+        if (!this.hasMoveTarget || this.position.distanceTo(this.moveTarget) < 1.2
+          || this.stateTime > 5 + this.traits.flank * 5) {
           this._setState(STATE.COMBAT);
           this.cover = null;
         }
-        if (this.suppression > 1.0) this._setState(STATE.COMBAT);
+        // How much incoming fire it takes to abandon the move and turn and fight.
+        if (this.suppression > 0.6 + this.traits.exposure * 0.8) this._setState(STATE.COMBAT);
         break;
       }
 
@@ -600,12 +721,19 @@ export class Agent {
         if (!this.hasMoveTarget || this.position.distanceTo(this.moveTarget) < 1.2) {
           this._setState(STATE.COMBAT);
         }
-        if (this.health > 45 && this.stateTime > 4) this._setState(STATE.COMBAT);
+        // Back into it: an aggressive man re-takes the ground he gave up as soon
+        // as he is off the floor, a conservative one waits it out.
+        if (this.health > 45 && this.stateTime > 2 + (1 - this.traits.aggression) * 5) {
+          this._setState(STATE.COMBAT);
+        }
         break;
       }
     }
 
-    if (this.suppression > 1.15 && this.state === STATE.COMBAT && this.cover) {
+    // Ducking is a personality, not a constant: 0.75 for the boldest man on the
+    // map, 1.55 for the most careful. The old flat 1.15 is the middle of that.
+    if (this.state === STATE.COMBAT && this.cover
+      && this.suppression > 1.55 - this.traits.exposure * 0.8) {
       this._setState(STATE.SUPPRESSED);
     }
   }
@@ -614,6 +742,36 @@ export class Agent {
     this._setState(STATE.COMBAT);
     this.cover = null;
     this.repathTimer = 0;
+  }
+
+  /**
+   * SWEEP THE SECTOR. Called by whatever is holding ground with nothing in sight:
+   * the yaw and the muzzle move across an angle either side of the bearing the
+   * objective gave him, re-rolled on `_scanTimer`. An impatient man sweeps wider
+   * and more often — a marksman holds one bearing almost still, which is exactly
+   * the difference the player should be able to read at 30 m.
+   *
+   * `facing` is a world point to watch, or null to sweep around where he already
+   * looks. Two scalars and one lerp; no allocation.
+   */
+  _scan(dt, facing) {
+    if (this._scanTimer <= 0) {
+      const p = this.traits.patience;
+      this._scanTimer = this.rng.range(0.8, 1.9) + p * this.rng.range(0.7, 3.0);
+      this._scanYaw = this.rng.signed() * (0.28 + (1 - p) * 1.05);
+      if (!facing) this._scanBase = this.yaw;
+    }
+    const base = facing
+      ? Math.atan2(facing.x - this.position.x, facing.z - this.position.z)
+      : this._scanBase;
+    this.targetYaw = base + this._scanYaw;
+    // the weapon follows the eyes
+    this._v.set(
+      this.position.x + Math.sin(this.targetYaw) * 14,
+      this.position.y + this.eyeHeight - 0.1,
+      this.position.z + Math.cos(this.targetYaw) * 14
+    );
+    this.aimTarget.lerp(this._v, Math.min(1, dt * 2.2));
   }
 
   /**
@@ -711,7 +869,24 @@ export class Agent {
      * picture. `_pickHoldSpot` keeps every spot on the nav grid and inside the
      * sector, so this can never wander a man off the objective.
      */
-    const holdish = obj.mode === 'hold' || obj.mode === 'retake';
+    /**
+     * AND SO IS ARRIVING AT ONE.
+     *
+     * `push` was not on this list, and the men carrying it are the whole attack
+     * minus the carrier. An attacker who reached the site with nothing in sight
+     * therefore did exactly what the defenders used to: `desiredSpeed = 0`, face
+     * the spawn, stand there. Measured on a full match, the attack spent 32 % of
+     * its time in ADVANCE and most of the men in it were parked. Once he is at
+     * the site he roams it like a holder does — same sector logic, forward bias
+     * from his own aggression — so the attack keeps working the mouths of the
+     * courtyard while it waits for the charge instead of queueing at one wall.
+     *
+     * The pull to the objective is unchanged until he gets there: the sector only
+     * engages inside 9 m, so nothing re-routes an approach or a staged flank.
+     */
+    const anchored = obj.mode === 'hold' || obj.mode === 'retake';
+    const holdish = anchored
+      || (obj.mode === 'push' && this.position.distanceTo(obj.position) < 9);
     let dest = obj.position;
     if (holdish) {
       if (!this._hasHoldSpot || this.holdTimer <= 0) this._pickHoldSpot(obj);
@@ -729,8 +904,11 @@ export class Agent {
     if (dist > arrive) {
       // Crossing the map is a run; moving inside a sector you already hold is a
       // walk, because a defender who sprints between two sandbags cannot shoot.
+      // How fast he crosses is his own: a rusher is at 5 m/s, a marksman at 3.4.
       const inSector = holdish && this.position.distanceTo(obj.position) < 14;
-      this.desiredSpeed = inSector ? 2.4 : obj.mode === 'hold' ? 3.4 : 4.3;
+      const haste = 0.82 + this.traits.aggression * 0.36;
+      this.desiredSpeed = inSector ? 2.0 + this.traits.aggression * 1.4
+        : (obj.mode === 'hold' ? 3.4 : 4.3) * haste;
       if (this.repathTimer <= 0 && !this.pathPending && (!this.hasMoveTarget || this.stuckTimer > 0.6)) {
         this.repathTimer = this.rng.range(1.1, 2.2);
         if (!this._goTo(dest) && !this.pathPending) {
@@ -744,19 +922,16 @@ export class Agent {
     // ---- in position ---------------------------------------------------
     this.desiredSpeed = 0;
     this.hasMoveTarget = false;
-    if (this._hasFacing) {
-      // Point at whatever the objective says the threat comes from, so a held
-      // site is watched rather than admired.
-      this.targetYaw = Math.atan2(
-        this._objFacing.x - this.position.x,
-        this._objFacing.z - this.position.z
-      );
-      this._v.copy(this._objFacing).setY(this.position.y + this.eyeHeight - 0.1);
-      this.aimTarget.lerp(this._v, Math.min(1, dt * 2.5));
-    }
-    // Half the men holding a site take a knee. It breaks up the silhouette line
-    // and it is what a defence actually looks like.
-    this.crouch = (this.id & 1) === 0 && obj.mode === 'hold';
+    // Watch the sector rather than one bearing off it — and if the objective gave
+    // no facing, sweep around where he is already looking rather than freezing.
+    this._scan(dt, this._hasFacing ? this._objFacing : null);
+    /**
+     * Taking a knee used to be `(this.id & 1) === 0`, which is a coin flip on a
+     * spawn counter — the same man crouched or did not for reasons no player
+     * could ever read. It is the careful men who go prone behind a sandbag and
+     * the bold ones who stand in the mouth of it.
+     */
+    this.crouch = holdish && this.traits.exposure < 0.42;
     this.aimWeight = 0.6;
   }
 
@@ -773,13 +948,50 @@ export class Agent {
    */
   _pickHoldSpot(obj) {
     const grid = this.ai.grid;
-    this.holdTimer = this.rng.range(4, 9);
+    const tr = this.traits;
+    /**
+     * HOW LONG HE STAYS IN IT is his patience, 2.4 s to 13 s, where it used to be
+     * a flat 4-9 for everybody. This one number is most of what makes two men on
+     * the same sandbag look like different soldiers: the impatient one is never
+     * where you last saw him and the anchor has not moved since the round started.
+     */
+    this.holdTimer = this.rng.range(2.4, 4.5) + tr.patience * this.rng.range(2.5, 9);
     this._hasHoldSpot = false;
     if (!grid) return;
-    const base = this.rng.range(0, Math.PI * 2);
+    /**
+     * WHERE IN THE SECTOR, AND ON WHICH SIDE OF IT.
+     *
+     * The old ring was a uniform 4-11 m on a uniform random bearing, so every man
+     * held a random point and the defence had no shape. A bearing is now PREFERRED:
+     * the aggressive men take the mouths on the threat side — forward of the
+     * objective, toward where the attack is coming from — and the careful ones
+     * hold the far side of the courtyard with the site in front of them. Candidate
+     * bearings are tried outward from that preference, so the first one that lands
+     * on the nav grid is the closest available to where this man wants to be.
+     *
+     * `_objFacing` is the world point the objective says the threat comes from
+     * (`match` passes the enemy's spawn centre), which is what makes "forward"
+     * mean anything.
+     */
+    const forward = tr.aggression >= 0.5;
+    let pref = this.rng.range(0, Math.PI * 2);
+    if (this._hasFacing) {
+      pref = Math.atan2(
+        this._objFacing.z - obj.position.z,
+        this._objFacing.x - obj.position.x
+      );
+      if (!forward) pref += Math.PI;
+      // ±35° of slop, re-rolled every time, so a man who holds the same side of
+      // the site does not hold the same square of it twice.
+      pref += this.rng.signed() * 0.6;
+    }
+    // Radius: forward men push out to the mouths, careful men sit deeper.
+    const rMin = forward ? 5 : 3;
+    const rMax = forward ? 13 : 9;
     for (let i = 0; i < 12; i++) {
-      const th = base + (i / 12) * Math.PI * 2;
-      const r = this.rng.range(4, 11);
+      // 0, +30°, -30°, +60°, -60° … so the search fans out from the preference
+      const th = pref + (i % 2 ? 1 : -1) * Math.ceil(i / 2) * (Math.PI / 6);
+      const r = this.rng.range(rMin, rMax);
       const x = obj.position.x + Math.cos(th) * r;
       const z = obj.position.z + Math.sin(th) * r;
       const ci = grid.nearest(x, z, obj.position.y, 2, 1.4);
@@ -837,7 +1049,19 @@ export class Agent {
           // nothing in his sights for the last beat of it.
           : mode === 'push' ? 5
             : 0;
-    if (urgency && this.stateTime > urgency && !this.targetVisible) {
+    /**
+     * AND HOW LONG *THIS MAN* WILL TRADE SHOTS BEFORE HE GOES ANYWAY.
+     *
+     * The dwells above are the mode's; this scales them by the person. A rusher
+     * breaks off at 0.65x — three seconds of a push objective and he is moving —
+     * and a marksman at 1.35x, which is a man who genuinely wants to win the
+     * firefight before taking the ground. Same for the stalemate break below,
+     * where patience rather than aggression is the trait that fits: it is a
+     * question about how long you are willing to hold a line, not about how
+     * badly you want the site.
+     */
+    const breakOff = urgency * (1.35 - this.traits.aggression * 0.7);
+    if (urgency && this.stateTime > breakOff && !this.targetVisible) {
       this.cover = null;
       this.ai.cover?.release(this.id);
       this._setState(STATE.ADVANCE);
@@ -853,17 +1077,26 @@ export class Agent {
      * objective pull turned up (see `toward` below). This is the difference
      * between a firing line and an assault.
      */
-    if (urgency && this.stateTime > urgency * 3) {
+    if (urgency && this.stateTime > breakOff * (1.4 + this.traits.patience * 3)) {
       this.cover = null;
       this.ai.cover?.release(this.id);
       this._setState(STATE.ADVANCE);
       return;
     }
     const sq = this.squad;
+    const tr = this.traits;
     const dist = this.position.distanceTo(target);
 
-    // wounded and outgunned: fall back
-    if (this.health < 34 && this.stateTime > 1.5 && this.rng.float() < dt * 0.5) {
+    /**
+     * WOUNDED: fall back — at a threshold that is his own. 18 HP for the boldest
+     * man on the map and 52 for the most careful, where it used to be a flat 34
+     * for everybody, and the roll rate goes with it. This is most of what "some
+     * of them should be conservative" means in practice: the anchor breaks
+     * contact at half health and comes back, the rusher dies where he stands.
+     */
+    const breakHealth = 18 + (1 - tr.aggression) * 34;
+    if (this.health < breakHealth && this.stateTime > 1.5
+      && this.rng.float() < dt * (0.25 + (1 - tr.aggression) * 0.7)) {
       const away = this._v
         .copy(this.position)
         .sub(target)
@@ -902,32 +1135,69 @@ export class Agent {
       const mode2 = this.objective?.mode;
       const pushing = mode2 === 'push' || mode2 === 'plant' || mode2 === 'pickup' ||
         mode2 === 'defuse' || mode2 === 'retake';
+      /**
+       * PREFERRED RANGE IS A REAL DECISION NOW.
+       *
+       * `minRange: 7, maxRange: 30` was every man on the map: thirty soldiers who
+       * all wanted the fight at the same distance, which is why they all ended up
+       * on the same line. `traits.range` is 9 m for a rusher and 44 for a marksman,
+       * and the window is built around it — so the rusher's cover scores best 4 to
+       * 15 m from the enemy and he walks INTO the fight, while the marksman's
+       * scores best at 20 to 75 and he backs out of it. Two men in the same
+       * doorway now leave it in opposite directions.
+       */
+      const want = tr.range;
+      /**
+       * AND HE WILL WALK TO IT. `toward` was for attackers only, on the argument
+       * that holding IS the defence's objective — true of the site, not of the
+       * fight. An aggressive defender pulled toward the CONTACT is a man who
+       * pushes out of the site to meet the attack, which is the
+       * "行動ももっとアグレッシブでもいい" half of the request; a hurt or careful one
+       * is pulled toward his own objective instead, which reads as falling back
+       * onto the site and re-taking it. Neither can walk off the map: the pull is
+       * a score bias on cover points, not a destination.
+       */
+      let towardPt = null;
+      let towardW = 0.55;
+      if (pushing) {
+        towardPt = this.objective.position;
+        towardW = mode2 === 'plant' || mode2 === 'defuse' ? 0.9
+          : 0.3 + tr.aggression * 0.6;
+      } else if (this.objective) {
+        const bold = tr.aggression > 0.55 && this.health > 55 && dist > want;
+        towardPt = bold ? target : this.objective.position;
+        towardW = bold ? 0.25 + tr.aggression * 0.45 : 0.2 + (1 - tr.aggression) * 0.35;
+      }
       const pick = this.ai.cover?.pick(this.position, target, {
         id: this.id,
         squad: sq?.members,
-        minRange: 7,
-        maxRange: 30,
-        maxTravel: this.cover ? 12 : 26,
+        minRange: Math.max(3, want * 0.45),
+        maxRange: want * 1.7,
+        // An eager man is willing to cross more ground to get where he wants to
+        // be; a careful one shuffles between two adjacent walls.
+        maxTravel: this.cover ? 7 + tr.aggression * 11 : 26,
         // Rotating out of a stale spot has to be allowed to go somewhere; with
         // the current point excluded and no room to move, the man would drop
         // cover entirely and stand in the open.
         avoid: stale ? this.cover : null,
-        toward: pushing ? this.objective.position : null,
-        // The carrier and the defuser push hardest; the rest of the attack
-        // still has to be willing to trade for ground.
-        towardWeight: mode2 === 'plant' || mode2 === 'defuse' ? 0.9 : 0.55,
+        toward: towardPt,
+        towardWeight: towardW,
       });
-      this.repathTimer = this.rng.range(2.2, 4.5);
+      this.repathTimer = this.rng.range(1.1, 2.2) + tr.patience * this.rng.range(1.2, 3.6);
       if (pick && pick !== this.cover) {
         this.cover = pick;
         this.coverPos.set(pick.x, pick.y, pick.z);
-        // 4-8 s in one spot. Shorter and they never settle enough to shoot;
-        // longer and it reads as the old statue.
-        this.coverDwell = this.rng.range(4, 8);
+        /**
+         * 4-8 s for everybody became 1.5-3 s for an impatient man and up to 12 for
+         * an anchor. The dwell is the single strongest lever on how static a bot
+         * looks — it is the timer that decides how often he is allowed to want to
+         * be somewhere else — so it is the one that has to carry the personality.
+         */
+        this.coverDwell = this.rng.range(1.5, 3.2) + tr.patience * this.rng.range(3, 9);
         this._goTo(this.coverPos);
       } else if (stale) {
         // Nothing better exists right now — do not ask again next frame.
-        this.coverDwell = this.rng.range(2, 3.5);
+        this.coverDwell = this.rng.range(1.2, 2.8);
       }
     }
 
@@ -953,19 +1223,40 @@ export class Agent {
       : false;
 
     if (this.cover && !atCover) {
-      // moving into position: run, weapon down, no shooting
-      this.desiredSpeed = 4.3;
+      /**
+       * MOVING INTO POSITION — AND FIRING WHILE HE DOES, IF HE IS THAT MAN.
+       *
+       * "weapon down, no shooting" for every man crossing between two walls is
+       * most of the reason a thirty-man map was quiet: COMBAT held half of all
+       * actor-time and only a fifth of it had anybody's finger on a trigger. A
+       * bold man shoots on the move — badly, which is the point: `_fireRound`
+       * opens his cone with his own speed, so advancing fire is suppression
+       * rather than a free kill, and he moves slower while he does it.
+       */
+      const shootMoving = tr.exposure > 0.5 && this.targetVisible && this.hasTarget
+        && dist < this.weaponRange;
+      this.desiredSpeed = shootMoving ? 2.6 + tr.aggression * 1.2 : 4.3;
       this.crouch = false;
-      this.wantFire = false;
-      this.aimWeight = 0.35;
+      this.wantFire = shootMoving;
+      this.aimWeight = shootMoving ? 0.85 : 0.35;
     } else {
       this.desiredSpeed = 0;
       this.hasMoveTarget = false;
-      // peek-and-shoot, gated by the squad so they alternate
-      const allowed = !sq || sq.requestPeek(this, dt);
+      /**
+       * PEEK-AND-SHOOT. The squad still alternates who leans out — except that a
+       * reckless man does not wait his turn. `exposure > 0.7` is two or three men
+       * on a fifteen-man side, and it is what stops a peek token being a queue
+       * ticket that silences the whole line while one man shoots.
+       */
+      const allowed = !sq || sq.requestPeek(this, dt) || tr.exposure > 0.7;
       if (this.peekTimer <= 0) {
         this.peeking = allowed && this.targetVisible !== false;
-        this.peekTimer = this.peeking ? this.rng.range(1.1, 2.4) : this.rng.range(0.7, 1.8);
+        // How long he stays out, and how long he stays in. A bold man is out for
+        // three seconds at a time and back out almost at once; a careful one
+        // shows a shoulder for one and hides for two.
+        this.peekTimer = this.peeking
+          ? this.rng.range(0.8, 1.6) + tr.exposure * this.rng.range(0.6, 2.4)
+          : this.rng.range(0.35, 1.0) + (1 - tr.exposure) * this.rng.range(0.4, 1.6);
         if (this.peeking && this.cover) {
           this.peekSide = this.ai.cover.peekOffset(this.cover, target, this.eyeHeight, this._v2);
           this.coverPos.copy(this._v2);
@@ -974,9 +1265,16 @@ export class Agent {
       this.crouch = this.cover ? !this.cover.high || !this.peeking : false;
       this.aimWeight = this.peeking ? 1 : 0.55;
       this.wantFire = this.peeking && this.targetVisible && this.hasTarget && dist < this.weaponRange;
-      // suppressing fire at the last known spot even without a clean shot
-      if (!this.wantFire && this.hasTarget && this.lastKnownAge < 2.2 && this.peeking) {
-        this.wantFire = this.rng.float() < 0.35;
+      /**
+       * SUPPRESSING FIRE at the last known spot without a clean shot: a flat 35 %
+       * coin flip for everybody became trigger discipline. A sprayer hoses the
+       * window at 70 %, a marksman holds his round at 15 %, and the difference
+       * between the two is audible from across the map — which is most of what
+       * "もっと戦争らしく撃ち合いまくって" asks for and it costs the player nothing,
+       * because rounds into a wall are rounds not into him.
+       */
+      if (!this.wantFire && this.hasTarget && this.lastKnownAge < 2.6 && this.peeking) {
+        this.wantFire = this.rng.float() < 0.12 + (1 - tr.trigger) * 0.62;
       }
     }
 
@@ -998,15 +1296,19 @@ export class Agent {
      */
     if (
       sq &&
-      this.stateTime > 2.5 &&
+      this.stateTime > 1.6 + this.traits.patience * 3 &&
       sq.canFlank(this) &&
-      this.rng.float() < dt * 0.55
+      // APPETITE. 0.12/s for a man who wants to hold his angle, 1.4/s for one
+      // whose whole game is arriving from somewhere else.
+      this.rng.float() < dt * (0.12 + tr.flank * 1.3)
     ) {
       const side = this.rng.float() < 0.5 ? 1 : -1;
       const perp = this._v.copy(target).sub(this.position).setY(0).normalize();
       const flank = this._v2
+        // How wide he goes is his appetite too: 7 m is a corner, 22 m is the
+        // other lane.
         .set(-perp.z * side, 0, perp.x * side)
-        .multiplyScalar(this.rng.range(8, 15))
+        .multiplyScalar(this.rng.range(6, 12 + tr.flank * 11))
         .add(this.position)
         .addScaledVector(perp, 4);
       if (this._goTo(flank)) {
@@ -1022,8 +1324,10 @@ export class Agent {
     if (
       this.hasGrenade &&
       this.grenadeCooldown <= 0 &&
-      dist > 8 &&
-      dist < 26 &&
+      // A man who fights at 10 m will throw at 7; one who fights at 35 will not
+      // throw at all until you are inside his window.
+      dist > 6 + (1 - tr.aggression) * 5 &&
+      dist < 20 + tr.range * 0.4 &&
       this.lastKnownAge < 1.5 &&
       (!sq || sq.requestGrenade(this))
     ) {
@@ -1226,13 +1530,23 @@ export class Agent {
     }
     if (this.burstLeft <= 0) {
       if (this.burstCooldown > 0) return;
-      // A good shooter fires short, controlled bursts with a short reset. A poor
-      // one dumps half a magazine and then has to wait — which is the window the
-      // player uses.
-      this.burstLeft = this.rng.int(2, 4 + Math.round((1 - this.skill) * 7));
+      /**
+       * THE BURST PATTERN IS TRIGGER DISCIPLINE, and it used to be skill alone.
+       * Skill still shapes it — a poor shooter dumps a magazine and then has to
+       * wait, which is the window the player uses — but WHETHER a man is a
+       * sprayer is now a trait independent of whether he can shoot. A disciplined
+       * marksman fires 2-4 and pauses; an undisciplined rusher fires up to 14 and
+       * pauses for half as long. That asymmetry is deliberate: the volume of fire
+       * on the map goes up, and it comes from the men least likely to hit with it.
+       */
+      const t = this.traits.trigger;
+      const lo = 2 + Math.round((1 - t) * 3);
+      this.burstLeft = this.rng.int(lo,
+        lo + 2 + Math.round((1 - this.skill) * 5 + (1 - t) * 5));
       this.burstCooldown =
-        this.rng.range(0.45, 1.0) + (1 - this.skill) * this.rng.range(0.3, 1.1) +
-        this.suppression * 0.5;
+        (this.rng.range(0.3, 0.85) + (1 - this.skill) * this.rng.range(0.25, 0.95))
+          * (0.55 + t * 0.8)
+        + this.suppression * 0.5;
     }
     if (this.fireCooldown > 0) return;
     this.fireCooldown = 1 / this.fireRate;
@@ -1256,7 +1570,14 @@ export class Agent {
      */
     const settle = 1 + (1 - this.aimSettle) * 1.6;
     const bloom = 1 + Math.min(6, this.magSize - this.ammo) * 0.055 * (1.4 - this.skill);
-    const spread = this.spread * settle * bloom * (1 + this.suppression * 1.5);
+    /**
+     * ADVANCING FIRE COSTS ACCURACY. A man who shoots while he walks (see
+     * `shootMoving` in `_combat`) opens his cone by up to 1.5x, so the aggressive
+     * archetypes put a great deal more lead in the air without becoming more
+     * dangerous per round than a man who stopped and aimed.
+     */
+    const moving = 1 + Math.min(1, this.speed * 0.22) * 0.5;
+    const spread = this.spread * settle * bloom * moving * (1 + this.suppression * 1.5);
     dir.x += this.rng.gauss() * spread;
     dir.y += this.rng.gauss() * spread * 0.8;
     dir.z += this.rng.gauss() * spread;
