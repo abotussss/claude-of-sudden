@@ -53,6 +53,9 @@ const RADIO = args.radio !== '0';
 const AMMO = args.ammo !== '0';
 const NEED = args.need !== '0';
 const DUMP = Number(args.dump ?? 0);
+/** `--earshot=0` plays every enemy call however far away — the WORST CASE for
+ *  the voice budget, and the arm that bounds "can chatter evict gunfire". */
+const EARSHOT = args.earshot !== '0';
 
 const browser = await chromium.launch({
   headless: true,
@@ -75,13 +78,14 @@ await page.evaluate(() => window.__AUDIO__?.start?.());
 await page.waitForFunction(() => window.__AUDIO__?.running === true, null, { timeout: 20000 })
   .catch(() => console.log('[radio] WARNING: AudioContext never started — audio numbers are void'));
 
-await page.evaluate(({ scale, radio, ammo, need }) => {
+await page.evaluate(({ scale, radio, ammo, need, earshot }) => {
   const e = window.__ENGINE__;
   const ai = e.ctx.peek('ai');
   const m = e.ctx.peek('match');
   const audio = window.__AUDIO__;
 
   if (!radio) ai.radio.enabled = false;
+  if (!earshot) ai.radio._earshot = () => true;
   if (!need) m._needCache = () => null;
   if (!ammo) {
     // The behaviour before `Agent.reserve`: a magazine always comes from
@@ -173,7 +177,7 @@ await page.evaluate(({ scale, radio, ammo, need }) => {
   e.events.on('match:round', () => { acc.rounds++; });
   e.events.on('actor:death', () => { acc.deaths++; });
   e.time.scale = scale;
-}, { scale: SCALE, radio: RADIO, ammo: AMMO, need: NEED });
+}, { scale: SCALE, radio: RADIO, ammo: AMMO, need: NEED, earshot: EARSHOT });
 
 const t0 = Date.now();
 while ((Date.now() - t0) / 1000 < SECONDS) await page.waitForTimeout(2000);
@@ -220,6 +224,7 @@ const nets = out.radio.nets.map((n) => ({
   wantedAnswer: n.wantedAnswer,
   answered: n.answered,
   refusedByAudio: n.refusedByAudio,
+  outOfEarshot: n.outOfEarshot,
   droppedFromQueue: n.droppedFromQueue,
   secondsInContact: n.hotSeconds,
   longestSilenceInFirefight: n.maxSilenceInFirefight,
@@ -231,7 +236,7 @@ for (const k in a.busSum) busMean[k] = +(a.busSum[k] / Math.max(1, a.busSamples)
 
 console.log(JSON.stringify({
   label: LABEL,
-  arms: { radio: RADIO, ammoEconomy: AMMO, needDrivenLegs: NEED },
+  arms: { radio: RADIO, ammoEconomy: AMMO, needDrivenLegs: NEED, earshotFilter: EARSHOT },
   liveSeconds: +a.live.toFixed(1),
   rounds: a.rounds,
   deaths: a.deaths,

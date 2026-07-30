@@ -435,7 +435,10 @@ export class Radio {
     const friendly = net.team === (this.ai.playerTeam | 0);
     const audio = this._getAudio();
     let played = false;
+    /** Was `audio` asked at all? Out of earshot is not the budget refusing. */
+    let asked = false;
     if (audio) {
+      asked = true;
       /**
        * FRIENDLY IS THE RADIO, ENEMY IS A MAN IN THE STREET. @see the header.
        * `bark` with a null position plays dry (head-locked); with one it goes
@@ -468,6 +471,7 @@ export class Radio {
           played = audio.bark(m.voice, at, { voice: m.speaker.id, level: 1, force: true });
         } else {
           net.outOfEarshot++;
+          asked = false;
         }
       }
     }
@@ -475,7 +479,7 @@ export class Radio {
     this.lastTxAny = now;
     m.speaker._radioAt = now;
     net.sent++;
-    if (!played) net.refused++;
+    if (asked && !played) net.refused++;
     net.kinds[m.kind] = (net.kinds[m.kind] ?? 0) + 1;
     if (m.answerTo) net.answered++;
 
