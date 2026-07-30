@@ -54,13 +54,28 @@
  * Sides: 0 = -Z, 1 = +X, 2 = +Z, 3 = -X.
  */
 
-/** The MID lane: the original market street, kept as the middle route. */
+/**
+ * The MID lane: the original market street, kept as the middle route.
+ *
+ * `zMin`/`zMax` were -58/46, i.e. the street ended a few metres behind each
+ * spawn. Both ends are extended by 22-24 units of authored plan so the map has
+ * somewhere to put a BASE DISTRICT at each end — see `THE MAP GROWS` at the
+ * bottom of this file. `halfWidth`/`kerb` are the authored NARROW values and
+ * are widened by `widenX()` in the same pass; do not read them before it.
+ *
+ * THE HARD CEILING ON zMin/zMax IS NOT TASTE. `tools/boundcheck.mjs` builds its
+ * flood grid at `EXT = 168 * SCALE * 0.5 + 2` = 128 m half-extent in scaled
+ * level space, hard-coded, and `tools/` is not ours to edit. `buildCordon`
+ * closes the street at `zMin - 3.7` / `zMax + 3.7`, so the furthest authored
+ * ground is 83.7 units = 125.6 m and the gate can still see all of it. Anything
+ * past ~85 units would be walkable ground boundcheck silently never scans.
+ */
 export const STREET = {
   halfWidth: 4.5, // asphalt
   kerb: 6.5, // building line
   walkH: 0.145,
-  zMin: -58,
-  zMax: 46,
+  zMin: -80,
+  zMax: 70,
 };
 
 /**
@@ -102,7 +117,7 @@ export const ALLEYS = [
  * soft shoulder so the dunes still carry the far ground.
  */
 export const FLAT = [
-  [-33, -48, 33, 46], // the whole three-lane box
+  [-33, -80, 33, 70], // the whole three-lane box, both base districts included
   [-38, -13, 38, 5], // both site courtyards
 ];
 
@@ -220,27 +235,16 @@ export const RELIEF = {
     { id: 'A-south step', rect: [-24.4, -15.4, -22.6, -13.8], h: 1.6, key: 'metal_blue' },
     { id: 'B-south step', rect: [22.6, -15.4, 24.4, -13.8], h: 1.6, key: 'metal_green' },
     /**
-     * Moved off centre, and SCALING IS WHY. A facade's door lands in a BAY, and
-     * the bay count is `round(length / 3.05)` — so K1's +Z face went from two
-     * bays to three when the map went to 1.5x and `doorBays: { 2: 1 }` moved
-     * its door from a quarter of the way along to dead centre, straight into
-     * the container. `indoorcheck` reported the capsule moving 0.0 m: it was
-     * spawned inside a shipping container. Nothing about the door changed, and
-     * nothing about the container did; the bay grid under them did. Off to one
-     * side, like K2's, it clears a door wherever the bay grid puts it.
+     * THE FOUR MANTLE STEPS ONTO K1 AND K2 ARE GONE WITH K1 AND K2.
+     *
+     * Both mid-street islands stood inside the footprint the CATHEDRAL now
+     * occupies (K1 at level z 9.3..14.7, K2 at -7.7..-1.5, both on the street
+     * centreline), so the containers that were the only way onto their roofs
+     * are a mantle ladder to nothing. The elevation they carried is replaced
+     * many times over by the cathedral's own aisle galleries — see
+     * `src/world/cathedral.js` — which is the point of putting a building
+     * there rather than two sheds.
      */
-    { id: 'K1 step 1', rect: [1.3, 16.05, 2.8, 17.65], h: 1.4, key: 'metal_blue' },
-    { id: 'K1 step 2', rect: [1.3, 14.75, 2.85, 16.05], h: 2.6, key: 'metal_green' },
-    /**
-     * …and the same for K2, which had none. `tools/floorcheck.mjs` floods the
-     * real player capsule up the map and K2's roof was the one surface on the
-     * level it could not reach: the island in connector 2 was the only piece of
-     * cover on the mid street with no way on top of it, so the two connectors
-     * did not play the same. Kept east of centre because K2's side-0 door is
-     * bay 0 at level x -1.8 and a container in a doorway is a locked door.
-     */
-    { id: 'K2 step 1', rect: [1.3, -10.9, 2.8, -9.2], h: 1.45, key: 'metal_green' },
-    { id: 'K2 step 2', rect: [1.3, -9.2, 2.85, -7.75], h: 2.7, key: 'metal_blue' },
   ],
 };
 
@@ -484,11 +488,20 @@ export const SITEWORKS = [
    * beside it are 3.3 units wide — one 2-unit run in either of them and the
    * south side has no route on to its own point. @see `navcheck`.
    */
-  { id: 'C north screen west', kind: 'wall', x: -3.3, z: 3.4, w: 2.6, d: 0.6, h: 1.65, key: 'brick', revet: true },
-  { id: 'C north screen east', kind: 'wall', x: 3.3, z: 3.4, w: 2.6, d: 0.6, h: 1.65, key: 'brick', revet: true },
-  { id: 'C north pier', kind: 'pier', x: 0.0, z: 5.0, w: 2.2, d: 2.2, h: 2.9, key: 'concrete' },
-  { id: 'C plinth west', kind: 'plinth', x: -4.2, z: -0.2, w: 1.8, d: 1.5, h: 1.25, key: 'concrete' },
-  { id: 'C plinth east', kind: 'plinth', x: 4.2, z: -0.2, w: 1.8, d: 1.5, h: 1.25, key: 'concrete' },
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * AND ZONE C IS INDOORS NOW, SO ITS FIVE STREET PIECES ARE GONE
+   * ────────────────────────────────────────────────────────────────────────────
+   * "また中央部は屋内にしてほしい なので中央部に広い大聖堂を配置して". Every one of
+   * the five pieces above stood on open tarmac inside x ±4.6, z -0.2..5.0 — which
+   * is the middle of the CATHEDRAL's nave. A street screen and a concrete pier
+   * inside a church are not cover, they are geometry inside geometry.
+   *
+   * The cover they provided is provided by the building instead, and by more of
+   * it: eight nave piers 1.4 m square, two aisle arcades, an altar platform and
+   * a choir screen, all of them mass in the 0.9-2.8 m band `sitecheck` counts.
+   * @see `src/world/cathedral.js`.
+   */
 
   // ═══════════════════════════════════════════════════════ ZONE B (east) ═══
   /**
@@ -600,10 +613,24 @@ export const SITEWORKS = [
  * The demolition entries stay: `RULES.mode` is still switchable and this file
  * cannot see which one is running.
  */
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * AND THE THREE ZONES HAVE MOVED AGAIN — ONE BESIDE EACH BASE, ONE IN THE
+ * MIDDLE. THESE THREE CIRCLES MOVED WITH THEM.
+ * ════════════════════════════════════════════════════════════════════════════
+ * "それぞれの拠点から近いところにエリアを作り、中央部に１つさらに設置して". The zones
+ * are no longer the two courtyards and the mid street; they are the north plaza
+ * between W5 and E5, the CATHEDRAL crossing, and the south plaza between W4 and
+ * E4. All three are on the street centreline, so `widenX` leaves them where they
+ * are, and all three are duplicated from `ZONES` in src/match/sites.js for the
+ * reason the file has always duplicated them: `world` may not import `match`.
+ * IF ONE MOVES, MOVE THE OTHER. Radius 3.0 authored = 4.5 m of ground, sized to
+ * `standRing`'s 4 m forward-spawn ring exactly as before.
+ */
 export const KEEPOUT = [
-  [-28.0, 0.0, 3.0], // ZONE A — west courtyard, domination
-  [0.0, 0.0, 3.0], // ZONE C — mid street, domination
-  [28.0, 0.0, 3.0], // ZONE B — east courtyard, domination
+  [0.0, 38.0, 3.0], // ZONE A — north plaza, beside the attack base
+  [0.0, -1.0, 3.0], // ZONE C — the cathedral crossing
+  [0.0, -40.0, 3.0], // ZONE B — south plaza, beside the defence base
   [-28.0, -7.0, 2.2], // site A plant area
   [28.0, -7.0, 2.2], // site B plant area
   /**
@@ -627,8 +654,14 @@ export const KEEPOUT = [
    * list exists to prevent. Sized to the cluster: 9.5 x 1.5 = 14.3 m clears the
    * furthest man plus a capsule.
    */
-  [0, 39.4, 9.5], // attack spawn pocket
-  [0, -39.4, 9.5], // defend spawn pocket
+  /**
+   * …and both pockets moved out into the new base districts with the spawns:
+   * five ranks of three at z 60.1..68.9 and -62.1..-70.9, x ∓6. Radius 9.5
+   * authored (14.3 m) still clears the furthest man of the cluster plus a
+   * capsule, because the cluster's shape did not change — only its z.
+   */
+  [0, 64.5, 9.5], // attack spawn pocket
+  [0, -66.5, 9.5], // defend spawn pocket
 ];
 
 /**
@@ -1115,65 +1148,23 @@ export const BUILDINGS = [
 
   // ------------------------------------------------------- the mid island --
   /**
-   * K1 and K2 stand in the MIDDLE of the mid street, one inside each connector.
+   * K1 AND K2 ARE GONE, AND WHAT REPLACES THEM IS THE WHOLE POINT OF THIS PASS.
    *
-   * They are what stops a connector being a fifty-metre firing line from site A
-   * straight into site B: with the island there, crossing the street on a
-   * rotation is a dog-leg, and a defender holding mid has a piece of hard cover
-   * to hold it from rather than a strip of open tarmac. Single storey on
-   * purpose — a two-storey island in the middle of the map would give the mid
-   * player an angle into both lanes at once.
+   * They were two single-storey sheds standing in the middle of the mid street,
+   * one inside each connector, at level (0, 12) and (-0.4, -4.6). Both are
+   * inside the CATHEDRAL's footprint — level x -10..10, z -16..14 — so they
+   * cannot both exist. The job they did (a dog-leg in each connector instead of
+   * a fifty-metre firing line, and a piece of hard cover to hold mid from) is
+   * done far better by a 30 x 45 m building standing on the same ground with a
+   * way through it: the rotation between the two lanes is now either 8.25 m of
+   * street down one flank or the length of a nave, and both are contested.
+   *
+   * They were also two of the ten `enterable` buildings, and their replacements
+   * are N2 and S2 in the two new base districts (see the bottom of this file),
+   * so the interior gates have the same count of interiors to prove.
+   *
+   * @see `src/world/cathedral.js`, and `CATHEDRAL` at the foot of this file.
    */
-  {
-    id: 'K1',
-    x: 0,
-    z: 12,
-    w: 5.4,
-    d: 5.4,
-    floors: 1,
-    groundH: 3.2,
-    wallKey: 'plaster_sand',
-    streetSide: 0,
-    secondarySide: 2,
-    damage: 0.3,
-    doorBays: { 0: 0, 2: 1 },
-    parapetH: 0.6,
-    enterable: true,
-    roofProps: 2,
-    /** Straight through, past the west end of the counter: the island is a
-     *  piece of cover you cut THROUGH on a rotation, not a box. */
-    route: [['s0', [0.21, 0.25], [0.21, 0.75], 's2']],
-    rooms: [
-      {
-        walls: [],
-        furnish: [{ kind: 'shop', x0: 0.0, z0: 0.0, x1: 1.0, z1: 1.0 }],
-      },
-    ],
-  },
-  {
-    id: 'K2',
-    x: -0.4,
-    z: -4.6,
-    w: 5.6,
-    d: 6.2,
-    floors: 1,
-    groundH: 3.3,
-    wallKey: 'plaster_cream',
-    streetSide: 2,
-    secondarySide: 0,
-    damage: 0.45,
-    doorBays: { 2: 1, 0: 0 },
-    parapetH: 0.6,
-    enterable: true,
-    roofProps: 2,
-    route: [['s0', [0.22, 0.25], [0.22, 0.75], 's2']],
-    rooms: [
-      {
-        walls: [],
-        furnish: [{ kind: 'storage', x0: 0.0, z0: 0.0, x1: 1.0, z1: 1.0 }],
-      },
-    ],
-  },
 
   // ------------------------------------------------- background / infill --
   /**
@@ -1194,11 +1185,25 @@ export const BUILDINGS = [
    * reading as a flat cut-out, and it is offset west so a slice of real sky
    * survives on the east side of the gap.
    */
-  { id: 'BS3', x: -4, z: -61, w: 9, d: 8, floors: 4, wallKey: 'plaster_sand', streetSide: 2, damage: 0.3, balconies: 0.2, roofProps: 4 },
-  { id: 'BS1', x: -19, z: -66, w: 20, d: 14, floors: 3, wallKey: 'plaster_sand', streetSide: 2, damage: 0.2, roofProps: 2 },
-  { id: 'BS2', x: 14, z: -68, w: 24, d: 16, floors: 2, wallKey: 'plaster_blue', streetSide: 2, damage: 0.2, roofProps: 2 },
-  { id: 'BN1', x: -16, z: 54, w: 20, d: 14, floors: 2, wallKey: 'plaster_cream', streetSide: 0, damage: 0.15, roofProps: 2 },
-  { id: 'BN2', x: 14, z: 56, w: 22, d: 16, floors: 3, wallKey: 'plaster_pink', streetSide: 0, damage: 0.15, roofProps: 2 },
+  /**
+   * ALL FIVE MOVED OUT WITH THE STREET ENDS, AND THEY KEPT THEIR OFFSETS.
+   *
+   * The gate went from level z -50.5 to -74 and both spawns went out past it, so
+   * the three southern blocks moved by the same -23 and the two northern ones by
+   * +24 — BS3 is still exactly 10 units behind the arch (which is the whole of
+   * its job: the receding roofline you see through the sliver of sky over the
+   * spandrel), BS1/BS2 still stand behind it, and BN1/BN2 still close the north
+   * vista. Their X moved as well, and that is NOT cosmetic: the cordon walls the
+   * new base districts are enclosed by run at level x ∓(kerb + 0.4) = ∓15.9 from
+   * z 44 to 73.7, and BN1 at its old x would have had its corner inside that run
+   * with a 0.9 m slot beside it — a hole in the boundary, which is the exact
+   * thing `tools/boundcheck.mjs` exists to catch.
+   */
+  { id: 'BS3', x: -4, z: -84, w: 9, d: 8, floors: 4, wallKey: 'plaster_sand', streetSide: 2, damage: 0.3, balconies: 0.2, roofProps: 4 },
+  { id: 'BS1', x: -19, z: -89, w: 20, d: 14, floors: 3, wallKey: 'plaster_sand', streetSide: 2, damage: 0.2, roofProps: 2 },
+  { id: 'BS2', x: 14, z: -91, w: 24, d: 16, floors: 2, wallKey: 'plaster_blue', streetSide: 2, damage: 0.2, roofProps: 2 },
+  { id: 'BN1', x: -23, z: 78, w: 20, d: 14, floors: 2, wallKey: 'plaster_cream', streetSide: 0, damage: 0.15, roofProps: 2 },
+  { id: 'BN2', x: 21, z: 80, w: 22, d: 16, floors: 3, wallKey: 'plaster_pink', streetSide: 0, damage: 0.15, roofProps: 2 },
 
   // ------------------------------------------------- IN-LANE HARD COVER --
   /**
@@ -1253,7 +1258,7 @@ export const BUILDINGS = [
  *   xT0..xT1  the tower/bastion, tallest and standing PROUD in +Z
  */
 export const GATE = {
-  z: -50.5,
+  z: -74,
   depth: 3.2,
   span: 5.6,
   height: 4.9,
@@ -1517,6 +1522,312 @@ export const SET_PIECES = {
     [-4.8, 24.0, 3],
     [4.9, -26.0, 4],
   ],
+};
+
+/* ========================================================================== */
+/* THE MAP GROWS — PART 1: THE MID STREET IS PRISED OPEN                      */
+/* ========================================================================== */
+/**
+ * "マップが狭いです、もっと広くして もっと作り込み広くしてほしい".
+ *
+ * The map was 1.5x already and it was still narrow, because 1.5x is a uniform
+ * scale: the mid street went from 13 m to 19.5 m of ground and stayed the same
+ * SHAPE, a corridor with a shed in it. What the middle of this map actually
+ * needed was room for a building — see part 3 — and there was none, because the
+ * two rows of shops stand ON the kerb line at level x ∓6.5.
+ *
+ * So the street is prised open and everything outside it moves out with it. This
+ * is a TRANSFORM for the same reason the 1.5x below is one, and the reason is
+ * worth restating: every adjacency in this plan is exact. `ALLEYS`'s A lane runs
+ * x -31..-20.5 because -20.5 is W1/W2/W3's outer face and -31 is BW1's inner
+ * face; the courtyard bulges to -36 because -36 is BW2's inner face; the north
+ * gatehouse sits at -29.2 because that is flush to the kerb. Retyping ninety
+ * literals would break some subset of that silently.
+ *
+ *   |x| <= WB    x * WK      the street itself, stretched
+ *   |x| >  WB    x + 9       everything outside it, translated
+ *
+ * `WK` is chosen so the two branches AGREE at `WB` (`WB * WK === WB + SPREAD`),
+ * so the map is continuous and nothing lands in a seam. Translating the outside
+ * is what preserves every adjacency: two faces that met still meet, because both
+ * moved by the same 9. Stretching the inside is what keeps the things authored
+ * ON the street — the kerb-line lamps, the facade hangings, the laundry lines,
+ * the median props — at the same fraction of it.
+ *
+ * WB IS 6.2 AND NOT 6.5 ON PURPOSE. The hangings are at x ∓6.45 and the cables
+ * and laundry at ∓6.35/6.40, i.e. bolted to a facade at ∓6.5. Put the breakpoint
+ * at 6.5 and they stretch to 13.87 against a wall at 15.5 — 2.4 m of daylight
+ * behind a rug that is nailed to a house. At 6.2 they are past the breakpoint,
+ * translate with the wall they hang on, and stay 0.05-0.15 out from it.
+ *
+ * WHAT IT COSTS: the mid street goes from 19.5 m to 46.5 m of ground, the map
+ * from 132 m to 189 m across, and NOTHING ELSE MOVES RELATIVE TO ANYTHING ELSE.
+ * Re-run `navcheck`, `lanecheck`, `sitecheck` and `boundcheck`.
+ *
+ * IT IS ALSO REPEATED IN `src/match/airstrike.js`, which authors eight anchors
+ * on facades in this same space and would otherwise drop all eight — see the
+ * note there. `src/match/sites.js` does NOT need it: all three zones and both
+ * spawn clusters are on the centreline now, where `widenX` is the identity.
+ */
+export const SPREAD = 9.0;
+const WB = 6.2;
+const WK = 1 + SPREAD / WB;
+
+/** The transform. Exported so the tools and `airstrike` can agree with it. */
+export function widenX(x) {
+  const a = x < 0 ? -x : x;
+  return a <= WB ? x * WK : x + (x < 0 ? -SPREAD : SPREAD);
+}
+
+const wRect = (r) => { r[0] = widenX(r[0]); r[2] = widenX(r[2]); };
+
+STREET.halfWidth = widenX(STREET.halfWidth);
+STREET.kerb = widenX(STREET.kerb);
+
+for (const a of ALLEYS) wRect(a.rect);
+for (const f of FLAT) wRect(f);
+for (const t of RELIEF.terraces) wRect(t.rect);
+for (const d of RELIEF.decks) wRect(d.rect);
+for (const b of RELIEF.blocks) wRect(b.rect);
+for (const k of KEEPOUT) k[0] = widenX(k[0]);
+// A sitework's WIDTH is a piece of masonry and does not stretch; only where it
+// stands does. Same rule as a building's `w`.
+for (const p of SITEWORKS) p.x = widenX(p.x);
+for (const b of BUILDINGS) b.x = widenX(b.x);
+// The gate spans the street, so its plan follows it. `span` is xR0 - xL1 and
+// both of those are inside WB, so it stretches by WK rather than translating.
+for (const k of ['xL0', 'xL1', 'xR0', 'xR1', 'xT0', 'xT1', 'outerW']) GATE[k] = widenX(GATE[k]);
+GATE.span *= WK;
+for (const key of ['stalls', 'jerseys', 'sandbagWalls', 'wrecks', 'palms', 'lamps', 'tyres', 'rubble']) {
+  for (const p of SET_PIECES[key]) p[0] = widenX(p[0]);
+}
+// [x0, y0, z0, x1, y1, z1, …] — both ends, and the y's are facade heights.
+for (const p of SET_PIECES.cables) { p[0] = widenX(p[0]); p[3] = widenX(p[3]); }
+for (const p of SET_PIECES.laundry) { p[0] = widenX(p[0]); p[3] = widenX(p[3]); }
+for (const p of SET_PIECES.hangings) p[0] = widenX(p[0]);
+
+/* ========================================================================== */
+/* THE MAP GROWS — PART 2: A BASE DISTRICT AT EACH END                        */
+/* ========================================================================== */
+/**
+ * "それぞれの拠点から近いところにエリアを作り、中央部に１つさらに設置して そうすることで
+ *  自陣プラス中央部を取るようになるので" — and the reason this needed 24 units of new
+ * map at each end rather than just moving two circles.
+ *
+ * The three zones used to sit on the equidistant line at level z 0, 42.2 m
+ * apart, for a reason `src/match/sites.js` still explains at length: domination
+ * never swaps sides, so any route advantage becomes permanent. The player's
+ * answer to that is better than the old one — give each side a zone of its OWN
+ * next to its OWN base and make the middle the thing worth fighting over — and
+ * it needs the bases to be somewhere. The spawns were at z ∓39.4, which is
+ * INSIDE the play box, three metres behind the last cross street; there was
+ * nowhere to put a zone "near the base" that was not already the base.
+ *
+ * So both ends of the street grow. The spawn clusters go out to z ∓64.5/-66.5,
+ * a row of three blocks goes in between each spawn and its plaza (two mouths
+ * 6.7 units wide, so nobody is spawn-trapped behind one door), and the ZONE goes
+ * in the plaza the two big cross-street blocks already framed: zone A between W5
+ * and E5 at level (0, 38), zone B between W4 and E4 at (0, -40).
+ *
+ *   zone -> its own base   26.5 units = 39.8 m, IDENTICAL for both sides
+ *   zone -> the cathedral  39 units   = 58.5 m, identical for both
+ *   zone -> zone           78 units   = 117 m
+ *
+ * against 42.2 / 42.2 / 84.3 m before. Everything below is authored in WIDENED
+ * space, because it is appended AFTER the transform above — the district is new
+ * ground and has no old adjacency to preserve.
+ *
+ * Both districts are enclosed by `buildCordon`, and for free: `cordonRuns()`
+ * derives its runs from `STREET.kerb` and from W5/E5/W4/E4's outer faces and the
+ * gate, all of which moved, so the compound walls follow the street to its new
+ * ends without a line changing in `src/world/cordon.js`.
+ */
+BUILDINGS.push(
+  /* ---- NORTH: the attack's district ------------------------------------- */
+  { id: 'N1', x: -12.5, z: 54, w: 6, d: 8, floors: 2, wallKey: 'plaster_sand', streetSide: 0, secondarySide: 1, damage: 0.4, balconies: 0.35, doorBays: { 0: 1 }, roofProps: 4 },
+  /**
+   * N2 and S2 are K1 and K2's replacements, and they are those two buildings'
+   * specs verbatim (footprint, storey height, door bays, through route, room
+   * plan) with a new position and a new coat of plaster. That is deliberate:
+   * every one of those numbers is a configuration `indoorcheck` and
+   * `throughcheck` already pass on — a 3-bay face whose bay-0 door lines up with
+   * the bay-1 door opposite, and a straight route between them past the end of
+   * the counter — and inventing a new one to prove again would be inventing a
+   * new way to fail. The mantle ladder onto each roof comes with them, below.
+   */
+  { id: 'N2', x: 0, z: 54, w: 5.4, d: 5.4, floors: 1, groundH: 3.2, wallKey: 'plaster_cream', streetSide: 0, secondarySide: 2, damage: 0.3, doorBays: { 0: 0, 2: 1 }, parapetH: 0.6, enterable: true, roofProps: 2,
+    route: [['s0', [0.21, 0.25], [0.21, 0.75], 's2']],
+    rooms: [{ walls: [], furnish: [{ kind: 'shop', x0: 0.0, z0: 0.0, x1: 1.0, z1: 1.0 }] }] },
+  { id: 'N3', x: 12.5, z: 54, w: 6, d: 8, floors: 2, wallKey: 'plaster_blue', streetSide: 0, secondarySide: 3, damage: 0.4, balconies: 0.35, doorBays: { 0: 1 }, roofProps: 4 },
+
+  /* ---- SOUTH: the defence's district ------------------------------------ */
+  { id: 'S1', x: -12.5, z: -56, w: 6, d: 8, floors: 2, wallKey: 'plaster_pink', streetSide: 2, secondarySide: 1, damage: 0.45, balconies: 0.3, doorBays: { 2: 1 }, roofProps: 4 },
+  { id: 'S2', x: 0, z: -56, w: 5.6, d: 6.2, floors: 1, groundH: 3.3, wallKey: 'plaster_blue', streetSide: 2, secondarySide: 0, damage: 0.45, doorBays: { 2: 1, 0: 0 }, parapetH: 0.6, enterable: true, roofProps: 2,
+    route: [['s0', [0.22, 0.25], [0.22, 0.75], 's2']],
+    rooms: [{ walls: [], furnish: [{ kind: 'storage', x0: 0.0, z0: 0.0, x1: 1.0, z1: 1.0 }] }] },
+  { id: 'S3', x: 12.5, z: -56, w: 6, d: 8, floors: 2, wallKey: 'plaster_sand', streetSide: 2, secondarySide: 3, damage: 0.45, balconies: 0.3, doorBays: { 2: 1 }, roofProps: 4 }
+);
+
+/**
+ * The mantle chain onto N2's and S2's roofs, K1's and K2's verbatim and for the
+ * same reason: `tools/floorcheck.mjs` floods the real player capsule over the
+ * level and an `enterable` block whose roof it cannot reach is a cul-de-sac it
+ * reports. Ground -> 1.4/1.45 -> 2.6/2.7 -> the 3.2/3.3 m parapet, every rung
+ * under `MOVE.mantle.maxHeight` = 1.85. Kept off the door bay (both doors are on
+ * the west half of their face) and out of the spawn ranks' 1.95 m.
+ */
+RELIEF.blocks.push(
+  { id: 'N2 step 2', rect: [1.3, 56.75, 2.85, 58.05], h: 2.6, key: 'metal_green' },
+  { id: 'N2 step 1', rect: [1.3, 58.05, 2.8, 59.65], h: 1.4, key: 'metal_blue' },
+  { id: 'S2 step 2', rect: [1.3, -60.55, 2.85, -59.1], h: 2.7, key: 'metal_blue' },
+  { id: 'S2 step 1', rect: [1.3, -62.25, 2.8, -60.55], h: 1.45, key: 'metal_green' }
+);
+
+/**
+ * THE MASS ON THE TWO NEW POINTS.
+ *
+ * A zone in the middle of a 46.5 m street is the "剥き出し" failure the whole
+ * `SITEWORKS` table was written to fix, and these two are worse off than the old
+ * courtyards were: a courtyard at least has walls. `sitecheck` counts mass
+ * 0.9-2.8 m over the zone floor inside the 8 m circle and wants 12 m² of it and
+ * six standing-cover points, so each plaza gets six pieces in the same 3.2-5.0
+ * authored band the courtyard pieces use — outside `standRing`'s 4 m forward
+ * spawn ring, inside the capture circle:
+ *
+ *   two SCREENS on the arc the CENTRE is approached from, so the side rotating
+ *     up from the cathedral cannot read the point off the street;
+ *   two PLINTHS east and west, waist-high mass ON the point;
+ *   one WALL on the base side, which is what a side retakes its own point from;
+ *   one PIER at 2.95 m — over the cover line on purpose, a chokepoint splitting
+ *     the 46.5 m frontage rather than cover on the point.
+ *
+ * Nothing spans more than 3.6 units of a 31-unit street, so A* crosses every one
+ * of them. `navcheck` is the gate.
+ */
+SITEWORKS.push(
+  { id: 'A screen west', kind: 'wall', x: -2.6, z: 34.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'A screen east', kind: 'wall', x: 2.6, z: 34.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'A plinth west', kind: 'plinth', x: -3.9, z: 38.0, w: 1.9, d: 1.6, h: 1.3, key: 'concrete' },
+  { id: 'A plinth east', kind: 'plinth', x: 3.9, z: 38.0, w: 1.9, d: 1.6, h: 1.3, key: 'concrete' },
+  { id: 'A retake wall', kind: 'wall', x: 0.0, z: 41.8, w: 3.6, d: 0.6, h: 1.45, key: 'plaster_blue', revet: true },
+  { id: 'A pier', kind: 'pier', x: 0.0, z: 32.8, w: 2.4, d: 2.4, h: 2.95, key: 'concrete' },
+
+  { id: 'B screen west', kind: 'wall', x: -2.6, z: -36.4, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'B screen east', kind: 'wall', x: 2.6, z: -36.4, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'B plinth west', kind: 'plinth', x: -3.9, z: -40.0, w: 1.9, d: 1.6, h: 1.3, key: 'concrete' },
+  { id: 'B plinth east', kind: 'plinth', x: 3.9, z: -40.0, w: 1.9, d: 1.6, h: 1.3, key: 'concrete' },
+  { id: 'B retake wall', kind: 'wall', x: 0.0, z: -43.8, w: 3.6, d: 0.6, h: 1.45, key: 'plaster_pink', revet: true },
+  { id: 'B pier', kind: 'pier', x: 0.0, z: -34.6, w: 2.4, d: 2.4, h: 2.95, key: 'concrete' }
+);
+
+/**
+ * And the districts get dressed like the rest of the map rather than left as
+ * two lots of tarmac — "もっと作り込み". All in widened space.
+ */
+SET_PIECES.stalls.push(
+  [-8.2, 47.0, 1.5, 2.4], [8.4, 46.0, -1.6, 2.4],
+  [-8.4, -49.0, 1.5, 2.4], [8.6, -48.0, -1.6, 2.4],
+  [-11.0, 61.5, 0.1, 2.3], [11.2, -63.5, 3.1, 2.3],
+  [-13.6, 30.0, 1.5, 2.2], [13.8, -32.0, -1.6, 2.2]
+);
+SET_PIECES.jerseys.push(
+  [-7.0, 44.6, 0.1], [7.2, 44.6, -0.1], [-7.0, -46.6, 0.1], [7.2, -46.6, -0.1],
+  [-13.0, 51.0, 1.55], [13.2, 51.0, 1.55], [-13.0, -53.0, 1.55], [13.2, -53.0, 1.55],
+  [-6.6, 58.5, 0.1], [6.8, -60.5, 0.1]
+);
+SET_PIECES.sandbagWalls.push(
+  [-6.4, 36.5, 1.57, 3.0], [6.6, 36.5, 1.57, 3.0],
+  [-6.4, -38.5, 1.57, 3.0], [6.6, -38.5, 1.57, 3.0],
+  [-10.5, 58.0, 0.0, 3.2], [10.7, -60.0, 0.0, 3.2],
+  [-13.8, 66.0, 0.0, 2.8], [13.9, -68.0, 0.0, 2.8]
+);
+SET_PIECES.wrecks.push(
+  [-11.5, 42.0, 1.4, 0], [11.7, -44.0, 1.5, 3],
+  [-12.8, 63.0, 0.3, 0], [12.9, -65.0, -0.4, 2],
+  [-13.2, 20.0, 1.45, 0], [13.4, -22.0, 1.5, 2]
+);
+SET_PIECES.palms.push(
+  [-9.8, 44.0, 1.0], [9.9, -46.0, 1.0],
+  [-13.4, 56.0, 0.95], [13.5, -58.0, 0.95],
+  [-14.0, 8.0, 1.05], [14.1, -10.0, 1.0]
+);
+SET_PIECES.lamps.push(
+  [-14.9, 46.0, -Math.PI / 2], [14.9, 40.0, Math.PI / 2],
+  [-14.9, -48.0, -Math.PI / 2], [14.9, -42.0, Math.PI / 2],
+  [-14.9, 62.0, -Math.PI / 2], [14.9, -64.0, Math.PI / 2],
+  [-14.9, 16.0, -Math.PI / 2], [14.9, -18.0, Math.PI / 2]
+);
+SET_PIECES.rubble.push(
+  [-13.0, 47.5, 2.4, 30], [13.2, -49.5, 2.4, 30],
+  [-9.0, 67.0, 2.0, 24], [9.2, -69.0, 2.0, 24],
+  [-14.2, 26.0, 2.2, 26], [14.4, -28.0, 2.2, 26]
+);
+SET_PIECES.tyres.push(
+  [-12.2, 45.0, 4], [12.4, -47.0, 4],
+  [-8.0, 59.0, 3], [8.2, -61.0, 3],
+  [-14.4, 12.0, 4], [14.6, -14.0, 3]
+);
+
+/* ========================================================================== */
+/* THE MAP GROWS — PART 3: THE CATHEDRAL IN THE MIDDLE                        */
+/* ========================================================================== */
+/**
+ * "また中央部は屋内にしてほしい なので中央部に広い大聖堂を配置してそこを戦闘激化させて
+ *  爆破させたり崩落もあり … もっと屋内での戦闘も起きるようになっていないのが今のマップの
+ *  勿体無いところです".
+ *
+ * ZONE C IS INSIDE THIS BUILDING. That is the entire design, and everything else
+ * about it follows:
+ *
+ *   IT IS NOT IN `BUILDINGS`. It is not a footprint with a facade programme —
+ *   it is an aisled basilica with an arcade, a clerestory, a crossing dome, an
+ *   apse and a campanile, and `buildBuilding` has no vocabulary for any of that.
+ *   `src/world/cathedral.js` builds it, `WorldSystem` calls that instead of the
+ *   kit, and it is kept out of `BUILDINGS` so nothing that walks that array
+ *   (`inBuilding`, `setDoorways`, `buildFeatures`, `buildLinks`, `cordonRuns`,
+ *   and the four interior gates, all of which index `infos` against `BUILDINGS`)
+ *   has to be taught a special case.
+ *
+ *   IT PUBLISHES AN INTERIOR VOLUME. `src/ai/nav.js` is a 2.5D height field
+ *   built from one ray per cell dropped from above, so inside any roofed
+ *   footprint that ray finds the ROOF and the storey under it does not exist to
+ *   A*. `NavGrid._carveInteriors` re-samples those cells from inside using
+ *   `world.interiorVolumes`, which is what finally put bots indoors on this map
+ *   (0 -> ~2620 ground-floor cells, 3/29 men ever inside -> 23/29). A cathedral
+ *   that did not publish one would be the most beautiful room on the map with a
+ *   capture point in it that no bot could ever walk to. @see `_interiorVolumes`.
+ *
+ *   IT IS BOMBABLE. Three strike anchors on it and a salvo that fires all three
+ *   as one event — `src/match/airstrike.js`. Everything is baked at boot: the
+ *   fracture, the per-chunk closed-form trajectory, the settled pose, the mound's
+ *   collision proxy and the nav patch. The frame it fires does two booleans and
+ *   one uniform write.
+ *
+ * THE PLAN, in authored units (x1.5 for metres of ground; heights are metres and
+ * never scale). It stands on the street centreline between the two connectors,
+ * where K1 and K2 used to be, leaving 5.5 units = 8.25 m of street down each
+ * flank — so the mid lane is still a route for anybody who does not want to
+ * fight through a nave, and the two connectors still meet it.
+ */
+export const CATHEDRAL = {
+  id: 'CATH',
+  /** Plan: 20 x 30 authored = 30 x 45 m of ground. Scaled with everything else. */
+  x: 0,
+  z: -1,
+  w: 20,
+  d: 30,
+  /** Every one of these is METRES and is NOT scaled. @see the 1.5x note below. */
+  wallT: 0.85,
+  /** The walking surface inside, a kerb over the street so water runs out. */
+  floorY: 0.16,
+  /** Aisle roof / gallery deck, nave roof, crossing dome crown, campanile. */
+  aisleY: 7.4,
+  naveY: 15.0,
+  domeY: 23.5,
+  towerY: 29.0,
+  /** Arcade: eight bays of piers down each side. */
+  bays: 8,
+  pierW: 1.4,
 };
 
 /* ========================================================================== */

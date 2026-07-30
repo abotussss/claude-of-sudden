@@ -61,6 +61,28 @@ const L = (x, z) => [x * SCALE, z * SCALE];
 const spawnRow = (r) => r.map(([x, z, y]) => [x * SCALE, z * SCALE, y]);
 
 /**
+ * …AND THE MID STREET WAS PRISED OPEN IN THE SAME PASS THE ZONES MOVED IN.
+ *
+ * `widenX` in src/world/layout.js stretches everything inside the old kerb line
+ * and TRANSLATES everything outside it by 9 authored units, so the mid street
+ * went from 13 to 31 units across and the two building rows, both lanes and both
+ * courtyards moved out with their walls. It is repeated here — like `SCALE`, and
+ * for the same reason: `match` may not import `world`. IF ONE MOVES, MOVE THE
+ * OTHER; `tools/navcheck.mjs` fails loudly the moment a point lands in a wall.
+ *
+ * `ZONES` and `SPAWNS` do NOT use it. Every one of them is on the street
+ * centreline, where this transform is the identity — which is the whole reason
+ * they are authored as `L(0, …)` below and read as raw plan coordinates.
+ * `SITES`, the DEMOLITION plant circles, is authored on the two courtyards and
+ * every one of its points would otherwise be nine units inside a building.
+ */
+const SPREAD = 9.0;
+const WB = 6.2;
+const WK = 1 + SPREAD / WB;
+const widenX = (x) => (Math.abs(x) <= WB ? x * WK : x + Math.sign(x) * SPREAD);
+const LW = (x, z) => [widenX(x) * SCALE, z * SCALE];
+
+/**
  * ────────────────────────────────────────────────────────────────────────────
  * WHY THE PLANT ZONE IS NOT IN THE FIRST-FLOOR COMMAND ROOM
  * ────────────────────────────────────────────────────────────────────────────
@@ -115,8 +137,8 @@ export const SITES = [
      * defender can physically stand on to cut the charge (swept cell by cell;
      * the missing 8 % is the strip against the perimeter wall).
      */
-    level: L(-28.0, -7.0),
-    fallback: L(-26.0, -5.0),
+    level: LW(-28.0, -7.0),
+    fallback: LW(-26.0, -5.0),
     /**
      * Where defenders set up: on the mouth their own rotation arrives through,
      * which for both sites is the lane from the south, ~9.6 m off the charge —
@@ -125,7 +147,7 @@ export const SITES = [
      * spot, close enough to contest a plant the moment it starts. Open
      * courtyard ground, NOT inside a building — see groundPoint's roof note.
      */
-    holdLevel: L(-24.0, -12.0),
+    holdLevel: LW(-24.0, -12.0),
     /**
      * THE ATTACK'S SECOND WAY IN. @see `MatchSystem._assignObjectives`.
      *
@@ -135,14 +157,14 @@ export const SITES = [
      * comes in through a different hole in a different wall. Null-safe: if this
      * does not resolve onto reachable ground the flank is simply not ordered.
      */
-    flankLevel: L(-13.0, -4.5),
+    flankLevel: LW(-13.0, -4.5),
   },
   {
     id: 'B',
     name: 'EAST COURTYARD',
-    level: L(28.0, -7.0),
-    fallback: L(26.0, -5.0),
-    holdLevel: L(24.0, -12.0),
+    level: LW(28.0, -7.0),
+    fallback: LW(26.0, -5.0),
+    holdLevel: LW(24.0, -12.0),
     /**
      * (15, -5) rather than the mirror of A's (-13, -4.5): the east arm of
      * connector 2 is not the west arm's mirror image. Probed cell by cell, the
@@ -150,7 +172,7 @@ export const SITES = [
      * therefore a cell no A* route reaches (0 of 15 attack spawns). Two metres
      * along the connector it is open gravel and all 15 reach it.
      */
-    flankLevel: L(15.0, -5.0),
+    flankLevel: LW(15.0, -5.0),
   },
 ];
 
@@ -222,31 +244,80 @@ export const SITES = [
  * three-lane map is the rotation; a staging alley on the way to one of them was
  * a demolition answer to a demolition problem (fifteen men, one objective).
  */
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * AND THEN THE PLAYER REPLACED THE WHOLE ARGUMENT ABOVE WITH A BETTER ONE
+ * ════════════════════════════════════════════════════════════════════════════
+ * "ドミネーションのエリアの距離はもっと間を空けて 距離が近すぎ"
+ * "それぞれの拠点から近いところにエリアを作り、中央部に１つさらに設置して そうすることで
+ *  自陣プラス中央部を取るようになるので"
+ * "また中央部は屋内にしてほしい なので中央部に広い大聖堂を配置して"
+ *
+ * The three-on-the-equidistant-line layout above solved the fairness problem and
+ * created two others, and the player named both. The zones were 42.2 m apart —
+ * one sprint, so there was no rotation, only a scrum — and all three were
+ * outdoors on a map that had just learnt how to fight indoors.
+ *
+ * ONE ZONE BESIDE EACH BASE AND ONE IN THE MIDDLE is the genre's answer and it
+ * is fair for a better reason than equidistance: it is SYMMETRIC. Each side is
+ * 39.8 m from its own point and 98.3 m from the other's, and the middle is
+ * 58.5 m from both. Nobody starts ahead; what each side starts with is one point
+ * it should hold and one it has to go and take.
+ *
+ *                          A (north)     C (cathedral)    B (south)
+ *   level                  (0, 38)       (0, -1)          (0, -40)
+ *   from the north base       39.8 m        98.3 m          157 m
+ *   from the south base        157 m        98.3 m         39.8 m
+ *   A-C 58.5 m     C-B 58.5 m     A-B 117 m
+ *
+ * against 42.2 / 42.2 / 84.3 m before.
+ *
+ * C IS INSIDE A BUILDING, and that is the part that needed the most from the
+ * rest of the engine. `src/world/cathedral.js` puts a 30 x 45 m aisled basilica
+ * on the street centreline and publishes its ground storey on
+ * `world.interiorVolumes`; `NavGrid._carveInteriors` re-samples those cells from
+ * inside, which is the only reason a bot can walk to the crossing at all. The
+ * long note at the top of the A entry in `SITES` — "a first-floor plant zone
+ * would be a charge no bot could ever defuse" — is still true of an UPPER floor
+ * and is no longer true of a ground one. That is what changed underneath this
+ * file, and it is what makes an indoor capture point possible.
+ *
+ * All three are on the street centreline, at level x 0. That is why nothing here
+ * repeats `widenX` from src/world/layout.js: the mid street was prised open from
+ * 13 to 31 authored units in this pass, and the transform that did it is the
+ * identity at x 0. `KEEPOUT` in layout.js duplicates all three centres — IF ONE
+ * MOVES, MOVE THE OTHER.
+ */
 export const ZONES = [
   {
     id: 'A',
-    name: 'WEST COURTYARD',
-    level: L(-28.0, 0.0),
-    /** Two units south-east, still inside the courtyard, off the north wall. */
-    fallback: L(-27.0, -2.5),
-    holdLevel: L(-28.0, 0.0),
+    name: 'NORTH PLAZA',
+    /** In the street between W5 and E5, the pair of blocks that already framed
+     *  it. The circle is r8 and the plaza is 31 units wide, so it fits clear of
+     *  both facades. */
+    level: L(0.0, 38.0),
+    /** Two units north, off the retake wall. */
+    fallback: L(0.0, 40.0),
+    holdLevel: L(0.0, 38.0),
     flankLevel: null,
   },
   {
     id: 'C',
-    name: 'MID STREET',
-    level: L(0.0, 0.0),
-    /** Further into the gap, away from K2's wall. */
-    fallback: L(0.0, 2.5),
-    holdLevel: L(0.0, 0.0),
+    name: 'THE CATHEDRAL',
+    /** The crossing, under the dome. Indoors, and reachable only because
+     *  `world.interiorVolumes` now has the cathedral on it. */
+    level: L(0.0, -1.0),
+    /** One bay south down the nave, still under the vault. */
+    fallback: L(0.0, -5.0),
+    holdLevel: L(0.0, -1.0),
     flankLevel: null,
   },
   {
     id: 'B',
-    name: 'EAST COURTYARD',
-    level: L(28.0, 0.0),
-    fallback: L(27.0, -2.5),
-    holdLevel: L(28.0, 0.0),
+    name: 'SOUTH PLAZA',
+    level: L(0.0, -40.0),
+    fallback: L(0.0, -42.0),
+    holdLevel: L(0.0, -40.0),
     flankLevel: null,
   },
 ];
@@ -285,20 +356,50 @@ export const ZONES = [
  * has the most empty ground around it, which only works if there are enough of
  * them to choose between.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * BOTH CLUSTERS MOVED OUT INTO THE TWO NEW BASE DISTRICTS
+ * ────────────────────────────────────────────────────────────────────────────
+ * They were at level z ∓34.2..∓44.6, which is three units behind the last cross
+ * street — INSIDE the play box. There was nowhere to put "a zone near the base"
+ * that was not already the base, so both ends of the street grew by 24 units of
+ * authored map (see `THE MAP GROWS` in src/world/layout.js) and the clusters went
+ * out into them:
+ *
+ *   x  -6.0   0.0   +6.0             (the mid lane's kerb line is x ∓15.5 now)
+ *   z  60.1  62.3  64.5  66.7  68.9   attack   (row of blocks N1-N3 at z 50..58)
+ *   z -62.1 -64.3 -66.5 -68.7 -70.9   defence  (row of blocks S1-S3 at -60..-52)
+ *
+ * Still five ranks of three, because `_spawnTeam` walks this list modulo its
+ * length and seven points for fifteen men stacks two bodies per point. Still
+ * facing down the map. `KEEPOUT` in layout.js reserves a 9.5-unit circle on each
+ * cluster centre, which is what stops the dressing dropping a crate on a
+ * respawn.
+ *
+ * THE SEPARATION IS STILL LOAD-BEARING, and it is now enormous: the closest
+ * attack/defence pair is 131 units = 197 m against an `Agent.viewRange` of 58 m,
+ * so the round still opens with two teams walking. What changed is that neither
+ * team is walking toward the other — each walks 40 m to its own point first,
+ * which is the whole shape of the mode the player asked for.
+ *
+ * x ∓6 rather than ∓5: these are authored in WIDENED space and the street they
+ * stand in is 46.5 m across, so the cluster is spread over 18 m of it and each
+ * rank still clears the containers at the foot of N2/S2 by ~2 m.
+ */
 export const SPAWNS = {
   attack: spawnRow([
-    [-5.0, 44.6, Math.PI], [0.0, 44.6, Math.PI], [5.0, 44.6, Math.PI],
-    [-5.0, 42.0, Math.PI], [0.0, 42.0, Math.PI], [5.0, 42.0, Math.PI],
-    [-5.0, 39.4, Math.PI], [0.0, 39.4, Math.PI], [5.0, 39.4, Math.PI],
-    [-5.0, 36.8, Math.PI], [0.0, 36.8, Math.PI], [5.0, 36.8, Math.PI],
-    [-5.0, 34.2, Math.PI], [0.0, 34.2, Math.PI], [5.0, 34.2, Math.PI],
+    [-6.0, 68.9, Math.PI], [0.0, 68.9, Math.PI], [6.0, 68.9, Math.PI],
+    [-6.0, 66.7, Math.PI], [0.0, 66.7, Math.PI], [6.0, 66.7, Math.PI],
+    [-6.0, 64.5, Math.PI], [0.0, 64.5, Math.PI], [6.0, 64.5, Math.PI],
+    [-6.0, 62.3, Math.PI], [0.0, 62.3, Math.PI], [6.0, 62.3, Math.PI],
+    [-6.0, 60.1, Math.PI], [0.0, 60.1, Math.PI], [6.0, 60.1, Math.PI],
   ]),
   defend: spawnRow([
-    [-5.0, -44.6, 0], [0.0, -44.6, 0], [5.0, -44.6, 0],
-    [-5.0, -42.0, 0], [0.0, -42.0, 0], [5.0, -42.0, 0],
-    [-5.0, -39.4, 0], [0.0, -39.4, 0], [5.0, -39.4, 0],
-    [-5.0, -36.8, 0], [0.0, -36.8, 0], [5.0, -36.8, 0],
-    [-5.0, -34.2, 0], [0.0, -34.2, 0], [5.0, -34.2, 0],
+    [-6.0, -70.9, 0], [0.0, -70.9, 0], [6.0, -70.9, 0],
+    [-6.0, -68.7, 0], [0.0, -68.7, 0], [6.0, -68.7, 0],
+    [-6.0, -66.5, 0], [0.0, -66.5, 0], [6.0, -66.5, 0],
+    [-6.0, -64.3, 0], [0.0, -64.3, 0], [6.0, -64.3, 0],
+    [-6.0, -62.1, 0], [0.0, -62.1, 0], [6.0, -62.1, 0],
   ]),
 };
 

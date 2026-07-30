@@ -52,8 +52,18 @@ export function buildGround(A, rng) {
   // it — at a fixed 84 the quad would be 3 m across, coarser than the 7 m
   // shoulder the flattening has to resolve, and the lanes would sit in a
   // visible crease.
-  const S = 168 * SCALE;
-  const N = Math.round(84 * SCALE);
+  /**
+   * 168 -> 220 AUTHORED UNITS. The map grew a base district at each end: the
+   * street runs level z -80..70, its cordon closes at ∓83.7 and the background
+   * blocks behind that reach z -99 and +88, i.e. ∓148 m of scaled ground. At
+   * 168 the plane was ±126 m and the three southern blocks would have hung off
+   * the edge of the world with sky under them. The SEGMENT COUNT goes with it,
+   * because the quad has to stay at 2 m — coarser than that and the 7 m
+   * flattening shoulder cannot be resolved and the lanes sit in a visible
+   * crease. 165² quads against 126²: +23k triangles on one merged mesh.
+   */
+  const S = 220 * SCALE;
+  const N = Math.round(110 * SCALE);
   const terrain = new THREE.PlaneGeometry(S, S, N, N);
   terrain.rotateX(-Math.PI / 2);
   const pa = terrain.getAttribute('position');

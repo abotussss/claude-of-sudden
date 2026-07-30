@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Assembler } from './builder.js';
-import { BUILDINGS, STREET, SET_PIECES, GATE, SCALE, RELIEF, ALLEYS, SITEWORKS, FLAT } from './layout.js';
+import { BUILDINGS, STREET, SET_PIECES, GATE, SCALE, RELIEF, ALLEYS, SITEWORKS, FLAT, CATHEDRAL } from './layout.js';
+import { buildCathedral } from './cathedral.js';
 import { buildGround } from './ground.js';
 import { buildBuilding, collapseRoof } from './buildings.js';
 import { buildRelief } from './relief.js';
@@ -89,16 +90,30 @@ const LEVEL_TZ = 1.34;
  */
 const LIGHT_SLOTS = 20;
 
-/** Spawn points in LEVEL space: [x, z, yaw, tag]. */
+/**
+ * Spawn points in LEVEL space: [x, z, yaw, tag].
+ *
+ * These are the DEV/free-roam spawns, not the match's — but they are also the
+ * only seeds `tools/boundcheck.mjs` floods from, so every reachable pocket of
+ * the map has to be connected to one of them or that gate simply never looks at
+ * it. Both base districts, the cathedral and the two new plazas are on the list
+ * for that reason as much as for the camera's.
+ *
+ * Authored in WIDENED level space — the mid street's kerb is at x ∓15.5 now, so
+ * a point at x ∓26 is in a lane rather than against a shopfront. @see `widenX`.
+ */
 const SPAWNS = [
   [0.4, 28.5, Math.PI, 'north cross'],
-  [-2.4, 40.0, Math.PI, 'attack pocket'],
+  [-2.4, 60.0, Math.PI, 'attack pocket'],
+  [0.0, 47.0, Math.PI, 'zone A plaza'],
   [3.6, 18.0, Math.PI, 'mid street'],
+  [0.0, -1.0, Math.PI, 'the cathedral crossing'],
   [-3.4, -12.5, 0, 'mid south'],
   [2.6, -30.0, 0, 'south cross'],
-  [-1.0, -42.0, 0, 'defend pocket'],
-  [26.0, -4.0, -Math.PI / 2, 'site B courtyard'],
-  [-26.0, -4.0, Math.PI / 2, 'site A courtyard'],
+  [0.0, -49.0, 0, 'zone B plaza'],
+  [-1.0, -62.0, 0, 'defend pocket'],
+  [35.0, -4.0, -Math.PI / 2, 'site B courtyard'],
+  [-35.0, -4.0, Math.PI / 2, 'site A courtyard'],
 ];
 
 export class WorldSystem {
@@ -165,6 +180,16 @@ export class WorldSystem {
     // `inSitework` before the dressing pass drops anything, so a crate cannot be
     // scattered inside a pier.
     buildSiteWorks(A, rng);
+    /**
+     * THE CATHEDRAL, and it is built here for two ordering reasons rather than
+     * one. It has to be up before the dressing pass, because `dressing.isOpen`
+     * consults `inCathedral` and a stall pitched in the chancel is the same bug
+     * as one pitched inside a pier; and it has to be up before `A.finalize`,
+     * because its floor, its walls and its dome are collision the nav grid is
+     * built from. It draws from its OWN fixed-seed rng stream — see the note at
+     * the top of the module — so it cannot move a single prop placed below.
+     */
+    this.cathedral = buildCathedral(A);
     dressStreet(A, rng);
     dressBuildings(A, rng, infos);
     scatterDebris(A, rng);
@@ -223,7 +248,21 @@ export class WorldSystem {
      * went to 1.5x, everything outside 62 m would simply have no nav in it and
      * both spawns would sit off the edge of the grid.
      */
-    const HB = 62 * SCALE;
+    /**
+     * 62 -> 86 AUTHORED UNITS, and this is the single most expensive line in
+     * the growth pass. The street now runs level z -80..70 and `buildCordon`
+     * closes it at ∓83.7, so a box at ±62 would leave both base districts —
+     * both SPAWNS — off the edge of the nav grid entirely. Sized to the
+     * cordon, plus a metre: 86 * 1.5 = 129 m.
+     *
+     * WHAT IT COSTS, measured: the grid goes 328x329 (108k cells, 518 ms) to
+     * 448x448 (~200k cells), i.e. 1.86x the cells, the rays and the memory.
+     * `NavGrid`'s open list is `Math.min(n, 1 << 18)` and therefore sized to the
+     * grid on its own, but A*'s `maxNodes` default of 24000 is NOT — it is a
+     * fixed cap, and an overflowing search reports "no route" silently rather
+     * than loudly. `navcheck` is the gate that would see it.
+     */
+    const HB = 86 * SCALE;
     this.bounds = new THREE.Box3(
       new THREE.Vector3(-HB, -2, -HB),
       new THREE.Vector3(HB, 26, HB)
@@ -248,7 +287,7 @@ export class WorldSystem {
      * most of the mass in both courtyards, and `FLAT` is the flattened play box
      * itself.
      */
-    this.layout = { BUILDINGS, STREET, SET_PIECES, GATE, SCALE, RELIEF, ALLEYS, SITEWORKS, FLAT };
+    this.layout = { BUILDINGS, STREET, SET_PIECES, GATE, SCALE, RELIEF, ALLEYS, SITEWORKS, FLAT, CATHEDRAL };
 
     const ms = performance.now() - t0;
     console.info(
@@ -298,6 +337,29 @@ export class WorldSystem {
     const c = Math.cos(LEVEL_YAW);
     const s = Math.sin(LEVEL_YAW);
     const out = [];
+    /**
+     * THE CATHEDRAL GOES ON THIS LIST FIRST, AND IF IT DID NOT THE WHOLE MIDDLE
+     * OF THE MAP WOULD BE A ROOM NO BOT COULD ENTER.
+     *
+     * It is not in `BUILDINGS` (see `CATHEDRAL` in layout.js for why), so the
+     * loop below cannot find it — but it is the biggest interior on the map by
+     * a factor of four and it has a CAPTURE POINT in the middle of it. Same
+     * shape of record as every other one: an oriented box on the level's own
+     * axes, the outer footprint (walls included, because the doorway a bot walks
+     * through is in the wall), and the height a downward ray must start at to
+     * find the floor rather than the vault.
+     */
+    if (this.cathedral) {
+      const k = this.cathedral;
+      const p = this.A.toWorld(k.cx, 0, k.cz, new THREE.Vector3());
+      out.push({
+        building: k.id,
+        cx: p.x, cz: p.z, c, s,
+        hw: k.hw, hd: k.hd,
+        floorY: k.floorY,
+        probeY: k.probeY,
+      });
+    }
     for (const info of infos) {
       const spec = info.spec;
       if (!spec.enterable) continue;

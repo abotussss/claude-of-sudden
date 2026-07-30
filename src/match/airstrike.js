@@ -110,8 +110,34 @@ import { RULES } from './rules.js';
  * `L()` and `SCALE` are duplicated from sites.js deliberately, the same way
  * sites.js duplicates them from layout.js. IF ONE MOVES, MOVE THE OTHERS.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * …AND THEN THE MID STREET WAS PRISED OPEN, AND THAT IS A SECOND TRANSFORM
+ * ────────────────────────────────────────────────────────────────────────────
+ * Every anchor below is authored ON A FACADE. `widenX` in src/world/layout.js
+ * stretched the mid street from 13 to 31 authored units and TRANSLATED the two
+ * building rows, both lanes and both courtyards outward by 9 units to make room
+ * for the cathedral — so all eight of the original facades moved, and without
+ * this every one of the eight sites would land in mid air and `_findRoof` would
+ * drop it with the error it prints two hundred lines below. Exactly the failure
+ * the SCALE note above describes, for exactly the same reason.
+ *
+ * It is duplicated here rather than imported because `match` may not import
+ * `world`, the same way `SCALE` is and the same way `src/match/sites.js` now
+ * carries its own copy. IF ONE MOVES, MOVE THE OTHERS.
+ */
 const SCALE = 1.5;
-const L = (x, z) => [x * SCALE, z * SCALE];
+const SPREAD = 9.0;
+const WB = 6.2;
+const WK = 1 + SPREAD / WB;
+const widenX = (x) => (Math.abs(x) <= WB ? x * WK : x + Math.sign(x) * SPREAD);
+const L = (x, z) => [widenX(x) * SCALE, z * SCALE];
+/**
+ * The cathedral's own anchors are authored in the WIDENED plan (it is a new
+ * building and stands in the street the transform created), so they take the
+ * scale and not the widen. @see `CATHEDRAL` in src/world/layout.js.
+ */
+const LC = (x, z) => [x * SCALE, z * SCALE];
 
 /**
  * THE STRIKE SITES, authored in the level space `src/world/layout.js` uses.
@@ -165,6 +191,45 @@ const STRIKE_SITES = [
   { id: 'R4', name: 'EAST LINK', level: L(15.5, 24.1), face: [0, 1], reach: 3.4, kind: 'route' },
   // B lane's last run in to site B, west row's east face
   { id: 'R5', name: 'B APPROACH', level: L(21.3, 7.5), face: [1, 0], reach: 3.4, kind: 'route' },
+
+  /* ---- the cathedral ---------------------------------------------------- */
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * "そこを戦闘激化させて 爆破させたり崩落もあり キャッシュさせて定期的に爆破や崩落を
+   *  イベントで起こしてランダムで"
+   * ────────────────────────────────────────────────────────────────────────────
+   * The middle of the map is a 30 x 45 m cathedral now and the middle CAPTURE
+   * POINT is under its dome, so it is where the round concentrates by
+   * construction — which makes it the one building on the map where an event
+   * that takes a bay of roof off is guaranteed to be seen. It is also the one
+   * the player asked to be able to bring down.
+   *
+   * NOTHING NEW IS COMPUTED WHEN IT FIRES, and that is the whole reason these
+   * are three more entries in this table rather than a new system. Everything
+   * this file already bakes at boot it bakes for these too: the fracture (489
+   * chunks each, 1467 for the group), the closed-form per-chunk trajectory in
+   * four instanced attributes, the settled pose as a second matrix array to
+   * memcpy, the mound's collision proxy parked in the BVH on layer 0, and the
+   * nav patch as three flat arrays of the ~300 cells the mound actually changes.
+   * The frame it goes off does two booleans per mesh and one uniform write.
+   *
+   * WHERE THEY ARE. Two on the nave's west elevation and one on the east, all
+   * three anchored on the wall with `face` pointing out over the flanking
+   * street, 11 and 16 authored units apart so their 9-unit masses do not
+   * overlap. `_findRoof` searches inside the footprint and takes the HIGHEST
+   * plane it finds, so CATH-W and CATH-E come off the nave roof at 15 m and
+   * CATH-X — anchored on the crossing — comes off the dome at ~20 m.
+   *
+   * THE STREET EITHER SIDE IS ONLY 8.25 m WIDE, and that is handled rather than
+   * hoped: `_buildSite` measures the lane with a ray at chest height and scales
+   * the mound to leave `LANE_CLEAR` = 3.6 m of it walkable, and `_verifyRoutes`
+   * then re-proves every spawn/target route with ALL of them settled and takes
+   * a site's collision away entirely if it costs anybody one. A cathedral that
+   * sealed its own flank would be a capture point nobody could rotate to.
+   */
+  { id: 'CATH-W', name: 'CATHEDRAL NAVE', level: LC(-10.0, -11.0), face: [-1, 0], reach: 5.0, kind: 'vault' },
+  { id: 'CATH-X', name: 'CATHEDRAL CROSSING', level: LC(-10.0, 0.0), face: [-1, 0], reach: 5.0, kind: 'vault' },
+  { id: 'CATH-E', name: 'CATHEDRAL CHOIR', level: LC(10.0, 5.0), face: [1, 0], reach: 5.0, kind: 'vault' },
 ];
 
 /**
@@ -197,6 +262,23 @@ const STRIKE_SITES = [
 const SALVOS = [
   { id: 'EASTBLOCK', name: 'EAST BLOCK', members: ['MID', 'R4', 'EAST'], stagger: [0, 0.21, 0.44] },
   { id: 'WESTBLOCK', name: 'WEST BLOCK', members: ['WEST', 'R2', 'R1'], stagger: [0, 0.25, 0.47] },
+  /**
+   * THE CATHEDRAL COMING DOWN, and it is a salvo rather than three separate
+   * strikes for the reason the other two groups are: "大規模爆破で街が破壊される
+   * とか起きないね？街を破壊するようなイベントです". One bay of roof off one elevation
+   * is a hazard; three bays off both elevations and the dome, a fifth of a
+   * second apart, with 1467 chunks in the air and a five-column dust wall
+   * standing in the nave for twenty seconds, is an event.
+   *
+   * It is also the group `_pickSalvo` will usually choose, and that is not luck.
+   * `match` writes the centre of the fight to `setFocus` every few seconds and
+   * `_pickSalvo` takes the group with the highest `_focusWeight` — and the
+   * middle capture point is inside this building, so the fight is here. The
+   * scheduler is what makes it "定期的に … ランダムで": `RULES.airstrikeSalvoDelay`
+   * holds it off the opening of the round, `airstrikeInterval` is the random
+   * gap, and the draw is weighted, never fixed.
+   */
+  { id: 'CATHEDRAL', name: 'THE CATHEDRAL', members: ['CATH-W', 'CATH-X', 'CATH-E'], stagger: [0, 0.23, 0.46] },
 ];
 
 /**
@@ -287,11 +369,37 @@ const MASS_LEDGE = [
   { id: 'rail', mat: 0, size: [0.14, 0.85, 3.2], at: [1.15, -2.2, -1.2], cut: [1, 2, 8] },
 ];
 
-const MASS_FOR = { block: MASS_BLOCK, route: MASS_LEDGE };
+/**
+ * The VAULT mass: what comes off a cathedral rather than off a shop.
+ *
+ * A bay of the nave roof and the vault webbing under it, the parapet and coping
+ * along the eaves, the two pinnacles on the buttress heads either side of that
+ * bay, a strip of the clerestory wall so the wound runs down the elevation, and
+ * the flying buttress that was propping it. 489 chunks — between the block's 923
+ * and the ledge's 292, which is right: it is a bigger event than a parapet and a
+ * shallower one than a whole added storey, because the mass has to fall into an
+ * 8.25 m street rather than a 14 m lane.
+ *
+ * TWO MATERIALS, unlike the route mass. A cathedral that came down entirely in
+ * render concrete would read as a car park collapsing; the roof and the wall are
+ * `plaster` (the level's own limestone bake) and the dressed stone — coping,
+ * pinnacles, flyer — is `concrete`. Two materials is two shader permutations per
+ * site, which the block sites already pay for.
+ */
+const MASS_VAULT = [
+  { id: 'ridge', mat: 0, size: [5.0, 1.5, 9.0], at: [-2.2, 0.75, 0], cut: [7, 3, 13] },
+  { id: 'coping', mat: 1, size: [1.0, 0.9, 9.4], at: [-0.6, 1.85, 0], cut: [2, 2, 13] },
+  { id: 'pinA', mat: 1, size: [1.1, 3.2, 1.1], at: [-0.7, 3.1, 3.0], cut: [2, 5, 2] },
+  { id: 'pinB', mat: 1, size: [1.1, 3.2, 1.1], at: [-0.7, 3.1, -3.0], cut: [2, 5, 2] },
+  { id: 'skin', mat: 0, size: [0.36, 4.2, 9.0], at: [-0.18, -2.3, 0], cut: [1, 8, 13] },
+  { id: 'flyer', mat: 1, size: [3.0, 0.7, 1.0], at: [1.3, -3.4, 1.4], cut: [5, 2, 2] },
+];
+
+const MASS_FOR = { block: MASS_BLOCK, route: MASS_LEDGE, vault: MASS_VAULT };
 /** Surface library name per material slot, per kind. */
-const SURFACE_FOR = { block: ['plaster', 'concrete'], route: ['concrete'] };
+const SURFACE_FOR = { block: ['plaster', 'concrete'], route: ['concrete'], vault: ['plaster', 'concrete'] };
 /** Mound height per kind — a parapet does not make the pile a storey does. */
-const MOUND_H = { block: 1.55, route: 1.05 };
+const MOUND_H = { block: 1.55, route: 1.05, vault: 1.45 };
 
 /**
  * Parts whose `at[0]` is measured from the REAL facade plane found by the boot
@@ -299,7 +407,7 @@ const MOUND_H = { block: 1.55, route: 1.05 };
  * have to be flush with the wall they hang off; the mass on the roof does not
  * care to the centimetre, and moving it would push it off the parapet.
  */
-const FACADE_PARTS = new Set(['skin', 'balcony', 'rail']);
+const FACADE_PARTS = new Set(['skin', 'balcony', 'rail', 'flyer']);
 
 /** Seconds of telegraph: jet first, then the whistle, then it lands. */
 const JET_LEAD = 4.4;

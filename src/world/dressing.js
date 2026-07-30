@@ -30,6 +30,7 @@ import {
 import { STREET, ALLEYS, BUILDINGS, SET_PIECES, GATE, KEEPOUT, SCALE } from './layout.js';
 import { reliefY, inRelief } from './relief.js';
 import { inSitework } from './sitework.js';
+import { inCathedral } from './cathedral.js';
 
 /**
  * WORLD — set dressing.
@@ -145,6 +146,14 @@ export function setDoorways(infos, specs) {
 /** True on the street, a pavement or an alley — i.e. somewhere props can sit. */
 export function isOpen(x, z, m = 0.3) {
   if (inBuilding(x, z, m)) return false;
+  /**
+   * …nor is the inside of the CATHEDRAL, which is not in `BUILDINGS` and so is
+   * invisible to `inBuilding`. Same failure with a bigger footprint: the
+   * scatter is placed at `groundY`, which has never heard of a floor at 0.16 m,
+   * so a market stall would be pitched in the chancel and a rubble mound poured
+   * through the crossing — and the crossing is a capture point.
+   */
+  if (inCathedral(x, z, m)) return false;
   /**
    * Under a catwalk or on a container is not a place to scatter debris: the
    * scatter is placed at `groundY`, so a crate dropped under the site A deck
