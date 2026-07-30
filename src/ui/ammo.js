@@ -61,6 +61,16 @@ export class AmmoPanel {
     this.slotL = el('div', 'ow-slot', this.equip);
     fragIcon(this.slotL);
     this.slotLn = el('span', null, this.slotL, '2');
+    /**
+     * THE FRAG RESUPPLY CLOCK, on the frags it governs.
+     *
+     * "グレネードの補充は1分に一回まで" is a rule the player has to be able to plan
+     * around, and a rule you only find out about by walking to a crate and being
+     * refused is a rule you experience as a bug. It is blank whenever the clock
+     * is not running, which is most of the time, so the panel is unchanged for a
+     * player who has not touched a grenade stack.
+     */
+    this.slotCd = el('span', 'ow-slot-cd', this.slotL, '');
     this.slotT = el('div', 'ow-slot', this.equip);
     flashIcon(this.slotT);
     this.slotTn = el('span', null, this.slotT, '1');
@@ -113,6 +123,11 @@ export class AmmoPanel {
    *                     reloadProgress, lethal, lethalCount, tacticalCount }
    */
   update(dt, s) {
+    // Written before the branches so every exit path below carries it.
+    const fragCd = s.fragCooldown ?? 0;
+    setText(this.slotCd, fragCd > 0 ? `${Math.ceil(fragCd)}S` : '');
+    setStyle(this.slotCd, 'display', fragCd > 0 ? '' : 'none');
+
     /**
      * A melee weapon has no ammunition, so the readout has nothing to count.
      * Zeroes are not the answer: "0 / 0" under a flashing PRESS R TO RELOAD is

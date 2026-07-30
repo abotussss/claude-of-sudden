@@ -16,6 +16,7 @@ import { PauseMenu } from './menu.js';
 import { ScopeOverlay } from './scope.js';
 import { RoundStrip, ZoneStrip, BombPanel, Scoreboard, SpectateBar } from './round.js';
 import { CapturePanel } from './capture.js';
+import { PickupToast, BeaconStrip } from './pickups.js';
 import { CombatDemo } from './demo.js';
 
 const MAX_BLIPS = 48;
@@ -41,6 +42,15 @@ const MAX_BLIPS = 48;
  *   ui.banner.show(title, sub, life)    kill / objective confirmation
  *   ui.setPrompt({key,text,sub,progress}) / ui.clearPrompt()
  *   ui.setObjectives([{position,label,name}])
+ *   ui.setCaches([{position,kind,label,ready,cooldown,inReach}])
+ *                                       THE PICKUPS. World markers on the
+ *                                       caches near the player, one glyph per
+ *                                       kind, with the cooldown on them. See
+ *                                       src/ui/pickups.js for why the whole
+ *                                       feature needed announcing.
+ *   ui.pickup(title, sub, kind)         'supply'|'weapon'|'beacon'|'deny' —
+ *                                       the receipt for a take, or the reason
+ *                                       there was not one
  *   ui.setBlips([{x,z,kind:'enemy'|'friend',heading}])
  *   ui.spawnGrenade(worldPos, fuse)
  *   ui.airAlert({kind,title,impactTitle,name,x,y,z,lead})
@@ -131,6 +141,12 @@ export class UiSystem {
      * — see the header of src/ui/capture.js for what it exists to fix.
      */
     this.capturePanel = new CapturePanel(this.chromeLayer, (id, gain) => this.sfx(id, gain));
+    /**
+     * The caches: the receipt for a pickup (or the reason there was not one),
+     * and the beacon's thirty seconds. @see src/ui/pickups.js
+     */
+    this.pickupToast = new PickupToast(this.chromeLayer);
+    this.beaconStrip = new BeaconStrip(this.chromeLayer);
     this.bombPanel = new BombPanel(this.chromeLayer);
     this.spectateBar = new SpectateBar(this.chromeLayer);
     this.scoreboard = new Scoreboard(this.root);
@@ -185,6 +201,8 @@ export class UiSystem {
     this._dir = new THREE.Vector3();
     this._tmp = new THREE.Vector3();
     this._objectives = [];
+    /** `match`'s nearby-cache view, or null when nothing is publishing one. */
+    this._caches = null;
     this._compassObjs = [];
     this._blips = new Array(MAX_BLIPS);
     for (let i = 0; i < MAX_BLIPS; i++) this._blips[i] = { x: 0, z: 0, kind: 'enemy', heading: 0 };
@@ -388,6 +406,26 @@ export class UiSystem {
 
   setObjectives(list) {
     this._objectives = list ?? [];
+  }
+
+  /**
+   * THE CACHES NEAR THE PLAYER, for the world markers. `match` hands over its
+   * own preallocated view records, nearest first — read every frame, never
+   * retained. @see `WorldMarkers.updateCaches`
+   *
+   * @param {Array|null} list [{ position, kind, label, ready, cooldown, inReach }]
+   */
+  setCaches(list) {
+    this._caches = list ?? null;
+  }
+
+  /**
+   * A PICKUP LANDED — or was refused, which is the case the player could not
+   * see at all. `kind` picks the colour: 'supply' | 'weapon' | 'beacon' | 'deny'.
+   */
+  pickup(title, sub, kind = 'supply') {
+    this.pickupToast.show(title, sub, kind);
+    this.sfx(kind === 'deny' ? 'hit_armour' : 'hit_kill', kind === 'deny' ? 0.35 : 0.55);
   }
 
   addObjective(o) {
@@ -628,6 +666,9 @@ export class UiSystem {
     this.hit.update(dt);
     this.arcs.update(dt, rx, rz, fx, fz);
     this.health.update(dt, s);
+    // The frag resupply clock rides on the ammo panel, beside the frag count it
+    // governs. `match` owns the number; this is the one line that carries it.
+    s.fragCooldown = this.round?.cache?.grenadeCooldown ?? 0;
     this.ammo.update(dt, s);
     this.killfeed.update(dt);
     this.matchBar.update(s);
@@ -643,6 +684,8 @@ export class UiSystem {
     setStyle(this.roundStrip.root, 'display', r ? '' : 'none');
     this.zoneStrip.update(dt, r);
     this.capturePanel.update(dt, r);
+    this.pickupToast.update(dt);
+    this.beaconStrip.update(dt, r?.beacon, r?.beaconLife ?? 30);
     this.bombPanel.update(dt, r);
     this.spectateBar.update(dt, r);
     // Held on Tab, and shown for free between rounds — which is when you
@@ -655,6 +698,7 @@ export class UiSystem {
     this.compass.update(heading, this._compassObjs);
 
     this.markers.updateObjectives(this._objectives, ctx.camera, this.vw, this.vh, this.k);
+    this.markers.updateCaches(dt, this._caches, ctx.camera, this.vw, this.vh, this.k);
     this.markers.updateGrenades(dt, ctx.camera, this.vw, this.vh, this.k);
     this.markers.updateDanger(dt, ctx.camera, this.vw, this.vh, this.k);
     this.markers.updateDamage(dt, ctx.camera, this.vw, this.vh, this.k);
@@ -749,6 +793,8 @@ export class UiSystem {
     this.roundStrip.dispose();
     this.zoneStrip.dispose();
     this.capturePanel.dispose();
+    this.pickupToast.dispose();
+    this.beaconStrip.dispose();
     this.bombPanel.dispose();
     this.spectateBar.dispose();
     this.scoreboard.dispose();

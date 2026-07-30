@@ -218,6 +218,32 @@ export class Caches {
     /** Reported by `_publishHud`; written in place. */
     this.stats = { taken: 0, weapons: 0, ammo: 0, frags: 0, beacons: 0, beaconSpawns: 0 };
     this._v = new THREE.Vector3();
+
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * THE LOCAL PLAYER'S FRAG CLOCK — "グレネードの補充は1分に一回まで"
+     * ────────────────────────────────────────────────────────────────────────
+     * `ctx.time.elapsed` the human may take frags again. PER PLAYER, and it is a
+     * different rule from `readyAt`, which is per CACHE: with six grenade stacks
+     * on this map, a forty second per-cache cooldown lets one man walk a circuit
+     * of three of them and never be without frags. "補充できすぎるとゲーム性崩壊
+     * する" is that circuit, and this is the thing that closes it.
+     *
+     * It is the PLAYER's because bots do not use `take()` at all — `_orderCache`
+     * walks them to a cache and the presence itself is the point (see this
+     * file's header); nothing in `src/ai` hands a bot a grenade off one. If that
+     * ever changes this becomes a map keyed on the actor, and the rule does not.
+     */
+    this.grenadeReadyAt = 0;
+    /**
+     * WHY THE LAST `take()` HANDED NOTHING OVER, or null. Reused in place, valid
+     * only until the next call, and the caller copies the strings out
+     * synchronously — the alternative was `take()` returning null for both "you
+     * are full" and "you may not have these for another 41 seconds", which is a
+     * refusal the player cannot tell from a broken key.
+     */
+    this.denied = null;
+    this._denied = { title: '', sub: '' };
   }
 
   /**
@@ -284,6 +310,11 @@ export class Caches {
     return this.botList.length;
   }
 
+  /** Seconds until the local player may take frags again, or 0. */
+  grenadeCooldown(now) {
+    return Math.max(0, this.grenadeReadyAt - now);
+  }
+
   /** How many seconds of beacon are left, or 0. */
   beaconRemaining(now) {
     return this.beacon.active ? Math.max(0, this.beacon.until - now) : 0;
@@ -341,8 +372,12 @@ export class Caches {
    * @returns {{title: string, sub: string}|null}
    */
   take(c, now) {
+    this.denied = null;
     const wp = this.weapons;
-    if (!wp || !this.ready(c, now)) return null;
+    if (!wp) return null;
+    if (!this.ready(c, now)) {
+      return this._deny('CACHE RESUPPLYING', `READY IN ${Math.ceil(c.readyAt - now)}S`);
+    }
     let out = null;
     if (c.kind === 'weapon' && c.weaponId) {
       const prev = wp.pickUpPrimary(c.weaponId);
@@ -350,12 +385,26 @@ export class Caches {
         const prevLabel = wp.states.get(prev)?.def?.label ?? prev;
         out = { title: c.label, sub: `SWAPPED FOR ${prevLabel}` };
         this.stats.weapons++;
+      } else {
+        return this._deny('ALREADY CARRYING', c.label);
       }
     } else if (c.kind === 'grenade') {
+      /**
+       * ONE MINUTE, PER PLAYER, AND IT IS CHECKED BEFORE THE HANDOVER. @see
+       * `grenadeReadyAt`. The refusal is a `denied` with the seconds in it: a
+       * hold that does nothing and says nothing is indistinguishable from a
+       * feature that is broken, which is how this whole pass started.
+       */
+      const wait = this.grenadeCooldown(now);
+      if (wait > 0) return this._deny('FRAGS ON COOLDOWN', `READY IN ${Math.ceil(wait)}S`);
       const got = wp.resupplyGrenades(RULES.cacheGrenades);
       if (got > 0) {
+        // Spent only on a real handover, so a full pouch cannot burn the minute.
+        this.grenadeReadyAt = now + RULES.grenadeResupplyCooldown;
         out = { title: 'FRAGS RESUPPLIED', sub: `+${got} · ${wp.grenadeCount} CARRIED` };
         this.stats.frags += got;
+      } else {
+        return this._deny('POUCH FULL', `${wp.grenadeCount} FRAGS CARRIED`);
       }
     } else {
       // `ammo` and `vantage` — both are a box of rounds.
@@ -363,12 +412,64 @@ export class Caches {
       if (got > 0) {
         out = { title: 'AMMUNITION', sub: `+${got} ROUNDS` };
         this.stats.ammo += got;
+      } else {
+        return this._deny('AMMUNITION FULL', 'NOTHING TO TAKE');
       }
     }
     if (!out) return null;
     c.readyAt = now + RULES.cacheCooldown;
     this.stats.taken++;
     return out;
+  }
+
+  /** Record why nothing was handed over, and hand back null. No allocation. */
+  _deny(title, sub) {
+    this._denied.title = title;
+    this._denied.sub = sub;
+    this.denied = this._denied;
+    return null;
+  }
+
+  /**
+   * THE CACHES CLOSE ENOUGH TO BE WORTH DRAWING, nearest first.
+   *
+   * References to the records themselves are written into `out` — the caller
+   * owns that array and nothing is allocated here or there. The height test is
+   * deliberately generous where `nearest()`'s is tight: `nearest` decides what
+   * you may put your hands on and must not reach through a floor, whereas a
+   * MARKER for the crate one storey up is the entire point of the feature —
+   * "屋上だったり３階のエリアなどにもメリットを与えて" only works if a man on the
+   * street can see that there is something up there.
+   *
+   * @param {THREE.Vector3} p
+   * @param {number} radius  metres
+   * @param {Array} out      preallocated; overwritten
+   * @param {number} max     how many to keep
+   * @returns {number} how many were written
+   */
+  nearby(p, radius, out, max = 6) {
+    const r2 = radius * radius;
+    let n = 0;
+    for (let i = 0; i < this.list.length; i++) {
+      const c = this.list[i];
+      const dx = c.position.x - p.x;
+      const dz = c.position.z - p.z;
+      const dy = c.position.y - p.y;
+      // Two storeys up or one down. Any further vertically and the marker is
+      // about a room the player has no way to reach from here.
+      if (dy > 8 || dy < -4.5) continue;
+      const d2 = dx * dx + dz * dz + dy * dy;
+      if (d2 > r2) continue;
+      // Insertion sort into the fixed window: nearest first, longest dropped.
+      let at = n < max ? n : max;
+      while (at > 0 && out[at - 1] && out[at - 1]._d2 > d2) at--;
+      if (at >= max) continue;
+      for (let j = Math.min(n, max - 1); j > at; j--) out[j] = out[j - 1];
+      c._d2 = d2;
+      out[at] = c;
+      if (n < max) n++;
+    }
+    return n;
   }
 
   /**

@@ -213,6 +213,31 @@ export const RULES = {
   /** Frags from a grenade stack. `weapons.resupplyGrenades` caps it at 2 carried. */
   cacheGrenades: 2,
   /**
+   * THE PLAYER'S OWN FRAG CLOCK — "グレネードの補充は1分に一回まで 補充できすぎると
+   * ゲーム性崩壊する".
+   *
+   * `cacheCooldown` is PER CACHE, and that is not the same rule: this map
+   * publishes six grenade stacks, so a man who learns the building can walk a
+   * circuit of three of them and carry frags permanently — forty seconds of
+   * cache cooldown is no cooldown at all when there are six caches. This one is
+   * per PLAYER and it is the binding constraint: sixty seconds between frag
+   * resupplies wherever you get them.
+   *
+   * It is spent only when frags actually change hands (`resupplyGrenades`
+   * returns > 0), so walking onto a stack with a full pouch cannot burn the
+   * minute, and it is NOT refunded by dying — a respawn already hands out a
+   * fresh loadout and making death the fast way to frags is the same collapse
+   * from the other end.
+   */
+  grenadeResupplyCooldown: 60,
+  /**
+   * Metres a cache is drawn on the HUD from. The features are INSIDE buildings
+   * and on roofs, so a marker has to appear before the doorway or the player
+   * never learns the room is worth entering — but a marker on all twenty-four
+   * is a wall of icons. 26 m is about one building plus its street.
+   */
+  cacheMarkerRange: 26,
+  /**
    * THE BEACON — "テンポラリーリスポーン地点としてのビーコンを起動できる（３０秒間）".
    *
    * Thirty seconds, as asked. It is a THIRD spawn option, not a second one:

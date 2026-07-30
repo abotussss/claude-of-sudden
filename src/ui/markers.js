@@ -75,6 +75,48 @@ function nadeGlyph(parent) {
   return s;
 }
 
+/* --------------------------------------------------------------- caches ---
+ * THE PICKUPS, IN THE WORLD. "武器落ち・グレネード補充・３０秒ビーコン、これらはもっと
+ * ハイライトして、わかりやすいように ユーザーが気付けるように".
+ *
+ * Four kinds of cache stand on painted squares inside eight buildings and on
+ * their roofs, and a player who never walked into the right room never found out
+ * they exist. A glyph per kind rather than one dot: "there is a rifle upstairs"
+ * and "there are frags upstairs" are different reasons to climb, and a marker
+ * that cannot tell you which is only a reason to be curious once.
+ */
+function rackGlyph(parent) {
+  const s = svg('svg', { viewBox: '0 0 16 16' }, parent);
+  // A rifle silhouette: receiver, barrel, magazine, stock.
+  svg('path', { d: 'M1.6 6.4h11.2v2H10l-.6 1.6H7.2L6.8 8.4H1.6z', fill: 'currentColor',
+    stroke: 'rgba(6,20,28,.75)', 'stroke-width': .9 }, s);
+  svg('rect', { x: 12.2, y: 6.9, width: 2.4, height: 1, fill: 'currentColor' }, s);
+  svg('path', { d: 'M6.9 10h2.2l-.5 3.4H7.4z', fill: 'currentColor' }, s);
+  return s;
+}
+function crateGlyph(parent) {
+  const s = svg('svg', { viewBox: '0 0 16 16' }, parent);
+  svg('rect', { x: 2.2, y: 5, width: 11.6, height: 7.4, fill: 'currentColor',
+    stroke: 'rgba(6,20,28,.75)', 'stroke-width': 1 }, s);
+  svg('path', { d: 'M2.2 8.2h11.6M8 5v7.4', stroke: 'rgba(6,20,28,.6)', 'stroke-width': 1 }, s);
+  svg('rect', { x: 4.4, y: 3.2, width: 7.2, height: 1.6, fill: 'currentColor' }, s);
+  return s;
+}
+function fragGlyph(parent) {
+  const s = svg('svg', { viewBox: '0 0 16 16' }, parent);
+  svg('circle', { cx: 8, cy: 9.4, r: 4.6, fill: 'currentColor',
+    stroke: 'rgba(6,20,28,.75)', 'stroke-width': 1 }, s);
+  svg('rect', { x: 7.1, y: 2.2, width: 1.8, height: 2.8, fill: 'currentColor' }, s);
+  svg('path', { d: 'M9 2.6h3.2', stroke: 'currentColor', 'stroke-width': 1.4, fill: 'none' }, s);
+  return s;
+}
+function nestGlyph(parent) {
+  const s = svg('svg', { viewBox: '0 0 16 16' }, parent);
+  svg('path', { d: 'M8 1.8 14 12.6H2z', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6 }, s);
+  svg('circle', { cx: 8, cy: 9.2, r: 1.8, fill: 'currentColor' }, s);
+  return s;
+}
+
 /**
  * The impact reticle: a bracketed cross on the point that is about to stop
  * existing. Deliberately NOT the grenade glyph — a grenade is a thing you look
@@ -171,6 +213,32 @@ export class WorldMarkers {
       this.objRoot
     );
 
+    /**
+     * CACHES. Six is `RULES.cacheMarkerRange`'s worth on this map — one
+     * building's four floors plus whatever is across the street — and `match`
+     * hands over the nearest six, so the seventh is never the one you needed.
+     */
+    this.cachePool = new Pool(
+      6,
+      () => {
+        const node = el('div', 'ow-cache');
+        const gl = el('div', 'ow-cache-glyph', node);
+        const glyphs = [rackGlyph(gl), crateGlyph(gl), fragGlyph(gl), nestGlyph(gl)];
+        for (const g of glyphs) g.style.display = 'none';
+        const chev = chevron(el('div', 'ow-cache-chev', node));
+        const label = el('div', 'ow-cache-label', node, '');
+        const sub = el('div', 'ow-cache-sub', node, '');
+        node._glyphs = glyphs;
+        node._chev = chev.parentNode;
+        node._label = label;
+        node._sub = sub;
+        return node;
+      },
+      this.objRoot
+    );
+    /** Kind -> index into `_glyphs`. */
+    this._cacheGlyph = { weapon: 0, ammo: 1, grenade: 2, vantage: 3 };
+
     this.dnPool = new Pool(
       16,
       () => {
@@ -221,6 +289,67 @@ export class WorldMarkers {
         // distant markers dim so a busy map doesn't turn into a wall of icons
         const fade = clamp01(1.15 - p.dist / 260) * (edge ? 0.72 : 1);
         setStyle(node, 'opacity', fade.toFixed(3));
+      }
+    }
+    for (let i = n; i < items.length; i++) {
+      if (items[i].alive) {
+        items[i].alive = false;
+        setStyle(items[i].node, 'display', 'none');
+      }
+    }
+  }
+
+  /**
+   * THE CACHES NEAR YOU, DRAWN IN THE WORLD.
+   *
+   * `list` is `match`'s own preallocated view records — read, never retained:
+   * `{ position, kind, label, ready, cooldown, inReach }`. Nothing is allocated
+   * here; the pool and the glyphs are built once in the constructor.
+   *
+   * The rules the styling encodes, in order of how much a player needs them:
+   *   IN REACH   full white, a breathing glyph and the word HOLD F. This is the
+   *              one that answers "there is something here and it is a key".
+   *   AVAILABLE  supply green with the kind and the range. A reason to walk.
+   *   COOLING    dim, with the seconds. "Not now" is worth knowing; a marker
+   *              that vanishes on cooldown just teaches you it was a ghost.
+   */
+  updateCaches(dt, list, camera, w, h, k) {
+    this._cacheT = (this._cacheT ?? 0) + dt;
+    const beat = 0.5 + 0.5 * Math.sin(this._cacheT * Math.PI * 3.2);
+    const items = this.cachePool.items;
+    const margin = 68 * k;
+    let n = 0;
+    if (list) {
+      for (let i = 0; i < list.length && n < items.length; i++) {
+        const o = list[i];
+        if (!o?.position) continue;
+        const p = project(o.position, camera, w, h, margin);
+        const it = items[n++];
+        if (!it.alive) {
+          it.alive = true;
+          setStyle(it.node, 'display', '');
+        }
+        const node = it.node;
+        setStyle(node, 'transform', `translate(${p.x.toFixed(1)}px,${p.y.toFixed(1)}px)`);
+        const gi = this._cacheGlyph[o.kind] ?? 1;
+        for (let g = 0; g < node._glyphs.length; g++) {
+          setStyle(node._glyphs[g], 'display', g === gi && !p.offscreen ? '' : 'none');
+        }
+        setStyle(node._chev, 'display', p.offscreen ? '' : 'none');
+        if (p.offscreen) setStyle(node._chev, 'transform', `rotate(${p.angle.toFixed(1)}deg)`);
+        setText(node._label, o.label ?? '');
+        setText(
+          node._sub,
+          o.ready ? (o.inReach ? 'HOLD F' : metres(p.dist)) : `${Math.ceil(o.cooldown)}S`
+        );
+        setClass(node, 'reach', !!o.inReach && !!o.ready);
+        setClass(node, 'cold', !o.ready);
+        // The glyph breathes only when it is a key away: motion is the last thing
+        // left that pulls an eye that is looking somewhere else, and spending it
+        // on the six crates you cannot reach is spending it on nothing.
+        const s = o.inReach && o.ready ? 1 + 0.16 * beat : 1;
+        setStyle(node, 'opacity', (clamp01(1.25 - p.dist / 40) * (o.ready ? 1 : 0.62)).toFixed(3));
+        setStyle(node._label, 'transform', `scale(${s.toFixed(3)})`);
       }
     }
     for (let i = n; i < items.length; i++) {

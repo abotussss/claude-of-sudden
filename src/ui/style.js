@@ -322,6 +322,10 @@ const CSS = `
 .ow-slot span { font-size: calc(11px * var(--k)); color: var(--ink-2); text-shadow: var(--sh-o1);
   min-width: calc(7px * var(--k)); text-align:left; }
 .ow-slot.empty { opacity:.34; }
+/* The frag resupply clock. Amber because it is a caution, not a count, and it
+   is only in the DOM while it is running. */
+.ow-slot-cd { font-size: calc(9px * var(--k)); letter-spacing:.14em; color: var(--amber);
+  text-shadow: var(--sh-o1); }
 
 /* ============================================================== killfeed */
 .ow-killfeed {
@@ -565,6 +569,38 @@ const CSS = `
 .ow-air.close { color: var(--red); }
 .ow-air.close .ow-air-label { font-size: calc(11px * var(--k)); }
 
+/* ---------------------------------------------------------- caches (world)
+   The pickups, marked where they stand. Supply green when there is something
+   to take, dim when the crate is resupplying, and full white with the key on
+   it once you are inside the 2.6 m the interaction actually reaches — the
+   three states a player has to be able to tell apart from across a street. */
+.ow-cache {
+  position:absolute; left:0; top:0; color: var(--ok);
+  display:flex; flex-direction:column; align-items:center;
+  transform-origin: 50% 50%;
+  will-change: transform, opacity;
+}
+.ow-cache-glyph { position:relative; width:calc(17px * var(--k)); height:calc(17px * var(--k)); }
+.ow-cache-glyph svg { position:absolute; inset:0; width:100%; height:100%; display:block;
+  overflow:visible; filter: drop-shadow(0 1px 2px rgba(0,0,0,.9)); }
+.ow-cache-chev { width:calc(15px * var(--k)); height:calc(15px * var(--k)); }
+.ow-cache-chev svg { width:100%; height:100%; display:block; overflow:visible;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.9)); }
+.ow-cache-label {
+  margin-top: calc(var(--u) * .5);
+  font-size: calc(10px * var(--k)); letter-spacing:.2em; font-weight:700;
+  color: currentColor; white-space:nowrap; text-shadow: var(--sh-o1);
+  will-change: transform;
+}
+.ow-cache-sub {
+  font-size: calc(9px * var(--k)); letter-spacing:.2em;
+  color: var(--ink-2); white-space:nowrap; text-shadow: var(--sh-o1);
+}
+.ow-cache.cold { color: var(--ink-3); }
+.ow-cache.cold .ow-cache-sub { color: var(--ink-3); }
+.ow-cache.reach { color: #ffffff; }
+.ow-cache.reach .ow-cache-sub { color: var(--amber); font-weight:700; }
+
 /* ======================================================== damage numbers */
 .ow-dn {
   position:absolute; left:0; top:0; font-family: var(--fd);
@@ -580,9 +616,21 @@ const CSS = `
 .ow-prompt {
   position:absolute; left:50%; top:58%;
   transform: translate(-50%,-50%);
-  display:flex; align-items:center; gap: calc(var(--u) * 2);
+  display:flex; flex-direction:column; align-items:flex-start;
+  gap: calc(var(--u) * 1.8);
   will-change: opacity, transform;
 }
+/* One verb per row: keycap + caption on the left, the verb on the right. */
+.ow-prompt-row { display:flex; align-items:center; gap: calc(var(--u) * 2); }
+.ow-prompt-keywrap { display:flex; flex-direction:column; align-items:center; gap: calc(var(--u) * .5); }
+.ow-prompt-cap {
+  font-size: calc(8.5px * var(--k)); letter-spacing:.24em; font-weight:700;
+  color: var(--amber); text-shadow: var(--sh-o1);
+}
+/* The second verb is real but secondary: same construction, one step back. */
+.ow-prompt-row.alt .ow-key { border-color: rgba(255,255,255,.34); }
+.ow-prompt-row.alt .ow-prompt-cap { color: var(--cyan); }
+.ow-prompt-row.alt .ow-prompt-txt { font-size: calc(11px * var(--k)); color: var(--ink-2); }
 .ow-key {
   min-width: calc(22px * var(--k)); height: calc(22px * var(--k));
   padding: 0 calc(var(--u) * 1.2);
@@ -683,6 +731,79 @@ const CSS = `
 .ow-aa.salvo .ow-aa-arrow { color: var(--amber); }
 .ow-aa.salvo .ow-aa-bar > i { background: var(--amber); }
 .ow-aa.landed .ow-aa-t { color: #fff; }
+
+/* ======================================================== pickup receipt
+   What you just took, or why you did not get it. Sits between the interaction
+   prompt (58%) and the capture panel (74%) — the eye is already down there
+   because that is where the prompt it answers is. */
+.ow-pick {
+  position:absolute; left:50%; top:64.5%;
+  transform: translate(-50%,-50%);
+  display:flex; align-items:center; gap: calc(var(--u) * 2);
+  padding: calc(var(--u) * 1.6) calc(var(--u) * 4) calc(var(--u) * 1.6) calc(var(--u) * 2.4);
+  background: linear-gradient(180deg, rgba(8,20,10,.62), rgba(5,10,7,.44));
+  box-shadow: 0 calc(2px * var(--k)) calc(12px * var(--k)) rgba(0,0,0,.5);
+  will-change: opacity, transform;
+}
+.ow-pick-rule { width: calc(3px * var(--k)); align-self:stretch; background: var(--ok); }
+.ow-pick-t {
+  font-family: var(--fd); font-size: calc(19px * var(--k)); font-weight:700;
+  letter-spacing:.24em; color: var(--ok); text-shadow: var(--sh-o1);
+}
+.ow-pick-s {
+  margin-top: calc(var(--u) * .4);
+  font-size: calc(10px * var(--k)); letter-spacing:.24em; color: var(--ink-2);
+  text-shadow: var(--sh-o1);
+}
+.ow-pick.weapon { background: linear-gradient(180deg, rgba(6,18,28,.62), rgba(4,9,14,.44)); }
+.ow-pick.weapon .ow-pick-rule { background: var(--cyan); }
+.ow-pick.weapon .ow-pick-t { color: var(--cyan); }
+.ow-pick.beacon { background: linear-gradient(180deg, rgba(24,18,4,.62), rgba(12,9,3,.44)); }
+.ow-pick.beacon .ow-pick-rule { background: var(--amber); }
+.ow-pick.beacon .ow-pick-t { color: var(--amber); }
+/* The refusal. It is the same element on purpose: the answer to "why did my
+   hold do nothing" has to arrive where the answer to "what did I get" does. */
+.ow-pick.deny { background: linear-gradient(180deg, rgba(28,6,4,.62), rgba(13,4,3,.44)); }
+.ow-pick.deny .ow-pick-rule { background: var(--red); }
+.ow-pick.deny .ow-pick-t { color: #ffb3a6; font-size: calc(16px * var(--k)); }
+
+/* =============================================================== beacon
+   The thirty seconds, under the minimap. */
+.ow-bcn {
+  position:absolute; left:var(--pad); top: calc(var(--pad) + 196px * var(--k));
+  width: calc(178px * var(--k));
+  padding-left: calc(var(--u) * 1.8);
+  border-left: calc(2.5px * var(--k)) solid var(--ok);
+  will-change: opacity;
+}
+.ow-bcn-head { display:flex; align-items:center; gap: calc(var(--u) * 1.2); }
+.ow-bcn-glyph { width: calc(13px * var(--k)); height: calc(13px * var(--k)); color: var(--ok); }
+.ow-bcn-glyph svg { width:100%; height:100%; display:block; overflow:visible;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.9)); }
+.ow-bcn-t {
+  font-size: calc(11px * var(--k)); letter-spacing:.22em; font-weight:700;
+  color: var(--ok); text-shadow: var(--sh-o1);
+}
+.ow-bcn-c {
+  margin-left:auto; font-family: var(--fd); font-size: calc(16px * var(--k));
+  color: var(--ok); text-shadow: var(--sh-o1);
+}
+.ow-bcn-track {
+  margin-top: calc(var(--u) * 1); height: calc(2.5px * var(--k));
+  background: rgba(255,255,255,.16);
+}
+.ow-bcn-track > i {
+  display:block; height:100%; width:100%; background: var(--ok);
+  transform-origin:left; transform:scaleX(1);
+}
+.ow-bcn-s {
+  margin-top: calc(var(--u) * .8);
+  font-size: calc(9px * var(--k)); letter-spacing:.2em; color: var(--ink-2);
+  text-shadow: var(--sh-o1);
+}
+.ow-bcn.cold { border-left-color: var(--ink-3); }
+.ow-bcn.cold .ow-bcn-glyph, .ow-bcn.cold .ow-bcn-t, .ow-bcn.cold .ow-bcn-c { color: var(--ink-3); }
+.ow-bcn.cold .ow-bcn-track > i { background: var(--ink-3); }
 
 /* ============================================================== capture
    DOMINATION's centrepiece — see src/ui/capture.js. It is deliberately the

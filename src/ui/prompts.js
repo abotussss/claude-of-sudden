@@ -1,11 +1,28 @@
 import { el, setText, setStyle, ease, clamp01, damp } from './util.js';
 
-/** Interaction prompt: keycap + verb, with an optional hold-progress rule. */
+/**
+ * Interaction prompt: keycap + verb, with an optional hold-progress rule.
+ *
+ * ONE KEY, TWO VERBS, AND THE PLAYER HAS TO BE TOLD WHICH IS WHICH. The caches
+ * put a HOLD (take what it holds) and a TAP (plant the thirty second beacon) on
+ * the same F, and the first version of this prompt carried both in one grey
+ * sub-line — "HOLD F · TAP F FOR BEACON" — which is a sentence you read once,
+ * at the wrong moment, and never again. So the two verbs are now two ROWS, each
+ * with its own keycap and its own caption under it, and the hold row keeps the
+ * progress rule that shows the key is doing something.
+ *
+ * `alt` is optional and everything about the single-row form is unchanged: the
+ * demolition prompts (PICK UP C4 / PLANT / DEFUSE) pass no `alt` and no
+ * `holdCaption`, and render exactly as they did.
+ */
 export class Prompt {
   constructor(parent) {
     this.root = el('div', 'ow-prompt', parent);
-    this.key = el('div', 'ow-key', this.root, 'F');
-    const col = el('div', null, this.root);
+    const row = el('div', 'ow-prompt-row', this.root);
+    const keyWrap = el('div', 'ow-prompt-keywrap', row);
+    this.key = el('div', 'ow-key', keyWrap, 'F');
+    this.cap = el('div', 'ow-prompt-cap', keyWrap, '');
+    const col = el('div', null, row);
     this.txt = el('div', 'ow-prompt-txt', col, 'INTERACT');
     this.sub = el('div', 'ow-prompt-sub', col, '');
     const bar = el('div', null, col);
@@ -16,13 +33,27 @@ export class Prompt {
       'display:block;height:100%;width:100%;background:var(--amber);transform-origin:left;transform:scaleX(0)';
     this.bar = bar;
 
+    /* ---- the second verb on the same key ------------------------------ */
+    this.altRow = el('div', 'ow-prompt-row alt', this.root);
+    const altWrap = el('div', 'ow-prompt-keywrap', this.altRow);
+    this.altKey = el('div', 'ow-key', altWrap, 'F');
+    this.altCap = el('div', 'ow-prompt-cap', altWrap, 'TAP');
+    const altCol = el('div', null, this.altRow);
+    this.altTxt = el('div', 'ow-prompt-txt', altCol, '');
+    this.altSub = el('div', 'ow-prompt-sub', altCol, '');
+
     this.shown = 0;
     this.active = false;
     this.progress = 0;
     setStyle(this.root, 'display', 'none');
+    setStyle(this.altRow, 'display', 'none');
   }
 
-  /** @param {object} p { key, text, sub, progress } */
+  /**
+   * @param {object} p { key, text, sub, progress, hold, alt: {key,text,sub} }
+   *                   `hold` captions the first row HOLD instead of TAP; `alt`
+   *                   adds the second row. Both optional.
+   */
   set(p) {
     this.active = true;
     setText(this.key, p.key ?? 'F');
@@ -31,6 +62,19 @@ export class Prompt {
     setStyle(this.sub, 'display', p.sub ? '' : 'none');
     this.progress = p.progress ?? 0;
     setStyle(this.bar, 'display', p.progress !== undefined ? '' : 'none');
+    const cap = p.hold === undefined ? '' : p.hold ? 'HOLD' : 'TAP';
+    setText(this.cap, cap);
+    setStyle(this.cap, 'display', cap ? '' : 'none');
+
+    const a = p.alt;
+    setStyle(this.altRow, 'display', a ? '' : 'none');
+    if (a) {
+      setText(this.altKey, a.key ?? p.key ?? 'F');
+      setText(this.altCap, a.hold ? 'HOLD' : 'TAP');
+      setText(this.altTxt, (a.text ?? '').toUpperCase());
+      setText(this.altSub, (a.sub ?? '').toUpperCase());
+      setStyle(this.altSub, 'display', a.sub ? '' : 'none');
+    }
   }
 
   clear() {

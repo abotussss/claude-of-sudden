@@ -425,8 +425,37 @@ export class MatchSystem {
      * THE CACHE HUD, and the beacon's clock. Allocated once; `ui` reads it every
      * frame and must never retain it. @see `_updateCacheUse`
      */
-    this._hud.cache = { near: '', kind: '', hold: 0, ready: true, cooldown: 0 };
+    this._hud.cache = { near: '', kind: '', hold: 0, ready: true, cooldown: 0, grenadeCooldown: 0 };
     this._hud.beacon = { active: false, mine: false, seconds: 0, cooldown: 0, at: '' };
+    /** So the beacon strip can scale its bar without importing RULES. */
+    this._hud.beaconLife = RULES.beaconTime;
+    /**
+     * THE CACHES THE PLAYER CAN SEE, for `ui.setCaches`. Allocated once: six
+     * view records and the six-slot window `Caches.nearby` sorts into. `ui`
+     * reads them every frame and must never retain them. @see `_publishCaches`
+     */
+    this._cacheNear = new Array(6).fill(null);
+    this._cacheView = [];
+    for (let i = 0; i < 6; i++) {
+      this._cacheView.push({
+        id: '',
+        kind: 'ammo',
+        label: '',
+        position: null,
+        ready: true,
+        cooldown: 0,
+        inReach: false,
+      });
+    }
+    /**
+     * The cache prompt is its OWN reused object rather than `_prompt`, which the
+     * demolition branch also writes: it carries two extra fields (`hold` and the
+     * `alt` row) and a stale one of those on a C4 prompt would draw a beacon
+     * line under "DEFUSE C4". One object per branch, no shared state.
+     */
+    this._cachePrompt = { key: 'F', text: '', sub: '', progress: 0, hold: true, alt: null };
+    /** The second row: TAP plants the beacon. Reused. */
+    this._promptAlt = { key: 'F', text: '', sub: '', hold: false };
     this._interact = { held: 0, kind: null };
     /**
      * HOLD vs TAP on the ONE interaction key. `held` is seconds the key has been
@@ -2363,6 +2392,7 @@ export class MatchSystem {
       h.near = '';
       h.kind = '';
       h.hold = 0;
+      h.grenadeCooldown = this.caches.grenadeCooldown(now);
       ui.clearPrompt();
       return;
     }
@@ -2381,12 +2411,21 @@ export class MatchSystem {
       st.held += dt;
       if (!st.done && st.held >= RULES.cacheHoldTime) {
         st.done = true;
-        const got = ready ? this.caches.take(c, now) : null;
+        /**
+         * `take` now decides the refusal as well as the handover, and says
+         * WHICH refusal in `caches.denied` — full pouch, cache still
+         * resupplying, or the player's own one-minute frag clock. A hold that
+         * did nothing and said "NOTHING TO TAKE" was the same message for three
+         * different situations, only one of which is worth walking away from.
+         */
+        const got = this.caches.take(c, now);
         if (got) {
           ui.banner.show(got.title, got.sub, 1.4);
+          ui.pickup?.(got.title, got.sub, c.kind === 'weapon' ? 'weapon' : 'supply');
           this._cacheFeedback();
         } else {
-          ui.banner.show('NOTHING TO TAKE', ready ? 'ALREADY FULL' : 'CACHE RESUPPLYING', 1.0);
+          const d = this.caches.denied;
+          ui.pickup?.(d?.title ?? 'NOTHING TO TAKE', d?.sub ?? '', 'deny');
         }
       }
     } else {
@@ -2394,15 +2433,13 @@ export class MatchSystem {
       if (st.wasDown && st.at === c && !st.done && st.held > 0.02) {
         if (beaconReady && this.caches.plantBeacon(c, this.playerTeam, this.player.yaw, now)) {
           ui.banner.show('BEACON ONLINE', `${RULES.beaconTime | 0}S FORWARD SPAWN`, 2.0);
+          ui.pickup?.('BEACON ONLINE', `${RULES.beaconTime | 0}S FORWARD SPAWN · ${c.id}`, 'beacon');
           this._cacheFeedback();
         } else {
-          ui.banner.show(
-            'BEACON UNAVAILABLE',
-            this.caches.beacon.active
-              ? `ONE IS ALREADY UP · ${this.caches.beaconRemaining(now).toFixed(0)}S`
-              : `READY IN ${this.caches.beaconCooldown(now).toFixed(0)}S`,
-            1.2
-          );
+          const why = this.caches.beacon.active
+            ? `ONE IS ALREADY UP · ${this.caches.beaconRemaining(now).toFixed(0)}S`
+            : `READY IN ${this.caches.beaconCooldown(now).toFixed(0)}S`;
+          ui.pickup?.('BEACON UNAVAILABLE', why, 'deny');
         }
       }
       st.held = 0;
@@ -2412,17 +2449,40 @@ export class MatchSystem {
     st.wasDown = down;
 
     /* ---- the prompt ---------------------------------------------------- */
-    const p = this._prompt;
+    /**
+     * TWO ROWS, ONE KEY. @see `Prompt.set` — the old single grey line
+     * "HOLD F · TAP F FOR BEACON" carried both verbs and was read by nobody,
+     * which is half of "ユーザーが気付けるように". The other half is that each row
+     * now says what it COSTS and whether it is available AT ALL before the key
+     * goes down: the frag clock is the common refusal now that it is one a
+     * minute, and finding that out only after a 0.55 s hold is finding it out
+     * from a bug report.
+     */
+    const frag = this.caches.grenadeCooldown(now);
+    const p = this._cachePrompt;
     p.text =
       c.kind === 'weapon' ? `TAKE ${c.label}`
         : c.kind === 'grenade' ? 'RESUPPLY FRAGS'
           : 'RESUPPLY AMMUNITION';
     p.sub = !ready
-      ? `RESUPPLYING · ${Math.ceil(c.readyAt - now)}S`
-      : beaconReady
-        ? 'HOLD F · TAP F FOR BEACON'
-        : 'HOLD F';
+      ? `CACHE RESUPPLYING · ${Math.ceil(c.readyAt - now)}S`
+      : c.kind === 'grenade'
+        ? frag > 0
+          ? `FRAGS READY IN ${Math.ceil(frag)}S`
+          : `+${RULES.cacheGrenades} FRAGS · ONE PER ${RULES.grenadeResupplyCooldown | 0}S`
+        : c.kind === 'weapon'
+          ? 'SWAP YOUR PRIMARY'
+          : `+${RULES.cacheAmmoMags} MAGS`;
     p.progress = st.at === c && !st.done ? Math.min(1, st.held / RULES.cacheHoldTime) : 0;
+    const alt = this._promptAlt;
+    alt.hold = false;
+    alt.text = 'PLANT BEACON';
+    alt.sub = beaconReady
+      ? `${RULES.beaconTime | 0}S FORWARD SPAWN`
+      : this.caches.beacon.active
+        ? `ONE IS UP · ${Math.ceil(this.caches.beaconRemaining(now))}S`
+        : `READY IN ${Math.ceil(this.caches.beaconCooldown(now))}S`;
+    p.alt = alt;
     ui.setPrompt(p);
 
     h.near = c.id;
@@ -2430,6 +2490,50 @@ export class MatchSystem {
     h.hold = p.progress;
     h.ready = ready;
     h.cooldown = ready ? 0 : c.readyAt - now;
+    h.grenadeCooldown = frag;
+  }
+
+  /**
+   * THE CACHES THE PLAYER CAN SEE, published for `ui.setCaches`.
+   *
+   * Written into the six records allocated in `init`; nothing is allocated per
+   * frame and `ui` never retains them. The whole reason this exists is that
+   * twenty-four caches stand on painted squares INSIDE buildings and on roofs,
+   * and a feature you have to already know about to find is a feature that, from
+   * the seat, does not exist — which is exactly what was reported.
+   */
+  _publishCaches() {
+    if (!this.caches || !this.ui.setCaches) return;
+    if (this.player.dead) {
+      this.ui.setCaches(null);
+      return;
+    }
+    const now = this.ctx.time.elapsed;
+    const near = this._cacheNear;
+    const n = this.caches.nearby(this.player.position, RULES.cacheMarkerRange, near, 6);
+    // The one the interaction would actually reach, asked of the same method the
+    // prompt asks: the marker says HOLD F on exactly the frames the prompt is up.
+    const reach = this.caches.nearest(this.player.position);
+    const view = this._cacheView;
+    view.length = n;
+    for (let i = 0; i < n; i++) {
+      const c = near[i];
+      const v = view[i];
+      v.id = c.id;
+      v.kind = c.kind;
+      v.label =
+        c.kind === 'weapon' ? c.label || 'WEAPON'
+          : c.kind === 'grenade' ? 'FRAGS'
+            : c.kind === 'vantage' ? 'NEST'
+              : 'AMMO';
+      v.position = c.position;
+      v.ready = this.caches.ready(c, now);
+      v.cooldown = Math.max(0, c.readyAt - now);
+      // The same 2.6 m `nearest()` uses, so the marker says HOLD F on exactly
+      // the frames the prompt is up and never on a frame it is not.
+      v.inReach = c === reach;
+    }
+    this.ui.setCaches(n ? view : null);
   }
 
   /** One transient off a cache. Audio is optional; never let it break the take. */
@@ -2610,7 +2714,12 @@ export class MatchSystem {
     h.spectating = this.spectator.active ? this.spectator.targetName : '';
     h.progress = b.progress;
     h.working = b.workKind ?? '';
-    if (this.domination) this._publishZones();
+    if (this.domination) {
+      this._publishZones();
+      // Every frame, not only while standing at one: the markers are how a
+      // player finds out the caches exist at all.
+      this._publishCaches();
+    }
     /**
      * THE BEACON'S CLOCK, written in place. `ui/round.js` draws it under the zone
      * strip. `mine` is from the LOCAL player's point of view for the same reason
