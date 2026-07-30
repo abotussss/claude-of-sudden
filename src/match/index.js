@@ -86,6 +86,7 @@ import { SiteMarks } from './sitemark.js';
 import { Airstrike } from './airstrike.js';
 import { Bomber } from './bomber.js';
 import { Strafe } from './strafe.js';
+import { Armour } from './tank.js';
 import { AmmoDrops } from './ammo.js';
 import { Caches } from './caches.js';
 
@@ -361,11 +362,32 @@ export class MatchSystem {
     if (patcher) for (const site of this.airstrike.sites) for (const m of site.materials) patcher.patch(m);
     this.bomber = new Bomber(ctx, { rng: this.rng.fork() }).build();
     this.strafe = new Strafe(ctx, { rng: this.rng.fork() }).build();
-    this.air = [this.airstrike, this.bomber, this.strafe];
+    /**
+     * THE ARMOUR — "そんで戦車イベントを早く追加しろ 総力上げて".
+     *
+     * A fourth event on the same shape as the other three (`build()` at boot,
+     * `update(dt, live)`, `armRound`/`disarm`/`reset`, a reused announce record)
+     * and one that is deliberately NOT in the others' `coBusy`: a sortie lasts
+     * about a minute, and standing the whole sky down for it would turn the
+     * tank into a minute of silence. The reverse IS true — see below — because
+     * rolling a tank out under an inbound salvo is two telegraphs at once.
+     */
+    this.tank = new Armour(ctx, { rng: this.rng.fork() }).build();
+    this.air = [this.airstrike, this.bomber, this.strafe, this.tank];
     // Each stands down while EITHER of the other two has something in the air.
     this.airstrike.coBusy = [this.bomber, this.strafe];
     this.bomber.coBusy = [this.airstrike, this.strafe];
     this.strafe.coBusy = [this.airstrike, this.bomber];
+    this.tank.coBusy = [this.airstrike, this.bomber, this.strafe];
+    /**
+     * WHO THE CREW CAN SEE. `match` owns the roster, so the tank never reads
+     * `ai` — it asks for a list and gets live, targetable hostiles of the other
+     * side, the local player included on exactly the same terms (spawn
+     * protection is `ai.targetable`, which takes the human as happily as it
+     * takes an Agent).
+     */
+    this.tank.enemies = (team, out) => this._tankEnemies(team, out);
+    this.tank.onKill = (t, by) => this._onTankKill(t, by);
     /**
      * THE ANNOUNCEMENT, and the reason it is wired here rather than inside the
      * three weapons.
@@ -383,6 +405,7 @@ export class MatchSystem {
       window.__STRIKE__ = this.airstrike;
       window.__BOMBER__ = this.bomber;
       window.__STRAFE__ = this.strafe;
+      window.__TANK__ = this.tank;
     }
 
     /* ---- scratch ------------------------------------------------------- */
@@ -722,6 +745,8 @@ export class MatchSystem {
     // never touched and there is nothing to put back.
     this.bomber?.reset();
     this.strafe?.reset();
+    // Both hulls back in their pockets, invisible, colliders off, wreck hidden.
+    this.tank?.reset();
 
     // ---- the charge ---------------------------------------------------
     // Last round's pouches go with last round's bodies: `_resetPlayer` has
@@ -1915,8 +1940,14 @@ export class MatchSystem {
       vr.deaths++;
     }
     const killer = e.by ?? null;
-    const kr = killer ? this._record(killer) : null;
-    if (kr && kr !== vr) kr.kills++;
+    /**
+     * A TANK IS A KILLER WITHOUT A ROSTER ROW. It is not a man, it does not
+     * score and it must never appear on the scoreboard — but it has a `name`
+     * and a `team`, which is everything the killfeed asks of an attacker, and
+     * "WORLD killed you" for a shell you watched being laid on you is a lie.
+     */
+    const kr = killer ? this._record(killer) ?? (killer.isTank ? killer : null) : null;
+    if (kr && kr !== vr && kr.kills !== undefined) kr.kills++;
     this._pushKillfeed(kr, vr, !!e.headshot);
     if (vr) this._queueRespawn(vr);
 
@@ -1946,8 +1977,10 @@ export class MatchSystem {
     if (pr && pr.alive) {
       pr.alive = false;
       pr.deaths++;
-      const killer = this._record(this._playerLastAttacker);
-      if (killer && killer !== pr) killer.kills++;
+      const att = this._playerLastAttacker;
+      // Same as `_onActorDeath`: a tank has no roster row but is a real killer.
+      const killer = this._record(att) ?? (att?.isTank ? att : null);
+      if (killer && killer !== pr && killer.kills !== undefined) killer.kills++;
       this._pushKillfeed(killer, pr, false);
       this._queueRespawn(pr);
     }
@@ -2087,6 +2120,7 @@ export class MatchSystem {
     this.airstrike?.update(dt, live);
     this.bomber?.update(dt, live);
     this.strafe?.update(dt, live);
+    this.tank?.update(dt, live);
 
     // Dead players watch. Written here, in update(), so it lands before `ui`
     // and `render` read the camera this frame.
@@ -2194,6 +2228,13 @@ export class MatchSystem {
         h.impactTitle = 'CANNON FIRE';
         label = 'CANNON';
         break;
+      case 'TANK':
+        // The only one of the four whose marker is not a point to leave: it is
+        // a street to stay out of, and it will still be there in thirty seconds.
+        h.title = 'ARMOUR MOVING UP';
+        h.impactTitle = 'TANK DESTROYED';
+        label = 'ARMOUR';
+        break;
       default:
         h.title = 'AIRSTRIKE INBOUND';
         h.impactTitle = 'IMPACT';
@@ -2204,8 +2245,14 @@ export class MatchSystem {
     for (let i = 0; i < info.count; i++) this.ui.airDanger(info.points[i], h.lead, label);
     this.ui.banner.show(
       h.title,
-      info.kind === 'SALVO' ? `${h.name} · CLEAR THE AREA` : `${h.name} · GET CLEAR`,
-      info.kind === 'STRAFE' ? 1.8 : 1.9
+      info.kind === 'SALVO'
+        ? `${h.name} · CLEAR THE AREA`
+        : // Both hulls roll on one call, so naming one side would be a lie to
+          // the other. The tank's line is what to do about it, not whose it is.
+          info.kind === 'TANK'
+          ? 'BOTH SIDES · STAY OUT OF THE MID STREET'
+          : `${h.name} · GET CLEAR`,
+      info.kind === 'STRAFE' ? 1.8 : info.kind === 'TANK' ? 2.6 : 1.9
     );
   }
 
@@ -2219,11 +2266,78 @@ export class MatchSystem {
           ? 'BOMBS DOWN'
           : info.kind === 'STRAFE'
             ? 'CANNON FIRE'
-            : 'AIRSTRIKE';
+            : info.kind === 'TANK'
+              ? 'TANK DESTROYED'
+              : 'AIRSTRIKE';
     this.ui.airImpact(title);
     // A salvo is the round's event and gets the full banner; the rest have
     // already had theirs on the way in and would only be shouting twice.
     if (info.kind === 'SALVO') this.ui.banner.show(title, `${info.name} · DOWN`, 2.4);
+  }
+
+  /* ------------------------------------------------------------- armour -- */
+
+  /**
+   * WHO THE TANK CREW MAY SHOOT AT. Filled into a list the caller owns and
+   * reuses, so this allocates nothing; called once every
+   * `ACQUIRE_EVERY` (0.4 s) per hull, not per frame.
+   *
+   * The two filters are the ones every other shooter on the map goes through:
+   * a corpse is not a target (`alive`), and neither is a man inside his spawn
+   * protection (`ai.targetable`, which `match` sets on every respawn for bots
+   * and the human alike). The local player is on the list on the same terms as
+   * anybody else — the tank does not know which of its targets has a camera.
+   */
+  _tankEnemies(team, out) {
+    const foe = team === 0 ? 1 : 0;
+    for (const a of this._botsByTeam[foe]) {
+      if (a.alive && this.ai.targetable(a)) out.push(a);
+    }
+    if (this.playerTeam === foe && !this.player.dead && this.ai.targetable(this.player)) {
+      out.push(this.player);
+    }
+    return out;
+  }
+
+  /**
+   * A HULL BREWED UP, AND SOMEBODY GETS PAID FOR IT.
+   *
+   * `RULES.tankKillScore` on to the killer's side of the DOMINATION score — the
+   * same array the zones print into, so it moves the same bar and can win the
+   * match. That is the whole reason the tank is worth turning to fight: 30
+   * points is fifteen seconds of holding two zones, taken in one play.
+   *
+   * `by` is whatever landed the last round. It can be a man on either side, and
+   * it can be nothing at all (an airstrike, or the other tank's shell), in which
+   * case nobody is paid and the killfeed says so.
+   */
+  _onTankKill(tank, by) {
+    const killerTeam = by ? this.ai.teamOf(by) : -1;
+    // A tank killed by its own side's shell or grenade pays nobody.
+    const paid = killerTeam === 0 || killerTeam === 1 ? killerTeam !== tank.team : false;
+    if (paid && this.capture) this.capture.score[killerTeam] += RULES.tankKillScore;
+    const kr = by ? this._record(by) : null;
+    if (kr) kr.kills++;
+    this.ui.killfeed.push({
+      attacker: kr ? kr.name : by?.name ?? 'WORLD',
+      victim: tank.name,
+      headshot: false,
+      mine: kr?.isPlayer === true,
+      attackerFriendly: killerTeam === -1 ? true : killerTeam === this.playerTeam,
+    });
+    if (paid) {
+      const mine = killerTeam === this.playerTeam;
+      this.ui.banner.show(
+        mine ? 'TANK DESTROYED' : 'ARMOUR LOST',
+        `${tank.name} · ${mine ? '+' : ''}${RULES.tankKillScore} ${TEAM_NAME[killerTeam]}`,
+        2.4
+      );
+    }
+    console.info(
+      `[match] ${tank.name} destroyed by ${kr?.name ?? by?.name ?? 'the environment'} — ` +
+        `${paid ? `+${RULES.tankKillScore} to ${TEAM_NAME[killerTeam]}` : 'no credit'} · ` +
+        `score ${this.score[0]}-${this.score[1]}`
+    );
   }
 
   _collectSquad() {
@@ -3041,10 +3155,12 @@ export class MatchSystem {
     this.airstrike?.dispose();
     this.bomber?.dispose();
     this.strafe?.dispose();
+    this.tank?.dispose();
     if (typeof window !== 'undefined') {
       if (window.__STRIKE__ === this.airstrike) delete window.__STRIKE__;
       if (window.__BOMBER__ === this.bomber) delete window.__BOMBER__;
       if (window.__STRAFE__ === this.strafe) delete window.__STRAFE__;
+      if (window.__TANK__ === this.tank) delete window.__TANK__;
     }
   }
 }

@@ -235,11 +235,20 @@ export class Armour {
     this._v = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
     this._v3 = new THREE.Vector3();
+    /** The hull's pitch quaternion, composed with its yaw every frame. */
+    this._qp = new THREE.Quaternion();
+    /** Where the route ends — what the HUD arrow points at. */
+    this._end = new THREE.Vector3();
+    /** `_destroy`'s own position, because a death can happen INSIDE a shell's
+     *  own `explosion` emit (the other tank's) and would otherwise clobber the
+     *  vector that emit is still using. Same reason `_deathBlast` is separate. */
+    this._v4 = new THREE.Vector3();
     this._q = new THREE.Quaternion();
     this._m = new THREE.Matrix4();
     this._sc = new THREE.Vector3(1, 1, 1);
     this._targets = [];
     this._blast = { position: this._v2, radius: 0, damage: 0, source: null };
+    this._deathBlast = { position: this._v4, radius: 0, damage: 0, source: null };
     this._ev = { phase: '', id: '', team: 0, position: this._v2 };
     this._ann = {
       kind: 'TANK',
@@ -549,7 +558,15 @@ export class Armour {
       mat.map = set.albedo;
       mat.normalMap = set.normal;
       mat.normalScale.set(opts.normalScale ?? 1.0, opts.normalScale ?? 1.0);
-      mat.roughnessMap = set.orm;
+      /**
+       * `orm` is the LIBRARY's roughness for that surface, and three MULTIPLIES
+       * it into `roughness`. For the road wheels that was the whole bug behind
+       * "six cream circles a side": the rubber bake's ORM is glossy in the
+       * crowns, so a 0.05-albedo tyre picked up a sky reflection and read as
+       * pale concrete. `flat: true` is "this surface has no gloss variation" —
+       * the scalar stands alone.
+       */
+      if (!opts.flat) mat.roughnessMap = set.orm;
     }
     this.ctx.peek('render')?.patcher?.patch(mat);
     tank.materials.push(mat);
@@ -559,24 +576,50 @@ export class Armour {
   /**
    * THE HULL, THE TURRET, THE GUN AND EVERYTHING BOLTED TO THEM.
    *
-   * Built out of boxes and cylinders merged per material at boot, so the whole
-   * vehicle is five draw calls (hull paint, running gear, canvas, team paint,
-   * road wheels) and none of it is a flat slab: the glacis and the rear plate
-   * are sloped plates, the turret is six faceted panels rather than a cube, the
-   * track run is thirty-odd individual shoes laid round the road wheels so it
-   * has real relief in a grazing light, and the stowage — bins, drums, a tarp
-   * roll, spare track links on the nose, a tow cable down each side — is what
-   * stops the silhouette reading as a shipping container with a pipe on it.
+   * Built out of boxes and cylinders merged per material at boot; none of it is
+   * a flat slab: the glacis and the rear plate are sloped plates, the turret is
+   * six faceted panels rather than a cube, the track run is thirty-odd
+   * individual shoes laid round the road wheels so it has real relief in a
+   * grazing light, and the stowage — bins, drums, a tarp roll, spare track links
+   * on the nose, a tow cable down each side — is what stops the silhouette
+   * reading as a shipping container with a pipe on it.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * ELEVEN LISTS, NOT FOUR, AND THE BUG THAT SAYS WHY
+   * ────────────────────────────────────────────────────────────────────────
+   * The merge key is (MATERIAL × PARENT), never material alone. The parts below
+   * are authored in three different frames — hull-local, TURRET-local and
+   * GUN-local — and a geometry merged into the wrong parent keeps its numbers
+   * and loses its frame.
+   *
+   * That is not hypothetical. With one `gear` list the gun TUBE, the muzzle
+   * brake and the coaxial MG — all authored at gun-local (0, 0, 0.4..4.9) —
+   * were merged into the hull's running-gear mesh and therefore drawn at
+   * hull-local y = 0: the barrel lay on the road beside the tracks, and the
+   * turret was a bare box with no cupola, no dischargers and no aerial, because
+   * every one of those had gone the same way. Photographed and fixed.
+   *
+   * So: `paint`/`gear`/`canvas`/`team` are hull-local, `tPaint`/`tGear`/
+   * `tCanvas`/`tTeam` are turret-local, `gPaint`/`gGear` are gun-local, and the
+   * road wheels are their own InstancedMesh. Eleven draw calls for a vehicle
+   * that is on screen twice a match; a merge that crosses a moving joint is not
+   * a saving, it is a different model.
    */
   _buildBody(tank) {
     const rng = tank.rng;
+    /* hull-local */
     const paint = [];
     const gear = [];
     const canvas = [];
     const team = [];
+    /* turret-local */
     const tPaint = [];
+    const tGear = [];
+    const tCanvas = [];
     const tTeam = [];
+    /* gun-local */
     const gPaint = [];
+    const gGear = [];
 
     const box = (list, w, h, d, x, y, z, rx = 0, ry = 0, rz = 0) => {
       const g = new THREE.BoxGeometry(w, h, d);
@@ -601,11 +644,23 @@ export class Armour {
     /* ---- lower hull and sponsons -------------------------------------- */
     box(paint, hullW, 0.95, 6.1, 0, 0.92, -0.1);
     box(paint, HULL_W - 0.06, 0.46, 5.5, 0, 1.55, -0.2); // sponsons over the tracks
-    // glacis: a real slope, not a wall
-    box(paint, HULL_W - 0.1, 0.2, 2.35, 0, 1.32, 2.72, -0.62);
-    box(paint, hullW, 0.2, 1.1, 0, 0.72, 3.18, 0.55);
+    /**
+     * THE GLACIS, AND THE SIGN THAT WAS WRONG.
+     *
+     * `rotateX(θ)` sends a point at +Z to `y = -z sinθ`, so a NEGATIVE θ lifts
+     * the FRONT of a plate. At -0.62 this plate stood up in front of the turret
+     * like a dozer blade — photographed. A glacis slopes the other way: nose
+     * low, top edge back at the hull roof. Positive θ, and the two things
+     * bolted to it (the spare links and the team plate) carry the same sign.
+     *
+     * The numbers are the two edges rather than a guess: top edge at the roof
+     * line (y 1.78, z 2.05), bottom edge at the nose (y 0.62, z 3.34) — a
+     * 1.74 m plate at 0.73 rad from horizontal, which is a 42 degree glacis.
+     */
+    box(paint, HULL_W - 0.1, 0.2, 1.74, 0, 1.2, 2.7, 0.73);
+    box(paint, hullW, 0.2, 1.0, 0, 0.62, 3.3, 0.55);
     // rear plate, sloped the other way, and the engine deck over the back
-    box(paint, HULL_W - 0.12, 0.2, 1.5, 0, 1.28, -3.05, 0.5);
+    box(paint, HULL_W - 0.12, 0.2, 1.5, 0, 1.28, -3.05, -0.5);
     box(paint, HULL_W - 0.24, 0.14, 2.3, 0, 1.79, -1.95);
     // deck louvres — six ribs across the engine deck
     for (let i = 0; i < 6; i++) {
@@ -678,17 +733,19 @@ export class Armour {
     this._buildWheels(tank, trackX, wheelY, wheelR);
 
     /* ---- stowage: what makes it look used ------------------------------ */
-    // spare track links bolted across the glacis
+    // spare track links bolted across the glacis (same slope as the plate)
     for (let i = 0; i < 5; i++) {
-      box(gear, 0.42, 0.12, 0.14, -0.9 + i * 0.45, 1.52, 2.86, -0.62, 0, rng.range(-0.03, 0.03));
+      box(gear, 0.42, 0.12, 0.14, -0.9 + i * 0.45, 1.28, 2.78, 0.73, 0, rng.range(-0.03, 0.03));
     }
     // tool bins down the right sponson, fuel drums across the back
     box(paint, 0.34, 0.36, 1.25, hw - 0.16, 1.94, 0.55);
     box(paint, 0.34, 0.3, 0.85, hw - 0.16, 1.9, -0.85);
     cyl(gear, 0.27, 0.27, 0.82, 12, 0.72, 2.06, -3.35, 0, 0, Math.PI / 2);
     cyl(gear, 0.27, 0.27, 0.82, 12, -0.72, 2.06, -3.35, 0, 0, Math.PI / 2);
-    // a tarpaulin roll and a folded net on the left sponson
-    cyl(canvas, 0.21, 0.19, 1.5, 10, -(hw - 0.2), 1.92, 0.9, 0, 0, Math.PI / 2);
+    // A tarpaulin roll and a folded net on the left sponson. The roll lies
+    // FORE-AFT: across the hull it hung 0.55 m outside the tracks at head
+    // height, and the narrowest street the route survives is 9.6 m.
+    cyl(canvas, 0.21, 0.19, 1.5, 10, -(hw - 0.2), 1.92, 0.9, Math.PI / 2, 0, 0);
     box(canvas, 0.4, 0.26, 0.85, -(hw - 0.22), 1.9, -0.8, 0, rng.range(-0.1, 0.1), 0);
     // tow cable: four short runs down each side, so it drapes
     for (const sx of [-1, 1]) {
@@ -708,35 +765,35 @@ export class Armour {
     box(tPaint, 1.05, 0.7, 0.8, -0.62, -0.02, 0.72, 0, 0.5, 0); // left cheek
     box(tPaint, 2.05, 0.5, 1.05, 0, 0.05, -1.42); // rear bustle
     box(tPaint, 2.1, 0.1, 2.6, 0, 0.4, -0.2); // roof
-    // commander's cupola, hatch, and the coax MG on its ring
+    // commander's cupola, hatch, and the pintle MG on its ring
     cyl(tPaint, 0.42, 0.42, 0.3, 14, 0.5, 0.56, -0.5);
-    cyl(gear, 0.44, 0.44, 0.07, 14, 0.5, 0.73, -0.5);
-    box(gear, 0.1, 0.1, 0.66, 0.5, 0.86, -0.16);
-    box(gear, 0.13, 0.16, 0.2, 0.5, 0.84, -0.52);
+    cyl(tGear, 0.44, 0.44, 0.07, 14, 0.5, 0.73, -0.5);
+    box(tGear, 0.1, 0.1, 0.66, 0.5, 0.86, -0.16);
+    box(tGear, 0.13, 0.16, 0.2, 0.5, 0.84, -0.52);
     cyl(tPaint, 0.3, 0.3, 0.26, 12, -0.62, 0.54, -0.55); // loader's hatch
     // vision blocks around the cupola
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2;
-      box(gear, 0.16, 0.1, 0.06, 0.5 + Math.sin(a) * 0.42, 0.6, -0.5 + Math.cos(a) * 0.42, 0, a, 0);
+      box(tGear, 0.16, 0.1, 0.06, 0.5 + Math.sin(a) * 0.42, 0.6, -0.5 + Math.cos(a) * 0.42, 0, a, 0);
     }
     // smoke dischargers, three a side, splayed
     for (const sx of [-1, 1]) {
       for (let i = 0; i < 3; i++) {
-        cyl(gear, 0.09, 0.09, 0.32, 8, sx * 0.95, 0.16, 0.35 - i * 0.26, -0.35, sx * 0.25, 0);
+        cyl(tGear, 0.09, 0.09, 0.32, 8, sx * 0.95, 0.16, 0.35 - i * 0.26, -0.35, sx * 0.25, 0);
       }
     }
     // stowage basket around the bustle: a frame plus a canvas roll in it
     for (let i = 0; i < 5; i++) {
-      box(gear, 0.05, 0.34, 0.05, -0.95 + i * 0.48, 0.44, -1.95);
+      box(tGear, 0.05, 0.34, 0.05, -0.95 + i * 0.48, 0.44, -1.95);
     }
-    box(gear, 2.0, 0.05, 0.05, 0, 0.6, -1.95);
-    box(canvas, 1.55, 0.3, 0.42, 0, 0.42, -1.86, rng.range(-0.06, 0.06));
+    box(tGear, 2.0, 0.05, 0.05, 0, 0.6, -1.95);
+    box(tCanvas, 1.55, 0.3, 0.42, 0, 0.42, -1.86, rng.range(-0.06, 0.06));
     // antenna bases and one bent whip
-    cyl(gear, 0.07, 0.07, 0.14, 8, -0.9, 0.5, -1.3);
-    box(gear, 0.035, 1.5, 0.035, -0.9, 1.28, -1.3, 0.12, 0, 0.07);
+    cyl(tGear, 0.07, 0.07, 0.14, 8, -0.9, 0.5, -1.3);
+    box(tGear, 0.035, 1.5, 0.035, -0.9, 1.28, -1.3, 0.12, 0, 0.07);
     // spare links on the turret side, the classic bit of extra armour
     for (let i = 0; i < 4; i++) {
-      box(gear, 0.1, 0.13, 0.4, -1.12, 0.12, 0.55 - i * 0.42);
+      box(tGear, 0.1, 0.13, 0.4, -1.12, 0.12, 0.55 - i * 0.42);
     }
 
     /* ---- team markings ------------------------------------------------- */
@@ -746,19 +803,19 @@ export class Armour {
     box(tTeam, 2.12, 0.16, 0.06, 0, 0.12, -1.97);
     box(tTeam, 0.06, 0.34, 0.5, 1.13, 0.06, -0.3);
     box(tTeam, 0.06, 0.34, 0.5, -1.13, 0.06, -0.3);
-    box(team, 0.5, 0.06, 0.34, 0, 1.87, 3.05, -0.62);
+    box(team, 0.5, 0.06, 0.34, 0, 1.02, 3.02, 0.73);
 
     /* ---- the gun ------------------------------------------------------- */
     // mantlet, barrel with a thermal sleeve over the breech end, muzzle brake
     box(gPaint, 1.15, 0.66, 0.5, 0, 0, 0.1);
     cyl(gPaint, 0.24, 0.2, 0.36, 14, 0, 0, 0.42, Math.PI / 2);
     cyl(gPaint, 0.155, 0.145, 2.1, 14, 0, 0, 1.55, Math.PI / 2); // sleeve
-    cyl(gear, 0.105, 0.098, 4.4, 14, 0, 0, 2.6, Math.PI / 2); // tube
-    cyl(gear, 0.17, 0.17, 0.5, 12, 0, 0, 4.6, Math.PI / 2); // muzzle brake
-    box(gear, 0.42, 0.1, 0.16, 0, 0, 4.55); // brake ports
-    box(gear, 0.42, 0.1, 0.16, 0, 0, 4.72);
+    cyl(gGear, 0.105, 0.098, 4.4, 14, 0, 0, 2.6, Math.PI / 2); // tube
+    cyl(gGear, 0.17, 0.17, 0.5, 12, 0, 0, 4.6, Math.PI / 2); // muzzle brake
+    box(gGear, 0.42, 0.1, 0.16, 0, 0, 4.55); // brake ports
+    box(gGear, 0.42, 0.1, 0.16, 0, 0, 4.72);
     // coaxial machine gun beside the mantlet
-    cyl(gear, 0.055, 0.05, 1.1, 8, 0.42, -0.12, 0.95, Math.PI / 2);
+    cyl(gGear, 0.055, 0.05, 1.1, 8, 0.42, -0.12, 0.95, Math.PI / 2);
 
     /* ---- merge, one mesh per material ---------------------------------- */
     const tint = tank.team === 0 ? 0x6b6450 : 0x4a5652;
@@ -786,8 +843,11 @@ export class Armour {
     add(tank.root, canvas, mCanvas, 'canvas');
     add(tank.root, team, mTeam, 'markings');
     add(tank.turret, tPaint, mPaint, 'turret');
+    add(tank.turret, tGear, mGear, 'turret_gear');
+    add(tank.turret, tCanvas, mCanvas, 'turret_canvas');
     add(tank.turret, tTeam, mTeam, 'turret_markings');
     add(tank.gun, gPaint, mPaint, 'gun');
+    add(tank.gun, gGear, mGear, 'gun_barrel');
     tank.gearMat = mGear;
   }
 
@@ -810,7 +870,15 @@ export class Armour {
       holes.push(g);
     }
     const geo = mergeGeometries([rim, hub, ...holes]);
-    const mat = this._hullMaterial(tank, 'rubber', 0x2e2c2a, { roughness: 0.95, metalness: 0.05 });
+    /**
+     * A ROAD WHEEL IS THE DARKEST THING ON THE VEHICLE. `getTextureSet` hands
+     * back the RAW bake — none of the library's `mat` tint/weather params are
+     * applied, they belong to `materials.get()` — and the rubber bake alone
+     * renders as a pale disc in direct sun, which is what six cream circles a
+     * side looked like. 0x17_1614 against that map lands at roughly 0.05
+     * albedo, which is what rubber is.
+     */
+    const mat = this._hullMaterial(tank, 'rubber', 0x171614, { roughness: 1.0, metalness: 0.0, flat: true });
     const n = 12;
     const mesh = new THREE.InstancedMesh(geo, mat, n);
     mesh.name = `match_tank_${tank.id}_wheels`;
@@ -1463,10 +1531,10 @@ export class Armour {
     tank.uniforms.uT.value = 0;
     tank.uniforms.uAnim.value = 1;
 
-    const b = this._blast;
-    this._v2.copy(tank.position);
-    this._v2.y += 1.5;
-    b.position = this._v2;
+    const b = this._deathBlast;
+    this._v4.copy(tank.position);
+    this._v4.y += 1.5;
+    b.position = this._v4;
     b.radius = RULES.tankDeathRadius;
     b.damage = RULES.tankDeathDamage;
     b.source = tank;
@@ -1474,14 +1542,14 @@ export class Armour {
 
     const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
     if (fx) {
-      fx.explosion?.({ position: this._v2, radius: 5.5 });
-      fx.hazeRing?.(this._v2.x, this._v2.y, this._v2.z, 3.0, 20, 0.5, 2.4);
+      fx.explosion?.({ position: this._v4, radius: 5.5 });
+      fx.hazeRing?.(this._v4.x, this._v4.y, this._v4.z, 3.0, 20, 0.5, 2.4);
       fx.scorch?.(tank.position.x, tank.position.y + 0.15, tank.position.z, 6.0);
       // A knocked-out tank burns for the rest of the round. One emitter.
       fx.addSmokeColumn?.(tank.position.x, tank.position.y + 1.2, tank.position.z, {
         radius: 2.4, duration: 26, rate: 9, rise: 2.6, dark: 0.5, life: 8, growth: 4.2,
       });
-      if (fx.lights) fx.lights.flash(this._v2.x, this._v2.y, this._v2.z, 1, 0.6, 0.3, 1400, 0.7, 8, 60, 5);
+      if (fx.lights) fx.lights.flash(this._v4.x, this._v4.y, this._v4.z, 1, 0.6, 0.3, 1400, 0.7, 8, 60, 5);
     }
     const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
     if (audio?.play) {

@@ -468,6 +468,71 @@ export const RULES = {
   /** Ceiling on runs per round. */
   strafeMaxPerRound: 3,
 
+  /* ---- armour ---- */
+  /**
+   * THE TANK — "そんで戦車イベントを早く追加しろ 総力上げて".
+   *
+   * One AI-crewed vehicle per side, driving its own end of the mid street on an
+   * authored, boot-proved route. It is the only air/armour event on the map that
+   * is a THING rather than a moment: the three air weapons happen to you in four
+   * seconds, the tank is present for the best part of a minute and has to be
+   * dealt with. @see src/match/tank.js
+   *
+   * HEALTH IS AGAINST THE ARMOUR TABLE, NOT AGAINST A RIFLE. `PART_MUL` in
+   * tank.js is 0.22 on the glacis, 0.4 on the turret and 1.7 on the engine deck,
+   * so at 2600 a 34-damage rifle round takes ~348 hits into the front and ~45
+   * into the deck — a magazine and a half from behind kills it, a magazine into
+   * the nose does nothing. A frag (`grenadeDamage` at `EXPLOSION_MUL` 1.35) is
+   * worth ~240 at contact, so three well-placed grenades or one airstrike
+   * (260 × 1.35 = 351 at the centre, and it is a 15 m radius) also does it.
+   */
+  tankHealth: 2600,
+  /**
+   * What killing one is worth to the side that did it, in DOMINATION points.
+   *
+   * 30 against a `scoreTarget` of 250 — 12 %, which is fifteen seconds of
+   * holding two zones. Enough that a squad turning to deal with the tank is not
+   * throwing the match away, small enough that it is a play and not a trophy.
+   */
+  tankKillScore: 30,
+  /**
+   * Seconds into a LIVE round before the first sortie. Longer than any of the
+   * air weapons: the tank takes ~40 s to drive its route, and it must not be in
+   * the street before the two sides have met.
+   */
+  tankFirstDelay: 55,
+  /** Gap between sorties, seconds. Both hulls have to be parked first. */
+  tankInterval: [95, 140],
+  /**
+   * Ceiling per match. Three sorties over a ten-minute match, each lasting about
+   * a minute — so armour is on the map for roughly a fifth of it.
+   */
+  tankMaxPerMatch: 3,
+  /**
+   * THE MAIN GUN. 9 m / 300 is between the route strike and the full airstrike:
+   * a direct hit kills, the splash off a wall two metres away kills, and being
+   * behind the wall it hit does not. The reload is what makes it survivable —
+   * five and a half seconds is long enough to cross a street.
+   */
+  tankMainRadius: 9,
+  tankMainDamage: 300,
+  tankMainReload: 5.5,
+  /**
+   * THE COAX. Per round it is a rifle bullet and it comes nine at a time behind
+   * every main-gun shot, so standing in the open after the shell lands is the
+   * second way it kills you.
+   */
+  tankCoaxDamage: 26,
+  /** Metres the crew will engage inside. Beyond this it drives. */
+  tankRange: 85,
+  /**
+   * IT BREWS UP. The ammunition going off is bigger than anything it fired —
+   * being next to a burning tank when it goes is its own hazard, and it is the
+   * reason killing one in a street is worth watching.
+   */
+  tankDeathRadius: 12,
+  tankDeathDamage: 240,
+
   /* ---- combat ---- */
   /**
    * SA has no health regeneration — the 100 HP you spawn with is the 100 HP you
