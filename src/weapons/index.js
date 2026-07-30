@@ -329,7 +329,15 @@ export class WeaponSystem {
   get primaryIds() {
     return WEAPON_IDS.filter((id) => {
       const c = WEAPON_DEFS[id]?.class;
-      return c !== 'pistol' && c !== 'melee';
+      /**
+       * A THROWABLE IS NOT A PRIMARY. The filter was written when the roster was
+       * rifle/smg/pistol/knife and excluded what existed then; the grenade
+       * arrived later on slot 4 and fell through into this list, so the pause
+       * menu's loadout row offered "carry a frag instead of a rifle" as a
+       * choice. Slot 1 draws whatever this returns, so picking it would have
+       * left the player with no primary at all.
+       */
+      return c !== 'pistol' && c !== 'melee' && c !== 'throwable' && c !== 'grenade';
     });
   }
 
