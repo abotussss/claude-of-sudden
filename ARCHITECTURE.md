@@ -102,7 +102,32 @@ ui.setRound(state)          ui.matchDriven      ui.isFriendlyTarget(actor)
 ui.airAlert(a)              ui.airImpact(title)   ui.clearAirAlert()
 ui.airDanger(position, life, label)
 world.levelYaw              world.levelToWorld(x, y, z, out)
+world.features              world.links
 ```
+
+`world.features` and `world.links` are PLACES THE LEVEL AUTHORED AND MARKED, and
+they exist because "屋内のエリアを作ってそこにもAIがいく利点やメリットを与えて でないとAIが
+屋内戦闘しない". `world` may not decide what a pickup gives any more than it may
+decide who is on which side, so it publishes the geography and `match` (or `ai`)
+binds the behaviour:
+
+```js
+world.features  // [{ id, kind:'ammo'|'weapon'|'grenade'|'vantage', building,
+                //    floor:0..2|'roof', indoor, botReachable,
+                //    position:Vector3, level:{x,y,z}, yaw }]
+world.links     // [{ id, from, to, a:Vector3, b:Vector3, width, span, fall }]
+```
+
+There are 24 features — one per floor of every enterable building and one on
+every reachable roof — and each is a real cache of geometry standing on a
+painted square, not a marker. `botReachable` is the field that matters to `ai`:
+`src/ai/nav.js` is a 2.5D height field, so a bot cannot climb a stair anywhere in
+this level, and only the eight GROUND-FLOOR features can ever be walked to by
+one. `world.links` are the four rooftop gangways; their decks are `LAYER.CLIP`
+so the connectors they cross are still open ground to the bot height field.
+`tools/floorcheck.mjs` gates all of it — head clearance over every tread, a
+cache on the level every flight arrives at, and the real capsule walked across
+every link. See `src/world/features.js` and `src/world/links.js`.
 
 `ui.airAlert` and `ui.airDanger` are INCOMING AIR, and they exist because the
 three air weapons in `src/match` fired correctly for weeks while the player
