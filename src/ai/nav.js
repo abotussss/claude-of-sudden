@@ -158,6 +158,12 @@ export class NavGrid {
      * failing loudly. Sized to the grid.
      */
     this.open = new Heap(Math.min(n, 1 << 18));
+    /**
+     * A*'s expansion ceiling, derived from the grid for the same reason the open
+     * list is. @see `findPath`, which has the measurements: a fixed 24000 became
+     * a silent "no route" for every long query the moment the map grew.
+     */
+    this.maxNodes = Math.max(24000, Math.round(n * 0.7));
 
     this._v = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
@@ -527,8 +533,39 @@ export class NavGrid {
      * not a cost: a search that succeeds still stops the moment it pops the
      * goal, and the routes on this map settle in a few hundred expansions. It
      * only ever spends the budget on a query that was going to fail.
+     *
+     * ────────────────────────────────────────────────────────────────────────
+     * AND THEN IT WENT STALE AGAIN, SO IT IS DERIVED FROM THE GRID NOW
+     * ────────────────────────────────────────────────────────────────────────
+     * The map grew a base district at each end and a cathedral in the middle
+     * (see `THE MAP GROWS` in src/world/layout.js): the grid went 328x329 to
+     * 453x453 and the longest route on it went from 118 m to 197 m. 24000 was
+     * not enough for either end of that, and BECAUSE THE FAILURE IS SILENT it
+     * did not look like a pathfinding problem. Measured, same build, same grid:
+     *
+     *   attack spawn -> the cathedral crossing (98 m)   24000: NO ROUTE
+     *                                                   60000: NO ROUTE
+     *                                                  400000: 9 waypoints
+     *   attack spawn -> defence spawn        (196 m)    24000: NO ROUTE
+     *                                                   60000: 11 waypoints
+     *
+     * What that looked like from the outside was the LEVEL being broken:
+     * `src/match/sites.js` reported "site C: walkable but NOT reachable from
+     * every spawn — moved 11.0 m", then relocated 24 of 30 spawn points by up to
+     * 24 m trying to find ground that could reach it, and `src/match/caches.js`
+     * dropped five interior caches as unreachable. Every one of those is a
+     * correct response to `findPath` returning 0, and every one of them was a
+     * lie about the geometry: the crossing has 1331 walkable cells around it and
+     * the route exists.
+     *
+     * A CEILING THAT DOES NOT SCALE WITH THE GRID IS A BUG WAITING FOR THE NEXT
+     * MAP CHANGE, and this is the second time it has fired. So it is derived,
+     * exactly like the open list two hundred lines up (`Math.min(n, 1 << 18)`):
+     * 70 % of the cells is far more than any successful search on a map this
+     * shape needs (the longest one measured expands well under a tenth of it),
+     * and it still bounds a hopeless query to less than one full sweep.
      */
-    const maxNodes = opts.maxNodes ?? 24000;
+    const maxNodes = opts.maxNodes ?? this.maxNodes;
 
     this.stamp++;
     const stamp = this.stamp;

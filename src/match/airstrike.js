@@ -138,6 +138,12 @@ const L = (x, z) => [widenX(x) * SCALE, z * SCALE];
  * scale and not the widen. @see `CATHEDRAL` in src/world/layout.js.
  */
 const LC = (x, z) => [x * SCALE, z * SCALE];
+/**
+ * Keep the cathedral's roof search inside the AISLE the anchor stands on: the
+ * aisle is 4.85 m of clear span and the campanile, the nave roof and the dome
+ * are all further in and all higher. @see `_findRoof`, which takes the maximum.
+ */
+const CATH_PROBE = { insets: [2.0, 3.0, 4.0], alongs: [0, 2.5, -2.5, 4, -4] };
 
 /**
  * THE STRIKE SITES, authored in the level space `src/world/layout.js` uses.
@@ -213,12 +219,11 @@ const STRIKE_SITES = [
    * nav patch as three flat arrays of the ~300 cells the mound actually changes.
    * The frame it goes off does two booleans per mesh and one uniform write.
    *
-   * WHERE THEY ARE. Two on the nave's west elevation and one on the east, all
-   * three anchored on the wall with `face` pointing out over the flanking
-   * street, 11 and 16 authored units apart so their 9-unit masses do not
-   * overlap. `_findRoof` searches inside the footprint and takes the HIGHEST
-   * plane it finds, so CATH-W and CATH-E come off the nave roof at 15 m and
-   * CATH-X — anchored on the crossing — comes off the dome at ~20 m.
+   * WHERE THEY ARE. Two bays of the west aisle roof and one of the east, all
+   * three anchored on the outer wall with `face` pointing out over the flanking
+   * street, 14 authored units apart so their 9 m masses do not overlap. Each
+   * carries a `probe` that keeps the roof search inside the 4.85 m aisle it is
+   * authored on — see `_findRoof`, and see what happened without it.
    *
    * THE STREET EITHER SIDE IS ONLY 8.25 m WIDE, and that is handled rather than
    * hoped: `_buildSite` measures the lane with a ray at chest height and scales
@@ -227,9 +232,21 @@ const STRIKE_SITES = [
    * a site's collision away entirely if it costs anybody one. A cathedral that
    * sealed its own flank would be a capture point nobody could rotate to.
    */
-  { id: 'CATH-W', name: 'CATHEDRAL NAVE', level: LC(-10.0, -11.0), face: [-1, 0], reach: 5.0, kind: 'vault' },
-  { id: 'CATH-X', name: 'CATHEDRAL CROSSING', level: LC(-10.0, 0.0), face: [-1, 0], reach: 5.0, kind: 'vault' },
-  { id: 'CATH-E', name: 'CATHEDRAL CHOIR', level: LC(10.0, 5.0), face: [1, 0], reach: 5.0, kind: 'vault' },
+  /**
+   * AND THE Z OF ALL THREE IS DECIDED BY WHAT IS ACROSS THE STREET FROM THEM.
+   *
+   * The flank the mound falls into is 8.25 m wide opposite W2 and W3 and OPEN
+   * where the two connectors meet it (authored z -8..-1 and 9..14). Anchored in
+   * a connector mouth the lane ray measures 42.5 m, `LANE_CLEAR` therefore never
+   * bites, and the full 6.6 m mound lands in the rotation: measured, CATH-W and
+   * CATH-X in those two positions cost 52 and 63 of 135 spawn/target routes and
+   * `_verifyRoutes` took both sites' collision away. So every anchor is opposite
+   * a building — and none is on the west flank south of authored z -10, because
+   * that is the campanile and its cap is 32.8 m up.
+   */
+  { id: 'CATH-W', name: 'CATHEDRAL NAVE', level: LC(10.0, -12.0), face: [1, 0], reach: 4.6, kind: 'vault', probe: CATH_PROBE },
+  { id: 'CATH-X', name: 'CATHEDRAL CHOIR', level: LC(-10.0, 7.0), face: [-1, 0], reach: 4.6, kind: 'vault', probe: CATH_PROBE },
+  { id: 'CATH-E', name: 'CATHEDRAL CROSSING', level: LC(10.0, 2.0), face: [1, 0], reach: 4.6, kind: 'vault', probe: CATH_PROBE },
 ];
 
 /**
@@ -679,11 +696,27 @@ export class Airstrike {
    *
    * @returns {number} roof height, or NaN when the anchor is not on a building
    */
-  _findRoof(anchor, u, v, physics) {
+  /**
+   * `spec.probe` OVERRIDES THE SEARCH, AND A CATHEDRAL IS WHY.
+   *
+   * The search takes the HIGHEST plane it finds inside the footprint, which is
+   * exactly right for a shop with a flat roof and a stair hut on it and exactly
+   * wrong for a building with a section. Measured on the first build of the
+   * cathedral sites: anchored on the outer aisle wall, the default sweep (2-7.5 m
+   * in, ∓5 m along) reached past the 4.85 m aisle to the nave roof at 15 m, over
+   * the crossing dome at 21.6 m and, at the south end, onto the campanile's cap
+   * at 32.8 m — so the mass was built at the roof plane of something 15 m INBOARD
+   * of the wall it was authored on and hung in mid air over the aisle.
+   *
+   * `probe` is per-site and additive: give it insets that stay inside the bay the
+   * anchor is actually on and the mass sits on the roof it is authored for. It
+   * changes nothing for the eight sites that do not carry one.
+   */
+  _findRoof(anchor, u, v, physics, spec = null) {
     const p = this._v;
     let best = NaN;
-    for (const inset of [ROOF_INSET, 4.5, 6.0, 2.0, 7.5]) {
-      for (const along of [0, 2.5, -2.5, 5, -5]) {
+    for (const inset of spec?.probe?.insets ?? [ROOF_INSET, 4.5, 6.0, 2.0, 7.5]) {
+      for (const along of spec?.probe?.alongs ?? [0, 2.5, -2.5, 5, -5]) {
         p.copy(anchor).addScaledVector(u, -inset).addScaledVector(v, along);
         const h = physics.groundHeight(p.x, p.z, 40);
         if (Number.isFinite(h) && h >= 3 && !(h <= best)) best = h;
@@ -704,7 +737,7 @@ export class Airstrike {
     const u = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)); // out over the lane
     const v = new THREE.Vector3(u.z, 0, -u.x); // along the facade
     // Roof height, probed INSIDE the footprint. Dropped from 40 m, over everything.
-    const roofY = this._findRoof(anchor, u, v, physics);
+    const roofY = this._findRoof(anchor, u, v, physics, spec);
     if (!Number.isFinite(roofY)) {
       console.error(
         `[airstrike] ${spec.id}: no roof anywhere inside the footprint at level ` +

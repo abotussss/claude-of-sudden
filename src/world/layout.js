@@ -1896,6 +1896,23 @@ for (const b of RELIEF.blocks) scRect(b.rect);          // `h` is the mantle lad
 
 for (const k of KEEPOUT) { k[0] *= S; k[1] *= S; k[2] *= S; }
 
+/**
+ * THE CATHEDRAL'S PLAN SCALES AND ITS SECTION DOES NOT, exactly like a building.
+ *
+ * Left off this list for one build and the consequence was not subtle: a 20 x 30
+ * m church instead of a 30 x 45 m one, whose arcade piers at ∓8.6 m ended up
+ * OUTSIDE its own walls at ∓9.15 m (a negative-width aisle), whose nave bays ran
+ * 2 m past the north and south elevations, and whose crossing — the capture
+ * point — resolved 11 m away in the street because `ensureReachable` could not
+ * find a route to the inside of what was left. `w`, `d` and the centre are plan;
+ * `pierW` is a piece of masonry sized to the man standing beside it, `bays` is a
+ * count and everything in `SEC` in cathedral.js is metres. None of those scale.
+ */
+CATHEDRAL.x *= S;
+CATHEDRAL.z *= S;
+CATHEDRAL.w *= S;
+CATHEDRAL.d *= S;
+
 // Centre and footprint scale exactly as a BUILDING's do; `h` is a height and
 // does not. See the long note over SITEWORKS.
 for (const p of SITEWORKS) { p.x *= S; p.z *= S; p.w *= S; p.d *= S; }
