@@ -2511,12 +2511,23 @@ export function buildPerimeter(A, rng) {
    * player has never seen the same scatter twice anyway.
    */
   const edge = new Rng(0x9a11ed6e);
-  /** Outside the furthest authored masonry on each axis, whatever it is now. */
-  let outerX = 58 * SCALE;
-  for (const b of BUILDINGS) outerX = Math.max(outerX, Math.abs(b.x) + b.w / 2 + 2.5);
-  const RX = outerX;
-  /** The z runs stay where they were: clear of the BN/BS rows, which are at
-   *  |z| >= 106.5, and the street passes through the gateway below. */
+  /**
+   * BOTH EXTENTS STAY AT 58 * SCALE, AND THE X ONE IS A DELIBERATE NON-FIX.
+   *
+   * X is stale as well: `widenX` translated the outer background row out by 9
+   * authored units and it now stands at level |x| 60..94.5, so these two runs are
+   * buried inside BW1/BW2/BW3 and BE1/BE2/BE3 rather than standing outside them.
+   * Deriving it — `max(|b.x| + b.w/2) + 2.5` = 97 — was MEASURED and is WORSE:
+   * it pulls the 10-unit strip between the blocks' outer faces and the new wall
+   * inside the boundary, where it is dune with nothing authored on it, and
+   * `boundcheck` correctly reported four new void pockets of 1150-1345 m² at the
+   * corners. The blocks are the boundary along their own length; the wall behind
+   * them is belt and braces. Widening the belt exposes ground the level has never
+   * dressed, so the honest edge in x is where the masonry is, and moving this
+   * line is not the fix — dressing that strip, or bringing the blocks together,
+   * would be.
+   */
+  const RX = 58 * SCALE;
   const RZ = 58 * SCALE;
   /** The gateway, one panel wider than the cordon's outer face so the innermost
    *  surviving panel of each run overlaps the wall it dies into. */
