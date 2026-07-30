@@ -238,9 +238,9 @@ export class NavGrid {
         walk++;
       }
     }
-    this.walkableCount = walk;
-    if (volumes && volumes.length) walk = this._carveInteriors(volumes);
-    this.walkableCount = walk;
+    // …and then the ground storeys, which the sweep above can only see the roof
+    // of, and which are the only cells in the grid it does not own.
+    this.walkableCount = volumes && volumes.length ? this._carveInteriors(volumes) : walk;
     this.buildMs = performance.now() - t0;
     return this;
   }
