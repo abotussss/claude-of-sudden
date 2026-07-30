@@ -97,6 +97,32 @@ const SPEAKER_GAP = 5.0;
 const SPEAKER_GAP_ACK = 2.2;
 /** Above this share of a side in combat, the net is "in a firefight". */
 const HOT_HEAT = 0.18;
+/**
+ * The share of a side in contact at which the net is at `NET_GAP_HOT`.
+ *
+ * MEASURED and then lowered: on a 15v15 the busiest moment of a round runs at
+ * about a quarter of each side having a target at once — fifteen men do not all
+ * see somebody, they take turns — so a scale of 0.35 meant the gap never got
+ * below ~3.1 s and the longest silence inside a firefight measured 11.4 s. It
+ * is 0.25 so a real engagement actually reaches the hot rate.
+ */
+const HEAT_FULL = 0.25;
+
+/**
+ * METRES. Past this, an ENEMY transmission is not played at all.
+ *
+ * The friendly net is a radio and has no distance. The enemy net is men
+ * shouting, and `src/audio/index.js` already draws exactly this line for
+ * gunfire — "nothing past 60 m, because a single crack from across the map is
+ * not information" — which is a stronger argument for a voice than for a rifle.
+ * It also has a measured cost: the 72-emitter spatial field runs pinned at 72
+ * in a live 15v15, so every positional bark that is not information is a slot
+ * taken off the firefight. @see the eviction numbers in the commit that added
+ * this. The message still goes out on the net and is still counted; it is the
+ * PLAYBACK that is skipped, which is honest — a man forty metres away really
+ * did say it.
+ */
+const ENEMY_AUDIBLE = 42;
 
 /**
  * PER-NET, PER-KIND COOLDOWN. The number is "how long is this still news".
@@ -178,6 +204,8 @@ class Net {
     /** Reported. @see `Radio.stats`. */
     this.sent = 0;
     this.refused = 0;
+    /** Enemy calls too far from the player to be worth a voice. @see `_earshot`. */
+    this.outOfEarshot = 0;
     this.dropped = 0;
     this.wantedAnswer = 0;
     this.answered = 0;
@@ -197,6 +225,7 @@ export class Radio {
     this.nets = [new Net(0), new Net(1)];
     this.lastTxAny = -1e9;
     this._audio = undefined;
+    this._player = undefined;
     this._levelYaw = 0;
     this._interiors = null;
     this._v = new THREE.Vector3();
@@ -223,6 +252,7 @@ export class Radio {
       n.lastTx = -1e9;
       n.heat = 0;
       n.sent = n.refused = n.dropped = n.wantedAnswer = n.answered = 0;
+      n.outOfEarshot = 0;
       n.maxHotSilence = 0;
       n.hotTime = 0;
       for (const k of Object.keys(n.kindAt)) n.kindAt[k] = -1e9;
@@ -397,7 +427,7 @@ export class Radio {
 
   /** 1.9 s in contact, 6.0 s out of it, and everything between. */
   _netGap(net) {
-    const k = Math.min(1, net.heat / 0.35);
+    const k = Math.min(1, net.heat / HEAT_FULL);
     return NET_GAP_QUIET + (NET_GAP_HOT - NET_GAP_QUIET) * k;
   }
 
@@ -429,10 +459,17 @@ export class Radio {
        * has to win an emitter from `SpatialField.acquire`, and losing there is
        * correct and is counted as `refusedByAudio`.
        */
-      played = friendly
-        ? audio.bark(m.voice, null, { radio: true, voice: m.speaker.id, level: 0.85, force: true })
-        : audio.bark(m.voice, m.speaker.alive ? m.speaker.position : m.position,
-          { voice: m.speaker.id, level: 1, force: true });
+      if (friendly) {
+        played = audio.bark(m.voice, null,
+          { radio: true, voice: m.speaker.id, level: 0.85, force: true });
+      } else {
+        const at = m.speaker.alive ? m.speaker.position : m.position;
+        if (this._earshot(at)) {
+          played = audio.bark(m.voice, at, { voice: m.speaker.id, level: 1, force: true });
+        } else {
+          net.outOfEarshot++;
+        }
+      }
     }
     net.lastTx = now;
     this.lastTxAny = now;
@@ -580,6 +617,23 @@ export class Radio {
   }
 
   /**
+   * Is `p` close enough to the man at the keyboard for a shout to be worth a
+   * voice? @see `ENEMY_AUDIBLE`.
+   *
+   * The listener is the local player's own position, which `src/ai` already
+   * reads every frame for `_testPlayerHit` and `actorChest`. It is not read out
+   * of `audio` — `field.listenerPos` is that subsystem's internal state, and
+   * the point of asking `player` is that the answer is the same one.
+   */
+  _earshot(p) {
+    if (this._player === undefined) this._player = this.ctx.peek('player') ?? null;
+    const lp = this._player?.position;
+    if (!lp) return true;
+    const dx = p.x - lp.x, dy = p.y - lp.y, dz = p.z - lp.z;
+    return dx * dx + dy * dy + dz * dz < ENEMY_AUDIBLE * ENEMY_AUDIBLE;
+  }
+
+  /**
    * The measurement. Read by `src/ai/radiocheck.mjs` and by the dev overlay;
    * nothing in gameplay reads it. Allocates — it is not called per frame.
    */
@@ -590,6 +644,7 @@ export class Radio {
         team: n.team,
         sent: n.sent,
         refusedByAudio: n.refused,
+        outOfEarshot: n.outOfEarshot,
         droppedFromQueue: n.dropped,
         wantedAnswer: n.wantedAnswer,
         answered: n.answered,
