@@ -1284,7 +1284,7 @@ export class MatchSystem {
     this.ui.banner.show(
       h.title,
       info.kind === 'SALVO' ? `${h.name} · CLEAR THE AREA` : `${h.name} · GET CLEAR`,
-      info.kind === 'STRAFE' ? 1.3 : 1.9
+      info.kind === 'STRAFE' ? 1.8 : 1.9
     );
   }
 

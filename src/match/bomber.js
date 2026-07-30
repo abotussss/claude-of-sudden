@@ -679,11 +679,12 @@ export class Bomber {
         `first away +${run.bombs[0].tRelease.toFixed(2)}s, first down ` +
         `+${run.bombs[0].tImpact.toFixed(2)}s, last down +${run.lastImpact.toFixed(2)}s`
     );
-    this._emit('inbound', run);
     // THE STICK IS A LINE, so the warning marks the line: the first crater, the
     // middle and the last. One marker in the middle of a 68 m run would tell the
-    // player to stand exactly where the fourth bomb lands.
+    // player to stand exactly where the fourth bomb lands. Announced before the
+    // event goes out, so a listener sees the HUD already warned.
     this._announce(this.onAnnounce, run, run.bombs[0].tImpact);
+    this._emit('inbound', run);
     return true;
   }
 

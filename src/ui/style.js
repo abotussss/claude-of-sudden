@@ -532,7 +532,7 @@ const CSS = `
    The impact reticle for an airstrike / bomb stick / cannon line. Bigger and
    colder than the grenade indicator on purpose: a grenade is a thing on the
    floor near you, this is an AREA to leave, and it has to be readable at 90 m.
-   `.close` (inside 22 m) goes to full red and gains a seat, because at that
+   '.close' (inside 22 m) goes to full red and gains a seat, because at that
    range the marker is no longer information, it is an instruction. */
 .ow-air { position:absolute; left:0; top:0; color:#ff6a52; will-change: transform, opacity; }
 .ow-air-ring {

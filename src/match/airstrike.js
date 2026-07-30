@@ -1215,11 +1215,12 @@ export class Airstrike {
         (group ? ` · SALVO ${group.id}` : '')
     );
 
-    this._emit('impact', site);
-    // 6. tell the HUD it landed, once per event rather than once per site.
+    // 6. tell the HUD it landed, once per event rather than once per site, and
+    //    before the event goes out for the same reason as the telegraph above.
     if (!group || group.sites[0] === site) {
       this._announce(this.onImpact, group ? 'SALVO' : 'STRIKE', group ?? site, group ? group.sites : null);
     }
+    this._emit('impact', site);
     return true;
   }
 
@@ -1362,15 +1363,16 @@ export class Airstrike {
       if (p.stage === 0) {
         p.stage = 1;
         this._telegraph(p.site, 'jet', p.group);
-        this._emit('inbound', p.site);
-        // The one call the whole HUD warning hangs off. `match` installs the
-        // hook; nothing in this file knows `ui` exists.
+        // ANNOUNCED BEFORE THE EVENT IS EMITTED, so anything listening to
+        // `match:airstrike` already sees the HUD in its warned state. `match`
+        // installs the hook; nothing in this file knows `ui` exists.
         this._announce(
           this.onAnnounce,
           p.group ? 'SALVO' : 'STRIKE',
           p.group ?? p.site,
           p.group ? p.group.sites : null
         );
+        this._emit('inbound', p.site);
       } else if (p.stage === 1 && p.t >= JET_LEAD - WHISTLE_LEAD) {
         p.stage = 2;
         this._telegraph(p.site, 'whistle', p.group);

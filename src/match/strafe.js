@@ -217,6 +217,20 @@ export class Strafe {
     this._sc = new THREE.Vector3();
     this._blast = { position: null, radius: 0, damage: 0, source: 'strafe' };
     this._ev = { phase: '', run: '', position: null };
+    /**
+     * The per-round impact payload handed to `fx.onImpact`. REUSED: `point` is
+     * re-pointed at the baked impact vector, and `normal`/`incident` are fixed —
+     * the ground is flat where these land and the shells all arrive on the same
+     * bearing at the same depression, which is the whole character of the weapon.
+     * `incident` is filled in per run because it depends on the line's heading.
+     */
+    this._impact = {
+      point: null,
+      normal: new THREE.Vector3(0, 1, 0),
+      incident: new THREE.Vector3(0, -1, 0),
+      surface: 'concrete',
+      damage: 70,
+    };
     this._ann = {
       kind: 'STRAFE',
       id: '',
@@ -361,14 +375,29 @@ export class Strafe {
       topY = Math.max(topY, p.y);
       impacts.push({ at: p, from: new THREE.Vector3(), tFire: 0, tImpact: 0, damage: i % DAMAGE_EVERY === 0 });
     }
-    // A shell that lands on a roof did nothing, and a badly authored line hides
-    // exactly this way. Say so at boot, like the bomber does.
+    /**
+     * A shell that lands on a ROOF did nothing, and a badly authored line hides
+     * exactly this way — so say so at boot, as the bomber does. But at 2.2 m
+     * spacing this probe is fine enough to also find things a bomber's 9 m
+     * spacing steps straight over, and those are not all errors: CROSS passes
+     * under the canopy at the mid-street junction (measured 3.2-3.9 m across
+     * level x -2.7..+2.7 at every z from 10.5 to 13.5), and rounds striking that
+     * canopy while the man underneath is untouched is the correct behaviour and a
+     * real piece of overhead cover. So the threshold is a SHARE of the line:
+     * a handful of sheltered impacts is a lane feature, a third of them is an
+     * authoring mistake.
+     */
     const high = impacts.filter((p) => p.at.y > 3);
-    if (high.length) {
+    if (high.length / n > 0.3) {
       console.warn(
         `[strafe] ${spec.id}: ${high.length}/${n} impacts land above 3 m ` +
           `(${high.map((p) => p.at.y.toFixed(1)).join(', ')} m) — the line is over rooftops, ` +
           'not over a street. Re-author it.'
+      );
+    } else if (high.length) {
+      console.info(
+        `[strafe] ${spec.id}: ${high.length}/${n} impacts are sheltered by structure at ` +
+          `${high.map((p) => p.at.y.toFixed(1)).join('/')} m — overhead cover, not a roof.`
       );
     }
 
@@ -577,6 +606,13 @@ export class Strafe {
     run.grit.userData.owNoShadow = true;
     run.grit.userData.owNoPrepass = true;
     this._poseAircraft(run, 0);
+    // The rounds all arrive on this line's heading at the gun's depression, so
+    // the impact incident is a per-RUN constant rather than a per-round one.
+    this._impact.incident
+      .set(run.dir.x, 0, run.dir.z)
+      .multiplyScalar(Math.cos(DEPRESSION));
+    this._impact.incident.y = -Math.sin(DEPRESSION);
+    this._impact.incident.normalize();
 
     const audio = this._audio ?? (this._audio = ctx.peek('audio'));
     if (audio?.play) {
@@ -606,8 +642,8 @@ export class Strafe {
         `last down +${run.lastImpact.toFixed(2)}s ` +
         `(${((run.lastImpact - run.firstImpact) || 1).toFixed(2)}s of walking line)`
     );
-    this._emit('inbound', run, run.position);
     this._announce(this.onAnnounce, run, run.firstImpact);
+    this._emit('inbound', run, run.position);
     return true;
   }
 
@@ -713,7 +749,47 @@ export class Strafe {
   _strike(run, p) {
     const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
     if (fx) {
-      fx.haze(p.at.x, p.at.y + 0.35, p.at.z, 0.75, 4.2, 0.5, 1.35);
+      /**
+       * `fx.onImpact` FOR EVERY ROUND, and this is the thing that makes the line
+       * read at all.
+       *
+       * The first pass used `fx.haze` for the non-blast impacts, which was
+       * invisible: haze is a REFRACTION sprite, so thirty of them over a second
+       * and a half produced a barely-perceptible shimmer and the frames showed a
+       * strafing run as a scatter of grit appearing out of nowhere. `onImpact` is
+       * the engine's own "a round struck this surface" recipe — a spall burst,
+       * a dust puff and a mark, sized by energy — which is exactly what a cannon
+       * shell arriving in a road is, and it writes into the same preallocated
+       * rings a rifle round does. It is ONE call and it is what a player sees
+       * walking toward them.
+       */
+      const im = this._impact;
+      im.point = p.at;
+      im.damage = p.damage ? 95 : 70;
+      fx.onImpact(im);
+      /**
+       * AND A DUST PLUME ON EVERY BLAST ROUND, which is what makes the line
+       * legible a second after it has passed.
+       *
+       * `onImpact`'s spall is the right size for one shell and lasts a few
+       * hundred milliseconds — read back from the frames, a whole gun run was
+       * over before it registered as anything more than a flicker. A short column
+       * on each `DAMAGE_EVERY`-th impact puts one plume every 8.8 m and leaves
+       * them standing along the axis for three seconds, so the answer to "where
+       * did that just go" is still on screen. Three plumes on a short line and
+       * eight on CROSS, against `fx`'s 24 emitters, and only while a run is on.
+       */
+      if (p.damage) {
+        fx.addSmokeColumn(p.at.x, p.at.y + 0.2, p.at.z, {
+          radius: 1.6,
+          duration: 0.7,
+          rate: 16,
+          dark: 0.2,
+          rise: 2.4,
+          life: 3.4,
+          growth: 4.2,
+        });
+      }
     }
     if (!p.damage) return;
     const b = this._blast;
@@ -841,7 +917,7 @@ export class Strafe {
       run.baked = false;
       run.next = 0;
       run.tracer = 0;
-      run.t = -1;
+        run.t = -1;
       run.uniforms.uT.value = -1;
       run.uniforms.uAnim.value = 1;
       const mesh = run.grit;
