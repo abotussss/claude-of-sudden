@@ -609,6 +609,79 @@ export const TEAM_RIM = {
   lumFloor: 0.12,
 };
 
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * TEAM DRESS — "味方と敵の服が似てて見分けつかないのでちゃんと見分けつくように色分けして"
+ * ════════════════════════════════════════════════════════════════════════════
+ *
+ * The note above TEAM_RIM argues against repainting the uniform, on the grounds
+ * that the camouflage is the art direction. That argument was tested by LOOKING
+ * and it lost. Two men, one per side, staged side by side on the level's own
+ * ground at 10 / 25 / 40 / 70 m in sun and in shade (`_teamread.mjs`): at 10 m
+ * in sun the friendly torso measured sRGB 125/104/79 against the hostile's
+ * 109/97/77 — a distance of SIXTEEN in 255, which is less than the variation
+ * across one man's own webbing. Silhouette (helmet against head wrap) does not
+ * survive 27 px, and the rim is deliberately faded to nothing inside 7 m. So
+ * inside the range band where most of a firefight happens the two sides were
+ * measurably and visibly the same colour, and the player was right.
+ *
+ * WHAT THIS IS. One vec4 per character material, injected after
+ * `<color_fragment>`, that rotates the garment's CHROMA to the side's colour
+ * while keeping its LUMINANCE:
+ *
+ *     diffuseColor.rgb = mix( diffuseColor.rgb, luminance * tint, strength )
+ *
+ * Keeping luminance is what keeps the art: the camo pattern, the 1-2 cm crease
+ * field, the seams, and the whole per-part value hierarchy the assembly builds
+ * out of vertex tints (pouches 0.19, webbing 0.13, sling 0.12, boots 0.055) are
+ * all VALUE structure, and none of it is touched. What changes is the hue, which
+ * is the one cue that survives a figure being 10 px tall, and the one cue that a
+ * shadow does not take away — shade divides the value of both men by the same
+ * number and leaves the hue difference intact.
+ *
+ * IT IS AN ALBEDO, NOT AN OVERLAY, and that is deliberate: it is multiplied by
+ * the light, shadowed by the CSM, occluded by GTAO and dimmed by aerial
+ * perspective exactly like the cloth it replaces, so a man in a doorway is still
+ * a man in a doorway. A screen-space team wash is none of those things.
+ *
+ * IT IS KEYED TO `playerTeam`, NOT TO THE TEAM INDEX. `AiSystem._applyTeamRims`
+ * resolves friendly/hostile against `playerTeam` for the dress and the rim in
+ * the same pass, so a side swap cannot make a friendly wear the enemy's colour.
+ *
+ * IT COSTS NO PROGRAM. The snippet is injected into EVERY character material,
+ * garment or not, with `strength = 0` on skin, glass, steel and polymer — so the
+ * shader source (and therefore `customProgramCacheKey`) is unchanged for every
+ * material that already existed. Verified: `renderer.info.programs.length` after
+ * the change is the same number as before.
+ *
+ * THE COLOURS ARE THE MODE'S. This is RED against BLUE (`TEAM_NAME` /
+ * `TEAM_COLOR` in the ruleset, and Sudden Attack's own two sides), so the sides
+ * wear a warm brick and a cool slate. Both tints are given in LINEAR space with
+ * a luminance written next to them: the hostile is 12 % brighter than the cloth
+ * it replaces, because he is the one you have to find; the friendly is
+ * luminance-neutral, because over-lighting your own squad is only noise.
+ */
+export const TEAM_DRESS = {
+  /**
+   * Cool slate, luminance 0.92 — a shade under the cloth it replaces, because a
+   * friendly reads against the same bright plaster and does not need to shout.
+   */
+  friendly: [0.66, 0.94, 1.55, 0.62],
+  /**
+   * Deep crimson, luminance 0.85.
+   *
+   * The first pass had this WARM AND BRIGHTER THAN THE CLOTH (a rust brown at
+   * luminance 1.12) on the theory that the man you must see should be the lighter
+   * of the two. Looked at, that was exactly wrong: rust brown at the value of
+   * sunlit sand is CAMOUFLAGE on this map — the hostile at 10 m read as bare skin
+   * against the street and had less contrast with his background than before the
+   * change. The map is warm and bright, so the hostile has to be warm and DARK:
+   * saturated crimson keeps the hue separation from the friendly's slate (which
+   * is what survives 10 px) and buys back value separation from the sand.
+   */
+  hostile: [2.10, 0.52, 0.50, 0.72],
+};
+
 /* ------------------------------------------------------------------ */
 /* Public: the material set                                            */
 /* ------------------------------------------------------------------ */
@@ -959,6 +1032,10 @@ export class SoldierMaterials {
     m.normalScale.set(opts.normalScale ?? 1, opts.normalScale ?? 1);
     m.aoMapIntensity = opts.ao ?? 0.85;
     m.name = `ai_${setName}`;
+    // GARMENT, or not: only cloth, webbing, boots and the plate carrier take the
+    // team dress. Skin, glass, steel and polymer keep strength 0 for ever — see
+    // TEAM_DRESS. The uniform exists on all of them so the program is shared.
+    m.userData.owGarment = !!opts.dress;
     this._attachShader(m, d && this.details[d.set] ? d : null, opts.rim);
     this.materials.set(key, m);
     // Index by variant so the team rim can be re-keyed without walking the cache
@@ -991,6 +1068,31 @@ export class SoldierMaterials {
   }
 
   /**
+   * Paint a variant's GARMENT in its side's colour. Same shape as `setTeamRim` —
+   * four float writes per material, no recompile — but it only touches the
+   * materials flagged `owGarment` in `get()`, so a man's face and his goggle
+   * lenses are never repainted. See TEAM_DRESS.
+   *
+   * @param variant  a key from VARIANTS
+   * @param dress    [r, g, b, strength] linear, or null to switch it off
+   * @returns        how many garment materials were repainted
+   */
+  setTeamDress(variant, dress) {
+    const list = this.byVariant.get(variant);
+    if (!list) return 0;
+    let n = 0;
+    for (const m of list) {
+      if (!m.userData.owGarment) continue;
+      const u = m.userData.owCharDress?.value;
+      if (!u) continue;
+      if (dress) u.set(dress[0], dress[1], dress[2], dress[3]);
+      else u.set(1, 1, 1, 0);
+      n++;
+    }
+    return n;
+  }
+
+  /**
    * Install the character shader hooks: the high-frequency detail tile (when the
    * set has one) and the silhouette edge-darkening term (always).
    *
@@ -1016,22 +1118,43 @@ export class SoldierMaterials {
       // Linear colour × strength. Zero until AiSystem assigns a side, so a
       // material that nobody is wearing costs an add of exactly 0.0.
       owCharTeam: { value: new THREE.Vector3(0, 0, 0) },
+      // TEAM DRESS: xyz linear chroma, w mix strength. w = 0 is a `mix` against
+      // itself, so an unassigned material and every non-garment slot are
+      // pixel-exact no-ops. See TEAM_DRESS.
+      owCharDress: { value: new THREE.Vector4(1, 1, 1, 0) },
     };
     m.userData.owDetailUniforms = uni;
     m.userData.owCharRim = uni.owCharRim;
     m.userData.owCharTeam = uni.owCharTeam;
+    m.userData.owCharDress = uni.owCharDress;
     const tag = `ai-${d ? `detail-${d.set}-${d.scale}` : 'plain'}-rim${rim.x.toFixed(2)}`;
     m.customProgramCacheKey = () => tag;
     m.onBeforeCompile = (shader) => {
       shader.uniforms.owCharRim = uni.owCharRim;
       shader.uniforms.owCharTeam = uni.owCharTeam;
+      shader.uniforms.owCharDress = uni.owCharDress;
       shader.uniforms.owTeamP0 = this.teamShape.owTeamP0;
       shader.uniforms.owTeamP1 = this.teamShape.owTeamP1;
       shader.uniforms.owTeamP2 = this.teamShape.owTeamP2;
       shader.fragmentShader =
-        'uniform vec4 owCharRim;\nuniform vec3 owCharTeam;\n' +
+        'uniform vec4 owCharRim;\nuniform vec3 owCharTeam;\nuniform vec4 owCharDress;\n' +
         'uniform vec4 owTeamP0;\nuniform vec4 owTeamP1;\nuniform vec2 owTeamP2;\n' +
         shader.fragmentShader;
+      /**
+       * TEAM DRESS — after `<color_fragment>`, which is where the per-part vertex
+       * tints have just been multiplied in, so the value hierarchy they carry is
+       * inside `diffuseColor` and gets preserved by keeping luminance. Injected
+       * unconditionally with `w = 0` on non-garment slots, so the source string
+       * (and `customProgramCacheKey` above) is identical for every material that
+       * existed before this and no new program is compiled. See TEAM_DRESS.
+       */
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        diffuseColor.rgb = mix( diffuseColor.rgb,
+          dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) ) * owCharDress.rgb,
+          owCharDress.w );`
+      );
       if (d) {
         shader.uniforms.owDetailTex = uni.owDetailTex;
         shader.uniforms.owDetailParams = uni.owDetailParams;

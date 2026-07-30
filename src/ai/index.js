@@ -49,7 +49,7 @@
  */
 
 import * as THREE from 'three';
-import { SoldierMaterials, TEAM_RIM } from './textures.js';
+import { SoldierMaterials, TEAM_RIM, TEAM_DRESS } from './textures.js';
 import { buildSoldier, resolveMaterials, MATERIAL_SLOTS, VARIANTS } from './soldier.js';
 import { RIG } from './rig.js';
 import { NavGrid, CoverMap } from './nav.js';
@@ -781,11 +781,29 @@ export class AiSystem {
       const friendly = a.team === this.playerTeam;
       if (!friendly && now - (a.spottedAt ?? -1e9) > 3) continue;
       let rec = this._blips[out.length];
-      if (!rec) rec = this._blips[out.length] = { position: new THREE.Vector3(), alive: true, friendly: true, heading: 0 };
+      if (!rec) {
+        rec = this._blips[out.length] = {
+          position: new THREE.Vector3(), alive: true, friendly: true, heading: 0,
+          /**
+           * ADDITIVE FIELDS, for a marker that has to be the size of the man.
+           * `height` is his standing height in metres and `stance` how much of it
+           * he is actually using, so `src/ui` can size a bracket off the figure
+           * instead of off a guess; `age` is how long ago the contact was
+           * confirmed, so a stale one can fade instead of vanishing. Existing
+           * readers (`ui._collectBlips`, `match._publishEnemyMarkers`) touch
+           * `position`, `friendly`, `alive` and `heading` only.
+           */
+          height: 1.78, stance: 1, age: 0, name: '',
+        };
+      }
       rec.position.copy(a.position);
       rec.alive = true;
       rec.friendly = friendly;
       rec.heading = (a.yaw * 180) / Math.PI;
+      rec.height = a.height ?? 1.78;
+      rec.stance = a.crouch ? 0.68 : 1;
+      rec.age = friendly ? 0 : now - (a.spottedAt ?? now);
+      rec.name = a.name ?? '';
       out.push(rec);
     }
     return out;
@@ -964,14 +982,18 @@ export class AiSystem {
     this._applyTeamRims();
   }
 
-  /** Re-key every known variant's rim against the CURRENT `playerTeam`. */
+  /**
+   * Re-key every known variant's rim AND its uniform colour against the CURRENT
+   * `playerTeam`. Both are resolved in the same pass off the same test, so a side
+   * swap moves the garment and the rim together and a friendly can never end up
+   * wearing the enemy's colour. See TEAM_RIM and TEAM_DRESS in textures.js.
+   */
   _applyTeamRims() {
     this._rimTeam = this.playerTeam;
     for (const [variant, team] of this._variantTeam) {
-      this.materials.setTeamRim(
-        variant,
-        team === this.playerTeam ? TEAM_RIM.friendly : TEAM_RIM.hostile
-      );
+      const friendly = team === this.playerTeam;
+      this.materials.setTeamRim(variant, friendly ? TEAM_RIM.friendly : TEAM_RIM.hostile);
+      this.materials.setTeamDress(variant, friendly ? TEAM_DRESS.friendly : TEAM_DRESS.hostile);
     }
   }
 

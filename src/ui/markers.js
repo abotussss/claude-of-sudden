@@ -4,6 +4,12 @@ import { el, svg, setText, setStyle, setClass, Pool, ease, clamp, clamp01, metre
 const _v = new THREE.Vector3();
 
 /**
+ * How far a friendly tick is worth drawing. Past this a team-mate is somebody
+ * else's problem and the mark is only clutter; the minimap still has him.
+ */
+const FRIEND_RANGE = 55;
+
+/**
  * Projects a world point into HUD pixels.
  * Returns the shared scratch object — never held past the call site.
  */
@@ -152,6 +158,76 @@ export class WorldMarkers {
   constructor(parent, rng) {
     this.rng = rng;
     this.objRoot = el('div', 'ow-layer', parent);
+
+    /* ------------------------------------------------------- friend or foe ---
+     * "敵は…ハイライトって色つけるというより的だと認識できるようにして" — highlight the
+     * enemy so he reads as a TARGET, not so he is a colour.
+     *
+     * A dot, a diamond and a tint are all the same statement: "something is
+     * there". A target is a different statement, and it is made by GEOMETRY, not
+     * by hue: four corner brackets the size of the man, held on him, with nothing
+     * inside them. That is the shape a player has been taught to read as
+     * "this one is being aimed at", it survives being 24 px wide because a corner
+     * is two straight lines and a right angle rather than a legible glyph, and it
+     * cannot be confused with the objective diamonds, the cache glyphs or the
+     * incoming-air reticle, because none of those is a bracket.
+     *
+     * THE BRACKETS ARE DIVS, NOT AN SVG. The box has to be the projected size of
+     * the figure, which means it is 240 px tall at 4 m and 26 px tall at 70 m — a
+     * stroked SVG scaled non-uniformly through that range gives a 6 px line on one
+     * edge and a hairline on the other. Four absolutely-placed corners with a
+     * fixed border width are the same weight at every distance.
+     *
+     * IT IS THE SAME CONTACT RULE AS THE MINIMAP. The list comes from
+     * `ai.getHudActors()`, which only reports a hostile somebody on the player's
+     * side actually has line of sight to and drops him three seconds after that
+     * is lost. `age` fades the bracket over those three seconds, so a contact you
+     * have lost decays in front of you instead of tracking through a wall.
+     *
+     * FRIENDLIES GET THE OTHER HALF, and it is not brackets: a small cool tick
+     * over the head. "A friendly must never read as hostile" needs a POSITIVE
+     * mark on the friendly, because absence of brackets is ambiguous — the
+     * bracket is line-of-sight gated, so no bracket can also mean "not spotted
+     * yet". Different shape, different colour, different place on the body:
+     * nothing about the two marks is interchangeable at any size.
+     */
+    this.tgtPool = new Pool(
+      12,
+      () => {
+        const node = el('div', 'ow-tgt');
+        for (const c of ['tl', 'tr', 'bl', 'br']) el('i', `ow-tgt-c ${c}`, node);
+        el('b', 'ow-tgt-pip', node);
+        node._key = '';
+        node._lock = 0;
+        return node;
+      },
+      this.objRoot
+    );
+
+    this.friendPool = new Pool(
+      10,
+      () => {
+        const node = el('div', 'ow-fr');
+        el('i', 'ow-fr-tick', node);
+        return node;
+      },
+      this.objRoot
+    );
+    /** Slot bookkeeping for `updateTargets`; allocated once, never grown. */
+    this._tgtClaimed = new Uint8Array(this.tgtPool.count);
+    this._tgtDone = new Uint8Array(64);
+    /**
+     * The world positions bracketed THIS frame, so `updateObjectives` can drop a
+     * marker that is standing on one of them. `match` publishes an enemy contact
+     * as an objective diamond (`_publishEnemyMarkers`), which was the right call
+     * when nothing better existed and is now a second red glyph inside the
+     * brackets — at 70 m the diamond is bigger than the man it is pointing at.
+     * The test is GEOMETRIC, not a name or a colour: an objective sitting within
+     * 10 cm of a man we are already bracketing IS that man.
+     */
+    this._hostileAt = new Array(this.tgtPool.count).fill(null);
+    this._hostileN = 0;
+
     this.objPool = new Pool(
       6,
       () => {
@@ -248,6 +324,133 @@ export class WorldMarkers {
       },
       this.objRoot
     );
+
+  }
+
+  /**
+   * FRIEND OR FOE, IN THE WORLD.
+   *
+   * `list` is `ai.getHudActors()`' own preallocated records — read, never
+   * retained: `{ position, friendly, alive, height, stance, age, name }`.
+   * Nothing is allocated per frame; the pools and the corner elements are built
+   * once in the constructor and the only per-frame writes are transforms,
+   * widths and opacities.
+   *
+   * @param dt      seconds, for the lock-on wipe
+   * @param list    ai.getHudActors()
+   * @param camera  the world camera
+   * @param fade    0..1 master opacity (0 hides the whole layer)
+   */
+  updateTargets(dt, list, camera, w, h, k, fade = 1) {
+    const tgt = this.tgtPool.items;
+    const fr = this.friendPool.items;
+    const claimed = this._tgtClaimed;
+    const done = this._tgtDone;
+    /**
+     * Projected height, in pixels, of a metre at `dist` — one divide instead of
+     * a second `project()` per man. `camera.fov` is the VERTICAL fov.
+     */
+    const focal = (h * 0.5) / Math.tan(camera.fov * 0.5 * (Math.PI / 180));
+    const margin = 8 * k;
+    const on = !!list && fade > 0.01;
+
+    /* ---- hostiles: brackets ------------------------------------------- */
+    claimed.fill(0);
+    done.fill(0);
+    this._hostileN = 0;
+    let nT = 0;
+    if (on) {
+      /**
+       * TWO PASSES, so the lock-on wipe belongs to a MAN and not to a pool index.
+       * Pass 0 gives every hostile back the slot that already held him (matched on
+       * his name); pass 1 hands the leftovers whatever is free. Without this a man
+       * dying re-indexes the list and every surviving bracket re-plays its wipe.
+       * `claimed` is a preallocated Uint8Array — nothing is allocated here.
+       */
+      for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < list.length; i++) {
+          const a = list[i];
+          if (!a || a.friendly || a.alive === false) continue;
+          if (i >= done.length || done[i]) continue;
+          const key = a.name || `#${i}`;
+          let slot = -1;
+          for (let s = 0; s < tgt.length; s++) {
+            if (claimed[s]) continue;
+            if (pass === 0) { if (tgt[s].node._key === key) { slot = s; break; } } else { slot = s; break; }
+          }
+          if (slot < 0) continue;
+          claimed[slot] = 1;
+          done[i] = 1;
+          if (this._hostileN < this._hostileAt.length) this._hostileAt[this._hostileN++] = a.position;
+          nT++;
+          const it = tgt[slot];
+          const node = it.node;
+          if (!it.alive) { it.alive = true; setStyle(node, 'display', ''); }
+          if (node._key !== key) { node._key = key; node._lock = 0; }
+          node._lock = Math.min(1, node._lock + dt / 0.13);
+
+          const p = project(a.position, camera, w, h, margin);
+          // The record's position is at his feet, so the box grows UP from there.
+          const tall = (a.height ?? 1.78) * (a.stance ?? 1);
+          const px = Math.max(1, (focal * tall) / Math.max(p.dist, 0.4));
+          /**
+           * MINIMUM SIZE IS THE POINT. At 70 m the man is 10 px tall and a bracket
+           * the size of the man is not a bracket, it is four dots. The box stops
+           * shrinking at 26 px so a distant contact is still a mark you can find,
+           * and stops growing at 300 px so a man at arm's length is not framed by
+           * the whole screen.
+           */
+          const bh = clamp(px * 1.04, 26 * k, 300 * k);
+          const bw = clamp(px * 0.46, 19 * k, 150 * k);
+          const grow = 1 + (1 - ease.outCubic(node._lock)) * 0.55;   // brackets close in
+          const gw = bw * grow;
+          const gh = bh * grow;
+          setStyle(node, 'width', `${gw.toFixed(1)}px`);
+          setStyle(node, 'height', `${gh.toFixed(1)}px`);
+          setStyle(node, 'transform',
+            `translate(${(p.x - gw * 0.5).toFixed(1)}px,${(p.y - px * 0.52 - gh * 0.5).toFixed(1)}px)`);
+          // The centre pip only exists while the figure is too small to BE a
+          // figure; past ~34 px he is his own mark and a dot on his chest is just
+          // something between the sights and the thing being shot at.
+          setStyle(node, '--pip', px < 34 * k ? '1' : '0');
+          setClass(node, 'edge', p.offscreen);
+          // A contact goes stale over the three seconds `ai` keeps it. That is
+          // information, so it fades instead of blinking out.
+          const stale = clamp01(1 - (a.age ?? 0) / 3);
+          setStyle(node, 'opacity',
+            (fade * (0.34 + 0.66 * stale) * (0.5 + 0.5 * node._lock)).toFixed(3));
+        }
+      }
+    }
+    for (let i = 0; i < tgt.length; i++) {
+      if (claimed[i] || !tgt[i].alive) continue;
+      tgt[i].alive = false;
+      tgt[i].node._key = '';
+      tgt[i].node._lock = 0;
+      setStyle(tgt[i].node, 'display', 'none');
+    }
+
+    /* ---- friendlies: a tick over the head ------------------------------ */
+    let nF = 0;
+    if (on) {
+      for (let i = 0; i < list.length && nF < fr.length; i++) {
+        const a = list[i];
+        if (!a || !a.friendly || a.alive === false) continue;
+        const p = project(a.position, camera, w, h, margin);
+        if (p.offscreen || p.dist > FRIEND_RANGE) continue;
+        const it = fr[nF++];
+        if (!it.alive) { it.alive = true; setStyle(it.node, 'display', ''); }
+        const tall = (a.height ?? 1.78) * (a.stance ?? 1);
+        const px = (focal * tall) / Math.max(p.dist, 0.4);
+        setStyle(it.node, 'transform',
+          `translate(${p.x.toFixed(1)}px,${(p.y - px - 12 * k).toFixed(1)}px)`);
+        setStyle(it.node, 'opacity', (fade * clamp01(1.2 - p.dist / FRIEND_RANGE) * 0.85).toFixed(3));
+      }
+    }
+    for (let i = nF; i < fr.length; i++) {
+      if (fr[i].alive) { fr[i].alive = false; setStyle(fr[i].node, 'display', 'none'); }
+    }
+    return nT;
   }
 
   /** @param {Array} list [{ position:Vector3, label:'A', name:'CAPTURE', color }] */
@@ -259,6 +462,12 @@ export class WorldMarkers {
       for (let i = 0; i < list.length && n < items.length; i++) {
         const o = list[i];
         if (!o?.position) continue;
+        // Already bracketed as a hostile — see `_hostileAt`.
+        let dup = false;
+        for (let j = 0; j < this._hostileN; j++) {
+          if (o.position.distanceToSquared(this._hostileAt[j]) < 0.01) { dup = true; break; }
+        }
+        if (dup) continue;
         const p = project(o.position, camera, w, h, margin);
         const it = items[n++];
         if (!it.alive) {
@@ -514,6 +723,16 @@ export class WorldMarkers {
     this.nadePool.releaseAll();
     this.airPool.releaseAll();
     this.dnPool.releaseAll();
+    this.tgtPool.releaseAll();
+    this.friendPool.releaseAll();
+    for (const it of this.tgtPool.items) { it.node._key = ''; it.node._lock = 0; }
+  }
+
+  /** How many hostiles are bracketed. For the harnesses; see `updateTargets`. */
+  get targetCount() {
+    let n = 0;
+    for (const it of this.tgtPool.items) if (it.alive) n++;
+    return n;
   }
 
   /** How many air-danger markers are live. For the HUD's own harnesses. */

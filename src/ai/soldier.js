@@ -835,6 +835,8 @@ export function resolveMaterials(name, slots, materials) {
           key: name,
           variant: name,
           tint: V.clothTint,
+          // TEAM DRESS: the garment slots take the side's colour. See TEAM_DRESS.
+          dress: true,
           rough: ROUGH.cloth,
           metal: 1,
           // 1.15, not 1.0: the base tile now carries a 1-2 cm crease field and
@@ -847,6 +849,7 @@ export function resolveMaterials(name, slots, materials) {
           key: name,
           variant: name,
           tint: V.plateTint,
+          dress: true,
           rough: ROUGH.plate,
           normalScale: 1.0,
           detail: detail('nylon', 'plate', 0.45, 0.10),
@@ -856,6 +859,7 @@ export function resolveMaterials(name, slots, materials) {
           key: name,
           variant: name,
           tint: V.gearTint,
+          dress: true,
           normalScale: 1.1,
           detail: detail('nylon', 'gear', 0.5, 0.14),
         });
@@ -864,6 +868,7 @@ export function resolveMaterials(name, slots, materials) {
           key: `${name}_boot`,
           variant: name,
           tint: V.gearTint,
+          dress: true,
           rough: ROUGH.boot,
           normalScale: 1.1,
           detail: detail('nylon', 'boot', 0.5, 0.10),

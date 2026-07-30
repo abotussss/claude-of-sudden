@@ -513,6 +513,55 @@ const CSS = `
 .ow-mk-name { font-size: calc(9px * var(--k)); letter-spacing:.18em; color: var(--ink-2); text-shadow:var(--sh); }
 .ow-mk.threat .ow-mk-dist { color: var(--red); }
 
+/* ------------------------------------------------------- friend or foe ---
+ * THE TARGET BRACKETS on a hostile, and the tick on a friendly. See
+ * WorldMarkers.updateTargets for why one is a bracket and the other is not.
+ *
+ * The corner arms are a FIXED length and a FIXED border width in HUD units, so
+ * the mark reads with the same weight whether the box is 26 px tall at 70 m or
+ * 300 px tall at 3 m — the box changes size, the brackets do not change shape.
+ * Both marks carry their own dark outline (a drop-shadow) because the map is
+ * sunlit plaster: a warm line on a warm wall is invisible without one, which is
+ * the same lesson the team rim learned.
+ */
+.ow-tgt {
+  position:absolute; left:0; top:0; color: var(--enemy);
+  will-change: transform, width, height, opacity;
+  filter: drop-shadow(0 0 calc(1.5px * var(--k)) rgba(0,0,0,.9));
+}
+.ow-tgt-c {
+  position:absolute; width:calc(7px * var(--k)); height:calc(7px * var(--k));
+  border:0 solid currentColor; box-sizing:border-box;
+}
+.ow-tgt-c.tl { left:0;  top:0;    border-left-width:calc(2px * var(--k)); border-top-width:calc(2px * var(--k)); }
+.ow-tgt-c.tr { right:0; top:0;    border-right-width:calc(2px * var(--k)); border-top-width:calc(2px * var(--k)); }
+.ow-tgt-c.bl { left:0;  bottom:0; border-left-width:calc(2px * var(--k)); border-bottom-width:calc(2px * var(--k)); }
+.ow-tgt-c.br { right:0; bottom:0; border-right-width:calc(2px * var(--k)); border-bottom-width:calc(2px * var(--k)); }
+/* the centre pip: only while the figure is too small to be a figure */
+.ow-tgt-pip {
+  position:absolute; left:50%; top:50%; width:calc(3px * var(--k)); height:calc(3px * var(--k));
+  margin:calc(-1.5px * var(--k)) 0 0 calc(-1.5px * var(--k));
+  background: currentColor; border-radius:50%;
+  opacity: var(--pip, 0);
+}
+/* clamped to the screen edge: keep the corners, drop the pip */
+.ow-tgt.edge { color: #ff5a44; }
+.ow-tgt.edge .ow-tgt-pip { opacity:0; }
+
+.ow-fr {
+  position:absolute; left:0; top:0; color: var(--friend);
+  will-change: transform, opacity;
+  filter: drop-shadow(0 0 calc(1.5px * var(--k)) rgba(0,0,0,.9));
+}
+/* a small open chevron, point down, sitting over the head */
+.ow-fr-tick {
+  position:absolute; left:0; top:0; width:calc(9px * var(--k)); height:calc(9px * var(--k));
+  margin:calc(-4.5px * var(--k)) 0 0 calc(-4.5px * var(--k));
+  border:0 solid currentColor;
+  border-right-width:calc(1.8px * var(--k)); border-bottom-width:calc(1.8px * var(--k));
+  box-sizing:border-box; transform: rotate(45deg);
+}
+
 /* grenade danger */
 .ow-nade { position:absolute; left:0; top:0; will-change: transform, opacity; }
 .ow-nade-ring {

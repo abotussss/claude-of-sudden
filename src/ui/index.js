@@ -208,6 +208,13 @@ export class UiSystem {
     for (let i = 0; i < MAX_BLIPS; i++) this._blips[i] = { x: 0, z: 0, kind: 'enemy', heading: 0 };
     this._blipCount = 0;
     this._blipView = [];
+    /**
+     * The live actor list `ai` published THIS frame, held for exactly one frame
+     * so the world markers can bracket the hostiles off the same records the
+     * minimap blips come from. Never retained past `update`; see
+     * `WorldMarkers.updateTargets`.
+     */
+    this._actorList = null;
 
     this.demo = null;
     /**
@@ -697,6 +704,15 @@ export class UiSystem {
     this._buildCompassObjectives(pos);
     this.compass.update(heading, this._compassObjs);
 
+    /**
+     * FRIEND OR FOE, before the objectives: the brackets are the thing being
+     * aimed at, so they go UNDER the zone letters and the cache glyphs in paint
+     * order rather than over them.
+     */
+    // RAW dt, not the scaled one: the lock-on wipe is a HUD animation, so it has
+    // to finish in 130 ms of the player's time even when the world clock is
+    // slowed (or, in the capture harness, nearly stopped).
+    this.markers.updateTargets(rawDt, this._actorList, ctx.camera, this.vw, this.vh, this.k);
     this.markers.updateObjectives(this._objectives, ctx.camera, this.vw, this.vh, this.k);
     this.markers.updateCaches(dt, this._caches, ctx.camera, this.vw, this.vh, this.k);
     this.markers.updateGrenades(dt, ctx.camera, this.vw, this.vh, this.k);
@@ -729,10 +745,12 @@ export class UiSystem {
   }
 
   _collectBlips() {
+    this._actorList = null;
     if (this.demo?.active) return; // demo drives its own contacts
     const ai = this.ctx.peek('ai');
     const list = typeof ai?.getHudActors === 'function' ? ai.getHudActors() : ai?.actors ?? null;
     if (!Array.isArray(list)) return;
+    this._actorList = list;
     let n = 0;
     for (let i = 0; i < list.length && n < MAX_BLIPS; i++) {
       const a = list[i];
