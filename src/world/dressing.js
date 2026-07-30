@@ -2466,16 +2466,52 @@ export function buildGate(A, rng) {
  * distant infill so the playable 120 m reads as part of a bigger town.
  */
 export function buildPerimeter(A, rng) {
-  // The compound wall is the edge of the world and has to stay outside the
-  // play box, which is 1.5x. Left at 58 it would run down the middle of the
-  // outer lanes.
-  const R = 58 * SCALE;
+  /**
+   * THE EDGE IS DERIVED FROM THE STREET, NOT TYPED, AND THIS IS WHY.
+   *
+   * It was `58 * SCALE` on both axes — a square 87 units a side, chosen when the
+   * street ran to level z ∓69 and scaled once, by hand, for the 1.5x pass. Then
+   * the map grew a BASE DISTRICT at each end (`THE MAP GROWS — PART 2` in
+   * layout.js): `STREET.zMax`/`zMin` went to ∓105/-120 and both spawn clusters
+   * went out to level z 90..103 and -93..-106 — PAST 87. The literal did not
+   * move, so the two z runs of this wall stopped being the edge of the world and
+   * became a 3.0-3.8 m concrete bulkhead across the middle of both base
+   * districts, sealing all thirty men into their own spawn.
+   *
+   * MEASURED, and it is the whole of the "bots never fight" failure: every live
+   * agent on both sides ended up standing on a single line at level z ±87.5,
+   * 0.35 m off this wall, in ADVANCE, at full desired speed, forever — 29 alive,
+   * `{ advance: 29 }`, 0 shots, 0 deaths, 0-0 after ten minutes of match. It is
+   * SILENT because nothing about it is an error: A* is asked for a route and
+   * finds one (this wall is dressing, and `NavGrid` never saw it — the nav cells
+   * under it are open ground), the bots walk the route, and the capsule stops.
+   *
+   * So both extents are read off the geometry they have to clear:
+   *
+   *   X is UNCHANGED at 58 * SCALE. Nothing grew in x — the widest authored
+   *     thing out here is BN1/BN2's background infill at level x ∓63, and the
+   *     kerb line the cordon stands on is at 23.25 — so the east and west runs
+   *     are exactly where they have always been.
+   *
+   *   Z clears the CORDON'S END WALLS, which are the real seal on the play box
+   *     (`cordonRuns` closes the street at `STREET.zMax + 3.7` and
+   *     `STREET.zMin - 3.7`). 6 units past the further of the two puts this wall
+   *     outside everything authored and still inside the 128-unit half-extent
+   *     `tools/boundcheck.mjs` floods, so the boundary gate can still see it.
+   *
+   * IF THE STREET GROWS AGAIN THIS FOLLOWS IT. That is the point: the last two
+   * times a number out here was a literal it went stale the moment the map
+   * changed and failed without saying anything. @see the A* ceiling in
+   * `src/ai/nav.js`, which is the same bug in the same shape.
+   */
+  const RX = 58 * SCALE;
+  const RZ = Math.max(58 * SCALE, STREET.zMax, -STREET.zMin) + 6.0;
   const segs = [
     // [x0,z0,x1,z1] runs of compound wall
-    [-R, -R, R, -R],
-    [-R, R, R, R],
-    [-R, -R, -R, R],
-    [R, -R, R, R],
+    [-RX, -RZ, RX, -RZ],
+    [-RX, RZ, RX, RZ],
+    [-RX, -RZ, -RX, RZ],
+    [RX, -RZ, RX, RZ],
   ];
   for (const [x0, z0, x1, z1] of segs) {
     const dx = x1 - x0;
