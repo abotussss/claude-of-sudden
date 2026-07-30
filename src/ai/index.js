@@ -271,6 +271,14 @@ export class AiSystem {
     // unchanged. `update()` keeps the same code as a fallback for the case where
     // the collision world is not registered yet.
     this._bootNav(ctx);
+    // `physics` keeps 8 ragdolls by default and evicts the oldest to make room.
+    // We keep 14 corpses, so six of the bodies on the map were being drawn by a
+    // solver that had been disposed underneath them: `dispose()` drops
+    // `bones3D`, the doll leaves `physics.ragdolls`, and the skeleton freezes on
+    // whatever transforms it last wrote — mid-fall, mid-air, mid-blast. `ai`
+    // owns `corpseLimit`, so `ai` is what has to say how deep the pool must be.
+    const phys = this.phys;
+    if (phys) phys.maxRagdolls = Math.max(phys.maxRagdolls, this.corpseLimit);
     await this.prewarmMaterials();
   }
 

@@ -6,14 +6,32 @@
  * world contacts and 120 Hz steps, a projected-Gauss-Seidel position solver is
  * unconditionally stable — bones cannot gain energy, so bodies *settle* instead
  * of buzzing or exploding, which is the entire brief. Each bone is a segment of
- * two particles; joints are shared particles, so joint separation is impossible
- * by construction and only the *angular* limits need constraints.
+ * two particles, and where a bone's head lands on its parent's tail the two
+ * share one particle, so that joint cannot separate at all.
+ *
+ * A BRANCH JOINT DOES NOT SHARE A PARTICLE, AND THAT WAS THE SLIME BUG.
+ * A bone table only shares particles down an unbranched chain. The moment a bone
+ * has two bone children — `Hips` -> `Spine` + `UpLegL` + `UpLegR`, `Spine2` ->
+ * `Neck` + `ClavicleL` + `ClavicleR`, i.e. every humanoid ever authored — only
+ * the FIRST child inherits the parent's tail particle. The others get particles
+ * of their own, 8-17 cm away, and for ten bones out of twenty-five nothing
+ * positional held them to the torso: the cone limit constrains a DIRECTION, not
+ * a position. Measured on the soldier rig, the doll was five disconnected
+ * islands (torso+head, each arm, each leg) that fell and were blasted apart
+ * independently, and the skin stretched between them — a body 12.9 m long, with
+ * a hip joint 12.6 m from the pelvis (`src/physics/dollcheck.mjs`, which now
+ * fails on any doll with more than one island). `attach` is the fix: two hard
+ * distance constraints per branch joint, to the parent's tail and to the
+ * parent's head, at their bind-pose lengths. Two distances pin the child's head
+ * onto a small circle about the parent's axis, which the cone limit then takes
+ * care of, and the rig is one connected body again.
  *
  * Constraints, applied in order every iteration:
  *   1. bone length      (hard distance, stiffness 1)
- *   2. cone limit       (swing of a bone relative to its parent)
- *   3. twist limit      (roll of a bone's reference frame, damped)
- *   4. world contact    (capsule vs static BVH + Coulomb friction)
+ *   2. branch attach    (hard distance, stiffness 1 — see above)
+ *   3. cone limit       (swing of a bone relative to its parent)
+ *   4. twist limit      (roll of a bone's reference frame, damped)
+ *   5. world contact    (capsule vs static BVH + Coulomb friction)
  *
  * `ai` hands over a dead actor with createRagdoll()/adoptSkeleton() and we own
  * the bone transforms from that moment on.
@@ -73,6 +91,22 @@ export function humanoidSpec(height = 1.8, scaleMass = 82) {
 const MAX_PARTICLE_STEP = 0.35; // metres per fixed step, anti-explosion clamp
 const SLEEP_MOTION = 0.0022;
 const SLEEP_TIME = 0.6;
+
+/**
+ * How much velocity ONE impulse may add to a single particle over and above the
+ * momentum the whole body carries away. See `applyImpulse`.
+ *
+ * MEASURED. `physics.explode` hands a 15 m / 260 damage airstrike ~117 N·s, and
+ * dividing that by a fingertip particle's 0.2 kg asked for 585 m/s — four times
+ * `MAX_PARTICLE_STEP`'s ceiling — while the pelvis particle next to it was asked
+ * for 12. No number of Gauss-Seidel iterations reconciles that inside one 1/120 s
+ * step, and the doll pays for it in visible stretch: the spine came out 47 %
+ * longer than it was authored (`src/physics/dollcheck.mjs`). Capping the LOCAL
+ * share makes a big impulse uniform across the body — it throws the corpse
+ * instead of tearing it — and leaves a small one mass-scaled, so a headshot still
+ * snaps the head.
+ */
+const IMPULSE_LOCAL_DV = 4;
 
 let _nextRagdollId = 1;
 
@@ -154,6 +188,12 @@ export class Ragdoll {
       this.boneUp[i * 3 + 2] = 1;
     }
 
+    /** Sum of the bone masses — every bone puts half at each end, so this is
+     *  also the sum of the particle masses. `applyImpulse` needs it. */
+    let total = 0;
+    for (let i = 0; i < nb; i++) total += this.boneMass[i];
+    this.totalMass = total;
+
     const np = px.length;
     this.particleCount = np;
     this.px = new Float64Array(px);
@@ -172,6 +212,8 @@ export class Ragdoll {
       this._initUp(i);
     }
 
+    this._buildAttach();
+
     // skeleton binding (filled by adoptSkeleton)
     this.bones3D = null;
     this.boneBind = null;
@@ -188,6 +230,71 @@ export class Ragdoll {
 
     this._ss = makeClosest();
     this.selfPairs = this._buildSelfPairs();
+  }
+
+  /**
+   * Positional attachments for BRANCH joints — the bones whose head is not their
+   * parent's tail particle, because the parent already spent its tail on an
+   * earlier child. Without these the limb is attached to the body by nothing
+   * (see the file header). Two hard distance constraints per joint, at their
+   * bind-pose lengths, taken from the particle positions the constructor has
+   * just placed:
+   *
+   *   childHead <-> parentTail   pins the joint to the end of the parent bone
+   *   childHead <-> parentHead   stops it sliding along the parent's axis
+   *
+   * Together those leave one degree of freedom — a roll about the parent bone —
+   * which is exactly what a shoulder or a hip has and what the cone limit is
+   * already there to bound. Stored flat as [a, b, a, b, ...] with a parallel
+   * rest-length array, so the solve allocates nothing.
+   */
+  _buildAttach() {
+    const a = [], rest = [];
+    const push = (i, j) => {
+      if (i === j) return;
+      const d = Math.hypot(this.px[i] - this.px[j], this.py[i] - this.py[j], this.pz[i] - this.pz[j]);
+      // Two particles authored on top of each other would make a zero-length
+      // constraint with no direction to correct along; the dedup above already
+      // merges those, so anything left is a real offset.
+      if (d < 1e-5) return;
+      a.push(i, j);
+      rest.push(d);
+    };
+    for (let i = 0; i < this.boneCount; i++) {
+      const p = this.boneParent[i];
+      if (p < 0) continue;
+      const ch = this.boneHead[i];
+      if (ch === this.boneTail[p]) continue; // shares the joint: nothing to do
+      push(ch, this.boneTail[p]);
+      push(ch, this.boneHead[p]);
+    }
+    this.attach = Int32Array.from(a);
+    this.attachRest = Float32Array.from(rest);
+    return this.attach;
+  }
+
+  /** Hard distance projection for every branch attachment. */
+  _solveAttach() {
+    const at = this.attach;
+    if (!at || at.length === 0) return;
+    for (let k = 0, n = 0; k < at.length; k += 2, n++) {
+      const a = at[k], c = at[k + 1];
+      const wa = this.invMass[a], wc = this.invMass[c];
+      const w = wa + wc;
+      if (w === 0) continue;
+      const dx = this.px[c] - this.px[a];
+      const dy = this.py[c] - this.py[a];
+      const dz = this.pz[c] - this.pz[a];
+      const d = Math.hypot(dx, dy, dz);
+      if (d < 1e-9) continue;
+      const diff = (d - this.attachRest[n]) / d / w;
+      this.px[a] += dx * diff * wa;
+      this.py[a] += dy * diff * wa;
+      this.pz[a] += dz * diff * wa;
+      this.px[c] -= dx * diff * wc;
+      this.py[c] -= dy * diff * wc;
+      this.pz[c] -= dz * diff * wc;
+    }
   }
 
   /**
@@ -246,16 +353,38 @@ export class Ragdoll {
    * Kick the doll at a world point — the killing shot, an explosion, a melee.
    * Falloff is 1/(1+d^2) so a headshot snaps the head without teleporting the
    * whole body.
+   *
+   * The impulse arrives in two shares, and the split is what keeps a blast from
+   * turning the corpse inside out:
+   *
+   *   RIGID  `impulse / totalMass`, identical on every particle. This is the
+   *          momentum the body as a whole carries away, and because it is the
+   *          same everywhere it cannot stretch a single bone.
+   *   LOCAL  `impulse / particleMass`, which is the snap at the hit — and it is
+   *          capped at `IMPULSE_LOCAL_DV`, because everything above that has to
+   *          be absorbed by one joint inside one step and comes out as stretch
+   *          rather than as motion.
+   *
+   * The consequence worth knowing: below the cap nothing changes at all, so a
+   * rifle round still whips the limb it hit. Above it — grenades, bombs,
+   * airstrikes — the two shares converge on the same value for every particle
+   * and the doll is thrown as one piece.
    */
   applyImpulse(x, y, z, ix, iy, iz, radius = 0.45, dt = 1 / 120) {
+    const mag = Math.hypot(ix, iy, iz);
+    if (mag < 1e-9) return;
+    const rigid = this.totalMass > 0 ? 1 / this.totalMass : 0;
+    const localCap = IMPULSE_LOCAL_DV / mag;
     for (let i = 0; i < this.particleCount; i++) {
       const dx = this.px[i] - x, dy = this.py[i] - y, dz = this.pz[i] - z;
       const d2 = dx * dx + dy * dy + dz * dz;
       const w = 1 / (1 + d2 / (radius * radius));
       const im = this.invMass[i];
-      this.qx[i] -= ix * im * w * dt;
-      this.qy[i] -= iy * im * w * dt;
-      this.qz[i] -= iz * im * w * dt;
+      if (im === 0) continue;
+      const k = (rigid + Math.min(im, localCap)) * w * dt;
+      this.qx[i] -= ix * k;
+      this.qy[i] -= iy * k;
+      this.qz[i] -= iz * k;
     }
     this.wake();
   }
@@ -296,12 +425,30 @@ export class Ragdoll {
     // --- Gauss-Seidel constraint solve ---
     for (let it = 0; it < this.iterations; it++) {
       this._solveDistance();
+      this._solveAttach();
       this._solveCones();
       this._solveContacts(it === this.iterations - 1);
     }
     // One self-collision pass per step: enough to stop an arm sinking through
     // the chest, cheap enough to run on every corpse on screen.
     this._solveSelf();
+    // …and then put the rig back. `_solveSelf` and the last `_solveContacts` both
+    // run AFTER the last length projection, and a contact may push a bone's end
+    // by up to 20 cm — which is longer than the pelvis bone (110 mm) and the
+    // first spine bone (126 mm) are in the first place. The skin is stretched by
+    // bone LENGTH, so bone length is what has to be exact at the moment the AABB
+    // and the skeleton are read, not merely in the middle of the iteration loop.
+    //
+    // Three alternating sweeps, attachments first and length last each time,
+    // because one sweep is not enough: Gauss-Seidel makes each constraint exact
+    // in turn and the pelvis is the first bone in the table, so every projection
+    // after it moves its tail again. MEASURED on the peak frame of an airstrike
+    // landing on a settled body: one sweep 1.24x, three sweeps 1.05x. The cost is
+    // six flat loops over 25 bones and 20 attachments on a doll that is awake.
+    for (let it = 0; it < 3; it++) {
+      this._solveAttach();
+      this._solveDistance();
+    }
 
     this._transportUp();
     this._updateAabb();

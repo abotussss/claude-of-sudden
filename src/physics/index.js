@@ -245,6 +245,14 @@ export class PhysicsSystem {
     this.gravity = UNITS.gravity;
     /** Set true by `ai` if it wants to own ragdoll creation itself. */
     this.ignoreDeathEvents = false;
+    /**
+     * How many dolls stay in the solver. `createRagdoll` evicts the oldest to
+     * make room, and eviction DISPOSES: the skeleton stops being written and
+     * freezes on its last transforms, wherever they were. Anything that keeps
+     * its own corpses must therefore raise this to at least as many as it keeps
+     * — `ai` sets it from `ai.corpseLimit` in its `init`, because six of its
+     * fourteen bodies were being frozen by this cap.
+     */
     this.maxRagdolls = 8;
 
     this._hitPool = [];
