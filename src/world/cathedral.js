@@ -295,10 +295,28 @@ export function buildCathedral(A) {
    * emissive interior-window key, which is what makes a lit window read from
    * outside at dusk without a light being registered for it.
    */
+  /**
+   * GLASS IS TWO PANES, BACK TO BACK, AND THIS IS NOT A DETAIL.
+   *
+   * `kit.PANE` is a single quad and a quad has ONE face. Every window in the
+   * first build of this building therefore existed only from outside, and from
+   * the nave floor the clerestory, the drum and all five apse lights were OPEN
+   * HOLES: screenshotted standing on capture point C, the crossing was a
+   * rectangle of sky and the apse read as a row of detached piers. A cathedral
+   * whose windows are only there from the street is a shed.
+   *
+   * Both faces, 2 cm apart, so it reads as glazing from either side without
+   * z-fighting. Cheap: a quad is two triangles and there are 34 of them.
+   */
   const glazing = (u, sill, v, wid, h, alongX, t) => {
     const key = rng.float() < 0.45 ? 'window_glow' : 'glass';
-    A.add(key, pane, LL(IDENT, X(u), sill + h / 2, Z(v), alongX ? 0 : Math.PI / 2, wid - 0.3, h - 0.3, 1),
-      { masks: [0.4, rng.range(0.3, 0.8), 0.1] });
+    const base = alongX ? 0 : Math.PI / 2;
+    for (const side of [0, Math.PI]) {
+      A.add(key, pane,
+        LL(IDENT, X(u + (alongX ? 0 : (side ? -0.01 : 0.01))), sill + h / 2,
+          Z(v + (alongX ? (side ? -0.01 : 0.01) : 0)), base + side, wid - 0.3, h - 0.3, 1),
+        { masks: [0.4, rng.range(0.3, 0.8), 0.1] });
+    }
     // mullions and two transoms
     for (const f of [-0.25, 0, 0.25]) {
       const du = alongX ? f * wid : 0;
@@ -376,8 +394,11 @@ export function buildCathedral(A) {
     {
       const ry = SEC.aisleRoof + 3.0;
       const R = 3.1;
-      A.add('window_glow', pane, LL(IDENT, X(0), ry, Z(-(HD - T / 2) - 0.06), 0, R * 1.9, R * 1.9, 1),
-        { masks: [0.3, 0.5, 0.05] });
+      for (const side of [0, Math.PI]) {
+        A.add('window_glow', pane,
+          LL(IDENT, X(0), ry, Z(-(HD - T / 2) - 0.06 + (side ? -0.02 : 0)), side, R * 1.9, R * 1.9, 1),
+          { masks: [0.3, 0.5, 0.05] });
+      }
       const ring = (r, w) => {
         const n = Math.max(18, Math.round(r * 9));
         for (let i = 0; i < n; i++) {
@@ -412,6 +433,20 @@ export function buildCathedral(A) {
     for (const side of [-1, 1]) {
       solid(key, side * (HW - 3.0) / 1, SEC.aisleRoof / 2, HD - T / 2, 6.0, SEC.aisleRoof, T);
     }
+    /**
+     * THE NORTH GABLE, and it was missing.
+     *
+     * The apse and the aisle returns only stand to `aisleRoof` (9 m); the nave
+     * vault and the clerestory walls run on to 15 m. Without a gable closing
+     * the end of the nave between those two heights, the whole north end of the
+     * church is a 19 x 6 m hole — screenshotted from the crossing, the frame is
+     * a band of daylight above the altar. It is not a small hole: it is bigger
+     * than the rose window and it is the only thing you look at from the point.
+     */
+    solid(key, 0, (SEC.aisleRoof + SEC.naveRoof) / 2, HD - T / 2,
+      2 * (ARC + PW / 2) + 1.2, SEC.naveRoof - SEC.aisleRoof, T);
+    trim('concrete_dark', 0, SEC.naveRoof - 0.3, HD - T / 2 - 0.1,
+      2 * (ARC + PW / 2) + 1.6, 0.3, T + 0.4, [0.95, 0.35, 0.15]);
     const R = ARC + PW / 2;
     const facets = 5;
     for (let i = 0; i < facets; i++) {
@@ -438,9 +473,11 @@ export function buildCathedral(A) {
       if (sill > 0) {
         A.add(key, box, LL(IDENT, X(fu), sill / 2, Z(fv), ry, ow, sill, T), { masks: stone() });
         A.box('concrete', X(fu), sill / 2, Z(fv), ow, sill, T, ry);
-        A.add(rng.float() < 0.5 ? 'window_glow' : 'glass', pane,
-          LL(IDENT, X(fu), sill + h / 2, Z(fv - 0.06), ry, ow - 0.25, h - 0.25, 1),
-          { masks: [0.35, 0.5, 0.08] });
+        const gk = rng.float() < 0.5 ? 'window_glow' : 'glass';
+        for (const side of [0, Math.PI]) {
+          A.add(gk, pane, LL(IDENT, X(fu), sill + h / 2, Z(fv - 0.06 + (side ? 0.03 : 0)), ry + side,
+            ow - 0.25, h - 0.25, 1), { masks: [0.35, 0.5, 0.08] });
+        }
       }
       // the half-conical roof over the apse, one facet at a time
       A.add('roof_screed', box, LL(IDENT, X(fu * 0.7), SEC.aisleRoof + 1.5, Z(fv - 1.2), ry, seg, 0.5, 3.4, -0.5),
@@ -551,16 +588,33 @@ export function buildCathedral(A) {
   const VAULT_Y = SEC.naveRoof - 1.9;
   const naveHalf = ARC + PW / 2 - 0.2;
   {
-    // the webbing: one shallow shell per bay, a touch domed so it is not a lid
+    /**
+     * THE WEBBING IS CONTINUOUS AND THE RELIEF SITS ON TOP OF IT.
+     *
+     * The first version laid three shells PER BAY and put all three at the same
+     * z, so it built a 1.3 m strip in the middle of every bay and left 2.7 m of
+     * open sky between them — screenshotted from the nave floor, the ceiling was
+     * a set of beams with daylight through it and the ribs looked like joists.
+     * A vault is a SURFACE. So: one slab down each half of the church (the
+     * crossing is deliberately open, because that is where you look up into the
+     * dome), and the per-bay curvature laid over it.
+     */
     const bays = [...NAVE_V, ...CHOIR_V];
+    for (const [v0, v1] of [[-HD + T, CROSS_V[0]], [CROSS_V[1], HD - T]]) {
+      A.add('plaster_white', box, LL(IDENT, X(0), VAULT_Y, Z((v0 + v1) / 2), 0, naveHalf * 2 - 0.4, 0.34, v1 - v0),
+        { masks: [0.3, 0.55, 0.6] });
+      A.box('concrete', X(0), VAULT_Y + 0.05, Z((v0 + v1) / 2), naveHalf * 2, 0.44, v1 - v0);
+    }
     for (const v of bays) {
+      // the severies: three courses across each bay, rising to the crown, so the
+      // surface is a vault and not a soffit
       for (let i = 0; i < 3; i++) {
         const f = (i + 0.5) / 3;
-        const drop = Math.sin(f * Math.PI) * 0.55;
-        A.add('plaster_white', box, LL(IDENT, X(0), VAULT_Y + drop, Z(v + 2), 0, naveHalf * 2 - 0.4, 0.34, 4 / 3),
+        const drop = Math.sin(f * Math.PI) * 0.5;
+        A.add('plaster_white', box,
+          LL(IDENT, X(0), VAULT_Y + 0.18 + drop, Z(v + 2 + (f - 0.5) * 4), 0, naveHalf * 2 - 0.5, 0.3, 4 / 3 + 0.06),
           { masks: [0.3, rng.range(0.35, 0.8), 0.6] });
       }
-      A.box('concrete', X(0), VAULT_Y + 0.2, Z(v + 2), naveHalf * 2, 0.5, 4);
       // transverse rib on the bay line
       A.add('concrete', soft, LL(IDENT, X(0), VAULT_Y - 0.28, Z(v), 0, naveHalf * 2, 0.42, 0.44),
         { masks: [0.85, 0.4, 0.35] });
@@ -626,12 +680,18 @@ export function buildCathedral(A) {
       A.add('plaster_sand', box, LL(IDENT, X(u), (SEC.naveRoof + SEC.drumTop) / 2, Z(v), -a,
         seg * 0.42, SEC.drumTop - SEC.naveRoof, 0.7), { masks: stone() });
       A.box('concrete', X(u), (SEC.naveRoof + SEC.drumTop) / 2, Z(v), seg * 0.42, SEC.drumTop - SEC.naveRoof, 0.7, -a);
-      A.add('window_glow', pane, LL(IDENT, X(u * 0.99), (SEC.naveRoof + SEC.drumTop) / 2 + 0.3, Z(v * 0.99), -a + Math.PI / 2,
-        seg * 0.5, SEC.drumTop - SEC.naveRoof - 1.4, 1), { masks: [0.3, 0.4, 0.05] });
+      for (const side of [0, Math.PI]) {
+        A.add('window_glow', pane,
+          LL(IDENT, X(u * (0.99 - (side ? 0.004 : 0))), (SEC.naveRoof + SEC.drumTop) / 2 + 0.3,
+            Z(v * (0.99 - (side ? 0.004 : 0))), -a + Math.PI / 2 + side,
+            seg * 0.5, SEC.drumTop - SEC.naveRoof - 1.4, 1), { masks: [0.3, 0.4, 0.05] });
+      }
     }
     trim('concrete_dark', 0, SEC.drumTop + 0.2, 0, R * 2.1, 0.4, R * 2.1, [0.95, 0.35, 0.12]);
     // the shell, as rings of decreasing radius on a hemispherical profile
-    const rings = 7;
+    // 13 courses rather than 7: at seven the shell reads as a ziggurat from the
+    // street, which is the one silhouette on this map you see from both bases.
+    const rings = 13;
     for (let i = 0; i < rings; i++) {
       const t0 = i / rings;
       const t1 = (i + 1) / rings;
@@ -651,8 +711,8 @@ export function buildCathedral(A) {
     // eight ribs over the shell
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
-      for (let k = 0; k < 7; k++) {
-        const t0 = k / 7;
+      for (let k = 0; k < 13; k++) {
+        const t0 = k / 13;
         const y = SEC.drumTop + (SEC.domeTop - SEC.drumTop) * Math.sin((t0 * Math.PI) / 2) + 0.2;
         const r0 = R * 1.02 * Math.cos((t0 * Math.PI) / 2);
         A.add('concrete', soft, LL(IDENT, X(Math.cos(a) * r0), y, Z(Math.sin(a) * r0), -a, 0.36, 0.5, 0.7),
