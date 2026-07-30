@@ -2308,7 +2308,25 @@ pairBuilding({ id: 'WC7', x: -80.25, z: 57.75, w: 5.5, d: 5.5, floors: 1, ground
  * side 2 is a blank elevation logs "route references missing opening" and ships
  * a corridor into a wall — which is what the first version of this pair did.
  */
-const SHED = { w: 5.4, d: 5.4, floors: 1, groundH: 3.2, damage: 0.3, parapetH: 0.6, enterable: true, roofProps: 2 };
+/**
+ * `parapetH` IS 0.25 AND NOT N2's 0.6, AND THAT IS THE MANTLE CHAIN TALKING.
+ *
+ * A 0.6 m parapet is 0.6 m of wall the player has to get over between the top
+ * container and the roof deck, and `tools/floorcheck.mjs` models that as three
+ * hops — container, parapet CROWN, deck — on a 0.28 m grid. The crown is about
+ * 0.15 m wide, so whether a grid cell lands on it is a coin toss decided by
+ * where the building happens to sit: measured on the first build of this pair,
+ * EC8 got a cell at 0.06 m inside its crown and its roof came back 1070/1070
+ * reached, WC8's nearest cells fell 0.08 m short and 0.20 m past and its roof
+ * came back UNREACHABLE — the same ladder under ρ, on the same boot.
+ *
+ * At 0.25 the crown is under the 0.42 m step height, so the deck is standable
+ * right up to the parapet's inner face and the container reaches it in ONE hop
+ * of 0.84 m against a 1.05 m reach, with the clearance ray passing 0.05 m over
+ * the crown. No cell has to land on anything. N2 keeps its 0.6 — it is not this
+ * pair's problem to solve and its roof has always been reached.
+ */
+const SHED = { w: 5.4, d: 5.4, floors: 1, groundH: 3.2, damage: 0.3, parapetH: 0.25, enterable: true, roofProps: 2 };
 BUILDINGS.push(
   { id: 'WC8', x: -72.7, z: 28.7, wallKey: 'plaster_cream', streetSide: 0, secondarySide: 2, ...SHED,
     doorBays: { 0: 0, 2: 1 },
@@ -2321,17 +2339,40 @@ BUILDINGS.push(
 );
 
 /**
- * The mantle chain onto the two sheds' roofs, `N2`'s verbatim: ground -> 1.4 ->
- * 2.6 -> the 3.2 m parapet, every rung under `MOVE.mantle.maxHeight` = 1.85.
+ * THE MANTLE CHAIN ONTO THE TWO SHEDS' ROOFS, AND IT IS THREE RUNGS RATHER THAN
+ * N2's TWO, BECAUSE THE TOP ONE HAS TO CLEAR THE PARAPET.
+ *
  * `tools/floorcheck.mjs` floods the real player capsule and reports an
- * `enterable` block whose roof it cannot reach as a cul-de-sac. Both ladders
- * stand on the SOUTH face's east third; both south doors are on its west third.
+ * `enterable` block whose roof it cannot reach as a cul-de-sac. It models the
+ * move on a 0.28 m grid, and a two-rung ladder against a parapet asks it to
+ * find a cell ON the crown — which is 0.15 m wide, so whether one lands there
+ * is decided by where the building happens to sit. Measured on the first build
+ * of this pair, on the same boot: EC8 got a cell 0.06 m inside its crown and
+ * came back 1070/1070, WC8's cells fell either side of its own and came back
+ * UNREACHABLE, and it stayed that way on three consecutive boots. The same
+ * ladder, under ρ, on the same map.
+ *
+ * The capsule cannot get closer than its own radius to the shed's wall on one
+ * side or to the parapet on the other, so container-to-deck is ~0.95 m across a
+ * 1.05 m reach — inside the limit but never by more than a cell. Ending the
+ * ladder ABOVE the deck instead removes the question: rung 3's top is 3.7 m,
+ * half a metre over the roof and 0.15 over the crown, so the cell on the rung
+ * and the cell on the deck are ADJACENT, and `floorcheck` skips the clearance
+ * ray for adjacent cells entirely. Every rung is still under
+ * `MOVE.mantle.maxHeight` = 1.85: 0.05 -> 1.4 -> 2.6 -> 3.7, then a 0.48 m drop
+ * in over the parapet.
+ *
+ * Both ladders stand on the face their shed's door does NOT open through the
+ * middle of — bay 0 of three is the far third — and `KEEPOUT` above holds the
+ * dressing off all three rungs.
  */
 RELIEF.blocks.push(
-  { id: 'WC8 step 2', rect: [-72.6, 24.65, -71.05, 25.95], h: 2.6, key: 'metal_green' },
-  { id: 'WC8 step 1', rect: [-72.6, 23.05, -71.1, 24.65], h: 1.4, key: 'metal_blue' },
-  { id: 'EC8 step 2', rect: [71.05, -27.95, 72.6, -26.65], h: 2.6, key: 'metal_blue' },
-  { id: 'EC8 step 1', rect: [71.1, -26.65, 72.6, -25.05], h: 1.4, key: 'metal_green' }
+  { id: 'WC8 step 3', rect: [-72.9, 25.0, -71.0, 26.0], h: 3.7, key: 'metal_green' },
+  { id: 'WC8 step 2', rect: [-72.9, 24.0, -71.0, 25.0], h: 2.6, key: 'metal_blue' },
+  { id: 'WC8 step 1', rect: [-72.9, 22.9, -71.0, 24.0], h: 1.4, key: 'metal_green' },
+  { id: 'EC8 step 3', rect: [71.0, -28.0, 72.9, -27.0], h: 3.7, key: 'metal_blue' },
+  { id: 'EC8 step 2', rect: [71.0, -27.0, 72.9, -26.0], h: 2.6, key: 'metal_green' },
+  { id: 'EC8 step 1', rect: [71.0, -26.0, 72.9, -24.9], h: 1.4, key: 'metal_blue' }
 );
 
 /**
@@ -2393,7 +2434,24 @@ for (const p of [
  */
 KEEPOUT.push(
   [-76.5, 46, 3.0], // ZONE A — the west city's avenue
-  [76.5, -48, 3.0]  // ZONE B — its 180° image in the east city's
+  [76.5, -48, 3.0], // ZONE B — its 180° image in the east city's
+  /**
+   * …AND ONE ON EACH SHED, WHICH IS THE MANTLE LADDER'S CIRCLE AND NOT THE
+   * DOOR'S. `setDoorways` already derives a circle on every threshold, so a
+   * pallet cannot brick up a doorway; nothing derives one on `RELIEF.blocks`,
+   * and a crate dropped on the 1.4 m rung is an `enterable` block whose roof
+   * `tools/floorcheck.mjs` reports as a cul-de-sac. Measured on the first build
+   * of this district: WC8's roof came back UNREACHABLE and EC8's — the same
+   * ladder under ρ — came back with seven ways onto it, which is the dice and
+   * not the geometry (`Engine` seeds from `Math.random()` unless
+   * `config.deterministic`).
+   *
+   * N2 has never needed one because it stands inside the attack spawn pocket's
+   * own 9.5-unit circle. These two are the same idea authored explicitly: 6.2
+   * units covers the shed, both thresholds and the two rungs south of it.
+   */
+  [-72.7, 27.2, 6.2], // WC8 — the west city's shed and its ladder
+  [72.7, -29.2, 6.2]  // EC8 — its ρ image
 );
 
 /**
