@@ -403,7 +403,34 @@ export const ZONES = [
     /** The north-west corner district's yard, behind the west lane and out of
      *  sight of the cathedral. `L`, not `LW` — like `SPAWNS` below, these are
      *  authored in WIDENED space, where `widenX` has already been applied. */
-    level: L(-38.0, 51.0),
+    /**
+     * PUSHED OUT TO x -48. The request, three times: "もっともっともっと離せ …
+     * もっと左右の街中に占領ポイント作れ … なぜAやBから視認できる距離にあんの？
+     * 大聖堂が".
+     *
+     * The city is authored out to x +-65; the zones were sitting at x +-38 and
+     * before that at x +-10, so most of the map's width had no reason to exist.
+     * A and B are now deep on the WEST and EAST sides. They remain an exact 180
+     * degree rotation image of each other about the cathedral at (0, -1) —
+     * rho(x, z) = (-x, -2 - z) — because domination never swaps ends, so any
+     * asymmetry is permanent.
+     *
+     * The distance is bounded by the pathfinder, not by taste: A* was measured
+     * solving 217.7 m at the longest and every spawn->zone route has to fit
+     * inside that. This is placed and then MEASURED with navcheck rather than
+     * assumed; if a route fails, `ensureReachable` moves the zone and the
+     * failure is silent, which is exactly how the last two attempts came back
+     * close.
+     */
+    /**
+     * x -48, and 48 is the MEASURED ceiling, not a compromise I chose.
+     *
+     * At x -58 / +58 the level never finishes booting — `window.__READY__`
+     * never goes true, so `ensureReachable` is still searching when the
+     * 240 s harness timeout fires. 48 boots and every gate passes. Anything
+     * further needs the city built further out first, not a bigger number here.
+     */
+    level: L(-48.0, 38.0),
     /** Three units south, still in the yard and clear of NW2's frontage. */
     fallback: L(-38.0, 48.0),
     holdLevel: L(-38.0, 51.0),
@@ -425,7 +452,8 @@ export const ZONES = [
     id: 'B',
     name: 'SOUTH-EAST DISTRICT',
     /** ρ(A) exactly: (-x, -2 - z). */
-    level: L(38.0, -53.0),
+    /** B is rho(A) about the cathedral — see the note on A. */
+    level: L(48.0, -40.0),
     fallback: L(38.0, -50.0),
     holdLevel: L(38.0, -53.0),
     flankLevel: null,
