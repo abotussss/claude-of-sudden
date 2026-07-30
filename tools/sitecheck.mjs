@@ -67,6 +67,18 @@ const MIN = {
   coverAreaIn: 12,
   /** every attacker mouth must be at least this watched from the ground */
   mouthGroundSeen: 0.35,
+  /**
+   * The defence must have overwatch OF ITS OWN — a perch it provably reaches
+   * before the attack does — that sees this much of the zone. Without this line
+   * the check passes on a site whose only elevation is the attack's own roof.
+   */
+  defenceFirstPerch: 0.4,
+  /**
+   * And the defence's ground read of the zone must not be WORSE than the
+   * attack's. Cover that hides the charge from both sides equally helps whoever
+   * brings more bodies, which is the attack.
+   */
+  groundEdge: 0.0,
 };
 
 const browser = await chromium.launch({
@@ -159,6 +171,16 @@ const result = await page.evaluate(() => {
     /** A coarse subset, for the thousands of candidate perches. */
     const zoneCoarse = zone.filter((_, i) => i % 3 === 0);
 
+    /**
+     * The courtyard rect, straight out of `ALLEYS`: the lane rect that contains
+     * the site centre. Everything that needs to know where the site's edges are
+     * — the mouth walk, the attacker's viewpoints, the plan view — derives them
+     * from this rather than from a second copy of the numbers.
+     */
+    const rect = (ALLEYS ?? [])
+      .map((a) => a.rect)
+      .find((r) => lc.x >= r[0] - 0.5 && lc.x <= r[2] + 0.5 && lc.z >= r[1] - 0.5 && lc.z <= r[3] + 0.5);
+
     const seenFrac = (eye, pts) => {
       if (!pts.length) return 0;
       let n = 0;
@@ -218,6 +240,40 @@ const result = await page.evaluate(() => {
     perches.sort((a, b) => b.seen - a.seen);
     const overwatch = perches.filter((p) => p.seen >= 0.15);
 
+    /**
+     * WHOSE PERCH IS IT? A perch both teams can reach, that the attack reaches
+     * first, is not a defender's advantage — it is a second attacking lane with
+     * a better angle. So price each of the leaders the same way `navcheck`
+     * prices the site: A* from the nearest spawn of each side to the ground cell
+     * the perch is mantled from. Positive `edge` means the defence gets there
+     * first. A* cannot route ONTO a perch (a stacked deck deletes the nav cell
+     * under it, by design) so this routes to its foot, which is the cell you
+     * have to be standing on to climb.
+     */
+    const spawnRoute = (kind, to) => {
+      let best = Infinity;
+      for (const sp of m.spawns[kind]) {
+        const d = routeLen(sp.position, to);
+        if (d > 0 && d < best) best = d;
+      }
+      return Number.isFinite(best) ? best : -1;
+    };
+    for (const p of perches.slice(0, 14)) {
+      const w = L2W(p.at[0], p.at[1]);
+      const ci = g.nearest(w.x, w.z, C.y, 5, 6);
+      if (ci < 0) continue;
+      const foot = new V3(g.worldX(ci % g.nx), g.floor[ci], g.worldZ((ci / g.nx) | 0));
+      const a = spawnRoute('attack', foot);
+      const d = spawnRoute('defend', foot);
+      if (a < 0 || d < 0) continue;
+      p.attackM = +a.toFixed(1);
+      p.defendM = +d.toFixed(1);
+      p.edge = +(a - d).toFixed(1);
+    }
+    const priced = perches.filter((p) => p.edge !== undefined);
+    const defFirst = priced.filter((p) => p.edge > 0);
+    const atkFirst = priced.filter((p) => p.edge <= 0);
+
     /** The AUTHORED overwatch, named, so a deck that misses says so. */
     const decks = [];
     for (const d of RELIEF.decks ?? []) {
@@ -245,6 +301,34 @@ const result = await page.evaluate(() => {
     /** The eyes a mouth is checked against. */
     const owEyes = overwatch.slice(0, 6).map((p) => p.eye);
     const gEyes = groundEyes.map((p) => p.eye);
+
+    /* ------------------------------------------- 2b. the attacker's view --
+     * THE NUMBER THAT SAYS "DEFENDER-FAVOURED", and the one that was missing.
+     * How much of the plant zone can the attack see from the ground it has to
+     * come in over — its own lane mouth and the two connector-side steps into
+     * the courtyard — versus how much the defence can see from its hold ring?
+     * Cover that hides the charge from the defence as well as from the attack is
+     * cover that helps the side with more bodies; the split is the point.
+     */
+    const attackEyes = [];
+    for (let i = 0; i < 20; i++) {
+      // Fan across the courtyard's +Z edge and up the lane behind it, plus the
+      // connector's mouth: the attack's two authored ways in.
+      const northX = lc.x + (i % 5 - 2) * 2.2;
+      const northZ = (rect ? rect[3] : lc.z + 10) + Math.floor(i / 5) * 2.0;
+      const connX = (rect ? (lc.x < 0 ? rect[2] : rect[0]) : lc.x) + (lc.x < 0 ? 1 : -1) * (i % 5) * 1.8;
+      const connZ = lc.z + 4 + (i % 4) * 1.2;
+      for (const [lx, lz] of [
+        [northX, northZ],
+        [connX, connZ],
+      ]) {
+        const w = L2W(lx, lz);
+        const y = navFloor(w.x, w.z, C.y, 1, 1.5);
+        if (y === null || !fits(w.x, y, w.z)) continue;
+        attackEyes.push({ at: [+lx.toFixed(1), +lz.toFixed(1)], eye: new V3(w.x, y + EYE, w.z), seen: 0 });
+      }
+    }
+    for (const ae of attackEyes) ae.seen = seenFrac(ae.eye, zone);
 
     /* ------------------------------------------------------- 3. the cover --
      * Swept area of mass standing 0.9-2.8 m over the zone floor. The upper
@@ -291,9 +375,6 @@ const result = await page.evaluate(() => {
      * The courtyard rect comes out of ALLEYS; the mouths are found by walking
      * its boundary and looking for runs that are walkable on both sides.
      */
-    const rect = (ALLEYS ?? [])
-      .map((a) => a.rect)
-      .find((r) => lc.x >= r[0] - 0.5 && lc.x <= r[2] + 0.5 && lc.z >= r[1] - 0.5 && lc.z <= r[3] + 0.5);
     const mouths = [];
     if (rect) {
       const [x0, z0, x1, z1] = rect;
@@ -395,10 +476,21 @@ const result = await page.evaluate(() => {
       groundBest: +Math.max(...groundEyes.map((p) => p.seen)).toFixed(3),
       groundHold: +groundEyes[0].seen.toFixed(3),
       groundMean: +(groundEyes.reduce((s, p) => s + p.seen, 0) / groundEyes.length).toFixed(3),
+      attackBest: attackEyes.length ? +Math.max(...attackEyes.map((p) => p.seen)).toFixed(3) : 0,
+      attackMean: attackEyes.length
+        ? +(attackEyes.reduce((s, p) => s + p.seen, 0) / attackEyes.length).toFixed(3)
+        : 0,
+      attackEyeCount: attackEyes.length,
       perchCount: perches.length,
       overwatchCount: overwatch.length,
       overwatchBest: perches.length ? +perches[0].seen.toFixed(3) : 0,
-      overwatchTop: perches.slice(0, 5).map((p) => ({ at: p.at, rise: p.rise, seen: +p.seen.toFixed(3) })),
+      overwatchTop: perches
+        .slice(0, 6)
+        .map((p) => ({ at: p.at, rise: p.rise, seen: +p.seen.toFixed(3), edge: p.edge ?? null })),
+      defFirstBest: defFirst.length ? +defFirst[0].seen.toFixed(3) : 0,
+      defFirstTop: defFirst.slice(0, 3).map((p) => ({ at: p.at, rise: p.rise, seen: +p.seen.toFixed(3), edge: p.edge })),
+      atkFirstBest: atkFirst.length ? +atkFirst[0].seen.toFixed(3) : 0,
+      atkFirstTop: atkFirst.slice(0, 3).map((p) => ({ at: p.at, rise: p.rise, seen: +p.seen.toFixed(3), edge: p.edge })),
       decks,
       coverIn,
       coverRing,
@@ -426,15 +518,27 @@ for (const s of result.sites) {
     `defence ${s.arrive.defend} m (${s.arriveS.defend} s)   ` +
     `defence ahead by ${(s.arrive.attack - s.arrive.defend).toFixed(1)} m`);
 
-  console.log(`\n  ZONE SEEN FROM THE GROUND     hold ${pct(s.groundHold)}   ` +
-    `best of the hold ring ${pct(s.groundBest)}   mean ${pct(s.groundMean)}`);
+  console.log(`\n  ZONE SEEN FROM THE GROUND`);
+  console.log(`    DEFENCE  hold ${pct(s.groundHold)}   best of the hold ring ${pct(s.groundBest)}   mean ${pct(s.groundMean)}`);
+  console.log(`    ATTACK   best ${pct(s.attackBest)}   mean ${pct(s.attackMean)}   ` +
+    `(${s.attackEyeCount} standable points on its two ways in)`);
+  console.log(`    -> the defence sees ${(s.groundMean - s.attackMean >= 0 ? '+' : '') +
+    ((s.groundMean - s.attackMean) * 100).toFixed(1)} points more of the zone than the attack`);
 
   console.log(`\n  OVERWATCH (player-reachable, >1.2 m over the zone, within 26 m)`);
   console.log(`    perches that see any of it: ${s.perchCount}    ` +
     `perches over 15 %: ${s.overwatchCount}    best: ${pct(s.overwatchBest)}`);
+  console.log(`    ${pad('', 24)} ${num('rise', 6)} ${num('sees', 8)} ${num('atk m', 8)} ${num('def m', 8)}   arrives first`);
   for (const p of s.overwatchTop) {
-    console.log(`      level ${num(p.at[0], 7)},${num(p.at[1], 7)}   +${num(p.rise, 5)} m   sees ${num(pct(p.seen), 7)}`);
+    console.log(`      level ${num(p.at[0], 7)},${num(p.at[1], 7)}       ` +
+      `+${num(p.rise, 5)} ${num(pct(p.seen), 8)} ` +
+      (p.edge === null ? `${num('-', 8)} ${num('-', 8)}   -` : `${num('', 8)} ${num('', 8)}   ` +
+        (p.edge > 0 ? `DEFENCE by ${p.edge} m` : `attack by ${-p.edge} m`)));
   }
+  console.log(`    best perch the DEFENCE reaches first: ${pct(s.defFirstBest)}` +
+    (s.defFirstTop[0] ? `  at level ${JSON.stringify(s.defFirstTop[0].at)} +${s.defFirstTop[0].rise} m (by ${s.defFirstTop[0].edge} m)` : ''));
+  console.log(`    best perch the ATTACK  reaches first: ${pct(s.atkFirstBest)}` +
+    (s.atkFirstTop[0] ? `  at level ${JSON.stringify(s.atkFirstTop[0].at)} +${s.atkFirstTop[0].rise} m (by ${-s.atkFirstTop[0].edge} m)` : ''));
   for (const d of s.decks) {
     console.log(`    authored ${pad(d.id, 14)} sees ${num(pct(d.seen), 7)}` +
       (d.bestAt ? `  best at level ${JSON.stringify(d.bestAt)}` : '') +
@@ -465,6 +569,18 @@ for (const s of result.sites) {
   const bad = [];
   if (s.overwatchBest < MIN.overwatchBest) bad.push(`no perch sees ${pct(MIN.overwatchBest)} of the zone (best ${pct(s.overwatchBest)})`);
   if (s.overwatchCount < MIN.overwatchCount) bad.push(`only ${s.overwatchCount} perch(es) over 15 % (want ${MIN.overwatchCount})`);
+  if (s.defFirstBest < MIN.defenceFirstPerch) {
+    bad.push(
+      `the best perch the DEFENCE reaches first sees only ${pct(s.defFirstBest)} of the zone ` +
+        `(want ${pct(MIN.defenceFirstPerch)}) — the elevation over this site belongs to the attack`
+    );
+  }
+  if (s.groundMean - s.attackMean < MIN.groundEdge) {
+    bad.push(
+      `the attack reads the zone BETTER from the ground than the defence does ` +
+        `(${pct(s.attackMean)} vs ${pct(s.groundMean)})`
+    );
+  }
   if (s.coverPts.inHigh < MIN.highCoverIn) bad.push(`${s.coverPts.inHigh} standing cover points in the zone (want ${MIN.highCoverIn})`);
   if (s.coverIn.m2 < MIN.coverAreaIn) bad.push(`${s.coverIn.m2} m² of mass in the zone (want ${MIN.coverAreaIn})`);
   for (const mo of s.mouths) {

@@ -160,15 +160,65 @@ export const RELIEF = {
       ],
     },
   ],
-  /** Catwalks over the outer strip of each site courtyard. Player only. */
+  /**
+   * Catwalks over the outer strip of each site courtyard. Player only.
+   *
+   * THE FIRST TWO WERE AUTHORED FOR A PLANT ZONE THAT HAS SINCE MOVED, and only
+   * one of them moved with it. `sitecheck` sampled six points along each and
+   * asked what fraction of the plant zone each point can see:
+   *
+   *              deck z span   plant zone z   best point   sees
+   *   A-deck      -9.5 .. -2.2      -7          -2.8       52.8 %
+   *   B-deck      -6.0 ..  0.6      -7          -2.1       55.2 %
+   *
+   * B-deck's whole 6.6 m ran NORTH of the charge — its centre was 4.3 m off in Z
+   * while A's was 1.15 m off — because the plant zone went from z -4 to z -7 and
+   * only A's numbers were ever revisited. Pulled south to -8.6, which is as far
+   * as it can go: BE3's north face is at z -8 and x 31..51, so anything past that
+   * is inside a building, and A-deck already runs 1.5 m into BW3 for the same
+   * reason. Its centre is now 1.7 m off instead of 4.3.
+   *
+   * THE TWO SOUTH CATWALKS ARE NEW, AND THEY ARE THE POINT OF THIS PASS.
+   *
+   * `sitecheck` found 246 and 227 player-reachable perches over each site with a
+   * view of the plant zone, best 92 % and 95 % — so the map had no shortage of
+   * elevation. What it had no elevation of was the DEFENCE'S: the two best
+   * perches at each site are W2/E2's roof at +7.3 m and BW1/BE1's at +10.4 m, and
+   * W2 and E2 are the ATTACK'S interior route to the site. Elevation both sides
+   * reach, the attack reaching it first, is not a defender's advantage; it is a
+   * second attacker's lane with a better angle.
+   *
+   * So each site gets a catwalk on the 2 m strip against the courtyard's INNER
+   * wall at its SOUTH end — W3's west face, E3's east face — running from the
+   * defence's own lane up to the connector mouth, 3 m up, looking north-west
+   * across the whole plant zone. The defence walks past its mantle block on the
+   * way in from a spawn 19 m closer than the attack's; the attack cannot get on
+   * it without first crossing the site. Same strip-against-a-wall rule as the
+   * first two decks — the cells a deck costs the grid have to be cells A* was
+   * never going to use — and kept 2.4 m clear of `holdLevel` so the defence's
+   * rally point is not standing under 3 m of steel.
+   */
   decks: [
     { id: 'A-deck', rect: [-36, -9.5, -34, -2.2], y: 2.9, railSide: 1 },
-    { id: 'B-deck', rect: [34, -6, 36, 0.6], y: 2.9, railSide: 3 },
+    { id: 'B-deck', rect: [34, -8.6, 36, 0.6], y: 2.9, railSide: 3 },
+    { id: 'A-south deck', rect: [-22.5, -15.6, -20.5, -12.8], y: 3.0, railSide: 3 },
+    { id: 'B-south deck', rect: [20.5, -15.6, 22.5, -12.8], y: 3.0, railSide: 1 },
   ],
   /** Containers and crates to mantle off. `base` stacks one on another. */
   blocks: [
     { id: 'A-deck step', rect: [-34, -4.5, -32, -2.5], h: 1.5, key: 'metal_green' },
     { id: 'B-deck step', rect: [32, -5.5, 34, -3.5], h: 1.5, key: 'metal_blue' },
+    /**
+     * The mantle chain onto the two south catwalks, and the reason they are the
+     * DEFENCE'S. Both sit in the defence's own lane at the catwalk's south end,
+     * adjacent in X exactly the way the two deck steps above are — ground to
+     * 1.6 m is a mantle, 1.6 m to the 3.0 m deck is 1.4 m and also a mantle, and
+     * `MOVE.mantle.maxHeight` is 1.85. Kept 1.8 m authored clear of `holdLevel`
+     * (∓24, -12), because a container dressed onto the defence's rally point puts
+     * the whole defence on an island — see the note over KEEPOUT.
+     */
+    { id: 'A-south step', rect: [-24.4, -15.4, -22.6, -13.8], h: 1.6, key: 'metal_blue' },
+    { id: 'B-south step', rect: [22.6, -15.4, 24.4, -13.8], h: 1.6, key: 'metal_green' },
     /**
      * Moved off centre, and SCALING IS WHY. A facade's door lands in a BAY, and
      * the bay count is `round(length / 3.05)` — so K1's +Z face went from two
@@ -267,12 +317,21 @@ export const SITEWORKS = [
    * that was not a street. Measured 15.2 m of walkable entry. The gatehouse goes
    * flush to the west kerb (x -31, which is also BW1's east face, so it reads as
    * part of the block rather than a lump in a field) and the baffle stands off
-   * the east wall with a 2.4 m slot behind it. What is left to cross is 3.3 m
-   * and 2.4 m authored — 5.0 m and 3.6 m on the ground — offset in Z from each
-   * other, so you cannot see the plant spot through either one until you are in.
+   * the east wall with a slot behind it. What is left to cross is 2.7 m and
+   * 1.8 m authored — 4.0 m and 2.7 m on the ground, 6.7 m of a 15.75 m lane —
+   * offset in Z from each other, so you cannot see the plant spot through either
+   * one until you are through it.
+   *
+   * THE BAFFLE WAS 1.2 m WIDE AND THAT WAS NOT ENOUGH. `sitecheck` measured the
+   * mouth at 11.6 m after the gatehouse went in and did not see the baffle at
+   * all: its mouth walk probes 1.4 m either side of the boundary and takes the
+   * nearest nav cell within one ring, so an obstacle 1.8 m wide on the ground is
+   * something the grid routes round without noticing. An obstacle a route does
+   * not notice is not a chokepoint. 2.4 m authored — 3.6 m on the ground, five
+   * nav cells — is.
    */
   { id: 'A north gatehouse', kind: 'pier', x: -29.2, z: 3.2, w: 3.6, d: 3.2, h: 3.2, key: 'plaster_sand' },
-  { id: 'A north baffle', kind: 'wall', x: -23.5, z: 4.2, w: 1.2, d: 2.8, h: 1.6, key: 'brick' },
+  { id: 'A north baffle', kind: 'wall', x: -23.5, z: 4.2, w: 2.4, d: 2.8, h: 1.6, key: 'brick' },
   /**
    * THE CONNECTOR — the flank from the mid street. The blockhouse sits INSIDE
    * connector 2's west arm, flush to its south kerb (W3's north face at z -8),
@@ -331,7 +390,7 @@ export const SITEWORKS = [
    *     concrete barrier standing inside a blockhouse looks like a bug.
    */
   { id: 'B north gatehouse', kind: 'pier', x: 29.2, z: 3.2, w: 3.6, d: 3.2, h: 3.2, key: 'plaster_cream' },
-  { id: 'B north baffle', kind: 'wall', x: 23.5, z: 4.2, w: 1.2, d: 2.8, h: 1.6, key: 'brick' },
+  { id: 'B north baffle', kind: 'wall', x: 23.5, z: 4.2, w: 2.4, d: 2.8, h: 1.6, key: 'brick' },
   { id: 'B connector blockhouse', kind: 'pier', x: 18.6, z: -6.8, w: 2.8, d: 2.4, h: 2.6, key: 'concrete' },
   { id: 'B spine east', kind: 'wall', x: 28.1, z: -4.0, w: 3.8, d: 0.55, h: 1.45, key: 'brick' },
   { id: 'B spine west', kind: 'wall', x: 23.2, z: -4.0, w: 2.8, d: 0.55, h: 1.3, key: 'brick' },

@@ -155,10 +155,31 @@ const scan = await page.evaluate(() => {
    *              `LAYER.FOLIAGE` exists in src/physics for exactly this.
    *   dust_skirt a painted contact fillet, 4 mm thick — not an object.
    *   litter/glass_shards/pock  decals with a thickness.
+   *   slab_shard a broken floor slab: 0.1 m of concrete lying FLAT with two to
+   *              four bent 8 mm rebars out of it. This is the prop the note at
+   *              the vertex test below was written about — it is ground debris
+   *              the player is supposed to walk over, and "demanding a collision
+   *              box would have put a knee-high concrete kerb under 157 pieces
+   *              of ground debris". Listing it makes that a DECISION instead of
+   *              a coincidence, which is what it had been: the vertex test the
+   *              note describes rejects a shard whose bars all lean the same
+   *              way, and passes one that happens to roll a bar leaning north
+   *              and another leaning east (`rz` ±1.4, `rx` ±1.2 rad — see
+   *              `slabShard` in src/world/props.js). Three of 159 rolled that on
+   *              one reroll of the dressing dice and the gate reported three
+   *              walk-throughs on debris it had passed on every run before,
+   *              because `Engine`'s RNG is seeded from `Math.random()` unless
+   *              `config.deterministic` is set, so the dressing is a fresh roll
+   *              every boot and a 2 % case is a coin this gate flips forever.
+   *              A bounding extent cannot tell a concrete plate from two spikes;
+   *              measured over two boots the thinnest genuine obstacle class on
+   *              the map (`sat_dish`) has 0.076 m² of surface above step height
+   *              and a maximal four-bar shard has up to 0.064 m², so no area
+   *              threshold separates them either. The prop is the judgement.
    * Everything else that is big enough to bump into is expected to be solid.
    */
   const PERMEABLE = new Set(['shrub', 'weeds', 'palm_frond', 'dust_skirt',
-                             'litter', 'glass_shards', 'pock']);
+                             'litter', 'glass_shards', 'pock', 'slab_shard']);
 
   const _a = new THREE_V(), _b = new THREE_V(), _c = new THREE_V();
   const M = c.camera.matrixWorld.constructor;      // THREE.Matrix4
