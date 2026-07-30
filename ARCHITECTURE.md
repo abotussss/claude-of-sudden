@@ -93,6 +93,8 @@ ai.playerTeam / ai.friendlyFire / ai.combatEnabled / ai.matchControlled / ai.ski
 ai.clearAgents()            ai.spawn(variant, pos, yaw, { team, name, role })
 ai.teamOf(actor)            ai.getHudActors()
 ai.protect(actor, seconds)  ai.targetable(actor)      ai.corpseLimit
+ai.needsAmmo(actor)         ai.needsGrenade(actor)    ai.ammoState(actor)
+ai.resupply(actor, mags, grenades)                    ai.radio
 agent.setObjective(mode, position, site, facing)   agent.working
 player.team / player.name / player.alive
 player.respawnAt(position, yaw)     player.health.regenEnabled
@@ -135,6 +137,34 @@ when `buildFeatures` runs — so `src/match/caches.js` still PROVES every cache
 against the real grid at init and drops the rest, exactly as `src/match/sites.js`
 proves a zone's standing points. What changed is the answer. It used to be false
 for all twenty-four:
+
+A CACHE HAS TO BE WORTH SOMETHING TO A BOT AS WELL, and it was not: `_orderCache`
+walked a man to a crate, he stood on it and walked away with what he arrived
+with, so what the feature measured was footfall. `ai.needsAmmo` /
+`ai.needsGrenade` / `ai.ammoState` / `ai.resupply(actor, mags, grenades)` are the
+same four hooks `weapons` already publishes for the player (`needsAmmo`,
+`scavenge`, `needsGrenades`, `resupplyGrenades`) addressed to the other side of
+the same split: `match` decides what a crate is worth, `ai` owns what a soldier
+is carrying, and `match` may no more read `Agent.reserve` than it may read
+`weapons.reserve`. `resupply` is capped at what the man spawned with, exactly as
+`scavenge` is capped at `def.reserve`. `src/match/caches.js:takeForBot` is the
+bot half of `take()` and `MatchSystem._needCache` ranks who is sent.
+
+WHICH CACHES A BOT CAN ACTUALLY USE IS TWO OF THE FOUR KINDS, measured at boot
+rather than assumed: the ground floors publish seven `ammo` and one `grenade`.
+EVERY weapon rack is on floor 1 and EVERY vantage nest is `floor: 'roof'`, and
+the height field has one floor per cell, so a bot on this map cannot take a
+weapon upgrade or use a firing position at all. Both branches are written and
+both are measured selecting zero. That is not a bug to fix in `ai` — it is
+`world` publishing no ground-floor rack.
+
+`ai.radio` is the SQUAD NET (`src/ai/radio.js`): two rate-limited nets, one per
+side, that turn what a soldier decides into a transmission and get it answered.
+It reaches `audio` only through the public `bark(kind, position, opts)`, and the
+friendly/enemy distinction is a MIX decision — the player's own side is
+`radio: true` and head-locked, the enemy is spatialised at his own position.
+`match` drives nothing on it; `ai` listens to `match:capture` for the objective
+traffic like any other event.
 
 ```js
 world.interiorVolumes // [{ building, cx, cz, c, s, hw, hd, floorY, probeY }]
