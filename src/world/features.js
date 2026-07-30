@@ -1,6 +1,7 @@
 import { BOX, BOX_THIN, IDENT, LL } from './kit.js';
 import { Rng } from '../core/rng.js';
-import { sandbagWall } from './dressing.js';
+import { groundY, sandbagWall } from './dressing.js';
+import { BEACON_SPOTS, CATHEDRAL, SCALE } from './layout.js';
 
 /**
  * WORLD — THE REASONS TO GO IN AND THE REASONS TO GO UP.
@@ -208,6 +209,76 @@ export function buildFeatures(A, infos) {
         yaw,
       });
     }
+  }
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE FLANK BEACON SQUARES, AND THE TWO IN THE CATHEDRAL
+   * ──────────────────────────────────────────────────────────────────────────
+   * "マップの左右のいく価値のないエリアにはビーコンエリアがあってそこからもリスポーンできる
+   *  ようにして（起動したら）左右にもっとメリットを与えて、例えば爆撃機を呼べるとか"
+   *
+   * Every feature above is INSIDE a building, because until now the only thing
+   * this file was answering was "why would you ever go indoors". The question has
+   * changed: with the capture points moved out to the corners
+   * (`ZONES` in src/match/sites.js) there are three flank areas with no point on
+   * them, and the player wants them worth walking to anyway.
+   *
+   * `world` still gives nothing away. What a cache is worth is `match`'s, and
+   * `src/match/caches.js` already binds BOTH halves of what was asked for to
+   * every published feature without knowing where it stands: HOLD F takes what it
+   * holds, TAP F lights a 30 s respawn beacon that joins `_safeSpawn`'s
+   * forward-spawn auction. So a "beacon area" is a feature on flank ground, and
+   * `kind: 'ammo'` is deliberate rather than lazy — `caches.js:KINDS` accepts
+   * exactly four strings and silently drops anything else, so a new kind would be
+   * an inert painted square until a file outside `world` was edited.
+   *
+   * AND THE CATHEDRAL GETS TWO. Zone C used to be the crossing, so the building
+   * was worth entering by definition; it no longer is, and a 45 m nave nobody has
+   * a reason to walk into is the "勿体無い" the whole cathedral pass was about. Two
+   * aisle caches — one either end, both on the ground storey `_carveInteriors`
+   * publishes, so a bot can be sent to them — are that reason, and they are also
+   * the safest beacon on the map to light because you are standing inside a
+   * fortress to do it.
+   *
+   * Positions are LEVEL space, already widened, and scaled here: `BEACON_SPOTS`
+   * is authored in widened plan units like the districts it stands in, and the
+   * cathedral's own numbers are metres from its crossing.
+   */
+  const flank = (id, name, kind, x, z, yaw) => {
+    const y = groundY(x, z);
+    cache(A, rng, kind, x, y, z, yaw);
+    out.push({
+      id, kind, building: name, floor: 0, indoor: false,
+      /** Outdoors on an authored lane: the strongest claim this file can make,
+       *  and `Caches.prove` measures it against the real grid regardless. */
+      botReachable: true,
+      level: { x, y, z },
+      yaw,
+    });
+  };
+  for (const b of BEACON_SPOTS) {
+    flank(`${b.id}-beacon`, b.name, 'ammo', b.x * SCALE, b.z * SCALE, b.yaw);
+  }
+  /**
+   * The two aisles, 9 m either side of the crossing so neither stands under the
+   * dome (which is what the strike takes down) and both are clear of the altar
+   * platform and the choir screen. u ∓11.7 m is the middle of an aisle: the
+   * arcade piers are 8.6 m off the centreline and the wall face is at 14.15 m.
+   */
+  for (const [id, kind, u, v] of [
+    ['CATH-f0-ammo', 'ammo', -11.7, -9.0],
+    ['CATH-f0-grenade', 'grenade', 11.7, 9.0],
+  ]) {
+    const x = CATHEDRAL.x + u;
+    const z = CATHEDRAL.z + v;
+    const y = 0.16; // the cathedral floor, a kerb over the street
+    cache(A, rng, kind, x, y, z, Math.atan2(-u, 0));
+    out.push({
+      id, kind, building: CATHEDRAL.id, floor: 0, indoor: true,
+      botReachable: true,
+      level: { x, y, z },
+      yaw: Math.atan2(-u, 0),
+    });
   }
   return out;
 }

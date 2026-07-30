@@ -94,16 +94,55 @@ export function cordonRuns() {
   const runs = [];
   const run = (id, x0, z0, x1, z1, o = {}) => runs.push({ id, x0, z0, x1, z1, ...o });
 
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * TWO OF THESE FOUR RUNS HAVE A GATE IN THEM NOW
+   * ────────────────────────────────────────────────────────────────────────────
+   * The compound wall behind each spawn used to be one unbroken run, because
+   * there was nothing on the far side of it but dune. There is now: a capture
+   * district west of the attack's compound and its point-image east of the
+   * defence's (`THE MAP GROWS — PART 4` in layout.js), and a capture point whose
+   * only way in is a 16 m throat 60 m up the map is a point nobody retakes.
+   *
+   * So each of those two runs is built in two pieces with a `GATE_W`-wide gap
+   * between them, and the gap is a REAL hole in the boundary on purpose — it is
+   * the district's second mouth, it is authored ground on both sides of it, and
+   * it is the only opening in either compound that is not the street.
+   *
+   * The other two runs (`N east`, `S west`) are untouched: there is still nothing
+   * behind them, and cutting a hole in a wall with dune on the far side is how
+   * `boundcheck` went red for a fortnight.
+   */
+  const GATE_W = 7.5;
+  /** `z0`/`z1` are the run's two ends and `gz` the middle of the opening, all in
+   *  the same ALREADY-SCALED level space the rest of this function reads. */
+  const gap = (id, sx, z0, z1, gz, o = {}) => {
+    const half = GATE_W / 2;
+    const near = Math.min(z0, z1);
+    const far = Math.max(z0, z1);
+    run(`${id} a`, sx * X, near, sx * X, gz - half, o);
+    run(`${id} b`, sx * X, gz + half, sx * X, far, o);
+    // the gate's own jambs: two piers standing where the wall stops, so the
+    // opening reads as a way through rather than as a wall somebody forgot.
+    for (const s of [-1, 1]) {
+      run(`${id} jamb ${s}`, sx * X, gz + s * half, sx * X, gz + s * (half + 0.62), {
+        t: 1.35, h: [4.1, 4.4], plain: true,
+      });
+    }
+  };
+
   // ------------------------------------------- the attack spawn's compound --
   // W5 and E5 stop at z 66; the street runs on to 69 and the barricade stands at
   // 71.9. These two are the missing 6 m of building line either side of it.
-  run('cordon N west', -X, face('W5', 2) - 0.3, -X, zN, { dress: 1 });
+  // The west one is gated into the north-west district at level z 75.
+  gap('cordon N west', -1, face('W5', 2) - 0.3, zN, 75.0, { dress: 1 });
   run('cordon N east', X, face('E5', 2) - 0.3, X, zN, { dress: 1 });
   run('cordon N end', -X - 0.3, zN, X + 0.3, zN, { h: [3.5, 3.9] });
 
   // ------------------------------------------ the defence spawn's compound --
   run('cordon S west', -X, face('W4', 0) + 0.3, -X, gateN, { dress: 1 });
-  run('cordon S east', X, face('E4', 0) + 0.3, X, gateN, { dress: 1 });
+  // …and the east one is gated into the south-east district, ρ of the above.
+  gap('cordon S east', 1, face('E4', 0) + 0.3, gateN, -77.0, { dress: 1 });
   // …and the pocket BEHIND the gate arch, which is 20 m of dressed road with
   // open dunes either side of it.
   run('cordon S west outer', -X, gateS, -X, zS, {});

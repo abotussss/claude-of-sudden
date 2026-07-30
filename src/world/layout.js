@@ -627,10 +627,23 @@ export const SITEWORKS = [
  * IF ONE MOVES, MOVE THE OTHER. Radius 3.0 authored = 4.5 m of ground, sized to
  * `standRing`'s 4 m forward-spawn ring exactly as before.
  */
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * …AND AGAIN, BECAUSE THE THREE ZONES CAME OFF THE CENTRELINE ALTOGETHER.
+ * ════════════════════════════════════════════════════════════════════════════
+ * "ドミねーとする場所が一っ直線に並んでるでしょ？ そうするとマップの左右側に行くメリット
+ *  ないから改善してほしい" — all three were at level x 0, so they were COLLINEAR
+ * and the whole left and right of the map was worth nothing.
+ *
+ * Zone C is the one that can still be written pre-widen, because it is the WEST
+ * COURTYARD and the courtyard is authored in this table's own space. Zones A and B
+ * stand in the two NEW CORNER DISTRICTS, which are authored in widened space at
+ * the foot of this file — so their circles are pushed there, beside the ground
+ * they belong to, exactly as the base-district pockets are.
+ * @see `THE MAP GROWS — PART 4` and `ZONES` in src/match/sites.js.
+ */
 export const KEEPOUT = [
-  [0.0, 38.0, 3.0], // ZONE A — north plaza, beside the attack base
-  [0.0, -1.0, 3.0], // ZONE C — the cathedral crossing
-  [0.0, -40.0, 3.0], // ZONE B — south plaza, beside the defence base
+  [-28.0, -1.0, 3.0], // ZONE C — the west courtyard, on the equidistant line
   [-28.0, -7.0, 2.2], // site A plant area
   [28.0, -7.0, 2.2], // site B plant area
   /**
@@ -1172,12 +1185,29 @@ export const BUILDINGS = [
    * are skyline: `skipSides` drops the faces nobody can ever see, and the inner
    * face of each one is the wall you take cover against.
    */
-  { id: 'BW1', x: -41, z: 22, w: 20, d: 42, floors: 3, wallKey: 'plaster_sand', streetSide: 1, damage: 0.15, skipSides: [3], roofProps: 3 },
+  /**
+   * BW1 AND BE3 ARE SHORTER THAN THEY WERE, AND THAT IS WHAT MAKES THE TWO
+   * CORNER DISTRICTS POSSIBLE. @see `THE MAP GROWS — PART 4` at the foot of this
+   * file.
+   *
+   * BW1 ran level z 1..43 and BE3 z -44..-8, i.e. each one walled its lane from
+   * the courtyard all the way to the cross street AND filled the whole corner
+   * behind it. The two new capture districts stand in those corners, so each
+   * block keeps the length that is actually a lane wall (20 units) and gives up
+   * the part that was only ever infill: BW1 is now z 1..21, BE3 z -23..-3.
+   *
+   * `cordonRuns()` derives the four party walls from the overlap of a background
+   * block and the block in front of it, so the BW1-W5 and BE3-E4 pairs drop out
+   * of that list on their own the moment the overlap goes to zero — the 0.75 m
+   * slots they closed are now 20-unit mouths into the new districts, which is
+   * the point. Nothing in `src/world/cordon.js` changed to make that happen.
+   */
+  { id: 'BW1', x: -41, z: 11, w: 20, d: 20, floors: 3, wallKey: 'plaster_sand', streetSide: 1, damage: 0.15, skipSides: [3], roofProps: 3 },
   { id: 'BW2', x: -45, z: -4, w: 18, d: 18, floors: 2, wallKey: 'plaster_cream', streetSide: 1, damage: 0.25, skipSides: [3], roofProps: 2 },
   { id: 'BW3', x: -41, z: -26, w: 20, d: 36, floors: 2, wallKey: 'plaster_blue', streetSide: 1, damage: 0.2, skipSides: [3], roofProps: 2 },
   { id: 'BE1', x: 41, z: 22, w: 20, d: 42, floors: 3, wallKey: 'plaster_pink', streetSide: 3, damage: 0.15, skipSides: [1], roofProps: 3 },
   { id: 'BE2', x: 45, z: -4, w: 18, d: 18, floors: 2, wallKey: 'plaster_sand', streetSide: 3, damage: 0.25, skipSides: [1], roofProps: 2 },
-  { id: 'BE3', x: 41, z: -26, w: 20, d: 36, floors: 2, wallKey: 'plaster_cream', streetSide: 3, damage: 0.2, skipSides: [1], roofProps: 2 },
+  { id: 'BE3', x: 41, z: -13, w: 20, d: 20, floors: 2, wallKey: 'plaster_cream', streetSide: 3, damage: 0.2, skipSides: [1], roofProps: 2 },
   /**
    * The mass BEHIND the gate. Only its top four metres and its roofline are
    * visible — through the sliver of sky over the arch spandrel — but that is the
@@ -1802,6 +1832,304 @@ SET_PIECES.tyres.push(
   [-8.0, 59.0, 3], [8.2, -61.0, 3],
   [-14.4, 12.0, 4], [14.6, -14.0, 3]
 );
+
+/* ========================================================================== */
+/* THE MAP GROWS — PART 4: TWO CORNER DISTRICTS, AND THE ZONES GO IN THEM      */
+/* ========================================================================== */
+/**
+ * "ドミねーとする場所が一っ直線に並んでるでしょ？ そうするとマップの左右側に行くメリット
+ *  ないから改善してほしい"
+ * "ドミねーとする場所は大聖堂挟んで対角になるように配置、物理的に距離をもっと空けて、
+ *  つまりマップの左右、大聖堂ではないエリアにドミネーションするエリアを配置して"
+ *
+ * THE THREE ZONES WERE ALL AT LEVEL x 0. The north plaza, the cathedral crossing
+ * and the south plaza — one line straight down the middle of the map, which is
+ * exactly what the player measured by eye: every route worth walking was the mid
+ * street, and the two lanes, the two courtyards and the four cross-street arms
+ * were 40 % of the map's ground with nothing on it.
+ *
+ * WHERE THEY GO, and why it takes new ground. The requirement has three parts —
+ * DIAGONALLY OPPOSITE about the cathedral, FURTHER APART, and NOT in the
+ * cathedral — and one of them is not free:
+ *
+ *   Zone C has to stay on the line equidistant from the two bases. `SPAWNS` in
+ *   src/match/sites.js are at level z 64.5 and -66.5, so that line is z -1, and a
+ *   third zone anywhere off it hands one side a permanent lead — domination never
+ *   swaps ends, which is the whole argument the header of that file is built on.
+ *   Off the centreline and on that line there are exactly two places: the two
+ *   courtyards. C is the WEST one.
+ *
+ *   Zones A and B are a 180° pair about the cathedral centre (level 0, -1), so
+ *   whatever route advantage one side has to A, the other has to B. The furthest
+ *   such pair on the OLD ground is the two lane ends at z ∓28, and that puts A
+ *   only 29 units from C — 43 m, which is LESS than the 58.5 m the player was
+ *   already calling too close.
+ *
+ * So the two corners the map never had get built: a district west of W5 and north
+ * of it, and its exact point-image east of E4 and south of it. `BW1` and `BE3`
+ * were the infill standing in them and are 20 units shorter each (see their
+ * entries above).
+ *
+ *   ρ(x, z) = (-x, -2 - z)   the 180° rotation about the cathedral centre.
+ *   Every rect, every block and every piece of mass below is authored as a pair
+ *   under ρ, so the two districts are the same district played from both ends.
+ *
+ *              level (widened)     from N base    from S base    to the others
+ *   ZONE A       (-38,  51)          53 units       184 units     C 40, B 124
+ *   ZONE C       (-37,  -1)          75 units        75 units     A 40, B 94
+ *   ZONE B       ( 38, -53)         184 units        53 units     C 94, A 124
+ *
+ *   x1.5 for metres: A-B 186 m (was 117), A-C 60 m (was 58.5), B-C 141 m (was
+ *   58.5). Bearings from the cathedral: A 140.9°, C 180.0°, B -39.1° — A and B
+ *   are 180.0° apart, which is what "大聖堂挟んで対角" asks for exactly.
+ *
+ * EVERY DISTRICT HAS TWO MOUTHS, because a capture point in a one-door pocket is
+ * a point you cannot retake:
+ *   - the LANE mouth: 11 units of open frontage where the district meets the west
+ *     lane and the north cross street (and 8 where the east one meets the south
+ *     cross), i.e. where BW1/BE3 used to stand;
+ *   - the BASE mouth: a 5-unit gate cut in the compound wall behind each spawn.
+ *     @see `cordonRuns()` in src/world/cordon.js, which is where that gap lives.
+ */
+BUILDINGS.push(
+  /* ---- the north-west district: zone A ---------------------------------- */
+  /** The outer wall of the whole district, and the map edge on this side. Its
+   *  east face is flush with BW1's west face, so the corner it turns is closed
+   *  rather than a 2-unit slot into the dunes. */
+  { id: 'NW1', x: -65, z: 38.5, w: 10, d: 39, floors: 3, wallKey: 'plaster_blue', streetSide: 1, damage: 0.25, skipSides: [3], roofProps: 3 },
+  /** The two blocks that close the district's north side. They meet flush at
+   *  x -34 and NW3's east face is inside the compound wall's own thickness, so
+   *  the boundary is continuous from the map edge to the spawn's wall. */
+  { id: 'NW2', x: -47, z: 63, w: 26, d: 10, floors: 2, wallKey: 'plaster_cream', streetSide: 0, secondarySide: 1, damage: 0.3, balconies: 0.3, doorBays: { 0: 1 }, roofProps: 3 },
+  { id: 'NW3', x: -25, z: 63, w: 18, d: 10, floors: 2, wallKey: 'plaster_sand', streetSide: 0, secondarySide: 3, damage: 0.35, balconies: 0.25, doorBays: { 0: 1 }, roofProps: 3 },
+  /** Two single-storey blocks standing IN the district: the throat is 16.5 m of
+   *  frontage and the yard is 66 m long, so without these the walk in is one
+   *  straight line and the zone is read off it from 50 m. Not `enterable` — a
+   *  solid block is honest cover and adds nothing for the interior gates to
+   *  prove. Both are kept 6 units clear of the zone centre so they stand outside
+   *  its 8 m circle. */
+  { id: 'NW4', x: -46, z: 30, w: 7, d: 8, floors: 1, groundH: 3.5, wallKey: 'plaster_pink', streetSide: 1, damage: 0.4, parapetH: 0.7, roofProps: 2 },
+  { id: 'NW5', x: -28, z: 50, w: 8, d: 7, floors: 1, groundH: 3.3, wallKey: 'plaster_cream', streetSide: 3, damage: 0.45, parapetH: 0.6, roofProps: 2 },
+
+  /* ---- the south-east district: zone B, ρ of the above ------------------ */
+  { id: 'SE1', x: 65, z: -40.5, w: 10, d: 39, floors: 3, wallKey: 'plaster_pink', streetSide: 3, damage: 0.25, skipSides: [1], roofProps: 3 },
+  { id: 'SE2', x: 47, z: -65, w: 26, d: 10, floors: 2, wallKey: 'plaster_sand', streetSide: 2, secondarySide: 3, damage: 0.3, balconies: 0.3, doorBays: { 2: 1 }, roofProps: 3 },
+  { id: 'SE3', x: 25, z: -65, w: 18, d: 10, floors: 2, wallKey: 'plaster_blue', streetSide: 2, secondarySide: 1, damage: 0.35, balconies: 0.25, doorBays: { 2: 1 }, roofProps: 3 },
+  { id: 'SE4', x: 46, z: -32, w: 7, d: 8, floors: 1, groundH: 3.5, wallKey: 'plaster_cream', streetSide: 3, damage: 0.4, parapetH: 0.7, roofProps: 2 },
+  { id: 'SE5', x: 28, z: -52, w: 8, d: 7, floors: 1, groundH: 3.3, wallKey: 'plaster_pink', streetSide: 1, damage: 0.45, parapetH: 0.6, roofProps: 2 }
+);
+
+/**
+ * The district GROUND. Two rects each, an L wrapping the corner block: the leg
+ * beside the lane (where BW1 / BE3 used to be) and the leg behind the cross
+ * street's own block, which is where the zone stands.
+ *
+ * These are what makes the ground AUTHORED. `tools/boundcheck.mjs` calls a cell
+ * the player can reach VOID when the collision under it is bare `sand` and it is
+ * outside every authored rect, and the player has twice sent a screenshot of
+ * exactly that — so a district is a surface and a set of walls in the same commit
+ * as the capture point that stands on it, never one without the other.
+ */
+ALLEYS.push(
+  { rect: [-60, 21, -39.5, 44], surface: 'dirt', density: 0.35 },   // NW throat
+  { rect: [-60, 44, -15.5, 58], surface: 'gravel', density: 0.4 },  // NW yard — ZONE A
+  { rect: [39.5, -46, 60, -23], surface: 'dirt', density: 0.35 },   // SE throat
+  { rect: [15.5, -60, 60, -46], surface: 'gravel', density: 0.4 }   // SE yard — ZONE B
+);
+
+/** …and the terrain under them is flattened, with the soft shoulder `buildGround`
+ *  puts on every FLAT rect, so the dunes still carry the far ground behind the
+ *  new blocks. A capture point on ±0.55 m of fbm is a capture point where your
+ *  crosshair sits on a hill. */
+FLAT.push(
+  [-62, 19, -14, 60],
+  [14, -62, 62, -21]
+);
+
+/**
+ * The three ZONE circles and the three BEACON squares, as ground no
+ * collision-bearing prop may be dressed onto. Radius 3.0 for a zone (4.5 m of
+ * ground) is sized to `standRing`'s 4 m forward-spawn ring exactly as the old
+ * ones were; 2.2 for a beacon clears the 1.7 m painted square plus a capsule.
+ *
+ * Zone C's circle is in the pre-widen table above, because the courtyard it
+ * stands in is authored there. These are in WIDENED space.
+ */
+KEEPOUT.push(
+  [-38, 51, 3.0],   // ZONE A — the north-west district
+  [38, -53, 3.0],   // ZONE B — the south-east district
+  [-34.75, -20, 2.2], // BEACON — west lane, south run
+  [34.75, 18, 2.2],   // BEACON — east lane, north run
+  [40, -3, 2.2]       // BEACON — east courtyard
+);
+
+/**
+ * THE MASS ON THE TWO NEW POINTS, and it is the plaza recipe rather than a new
+ * one: two screens on the arc the ENEMY arrives from, two plinths of waist-high
+ * mass ON the point, one wall on the owner's own side to retake it from behind,
+ * and one pier over the 2.8 m cover line at the throat — a chokepoint, not cover.
+ * Everything is authored 3.2-5.1 units of the centre: outside `standRing`'s 4 m
+ * ring of forward spawns, inside the 8 m capture circle. @see the long note over
+ * `SITEWORKS`.
+ */
+SITEWORKS.push(
+  { id: 'A screen west', kind: 'wall', x: -40.6, z: 46.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'A screen east', kind: 'wall', x: -35.4, z: 46.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'A plinth north', kind: 'plinth', x: -38.0, z: 55.0, w: 2.0, d: 1.6, h: 1.3, key: 'concrete' },
+  { id: 'A plinth west', kind: 'plinth', x: -42.4, z: 51.0, w: 1.6, d: 2.0, h: 1.3, key: 'concrete' },
+  { id: 'A retake wall', kind: 'wall', x: -33.4, z: 51.0, w: 0.6, d: 3.6, h: 1.45, key: 'plaster_blue' },
+  { id: 'A throat pier', kind: 'pier', x: -38.0, z: 44.6, w: 2.4, d: 2.4, h: 2.95, key: 'concrete' },
+
+  { id: 'B screen east', kind: 'wall', x: 40.6, z: -48.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'B screen west', kind: 'wall', x: 35.4, z: -48.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'B plinth south', kind: 'plinth', x: 38.0, z: -57.0, w: 2.0, d: 1.6, h: 1.3, key: 'concrete' },
+  { id: 'B plinth east', kind: 'plinth', x: 42.4, z: -53.0, w: 1.6, d: 2.0, h: 1.3, key: 'concrete' },
+  { id: 'B retake wall', kind: 'wall', x: 33.4, z: -53.0, w: 0.6, d: 3.6, h: 1.45, key: 'plaster_pink' },
+  { id: 'B throat pier', kind: 'pier', x: 38.0, z: -46.6, w: 2.4, d: 2.4, h: 2.95, key: 'concrete' }
+);
+
+/* ========================================================================== */
+/* THE MAP GROWS — PART 5: THE CATHEDRAL IS NOT A DOOR YOU WALK THROUGH        */
+/* ========================================================================== */
+/**
+ * "簡単に中央大聖堂エリアにいけないようにしてください"
+ * "もっと建物増やして、今大聖堂周りはもっと開た感じにして、周りに遮蔽物もないし"
+ *
+ * Two requests, one piece of geometry. The cathedral stands in a 46.5 m street
+ * with 8.25 m of it down each flank, and until now the whole approach was a swept
+ * square: you walked up the middle of the street and in through a 6 m portal
+ * without ever being made to choose, and there was nothing between the north
+ * cross street and the south portal to stand behind.
+ *
+ * So the precinct is GATED and the forecourts get mass. In authored (widened)
+ * units, the cathedral is x ∓10, z -16..14 and the kerbs are ∓15.5:
+ *
+ *   the two GATE LINES   z 19.5 and -21.5, right across the forecourt: a 2.4-unit
+ *                        pier dead centre with a 6-unit wall each side of it, so
+ *                        the way in from either cross street is two 2.2-unit
+ *                        (3.3 m) slots instead of 31 units of open tarmac. The
+ *                        6.1 units of street OUTSIDE each wall stay open — that
+ *                        is the mid route past the building, and choking it would
+ *                        cost the map its middle lane. @see `navcheck`.
+ *   the TRANSEPT SCREENS x ∓13.2, standing along Z in front of the two transept
+ *                        portals: 4 units long, 2.9 units clear of the church
+ *                        wall and 2 clear of the kerb, so the portal is a dog-leg
+ *                        from both directions rather than a hole you run into.
+ *   four PLINTHS         waist-high mass in the two forecourts, which is the
+ *                        "遮蔽物もない" half: 1.25 m, so you shoot over it.
+ *   two MARKET WALLS     broken runs breaking the 8.25 m flank-street sightline
+ *                        at each end of the building.
+ *
+ * NOTHING IS AUTHORED IN THE FLANK STREETS AT LEVEL z -12, 6.5 OR 7. Those are
+ * the three cathedral strike anchors in `src/match/airstrike.js`, and each one
+ * measures the street beside it with a chest-height ray to size the rubble mound
+ * it drops. A 1.7 m screen inside that measurement turns the mega-collapse into a
+ * pile of gravel — the transept screens are 5 units clear of the nearest anchor
+ * and the market walls are outside the building's own z range. IF AN ANCHOR
+ * MOVES, RE-CHECK THIS LIST.
+ */
+SITEWORKS.push(
+  { id: 'CATH north pier', kind: 'pier', x: 0.0, z: 19.5, w: 2.4, d: 2.4, h: 3.4, key: 'concrete' },
+  { id: 'CATH north wall west', kind: 'wall', x: -6.4, z: 19.5, w: 6.0, d: 0.6, h: 1.9, key: 'plaster_cream', revet: true },
+  { id: 'CATH north wall east', kind: 'wall', x: 6.4, z: 19.5, w: 6.0, d: 0.6, h: 1.9, key: 'plaster_cream', revet: true },
+  { id: 'CATH south pier', kind: 'pier', x: 0.0, z: -21.5, w: 2.4, d: 2.4, h: 3.4, key: 'concrete' },
+  { id: 'CATH south wall west', kind: 'wall', x: -6.4, z: -21.5, w: 6.0, d: 0.6, h: 1.9, key: 'plaster_sand', revet: true },
+  { id: 'CATH south wall east', kind: 'wall', x: 6.4, z: -21.5, w: 6.0, d: 0.6, h: 1.9, key: 'plaster_sand', revet: true },
+  { id: 'CATH west transept screen', kind: 'wall', x: -13.2, z: -1.0, w: 0.6, d: 4.0, h: 1.7, key: 'brick' },
+  { id: 'CATH east transept screen', kind: 'wall', x: 13.2, z: -1.0, w: 0.6, d: 4.0, h: 1.7, key: 'brick' },
+  { id: 'CATH north plinth west', kind: 'plinth', x: -5.0, z: 16.5, w: 2.0, d: 1.4, h: 1.25, key: 'concrete' },
+  { id: 'CATH north plinth east', kind: 'plinth', x: 5.0, z: 16.5, w: 2.0, d: 1.4, h: 1.25, key: 'concrete' },
+  { id: 'CATH south plinth west', kind: 'plinth', x: -5.0, z: -18.5, w: 2.0, d: 1.4, h: 1.25, key: 'concrete' },
+  { id: 'CATH south plinth east', kind: 'plinth', x: 5.0, z: -18.5, w: 2.0, d: 1.4, h: 1.25, key: 'concrete' },
+  { id: 'CATH north-west market wall', kind: 'wall', x: -11.5, z: 21.5, w: 0.6, d: 3.4, h: 1.45, key: 'brick', revet: true },
+  { id: 'CATH south-east market wall', kind: 'wall', x: 11.5, z: -23.5, w: 0.6, d: 3.4, h: 1.45, key: 'brick', revet: true }
+);
+
+/**
+ * And the two districts are DRESSED, because "もっと作り込み" applies to new ground
+ * more than to old: a district that is a surface and five blocks reads as a car
+ * park. All in widened space, all paired under ρ, and all clear of the zone
+ * circles above (`KEEPOUT` is what actually enforces that).
+ */
+SET_PIECES.stalls.push(
+  [-45.0, 47.0, 1.5, 2.4], [45.2, -49.0, -1.6, 2.4],
+  [-24.0, 47.5, 0.1, 2.3], [24.2, -49.5, 3.1, 2.3],
+  [-50.0, 25.0, 1.5, 2.2], [50.2, -27.0, -1.6, 2.2]
+);
+SET_PIECES.jerseys.push(
+  [-43.0, 44.6, 0.1], [43.2, -46.6, -0.1],
+  [-31.5, 55.5, 1.55], [31.7, -57.5, 1.55],
+  [-52.0, 31.0, 0.1], [52.2, -33.0, 0.1],
+  [-20.0, 52.0, 1.55], [20.2, -54.0, 1.55]
+);
+SET_PIECES.sandbagWalls.push(
+  [-44.0, 55.0, 0.0, 3.0], [44.2, -57.0, 0.0, 3.0],
+  [-33.0, 45.5, 1.57, 2.8], [33.2, -47.5, 1.57, 2.8],
+  [-47.0, 36.0, 0.0, 3.2], [47.2, -38.0, 0.0, 3.2],
+  [-19.0, 46.5, 0.0, 2.6], [19.2, -48.5, 0.0, 2.6]
+);
+SET_PIECES.wrecks.push(
+  [-49.5, 41.0, 1.4, 0], [49.7, -43.0, 1.5, 3],
+  [-25.5, 55.0, 0.3, 0], [25.7, -57.0, -0.4, 2],
+  [-55.0, 27.0, 1.45, 0], [55.2, -29.0, 1.5, 2]
+);
+SET_PIECES.palms.push(
+  [-42.0, 56.0, 1.0], [42.2, -58.0, 1.0],
+  [-52.5, 42.0, 0.95], [52.7, -44.0, 0.95],
+  [-30.0, 43.0, 1.05], [30.2, -45.0, 1.0],
+  // …and four in the two cathedral forecourts, which had nothing standing in
+  // them at all: a palm is a soft vertical the eye can read the depth of the
+  // square against.
+  [-9.5, 17.5, 1.05], [9.7, 17.0, 1.0],
+  [-9.5, -19.5, 1.0], [9.7, -19.0, 1.05]
+);
+SET_PIECES.lamps.push(
+  [-40.0, 52.0, -Math.PI / 2], [40.2, -54.0, Math.PI / 2],
+  [-46.0, 30.0, -Math.PI / 2], [46.2, -32.0, Math.PI / 2],
+  [-25.0, 46.0, -Math.PI / 2], [25.2, -48.0, Math.PI / 2]
+);
+SET_PIECES.rubble.push(
+  [-56.5, 34.0, 2.4, 30], [56.7, -36.0, 2.4, 30],
+  [-44.0, 25.5, 2.2, 26], [44.2, -27.5, 2.2, 26],
+  [-21.0, 56.0, 2.0, 24], [21.2, -58.0, 2.0, 24],
+  [-31.0, 41.0, 2.2, 26], [31.2, -43.0, 2.2, 26],
+  // the collapsed corner of the cathedral's own precinct wall, in both forecourts
+  [-12.5, 16.0, 2.0, 24], [12.7, -18.0, 2.0, 24]
+);
+SET_PIECES.tyres.push(
+  [-48.0, 48.0, 4], [48.2, -50.0, 4],
+  [-36.0, 26.0, 3], [36.2, -28.0, 3],
+  [-22.5, 50.0, 4], [22.7, -52.0, 3]
+);
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE FLANK BEACON SQUARES — the three places the left and right are worth
+ * walking to even when the point next door is already yours.
+ * ────────────────────────────────────────────────────────────────────────────
+ * "マップの左右のいく価値のないエリアにはビーコンエリアがあってそこからもリスポーンできる
+ *  ようにして（起動したら）左右にもっとメリットを与えて、例えば爆撃機を呼べるとか"
+ *
+ * `world` publishes the PLACE and nothing else — what a cache is worth is
+ * `match`'s to decide, and it already decides it: `src/match/caches.js` turns
+ * every published feature into HOLD F (take what it holds) and TAP F (a 30 s
+ * forward spawn that joins `_safeSpawn`'s auction). So a beacon area is a
+ * `world.features` entry standing on flank ground, and the respawn the player
+ * asked for is the mechanism that has been on the map since the caches went in.
+ *
+ * WHERE. The three flank areas that have no capture point on them once the zones
+ * move: the west lane's south run, the east lane's north run (a ρ pair, so
+ * neither side is nearer to its own) and the EAST courtyard — which is zone C's
+ * mirror image, so both sides are equidistant from it exactly as they are from C.
+ *
+ * Level space, WIDENED, pre-1.5x — `src/world/features.js` scales them with
+ * everything else. Each has a `KEEPOUT` circle above.
+ */
+export const BEACON_SPOTS = [
+  { id: 'FLANK-W', name: 'WEST LANE DEPOT', x: -34.75, z: -20, yaw: Math.PI / 2 },
+  { id: 'FLANK-E', name: 'EAST LANE DEPOT', x: 34.75, z: 18, yaw: -Math.PI / 2 },
+  { id: 'FLANK-C', name: 'EAST COURTYARD DEPOT', x: 40, z: -3, yaw: -Math.PI / 2 },
+];
 
 /* ========================================================================== */
 /* THE MAP GROWS — PART 3: THE CATHEDRAL IN THE MIDDLE                        */

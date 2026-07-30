@@ -288,36 +288,89 @@ export const SITES = [
  * identity at x 0. `KEEPOUT` in layout.js duplicates all three centres — IF ONE
  * MOVES, MOVE THE OTHER.
  */
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * AND THEN ALL THREE CAME OFF THE CENTRELINE, BECAUSE A LINE IS NOT A MAP
+ * ════════════════════════════════════════════════════════════════════════════
+ * "ドミねーとする場所が一っ直線に並んでるでしょ？ そうするとマップの左右側に行くメリット
+ *  ないから改善してほしい"
+ * "ドミねーとする場所は大聖堂挟んで対角になるように配置、物理的に距離をもっと空けて、
+ *  つまりマップの左右、大聖堂ではないエリアにドミネーションするエリアを配置して"
+ *
+ * Everything the note above says about SYMMETRY was right and is kept. What it got
+ * wrong is that it bought that symmetry with COLLINEARITY: (0, 38), (0, -1),
+ * (0, -40) is one straight line down the mid street, so the whole match happened
+ * on one 46 m-wide corridor and the two lanes, the two courtyards and the four
+ * cross-street arms — call it 40 % of the map's walkable ground — were worth
+ * nothing at all. That is not a taste, it is what the player measured by playing
+ * it: "マップの左右側に行くメリットない".
+ *
+ * THE NEW SHAPE. A and B are a 180° PAIR about the cathedral centre, in two
+ * corner districts that had to be built for them (`THE MAP GROWS — PART 4` in
+ * src/world/layout.js); C is the WEST COURTYARD. None of the three is in the
+ * cathedral.
+ *
+ *   ρ(x, z) = (-x, -2 - z)   the rotation about the cathedral centre (0, -1)
+ *   ρ(A) = B exactly, so any route advantage one side has to A the other has to B.
+ *
+ *              level (widened)   bearing from the cathedral   own base   far base
+ *   A   NW district   (-38,  51)        140.9°                  53 u      184 u
+ *   C   west courtyard (-37, -1)        180.0°                  75 u       75 u
+ *   B   SE district    ( 38, -53)       -39.1°                 184 u       53 u
+ *
+ *   A-B 124 units = 186 m   (was 117 m)
+ *   A-C  40 units =  60 m   (was  58.5 m)
+ *   B-C  94 units = 141 m   (was  58.5 m)
+ *
+ * A and B are 180.0° apart across the building — "大聖堂挟んで対角" — and the
+ * shortest leg of the triangle is longer than the LONGEST of the two legs the
+ * player was calling too close.
+ *
+ * WHY C IS A COURTYARD AND NOT SOMEWHERE MORE INTERESTING. `SPAWNS` below are at
+ * level z 64.5 and -66.5, so the line equidistant from the two bases is z -1, and
+ * a third point off that line is a permanent lead for one side in a mode that
+ * never swaps ends — the failure this file already has two long notes about (2-1
+ * inside forty seconds, 252-100). Off the centreline and on z -1 there are exactly
+ * two places on this map: the two courtyards. C is the west one; the east one is a
+ * BEACON square instead (`BEACON_SPOTS` in src/world/layout.js), so both sides are
+ * equidistant from both of them and the left and right of the map each carry one
+ * reason to be there.
+ *
+ * THESE USE `LW`, NOT `L`. Every previous version of this table was on the street
+ * centreline where `widenX` is the identity; none of these three are, and an
+ * authored -29 is a widened -38. `KEEPOUT` in src/world/layout.js duplicates all
+ * three — IF ONE MOVES, MOVE THE OTHER.
+ */
 export const ZONES = [
   {
     id: 'A',
-    name: 'NORTH PLAZA',
-    /** In the street between W5 and E5, the pair of blocks that already framed
-     *  it. The circle is r8 and the plaza is 31 units wide, so it fits clear of
-     *  both facades. */
-    level: L(0.0, 38.0),
-    /** Two units north, off the retake wall. */
-    fallback: L(0.0, 40.0),
-    holdLevel: L(0.0, 38.0),
+    name: 'NORTH-WEST YARD',
+    /** The middle of the new district behind W5, 6 units clear of NW5's corner
+     *  and 6.5 clear of the north blocks, so the r8 circle is open ground. */
+    level: LW(-29.0, 51.0),
+    /** Three units south, toward the throat, still inside the yard. */
+    fallback: LW(-29.0, 48.0),
+    holdLevel: LW(-29.0, 51.0),
     flankLevel: null,
   },
   {
     id: 'C',
-    name: 'THE CATHEDRAL',
-    /** The crossing, under the dome. Indoors, and reachable only because
-     *  `world.interiorVolumes` now has the cathedral on it. */
-    level: L(0.0, -1.0),
-    /** One bay south down the nave, still under the vault. */
-    fallback: L(0.0, -5.0),
-    holdLevel: L(0.0, -1.0),
+    name: 'WEST COURTYARD',
+    /** The courtyard the demolition mode fights over, on the equidistant line.
+     *  Its cover is the `SITEWORKS` spine, screens and plinths that were authored
+     *  around this exact circle two passes ago and never moved. */
+    level: LW(-28.0, -1.0),
+    /** Two units into the courtyard's middle, off the spine wall. */
+    fallback: LW(-27.0, -3.0),
+    holdLevel: LW(-28.0, -1.0),
     flankLevel: null,
   },
   {
     id: 'B',
-    name: 'SOUTH PLAZA',
-    level: L(0.0, -40.0),
-    fallback: L(0.0, -42.0),
-    holdLevel: L(0.0, -40.0),
+    name: 'SOUTH-EAST YARD',
+    level: LW(29.0, -53.0),
+    fallback: LW(29.0, -50.0),
+    holdLevel: LW(29.0, -53.0),
     flankLevel: null,
   },
 ];

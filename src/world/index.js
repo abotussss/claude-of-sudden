@@ -102,18 +102,32 @@ const LIGHT_SLOTS = 20;
  * Authored in WIDENED level space — the mid street's kerb is at x ∓15.5 now, so
  * a point at x ∓26 is in a lane rather than against a shopfront. @see `widenX`.
  */
+/**
+ * THE TWO NEW CORNER DISTRICTS ARE ON THIS LIST, AND THEY HAVE TO BE.
+ *
+ * `boundcheck` floods from these points and nothing else, so a district that is
+ * not connected to one of them is ground the boundary gate never looks at — the
+ * exact blind spot that let 5 645 m² of bare sand survive until `cordon.js` was
+ * written. Zone A's and zone B's yards are 2 300 m² of brand new authored ground
+ * each; they get a seed apiece, and the two flank beacon squares are covered by
+ * the courtyard/lane seeds that were already here.
+ */
 const SPAWNS = [
   [0.4, 28.5, Math.PI, 'north cross'],
   [-2.4, 60.0, Math.PI, 'attack pocket'],
-  [0.0, 47.0, Math.PI, 'zone A plaza'],
+  [0.0, 47.0, Math.PI, 'north plaza'],
+  [-38.0, 51.0, -Math.PI / 2, 'zone A — north-west district'],
+  [-46.0, 34.0, Math.PI, 'north-west throat'],
   [3.6, 18.0, Math.PI, 'mid street'],
   [0.0, -1.0, Math.PI, 'the cathedral crossing'],
   [-3.4, -12.5, 0, 'mid south'],
   [2.6, -30.0, 0, 'south cross'],
-  [0.0, -49.0, 0, 'zone B plaza'],
+  [0.0, -49.0, 0, 'south plaza'],
+  [38.0, -53.0, Math.PI / 2, 'zone B — south-east district'],
+  [46.0, -36.0, 0, 'south-east throat'],
   [-1.0, -62.0, 0, 'defend pocket'],
-  [35.0, -4.0, -Math.PI / 2, 'site B courtyard'],
-  [-35.0, -4.0, Math.PI / 2, 'site A courtyard'],
+  [35.0, -4.0, -Math.PI / 2, 'east courtyard'],
+  [-35.0, -4.0, Math.PI / 2, 'zone C — west courtyard'],
 ];
 
 export class WorldSystem {
