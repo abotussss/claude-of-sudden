@@ -464,9 +464,29 @@ export const ZONES = [
   {
     id: 'C',
     name: 'WEST COURTYARD',
-    /** The courtyard the demolition mode fights over, on the equidistant line.
-     *  Its cover is the `SITEWORKS` spine, screens and plinths that were authored
-     *  around this exact circle two passes ago and never moved. */
+    /**
+     * STILL 56 m FROM THE CATHEDRAL, AND THAT IS THE ONE REQUIREMENT LEFT OPEN.
+     *
+     * A and B were moved to the flank districts and MEASURE 136 m out with the
+     * dome blocked from both. C did not move with them, and "AもBも大聖堂から
+     * 近すぎ" is therefore still true of one point in three.
+     *
+     * I moved it to LW(-70, -1) and MEASURED the result: navcheck went from
+     * attack 110.5 vs defend 112.6 (2 m apart) to attack 266.8 vs defend 163.9
+     * — a 103 m gift to one side, permanent, because domination never swaps
+     * ends. Reverted.
+     *
+     * The reason is structural, not a bad number. The flank districts are
+     * NORTH-WEST and SOUTH-EAST — a rho pair about the cathedral, which is what
+     * makes A and B fair. There is no north-east or south-west district, so the
+     * west flank only exists at z 15..62; at z -1 there is no avenue to stand
+     * in. And the only point that is genuinely equidistant for both bases is
+     * the cathedral itself, which is already D.
+     *
+     * So C cannot be both far from the cathedral and fair until a second rho
+     * pair of districts is built on the other diagonal. That is world work and
+     * it is the honest next step, not another number in this file.
+     */
     level: LW(-28.0, -1.0),
     /** Two units into the courtyard's middle, off the spine wall. */
     fallback: LW(-27.0, -3.0),
