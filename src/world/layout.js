@@ -1769,20 +1769,27 @@ RELIEF.blocks.push(
  * Nothing spans more than 3.6 units of a 31-unit street, so A* crosses every one
  * of them. `navcheck` is the gate.
  */
+/**
+ * …AND THEY MOVED WITH THEIR POINTS. Both plaza zones came off the centreline in
+ * the same pass the districts went in — zone A to widened (-10, 40), zone B to
+ * (10, -42) — so every piece here is shifted by the same (-10, +2) / (+10, -2).
+ * Move a zone without moving these and the mass ends up in the ring rather than
+ * on the point: `sitecheck` counts nothing outside the 8 m circle.
+ */
 SITEWORKS.push(
-  { id: 'A screen west', kind: 'wall', x: -2.6, z: 34.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
-  { id: 'A screen east', kind: 'wall', x: 2.6, z: 34.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
-  { id: 'A plinth west', kind: 'plinth', x: -3.9, z: 38.0, w: 1.9, d: 1.6, h: 1.3, key: 'concrete' },
-  { id: 'A plinth east', kind: 'plinth', x: 3.9, z: 38.0, w: 1.9, d: 1.6, h: 1.3, key: 'concrete' },
-  { id: 'A retake wall', kind: 'wall', x: 0.0, z: 41.8, w: 3.6, d: 0.6, h: 1.45, key: 'plaster_blue', revet: true },
-  { id: 'A pier', kind: 'pier', x: 0.0, z: 32.8, w: 2.4, d: 2.4, h: 2.95, key: 'concrete' },
+  { id: 'A screen west', kind: 'wall', x: -12.6, z: 36.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'A screen east', kind: 'wall', x: -7.4, z: 36.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'A plinth west', kind: 'plinth', x: -13.9, z: 40.0, w: 1.9, d: 1.6, h: 1.3, key: 'concrete' },
+  { id: 'A plinth east', kind: 'plinth', x: -6.1, z: 40.0, w: 1.9, d: 1.6, h: 1.3, key: 'concrete' },
+  { id: 'A retake wall', kind: 'wall', x: -10.0, z: 43.8, w: 3.6, d: 0.6, h: 1.45, key: 'plaster_blue', revet: true },
+  { id: 'A pier', kind: 'pier', x: -10.0, z: 34.8, w: 2.4, d: 2.4, h: 2.95, key: 'concrete' },
 
-  { id: 'B screen west', kind: 'wall', x: -2.6, z: -36.4, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
-  { id: 'B screen east', kind: 'wall', x: 2.6, z: -36.4, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
-  { id: 'B plinth west', kind: 'plinth', x: -3.9, z: -40.0, w: 1.9, d: 1.6, h: 1.3, key: 'concrete' },
-  { id: 'B plinth east', kind: 'plinth', x: 3.9, z: -40.0, w: 1.9, d: 1.6, h: 1.3, key: 'concrete' },
-  { id: 'B retake wall', kind: 'wall', x: 0.0, z: -43.8, w: 3.6, d: 0.6, h: 1.45, key: 'plaster_pink', revet: true },
-  { id: 'B pier', kind: 'pier', x: 0.0, z: -34.6, w: 2.4, d: 2.4, h: 2.95, key: 'concrete' }
+  { id: 'B screen west', kind: 'wall', x: 7.4, z: -38.4, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'B screen east', kind: 'wall', x: 12.6, z: -38.4, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'B plinth west', kind: 'plinth', x: 6.1, z: -42.0, w: 1.9, d: 1.6, h: 1.3, key: 'concrete' },
+  { id: 'B plinth east', kind: 'plinth', x: 13.9, z: -42.0, w: 1.9, d: 1.6, h: 1.3, key: 'concrete' },
+  { id: 'B retake wall', kind: 'wall', x: 10.0, z: -45.8, w: 3.6, d: 0.6, h: 1.45, key: 'plaster_pink', revet: true },
+  { id: 'B pier', kind: 'pier', x: 10.0, z: -36.6, w: 2.4, d: 2.4, h: 2.95, key: 'concrete' }
 );
 
 /**
@@ -1956,8 +1963,10 @@ FLAT.push(
  * stands in is authored there. These are in WIDENED space.
  */
 KEEPOUT.push(
-  [-38, 51, 3.0],   // ZONE A — the north-west district
-  [38, -53, 3.0],   // ZONE B — the south-east district
+  [-10, 40, 3.0],     // ZONE A — north plaza, off the centreline to the west
+  [10, -42, 3.0],     // ZONE B — south plaza, its 180° image
+  [-38, 51, 2.2],     // BEACON — the north-west district
+  [38, -53, 2.2],     // BEACON — the south-east district
   [-34.75, -20, 2.2], // BEACON — west lane, south run
   [34.75, 18, 2.2],   // BEACON — east lane, north run
   [40, -3, 2.2]       // BEACON — east courtyard
@@ -1973,19 +1982,19 @@ KEEPOUT.push(
  * `SITEWORKS`.
  */
 SITEWORKS.push(
-  { id: 'A screen west', kind: 'wall', x: -40.6, z: 46.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
-  { id: 'A screen east', kind: 'wall', x: -35.4, z: 46.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
-  { id: 'A plinth north', kind: 'plinth', x: -38.0, z: 55.0, w: 2.0, d: 1.6, h: 1.3, key: 'concrete' },
-  { id: 'A plinth west', kind: 'plinth', x: -42.4, z: 51.0, w: 1.6, d: 2.0, h: 1.3, key: 'concrete' },
-  { id: 'A retake wall', kind: 'wall', x: -33.4, z: 51.0, w: 0.6, d: 3.6, h: 1.45, key: 'plaster_blue' },
-  { id: 'A throat pier', kind: 'pier', x: -38.0, z: 44.6, w: 2.4, d: 2.4, h: 2.95, key: 'concrete' },
+  { id: 'NW yard screen west', kind: 'wall', x: -40.6, z: 46.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'NW yard screen east', kind: 'wall', x: -35.4, z: 46.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'NW yard plinth north', kind: 'plinth', x: -38.0, z: 55.0, w: 2.0, d: 1.6, h: 1.3, key: 'concrete' },
+  { id: 'NW yard plinth west', kind: 'plinth', x: -42.4, z: 51.0, w: 1.6, d: 2.0, h: 1.3, key: 'concrete' },
+  { id: 'NW yard wall', kind: 'wall', x: -33.4, z: 51.0, w: 0.6, d: 3.6, h: 1.45, key: 'plaster_blue' },
+  { id: 'NW throat pier', kind: 'pier', x: -38.0, z: 44.6, w: 2.4, d: 2.4, h: 2.95, key: 'concrete' },
 
-  { id: 'B screen east', kind: 'wall', x: 40.6, z: -48.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
-  { id: 'B screen west', kind: 'wall', x: 35.4, z: -48.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
-  { id: 'B plinth south', kind: 'plinth', x: 38.0, z: -57.0, w: 2.0, d: 1.6, h: 1.3, key: 'concrete' },
-  { id: 'B plinth east', kind: 'plinth', x: 42.4, z: -53.0, w: 1.6, d: 2.0, h: 1.3, key: 'concrete' },
-  { id: 'B retake wall', kind: 'wall', x: 33.4, z: -53.0, w: 0.6, d: 3.6, h: 1.45, key: 'plaster_pink' },
-  { id: 'B throat pier', kind: 'pier', x: 38.0, z: -46.6, w: 2.4, d: 2.4, h: 2.95, key: 'concrete' }
+  { id: 'SE yard screen east', kind: 'wall', x: 40.6, z: -48.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'SE yard screen west', kind: 'wall', x: 35.4, z: -48.6, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'SE yard plinth south', kind: 'plinth', x: 38.0, z: -57.0, w: 2.0, d: 1.6, h: 1.3, key: 'concrete' },
+  { id: 'SE yard plinth east', kind: 'plinth', x: 42.4, z: -53.0, w: 1.6, d: 2.0, h: 1.3, key: 'concrete' },
+  { id: 'SE yard wall', kind: 'wall', x: 33.4, z: -53.0, w: 0.6, d: 3.6, h: 1.45, key: 'plaster_pink' },
+  { id: 'SE throat pier', kind: 'pier', x: 38.0, z: -46.6, w: 2.4, d: 2.4, h: 2.95, key: 'concrete' }
 );
 
 /* ========================================================================== */
@@ -2126,6 +2135,8 @@ SET_PIECES.tyres.push(
  * everything else. Each has a `KEEPOUT` circle above.
  */
 export const BEACON_SPOTS = [
+  { id: 'FLANK-NW', name: 'NORTH-WEST YARD', x: -38, z: 51, yaw: -Math.PI / 2 },
+  { id: 'FLANK-SE', name: 'SOUTH-EAST YARD', x: 38, z: -53, yaw: Math.PI / 2 },
   { id: 'FLANK-W', name: 'WEST LANE DEPOT', x: -34.75, z: -20, yaw: Math.PI / 2 },
   { id: 'FLANK-E', name: 'EAST LANE DEPOT', x: 34.75, z: 18, yaw: -Math.PI / 2 },
   { id: 'FLANK-C', name: 'EAST COURTYARD DEPOT', x: 40, z: -3, yaw: -Math.PI / 2 },

@@ -344,13 +344,16 @@ export const SITES = [
 export const ZONES = [
   {
     id: 'A',
-    name: 'NORTH-WEST YARD',
-    /** The middle of the new district behind W5, 6 units clear of NW5's corner
-     *  and 6.5 clear of the north blocks, so the r8 circle is open ground. */
-    level: LW(-29.0, 51.0),
-    /** Three units south, toward the throat, still inside the yard. */
-    fallback: LW(-29.0, 48.0),
-    holdLevel: LW(-29.0, 51.0),
+    name: 'NORTH PLAZA WEST',
+    /** The plaza between W5 and E5, on its WEST side: the circle is r8 = 5.33
+     *  units and the plaza is 31 across, so at x -10 it runs -15.3..-4.7 and
+     *  still clears W5's facade by 0.2. `L`, not `LW` — like `SPAWNS` below,
+     *  these are authored in WIDENED space, where the mid street is 31 units
+     *  wide and `widenX` has already been applied. */
+    level: L(-10.0, 40.0),
+    /** Two units south, off the retake wall. */
+    fallback: L(-10.0, 38.0),
+    holdLevel: L(-10.0, 40.0),
     flankLevel: null,
   },
   {
@@ -367,10 +370,11 @@ export const ZONES = [
   },
   {
     id: 'B',
-    name: 'SOUTH-EAST YARD',
-    level: LW(29.0, -53.0),
-    fallback: LW(29.0, -50.0),
-    holdLevel: LW(29.0, -53.0),
+    name: 'SOUTH PLAZA EAST',
+    /** ρ(A) exactly: (-x, -2 - z). */
+    level: L(10.0, -42.0),
+    fallback: L(10.0, -40.0),
+    holdLevel: L(10.0, -42.0),
     flankLevel: null,
   },
 ];
