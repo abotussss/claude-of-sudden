@@ -2467,75 +2467,116 @@ export function buildGate(A, rng) {
  */
 export function buildPerimeter(A, rng) {
   /**
-   * THE EDGE IS DERIVED FROM THE STREET, NOT TYPED, AND THIS IS WHY.
+   * ════════════════════════════════════════════════════════════════════════════
+   * THE MAP EDGE, DERIVED FROM THE MAP. IT WAS A LITERAL AND IT WENT STALE TWICE.
+   * ════════════════════════════════════════════════════════════════════════════
+   * It was `58 * SCALE` — a square 87 units a side — on BOTH axes. Two separate
+   * map changes have since grown the level past it, and neither of them said a
+   * word, because this wall is DRESSING: `NavGrid` is built from one ray per cell
+   * and never sampled it, `boundcheck` only fails when the flood happens to find
+   * the hole, and `npx vite build` is clean either way.
    *
-   * It was `58 * SCALE` on both axes — a square 87 units a side, chosen when the
-   * street ran to level z ∓69 and scaled once, by hand, for the 1.5x pass. Then
-   * the map grew a BASE DISTRICT at each end (`THE MAP GROWS — PART 2` in
-   * layout.js): `STREET.zMax`/`zMin` went to ∓105/-120 and both spawn clusters
-   * went out to level z 90..103 and -93..-106 — PAST 87. The literal did not
-   * move, so the two z runs of this wall stopped being the edge of the world and
-   * became a 3.0-3.8 m concrete bulkhead across the middle of both base
-   * districts, sealing all thirty men into their own spawn.
+   * IN Z, `widenX`'s sibling: the map grew a BASE DISTRICT at each end (`THE MAP
+   * GROWS — PART 2` in layout.js). `STREET.zMax`/`zMin` went to ∓105/-120 and
+   * both spawn clusters went out to level z 90..103 and -93..-106 — past 87 — so
+   * the north and south runs became a 3.0-3.8 m concrete bulkhead across the
+   * middle of both districts. MEASURED: every live agent on both sides standing
+   * on one line at level z ±87.5, 0.35 m off this wall, in ADVANCE at full
+   * desired speed, forever. 29 alive, `{ advance: 29 }`, 0 shots, 0 deaths, 0-0
+   * after ten minutes. A* is asked for a route across cells it thinks are open
+   * ground, finds one, the bots walk it, and the capsule stops.
    *
-   * MEASURED, and it is the whole of the "bots never fight" failure: every live
-   * agent on both sides ended up standing on a single line at level z ±87.5,
-   * 0.35 m off this wall, in ADVANCE, at full desired speed, forever — 29 alive,
-   * `{ advance: 29 }`, 0 shots, 0 deaths, 0-0 after ten minutes of match. It is
-   * SILENT because nothing about it is an error: A* is asked for a route and
-   * finds one (this wall is dressing, and `NavGrid` never saw it — the nav cells
-   * under it are open ground), the bots walk the route, and the capsule stops.
+   * IN X, `widenX` itself: it translates everything outside the old kerb by 9
+   * authored units, so the outer background row went out with it and now stands
+   * at level |x| 60..94.5 (BW2/BE2 are the furthest). The east and west runs at
+   * 87 are BURIED INSIDE that row — the boundary stops being continuous wherever
+   * a block swallows it, and past the block's outer face there is nothing at all.
+   * MEASURED: with the z bulkhead fixed and this left at 87, `boundcheck` failed
+   * on 3 boots in 30 with a ~26000 m² void reaching its own ±128 grid corner, and
+   * its leak list every time was a 57 m band of crossings along level x 90,
+   * z 10..63 — which is exactly BE1's east face (x 60..90, z 1.5..64.5).
    *
-   * So both extents are read off the geometry they have to clear:
+   * So both extents are read off the geometry they have to be outside of, and the
+   * street gets a TUNNEL rather than a hole: the two z runs stop either side of
+   * the corridor (the cordon walls that stretch, `cordonRuns()`), and a return
+   * each side plus an end wall carry the box out to the new street ends.
    *
-   *   X is UNCHANGED at 58 * SCALE. Nothing grew in x — the widest authored
-   *     thing out here is BN1/BN2's background infill at level x ∓63, and the
-   *     kerb line the cordon stands on is at 23.25 — so the east and west runs
-   *     are exactly where they have always been.
-   *
-   *   Z clears the CORDON'S END WALLS, which are the real seal on the play box
-   *     (`cordonRuns` closes the street at `STREET.zMax + 3.7` and
-   *     `STREET.zMin - 3.7`). 6 units past the further of the two puts this wall
-   *     outside everything authored and still inside the 128-unit half-extent
-   *     `tools/boundcheck.mjs` floods, so the boundary gate can still see it.
-   *
-   * IF THE STREET GROWS AGAIN THIS FOLLOWS IT. That is the point: the last two
-   * times a number out here was a literal it went stale the moment the map
-   * changed and failed without saying anything. @see the A* ceiling in
-   * `src/ai/nav.js`, which is the same bug in the same shape.
+   * ITS DICE ARE ITS OWN. `rng` is the stream every prop in the level comes from,
+   * so changing how many values this function spends re-rolls the whole set
+   * dressing — which is how the first attempt at this fix turned into an
+   * intermittent leak 60 m from anything it touched. A private fixed seed makes
+   * the boundary independent of its own length, exactly as `buildCordon` does and
+   * for exactly that reason. It costs nothing: `deterministic` is false outside
+   * the capture path, so the shared stream is seeded from `Math.random()` and the
+   * player has never seen the same scatter twice anyway.
    */
-  const RX = 58 * SCALE;
-  const RZ = Math.max(58 * SCALE, STREET.zMax, -STREET.zMin) + 6.0;
+  const edge = new Rng(0x9a11ed6e);
+  /** Outside the furthest authored masonry on each axis, whatever it is now. */
+  let outerX = 58 * SCALE;
+  for (const b of BUILDINGS) outerX = Math.max(outerX, Math.abs(b.x) + b.w / 2 + 2.5);
+  const RX = outerX;
+  /** The z runs stay where they were: clear of the BN/BS rows, which are at
+   *  |z| >= 106.5, and the street passes through the gateway below. */
+  const RZ = 58 * SCALE;
+  /** The gateway, one panel wider than the cordon's outer face so the innermost
+   *  surviving panel of each run overlaps the wall it dies into. */
+  const CORRIDOR = STREET.kerb + 1.0;
+  /** …and where the tunnel ends: outside the cordon's own end walls at
+   *  `STREET.zMax + 3.7` / `zMin - 3.7`, and inside the 128-unit half-extent
+   *  `tools/boundcheck.mjs` floods, so the boundary gate can still see it. */
+  const RZ2 = Math.max(RZ, STREET.zMax, -STREET.zMin) + 6.0;
+
   const segs = [
-    // [x0,z0,x1,z1] runs of compound wall
+    // the square: [x0,z0,x1,z1]
     [-RX, -RZ, RX, -RZ],
     [-RX, RZ, RX, RZ],
     [-RX, -RZ, -RX, RZ],
     [RX, -RZ, RX, RZ],
   ];
+  for (const s of [1, -1]) {
+    const zIn = s > 0 ? RZ : -RZ;
+    const zOut = s > 0 ? RZ2 : -RZ2;
+    segs.push([-CORRIDOR, zIn, -CORRIDOR, zOut]);
+    segs.push([CORRIDOR, zIn, CORRIDOR, zOut]);
+    segs.push([-CORRIDOR - 0.3, zOut, CORRIDOR + 0.3, zOut]);
+  }
+
   for (const [x0, z0, x1, z1] of segs) {
     const dx = x1 - x0;
     const dz = z1 - z0;
     const len = Math.hypot(dx, dz);
     const ry = Math.atan2(dx, dz) - Math.PI / 2;
-    const n = Math.round(len / 4);
+    const n = Math.max(1, Math.round(len / 4));
+    /** A run along z at |x| < CORRIDOR is the gateway and is the cordon's job. */
+    const isSquareZRun = dz === 0 && Math.abs(z0) === RZ;
     for (let i = 0; i < n; i++) {
       const t = (i + 0.5) / n;
       const px = x0 + dx * t;
       const pz = z0 + dz * t;
-      const h = rng.range(3.0, 3.8);
+      if (isSquareZRun && Math.abs(px) < CORRIDOR) continue;
+      const h = edge.range(3.0, 3.8);
+      /**
+       * EVERY PANEL SITS ON ITS OWN GROUND. Pinned to y = 0 this was fine while
+       * the whole square was inside `FLAT`, which flattens the play box — y = 0
+       * WAS the ground under all of it. `FLAT` stops at level z ∓105/-120 and
+       * x ∓63; the runs are outside that on three counts now, on dune fbm. A
+       * panel pinned to zero on a dune 1.6 m proud is a 1.7 m wall against a
+       * 1.85 m `MOVE.mantle.maxHeight` — the player pulls himself over it.
+       */
+      const gy = groundY(px, pz);
       A.add(
-        rng.pick(['plaster_sand', 'plaster_cream', 'concrete']),
+        edge.pick(['plaster_sand', 'plaster_cream', 'concrete']),
         BOX(A),
-        LL(IDENT, px, h / 2, pz, ry, len / n + 0.05, h, 0.4),
+        LL(IDENT, px, gy + h / 2, pz, ry, len / n + 0.05, h, 0.4),
         { masks: [0.5, 0.7, 0.4] }
       );
-      A.add('concrete', BOX_SOFT(A), LL(IDENT, px, h + 0.06, pz, ry, len / n + 0.14, 0.12, 0.54), {
+      A.add('concrete', BOX_SOFT(A), LL(IDENT, px, gy + h + 0.06, pz, ry, len / n + 0.14, 0.12, 0.54), {
         masks: [0.8, 0.4, 0.15],
       });
-      A.box('concrete', px, h / 2, pz, len / n + 0.05, h, 0.45, ry);
+      A.box('concrete', px, gy + h / 2, pz, len / n + 0.05, h, 0.45, ry);
     }
   }
+
   // Blocked cross-streets: rubble barricades and stacked barriers rather than
   // an invisible wall, so the boundary is diegetic.
   const blocks = [
