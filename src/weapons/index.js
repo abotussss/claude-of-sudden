@@ -58,6 +58,9 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  *   wp.meleeAttack('slash'|'stab')   blade only; traces on the impact frame
  *   wp.cycleFireMode()
  *   wp.reload()           no-op if full or empty of reserve
+ *   wp.scavenge(mags) / wp.needsAmmo          ammunition off a body
+ *   wp.pickUpPrimary(id) / wp.needsGrenades   OFF A CACHE — see below
+ *   wp.resupplyGrenades(n) / wp.grenadeCapacity
  *   wp.inspect()
  *   wp.tryFire()          honours fire mode + rpm; returns true if a shot left
  *   wp.viewmodel          the rig (fx/ui may read muzzle/eject transforms)
@@ -599,6 +602,93 @@ export class WeaponSystem {
       added += take;
     }
     return added;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * TAKE A WEAPON OFF A RACK — "武器が落ちてるとか、武器はF長押しで交換可能にする"
+   * ────────────────────────────────────────────────────────────────────────────
+   * `match` owns WHERE a weapon is lying (a `kind: 'weapon'` cache out of
+   * `world.features`, bound in src/match/caches.js) and this owns WHAT PICKING
+   * ONE UP IS WORTH, for exactly the reason `scavenge` above does: `mag`,
+   * `chambered` and `reserve` are this subsystem's state and nothing outside it
+   * may write them.
+   *
+   * IT IS NOT `setPrimary`. `setPrimary` is the LOADOUT choice made in the pause
+   * menu, out of the round, and it is right that it changes nothing but which
+   * gun slot 1 draws — you are picking what you walk out of spawn with. Taking a
+   * gun off a rack in the middle of a firefight is a different verb and has to
+   * answer a question the menu never asks: WHAT IS IN IT?
+   *
+   *   THE MAGAZINE IS FULL. A rack weapon you have to reload before you can use
+   *   it is a rack weapon you never take, because the two seconds it costs are
+   *   two seconds spent standing in a building.
+   *   THE RESERVE IS HALF, AND IT IS A FLOOR NOT A GIFT. `Math.max` against what
+   *   you already had, capped at the weapon's own `def.reserve` — same cap
+   *   `scavenge` uses and for the same reason. Swapping to a gun and back cannot
+   *   manufacture ammunition, and a gun you have already been carrying and
+   *   shooting is not silently topped up by walking past a rack.
+   *   THE OLD GUN IS NOT CONSUMED. You keep it; you have simply chosen which of
+   *   the five is in your hands. Modelling a two-slot inventory would mean
+   *   throwing one away with no way to get it back on a map with eight racks on
+   *   it, and `weaponIds` — which the number keys, the HUD and `nextWeapon` all
+   *   walk — is a fixed list this subsystem builds at init.
+   *
+   * @param {string} id one of `primaryIds`
+   * @returns {string|null} the primary this replaced, or null if nothing changed
+   */
+  pickUpPrimary(id) {
+    if (!this.states.has(id) || id === this.primaryId) return null;
+    const prev = this.primaryId;
+    if (!this.setPrimary(id)) return null;
+    const s = this.states.get(id);
+    const def = s.def;
+    if (def.magSize) {
+      s.mag = def.magSize;
+      s.chambered = true;
+    }
+    const cap = def.reserve ?? 0;
+    if (cap) s.reserve = Math.min(cap, Math.max(s.reserve, Math.round(cap * 0.5)));
+    return prev;
+  }
+
+  /** How many frags a full pouch is. @see resupplyGrenades */
+  get grenadeCapacity() {
+    return this.states.get('grenade')?.def.count ?? 0;
+  }
+
+  /** True when the frag pouch is not full. The cheap test before a resupply. */
+  get needsGrenades() {
+    return this.grenadeCount < this.grenadeCapacity;
+  }
+
+  /**
+   * PUT FRAGS BACK IN THE POUCH — "グレネードを補充できる".
+   *
+   * `resetAmmo` says in as many words that "the round's grenades are the round's
+   * budget… there are no pickups", and `scavenge` excludes them on purpose,
+   * because a frag is the strongest thing in the loadout and a body every ten
+   * seconds would mean infinite ones. Neither of those arguments applies to a
+   * grenade cache: it is ONE FIXED PLACE, it is INDOORS on somebody else's half
+   * of the map, and `match` puts a cooldown on it — so the frag economy becomes
+   * "you may have more if you are willing to go and stand in that room", which
+   * is the entire point of the feature.
+   *
+   * Capped at `def.count` like everything else here, so this can only ever claw
+   * back what has been thrown. A lit grenade is not topped up: `mag` is the
+   * pouch and the one in your hand has already left it.
+   *
+   * @param {number} n frags to hand over
+   * @returns {number} how many actually went in — 0 means the pouch was full
+   */
+  resupplyGrenades(n = 2) {
+    const s = this.states.get('grenade');
+    if (!s) return 0;
+    const cap = s.def.count ?? 0;
+    const take = Math.min(Math.max(0, n | 0), cap - s.mag);
+    if (take <= 0) return 0;
+    s.mag += take;
+    return take;
   }
 
   /** True when at least one magazine-fed weapon is below its starting reserve. */

@@ -87,6 +87,7 @@ import { Airstrike } from './airstrike.js';
 import { Bomber } from './bomber.js';
 import { Strafe } from './strafe.js';
 import { AmmoDrops } from './ammo.js';
+import { Caches } from './caches.js';
 
 const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', MATCH_OVER: 'matchover' };
 
@@ -114,6 +115,27 @@ const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', 
  * rewrite its tuning.
  */
 const AI_ROLE_FIELD = 'field';
+
+/**
+ * THE CACHE LEG'S THREE NUMBERS. @see `_assignCacheLegs`
+ *
+ * `CACHE_LEGS` is per side per two-second refresh and is also capped at a fifth
+ * of the live side, so a team of fifteen sends at most three men inside and a
+ * team of five sends one. Above that the mode stops being domination: a capture
+ * point is taken by the side that put more bodies on it, and men in a building
+ * are men not on the point.
+ *
+ * `CACHE_NEAR_ZONE` is 26 m, which is the distance at which a ground floor is
+ * still part of the fight for a point rather than a different part of the map —
+ * the same order as `sitecheck`'s 26 m overwatch span, for the same reason.
+ *
+ * `RESUPPLY_AFTER` / `RESUPPLY_RANGE`: a man who has been alive 40 s has been
+ * shooting, and 22 m is close enough that the detour is on his way.
+ */
+const CACHE_LEGS = 3;
+const CACHE_NEAR_ZONE = 26;
+const RESUPPLY_AFTER = 40;
+const RESUPPLY_RANGE = 22;
 
 /** Metres. Close enough to the flank staging point to count as "been there". */
 const FLANK_ARRIVE = 7;
@@ -214,6 +236,18 @@ export class MatchSystem {
      * key, and why a pouch can never take you above your starting reserve.
      */
     this.ammoDrops = new AmmoDrops(ctx);
+    /**
+     * THE CACHES. `world.features` is twenty-four places the level authored and
+     * marked and gave nothing to; this is what they are worth and who walks to
+     * them. See src/match/caches.js — including the measurement it exists to
+     * move (4.25 % of bot-time indoors before anything was bound to them).
+     */
+    this.caches = new Caches(ctx, this.world?.features ?? [], this.weapons);
+    console.info(
+      `[match] ${this.caches.list.length} caches bound · ${this.caches.botList.length} ` +
+        `bot-reachable · racks: ${this.caches.list.filter((c) => c.weaponId)
+          .map((c) => `${c.building}=${c.label}`).join(' ') || 'none'}`
+    );
     const patcher = ctx.peek('render')?.patcher;
     if (patcher) {
       for (const m of this.bomb.materials) patcher.patch(m);
@@ -353,7 +387,20 @@ export class MatchSystem {
       ownedThem: 0,
     };
     this._hud.respawnIn = 0;
+    /**
+     * THE CACHE HUD, and the beacon's clock. Allocated once; `ui` reads it every
+     * frame and must never retain it. @see `_updateCacheUse`
+     */
+    this._hud.cache = { near: '', kind: '', hold: 0, ready: true, cooldown: 0 };
+    this._hud.beacon = { active: false, mine: false, seconds: 0, cooldown: 0, at: '' };
     this._interact = { held: 0, kind: null };
+    /**
+     * HOLD vs TAP on the ONE interaction key. `held` is seconds the key has been
+     * down at the current cache, `done` latches the hold so it fires once, and
+     * `at` is the cache the press started on — walking off a cache mid-hold has
+     * to cancel it rather than give you the next one's contents.
+     */
+    this._cacheUse = { held: 0, done: false, at: null, wasDown: false };
     this._playerWasDead = false;
     /** Scratch for `_safeSpawn`, which runs on a respawn and must not allocate. */
     this._spawnPick = new THREE.Vector3();
@@ -653,12 +700,28 @@ export class MatchSystem {
         role: this.domination ? AI_ROLE_FIELD : role,
       });
       squad.add(agent);
+      this._stampSpawn(agent);
       this._botsByTeam[team].push(agent);
       this.roster.push({
         name: agent.name, team, kills: 0, deaths: 0, alive: true, isPlayer: false, actor: agent,
         role, variant, slot,
       });
     }
+  }
+
+  /**
+   * When this man came into the round, on `match`'s own clock and on `match`'s
+   * own field.
+   *
+   * A respawned bot is a NEW `Agent` (see `match:respawn` in ARCHITECTURE.md), so
+   * there is nothing on the actor that survives a death and nothing in `src/ai`
+   * that says how long somebody has been fighting. `_assignCacheLegs` needs
+   * exactly that to decide who is worth sending to resupply, and `match` may not
+   * add a field to `src/ai`'s class — so it stamps one on the instance it was
+   * handed, underscore-prefixed to say whose it is.
+   */
+  _stampSpawn(agent) {
+    if (agent) agent._matchSpawnedAt = this.ctx.time.elapsed;
   }
 
   /** A spawn point plus a metre of scatter, dropped onto the floor. */
@@ -806,10 +869,46 @@ export class MatchSystem {
         }
       }
     }
-    if (forward) this._forwardSpawns[team]++;
+    /**
+     * THE BEACON — "テンポラリーリスポーン地点としてのビーコンを起動できる（３０秒間）".
+     *
+     * A THIRD candidate in the SAME auction, which is the whole reason it is
+     * here rather than in a second respawn path: it is scored by the same
+     * nearest-enemy distance, vetoed by the same `forwardSpawnBlockRadius`, and
+     * given the same `forwardSpawnBias` as a zone's standing point. So the base
+     * cluster is still always in the running, a beacon with an enemy on it is
+     * simply not chosen, and there is no bookkeeping to invalidate when it dies.
+     *
+     * THE EXPIRY IS TESTED HERE, at the moment of the respawn, exactly as
+     * `z.owner === team` is above. `Caches.update` clears the flag on the frame
+     * it runs out, but a respawn that lands in the same frame must not be able
+     * to use a beacon whose thirty seconds are gone — so the clock is read, not
+     * the flag alone. That is the difference between "expires" and "expires,
+     * eventually".
+     */
+    let beacon = false;
+    const bc = this.caches?.beacon;
+    if (this.domination && bc && bc.active && bc.team === team && this.ctx.time.elapsed < bc.until) {
+      const d = this._nearestFoeDist(team, bc.position);
+      if (d >= RULES.forwardSpawnBlockRadius) {
+        const score = d + RULES.forwardSpawnBias + this.rng.range(0, 6);
+        if (score > bestScore) {
+          bestScore = score;
+          best = bc;
+          forward = null;
+          beacon = true;
+        }
+      }
+    }
+    if (beacon) {
+      bc.used++;
+      this.caches.stats.beaconSpawns++;
+      this._forwardSpawns[team]++;
+    } else if (forward) this._forwardSpawns[team]++;
     else if (this.domination) this._baseSpawns[team]++;
     outYaw.yaw = best.yaw;
-    outYaw.zone = forward ? forward.id : '';
+    outYaw.zone = beacon ? 'BEACON' : forward ? forward.id : '';
+    outYaw.beacon = beacon;
     return this._jitterOnto(best, this._spawnPick);
   }
 
@@ -849,6 +948,7 @@ export class MatchSystem {
       role: this.domination ? AI_ROLE_FIELD : role,
     });
     this._squads[team]?.add(agent);
+    this._stampSpawn(agent);
     this._botsByTeam[team].push(agent);
     rec.actor = agent;
     rec.alive = true;
@@ -868,7 +968,7 @@ export class MatchSystem {
     this._playerWasDead = false;
     this.ai.protect(this.player, RULES.spawnProtect);
     this.ui.banner.show(
-      yawOut.zone ? `RESPAWN — ZONE ${yawOut.zone}` : 'RESPAWN',
+      yawOut.beacon ? 'RESPAWN — BEACON' : yawOut.zone ? `RESPAWN — ZONE ${yawOut.zone}` : 'RESPAWN',
       `${RULES.spawnProtect | 0}S PROTECTED`,
       1.6
     );
@@ -1117,6 +1217,105 @@ export class MatchSystem {
         const e = spare[k++ % spare.length];
         this._orderZone(live[i], e.zone, e.mode, e.filled++, face);
       }
+    }
+
+    /**
+     * …AND THEN SOME OF THEM GET SENT INSIDE. @see `_assignCacheLegs`
+     * Last, deliberately: this RE-tasks men who already have a zone, so the
+     * zone plan above is always complete first and a cache leg can only ever
+     * take a man who was surplus to it.
+     */
+    this._assignCacheLegs(team, live, face);
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * THE REASON A BOT GOES INDOORS
+   * ────────────────────────────────────────────────────────────────────────────
+   * "もっと屋内戦闘をさせたいので屋内のエリアを作ってそこにもAIがいく利点やメリットを
+   *  与えて でないとAIが屋内戦闘しない"
+   *
+   * MEASURED BEFORE THIS EXISTED, over 4260 bot-samples of live match
+   * (`_indoortime.mjs`): 4.25 % of bot-time inside an enterable building, three
+   * of twenty-nine bots ever inside one at all, and almost all of that one
+   * building that happens to lie on a route. The caches were scenery.
+   *
+   * TWO REASONS, AND THEY ARE DIFFERENT REASONS.
+   *
+   *  1. CONTEST — a bot-reachable cache within `CACHE_NEAR_ZONE` of a zone this
+   *     side is fighting over (its focus, or one of ours with an enemy in it).
+   *     This is the one that answers the complaint, and it is not a detour: a
+   *     ground floor twenty metres off a capture point is a door onto that point
+   *     with a wall in front of it. Sending two men through the building instead
+   *     of eleven up the same street is what indoor fighting on this map IS.
+   *
+   *  2. RESUPPLY — the nearest cache to a man who has been in the fight a long
+   *     time. `src/ai` runs its own ammunition (`Agent.ammo`, refilled on its own
+   *     reload) and `match` may not reach in and rewrite it, so "low" here is
+   *     honest about what it can see: TIME SINCE HE SPAWNED. A man who has been
+   *     alive `RESUPPLY_AFTER` seconds has been shooting, and sending him to pull
+   *     a crate open on the way to his next objective is both plausible and, more
+   *     to the point, is the behaviour that was asked for.
+   *
+   * WHAT IT COSTS THE PLAN. `CACHE_LEGS` men per side per refresh, capped at a
+   * fifth of the side, and only ever men the zone plan had already filled its
+   * `want` from — i.e. the spare bodies. It cannot take the last man off a
+   * contested point.
+   *
+   * THE VERB IS `'pickup'`, which is `src/ai`'s own word (see `setObjective`'s
+   * doc) and not a new one: 1.0 m arrival radius, 2.5 s combat break-off. That is
+   * exactly "walk to that crate and stand on it, and leave a firefight to do it".
+   * `match` may not add behaviour to `src/ai`; it may only drive it.
+   *
+   * Allocates nothing: `_claimed` and `_cacheOrder` are built once.
+   */
+  _assignCacheLegs(team, live, face) {
+    const caches = this.caches;
+    if (!caches || !caches.botList.length || !live.length) return;
+    const claimed = this._claimed ?? (this._claimed = new Set());
+    claimed.clear();
+    /**
+     * A cache another live bot is ALREADY standing on or walking to is taken,
+     * whichever side he is on. Two men on one crate is a queue, not a flank.
+     */
+    for (const a of this.ai.agents) {
+      if (!a.alive) continue;
+      const o = a.objective;
+      if (o && o.mode === 'pickup' && o.cache) claimed.add(o.cache);
+    }
+
+    const now = this.ctx.time.elapsed;
+    let legs = Math.min(CACHE_LEGS, Math.max(1, (live.length / 5) | 0));
+    for (let i = 0; i < live.length && legs > 0; i++) {
+      const a = live[i];
+      // Never pull a man who is already working a cache leg off it.
+      if (a.objective?.mode === 'pickup' && a.objective.cache) {
+        legs--;
+        continue;
+      }
+      /**
+       * `spawnedAt` is stamped by `_stampSpawn`, not read out of `src/ai`: the
+       * agent object is replaced wholesale on a respawn (`match:respawn` says a
+       * respawned bot is a NEW Agent), so a field of our own on the actor is the
+       * only honest clock for "how long has this man been in it".
+       */
+      const veteran = now - (a._matchSpawnedAt ?? now) > RESUPPLY_AFTER;
+      const zone = this._focus[team] ?? null;
+      let c = null;
+      // 1. contest: a cache beside the point this side is trying to take.
+      if (zone) c = caches.nearestBotCache(zone.position, claimed, CACHE_NEAR_ZONE);
+      // 2. resupply: the nearest one to a man who has been out here a while.
+      if (!c && veteran) c = caches.nearestBotCache(a.position, claimed, RESUPPLY_RANGE);
+      if (!c) continue;
+      claimed.add(c);
+      legs--;
+      a.setObjective('pickup', c.position, null, face);
+      /**
+       * `setObjective` builds `{mode, position, site}` and does not carry a
+       * cache, so the tag goes on afterwards. It is read by the claim sweep
+       * above and by `_indoortime.mjs`; `src/ai` never looks at it.
+       */
+      if (a.objective) a.objective.cache = c;
     }
   }
 
@@ -1614,6 +1813,12 @@ export class MatchSystem {
           this._assignObjectives();
         }
         if (!this.domination) this._updateBotObjectiveWork(dt);
+        /**
+         * The beacon's thirty seconds. Retired here rather than lazily inside
+         * `_safeSpawn` so the marker, the HUD clock and the "you may plant
+         * another" state all turn over on the frame it actually runs out.
+         */
+        if (this.caches?.update(ctx.time.elapsed)) this.ui.banner.show('BEACON OFFLINE', '', 1.2);
         this._updatePlayerInteraction(dt);
         this._updateAmmoDrops(dt, audio);
         this._checkWinConditions();
@@ -1928,17 +2133,17 @@ export class MatchSystem {
       return;
     }
     /**
-     * DOMINATION HAS NO INTERACTION. Presence is the whole verb — a capture point
-     * you have to hold a key on does not exist in this genre, and in this engine
-     * it would be actively wrong: `Agent.working` freezes a bot where it stands,
-     * so a "use" gate would have to be human-only and the bots could never take
-     * anything. The player's feedback is the zone strip on the HUD (`h.zones`,
-     * with `here` set on the one he is standing in), so there is nothing to
-     * prompt and the prompt is cleared rather than left showing the last thing
-     * the C4 mode put in it.
+     * DOMINATION'S CAPTURE HAS NO INTERACTION. Presence is the whole verb — a
+     * capture point you have to hold a key on does not exist in this genre, and
+     * in this engine it would be actively wrong: `Agent.working` freezes a bot
+     * where it stands, so a "use" gate would have to be human-only and the bots
+     * could never take anything. The player's feedback for the ZONES is the zone
+     * strip on the HUD (`h.zones`, with `here` set on the one he is standing in).
+     *
+     * The key is not idle, though. It is the CACHES — @see `_updateCacheUse`.
      */
     if (this.domination) {
-      ui.clearPrompt();
+      this._updateCacheUse(dt);
       return;
     }
     const b = this.bomb;
@@ -2030,6 +2235,132 @@ export class MatchSystem {
       this.weapons.locked = false;
     }
     ui.clearPrompt();
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * THE CACHES, FROM THE PLAYER'S SIDE — ONE KEY, TWO VERBS
+   * ────────────────────────────────────────────────────────────────────────────
+   * "武器はF長押しで交換可能にする グレネードを補充できる テンポラリーリスポーン地点と
+   *  してのビーコンを起動できる（３０秒間）"
+   *
+   *   HOLD F (past `RULES.cacheHoldTime`)  take what the cache holds — the
+   *     weapon off the rack, the frags out of the stack, the rounds out of the
+   *     dump. `Caches.take` decides what that is; `weapons` decides what it is
+   *     worth. The prompt's progress bar is the hold.
+   *   TAP  F (released before it)          switch on the beacon: a spawn point
+   *     for your side for `RULES.beaconTime` seconds.
+   *
+   * WHY THE SPLIT IS SAFE. The demolition mode's F is a TAP ("PICK UP C4") and a
+   * HOLD (plant / defuse), and this is the same shape — but it is also in the
+   * other branch of `_updatePlayerInteraction` entirely, so the two can never be
+   * live at once whatever `RULES.mode` says. Inside this branch the two verbs
+   * cannot fight each other either, because they are decided at DIFFERENT
+   * MOMENTS: the hold fires the instant the timer crosses the threshold with the
+   * key still down, and the tap can only fire on the RELEASE edge of a press
+   * that never reached it. `done` latches the hold so one press is one item, and
+   * `at` pins the press to the cache it began on so walking down a corridor with
+   * F held cannot empty three of them.
+   *
+   * The weapon is NOT locked for the hold. `plant` and `defuse` lock it because
+   * they are four and seven seconds of both hands; half a second at a crate is
+   * not, and every `weapons.locked = true` needs a guaranteed path back to false
+   * — the cheapest way to never leave a player unable to shoot is not to take it
+   * away for half a second in the first place.
+   */
+  _updateCacheUse(dt) {
+    const ui = this.ui;
+    const st = this._cacheUse;
+    const now = this.ctx.time.elapsed;
+    const h = this._hud.cache;
+    const c = this.caches.nearest(this.player.position);
+    const down = this.ctx.input.action('use') && this.ctx.input.enabled;
+
+    if (!c) {
+      st.held = 0;
+      st.done = false;
+      st.at = null;
+      st.wasDown = down;
+      h.near = '';
+      h.kind = '';
+      h.hold = 0;
+      ui.clearPrompt();
+      return;
+    }
+
+    const ready = this.caches.ready(c, now);
+    const beaconReady = this.caches.beaconCooldown(now) <= 0 && !this.caches.beacon.active;
+
+    /* ---- the press ---------------------------------------------------- */
+    if (down) {
+      if (st.at !== c) {
+        // A new cache under the same held key starts its own press.
+        st.at = c;
+        st.held = 0;
+        st.done = false;
+      }
+      st.held += dt;
+      if (!st.done && st.held >= RULES.cacheHoldTime) {
+        st.done = true;
+        const got = ready ? this.caches.take(c, now) : null;
+        if (got) {
+          ui.banner.show(got.title, got.sub, 1.4);
+          this._cacheFeedback();
+        } else {
+          ui.banner.show('NOTHING TO TAKE', ready ? 'ALREADY FULL' : 'CACHE RESUPPLYING', 1.0);
+        }
+      }
+    } else {
+      // The RELEASE edge. A press that never reached the hold threshold is a tap.
+      if (st.wasDown && st.at === c && !st.done && st.held > 0.02) {
+        if (beaconReady && this.caches.plantBeacon(c, this.playerTeam, this.player.yaw, now)) {
+          ui.banner.show('BEACON ONLINE', `${RULES.beaconTime | 0}S FORWARD SPAWN`, 2.0);
+          this._cacheFeedback();
+        } else {
+          ui.banner.show(
+            'BEACON UNAVAILABLE',
+            this.caches.beacon.active
+              ? `ONE IS ALREADY UP · ${this.caches.beaconRemaining(now).toFixed(0)}S`
+              : `READY IN ${this.caches.beaconCooldown(now).toFixed(0)}S`,
+            1.2
+          );
+        }
+      }
+      st.held = 0;
+      st.done = false;
+      st.at = null;
+    }
+    st.wasDown = down;
+
+    /* ---- the prompt ---------------------------------------------------- */
+    const p = this._prompt;
+    p.text =
+      c.kind === 'weapon' ? `TAKE ${c.label}`
+        : c.kind === 'grenade' ? 'RESUPPLY FRAGS'
+          : 'RESUPPLY AMMUNITION';
+    p.sub = !ready
+      ? `RESUPPLYING · ${Math.ceil(c.readyAt - now)}S`
+      : beaconReady
+        ? 'HOLD F · TAP F FOR BEACON'
+        : 'HOLD F';
+    p.progress = st.at === c && !st.done ? Math.min(1, st.held / RULES.cacheHoldTime) : 0;
+    ui.setPrompt(p);
+
+    h.near = c.id;
+    h.kind = c.kind;
+    h.hold = p.progress;
+    h.ready = ready;
+    h.cooldown = ready ? 0 : c.readyAt - now;
+  }
+
+  /** One transient off a cache. Audio is optional; never let it break the take. */
+  _cacheFeedback() {
+    try {
+      const audio = this._audio ?? this.ctx.peek('audio');
+      audio?.play?.('hit_armour', this.player.position, { level: 0.4 });
+    } catch {
+      /* feedback only */
+    }
   }
 
   /** The site whose radius contains `p`, or null. */
@@ -2201,6 +2532,22 @@ export class MatchSystem {
     h.progress = b.progress;
     h.working = b.workKind ?? '';
     if (this.domination) this._publishZones();
+    /**
+     * THE BEACON'S CLOCK, written in place. `ui/round.js` draws it under the zone
+     * strip. `mine` is from the LOCAL player's point of view for the same reason
+     * every other field on this object is: a HUD that makes you work out which of
+     * RED and BLUE you are is a HUD you misread under fire.
+     */
+    if (this.caches) {
+      const bn = this.caches.beacon;
+      const hb = h.beacon;
+      const now = this.ctx.time.elapsed;
+      hb.active = bn.active;
+      hb.mine = bn.active && bn.team === this.playerTeam;
+      hb.seconds = this.caches.beaconRemaining(now);
+      hb.cooldown = this.caches.beaconCooldown(now);
+      hb.at = bn.active ? bn.at : '';
+    }
     h.alert =
       this.phase === PHASE.FREEZE
         ? 'PREPARE'
@@ -2280,6 +2627,16 @@ export class MatchSystem {
             z.owner < 0 ? '#ffb02a' : TEAM_COLOR[z.owner]
           )
         );
+      }
+      /**
+       * A LIVE BEACON IS A PLACE ON THE MAP, so it gets the same treatment a zone
+       * does — a world marker the compass and the minimap both pick up. Only your
+       * own side's: it is a spawn point, and telling the enemy where one is is a
+       * different feature (and one nobody asked for).
+       */
+      const bn = this.caches?.beacon;
+      if (bn?.active && bn.team === this.playerTeam) {
+        out.push(this._marker('beacon', 'BEACON', bn.position, '#4dffa6'));
       }
       this._publishEnemyMarkers(out);
       this.ui.setObjectives(out);

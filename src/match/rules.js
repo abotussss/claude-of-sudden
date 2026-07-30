@@ -178,6 +178,57 @@ export const RULES = {
    */
   zoneGarrison: 2,
 
+  /* ────────────────────────────────────────────────────────────────────────
+   * THE CACHES — what `world.features` is WORTH.
+   * ────────────────────────────────────────────────────────────────────────
+   * "もっと屋内戦闘をさせたいので屋内のエリアを作ってそこにもAIがいく利点やメリットを
+   *  与えて でないとAIが屋内戦闘しない … 屋上だったり３階のエリアなどにもメリットを
+   *  与えて 例えば武器が落ちてるとか、武器はF長押しで交換可能にする グレネードを補充
+   *  できる テンポラリーリスポーン地点としてのビーコンを起動できる（３０秒間）"
+   *
+   * `world` publishes twenty-four caches and decides nothing about them; these
+   * are the numbers that make them a reason to be indoors. @see src/match/caches.js
+   */
+  /** Metres from a cache the prompt appears and the interaction reaches. */
+  cacheUseRadius: 2.6,
+  /**
+   * Seconds of HELD F to take what a cache holds — "F長押し".
+   *
+   * 0.55, and it has to be long enough to be unmistakably a HOLD (`plantTime`
+   * is 4 s, which is a different verb) and short enough that standing still for
+   * it in a building is a risk rather than a sentence. A TAP under this figure
+   * is the beacon instead, which is why there is a threshold at all rather than
+   * an instant pickup: one key, two verbs, no second bind. @see `_updateCacheUse`
+   */
+  cacheHoldTime: 0.55,
+  /**
+   * Seconds before the same cache gives anything again. Long, on purpose: a
+   * cache you can stand next to and milk is a supply depot, and what this is
+   * meant to be is a REASON TO CROSS THE MAP. Two frags every forty seconds
+   * means going and getting them, then going somewhere else.
+   */
+  cacheCooldown: 40,
+  /** Magazines per weapon from an ammunition dump. `weapons.scavenge` caps it. */
+  cacheAmmoMags: 2,
+  /** Frags from a grenade stack. `weapons.resupplyGrenades` caps it at 2 carried. */
+  cacheGrenades: 2,
+  /**
+   * THE BEACON — "テンポラリーリスポーン地点としてのビーコンを起動できる（３０秒間）".
+   *
+   * Thirty seconds, as asked. It is a THIRD spawn option, not a second one:
+   * `_safeSpawn` already scores the base cluster against every standing point of
+   * every zone the side owns, and the beacon joins that same auction with the
+   * same `forwardSpawnBias` and the same `forwardSpawnBlockRadius` veto — so a
+   * beacon with an enemy standing on it is simply not chosen, and a beacon that
+   * has run out is not in the list at all. One code path, one set of rules.
+   *
+   * `beaconCooldown` is measured from the moment one is PLANTED, so the feature
+   * is up for 30 of every 75 seconds at best. A permanent forward spawn wherever
+   * you like would beat holding a zone, which is the mode's own currency.
+   */
+  beaconTime: 30,
+  beaconCooldown: 75,
+
   /* ---- clocks (seconds) ---- */
   /** One-off, before the first round: lets the level finish streaming in. */
   warmup: 5,

@@ -177,6 +177,28 @@ export class ZoneStrip {
     setStyle(this.held, 'padding-left', 'calc(var(--u) * 1.5)');
     setStyle(this.held, 'border-left', '1px solid var(--hair)');
 
+    /**
+     * THE BEACON'S CLOCK — the temporary forward spawn, "３０秒間".
+     *
+     * It hangs off the end of the zone strip because it is the same class of
+     * information: WHERE MAY I COME BACK. A player who cannot see the thirty
+     * seconds running down has a feature he has to guess the state of, and the
+     * one decision it drives — do I push now or wait — is entirely a question of
+     * how many of those seconds are left.
+     *
+     * Its own element rather than a sixth chip: it is not a zone, it does not
+     * capture, and it must not be counted in "2/3".
+     */
+    this.beacon = el('div', null, this.root, '');
+    setStyle(this.beacon, 'align-self', 'center');
+    setStyle(this.beacon, 'display', 'none');
+    setStyle(this.beacon, 'font-family', 'var(--fm)');
+    setStyle(this.beacon, 'font-size', 'calc(10px * var(--k))');
+    setStyle(this.beacon, 'letter-spacing', '.18em');
+    setStyle(this.beacon, 'text-shadow', 'var(--sh-o1)');
+    setStyle(this.beacon, 'padding-left', 'calc(var(--u) * 1.5)');
+    setStyle(this.beacon, 'border-left', '1px solid var(--hair)');
+
     this.shown = 0;
     this._pulse = 0;
     setStyle(this.root, 'display', 'none');
@@ -234,6 +256,30 @@ export class ZoneStrip {
       `${s.ownedUs ?? 0}/${zones.length} · ${s.score?.[s.playerTeam ?? 0] ?? 0}` +
         ` of ${s.scoreTarget ?? 0}`
     );
+
+    /**
+     * MINE, UP AND COUNTING DOWN — the friendly tint, breathing on the same
+     * shared pulse the contested bars use once it is under five seconds, which
+     * is the only warning a player gets that his forward spawn is about to stop
+     * existing. On cooldown it stays on screen in dim text rather than
+     * vanishing: "there is no beacon" and "there cannot be one for another
+     * forty seconds" are different things to know.
+     */
+    const b = s.beacon;
+    if (!b || (!b.mine && b.cooldown <= 0)) {
+      setStyle(this.beacon, 'display', 'none');
+    } else {
+      setStyle(this.beacon, 'display', '');
+      if (b.mine) {
+        setText(this.beacon, `BEACON ${Math.ceil(b.seconds)}S`);
+        setStyle(this.beacon, 'color', 'var(--friend)');
+        setStyle(this.beacon, 'opacity', b.seconds < 5 ? breathe.toFixed(3) : '1');
+      } else {
+        setText(this.beacon, `BEACON ${Math.ceil(b.cooldown)}S`);
+        setStyle(this.beacon, 'color', 'var(--ink-3)');
+        setStyle(this.beacon, 'opacity', '1');
+      }
+    }
   }
 
   dispose() {
