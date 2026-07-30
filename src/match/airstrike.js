@@ -246,7 +246,18 @@ const STRIKE_SITES = [
    */
   { id: 'CATH-W', name: 'CATHEDRAL NAVE', level: LC(10.0, -12.0), face: [1, 0], reach: 4.6, kind: 'vault', probe: CATH_PROBE },
   { id: 'CATH-X', name: 'CATHEDRAL CHOIR', level: LC(-10.0, 7.0), face: [-1, 0], reach: 4.6, kind: 'vault', probe: CATH_PROBE },
-  { id: 'CATH-E', name: 'CATHEDRAL CROSSING', level: LC(10.0, 2.0), face: [1, 0], reach: 4.6, kind: 'vault', probe: CATH_PROBE },
+  /**
+   * MOVED FROM z 2 TO z 6.5, AND THE REASON IS ON THE GROUND RATHER THAN ON THE
+   * ROOF. `src/world/layout.js` now stands a 1.7 m screen in each flank street
+   * in front of the transept portal (level z -3..1) to keep the cathedral from
+   * being a building you walk straight into. `_buildSite` measures the street
+   * beside each anchor with ONE chest-height ray and scales the rubble mound to
+   * leave `LANE_CLEAR`; at z 2 that ray would have hit the screen 2 m out and
+   * the mound would have come back the size of a skip. z 6.5 is still opposite
+   * E2 (level z -1..9) rather than a connector mouth, and it is 5.5 units clear
+   * of the screen. IF THAT SCREEN MOVES, RE-CHECK THIS.
+   */
+  { id: 'CATH-E', name: 'CATHEDRAL CHOIR EAST', level: LC(10.0, 6.5), face: [1, 0], reach: 4.6, kind: 'vault', probe: CATH_PROBE },
 ];
 
 /**
@@ -460,6 +471,8 @@ export class Airstrike {
     this._live = [];
     /** Pending telegraphed calls: { site, group, k, t, stage }. */
     this._pending = [];
+    /** The flank beacon this system has already answered. @see `_pollFlankCall`. */
+    this._flankKey = null;
     /** Seconds until the scheduler may pick a site. Set by `armRound`. */
     this._next = Infinity;
     /** Strikes called this round, against `RULES.airstrikeMaxPerRound`. */
@@ -1459,6 +1472,60 @@ export class Airstrike {
     return true;
   }
 
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * THE CATHEDRAL MEGA-DESTRUCTION EVENT, AND WHO IS ALLOWED TO CALL IT
+   * ────────────────────────────────────────────────────────────────────────────
+   * "大聖堂大破壊イベントも入れてね"
+   * "マップの左右のいく価値のないエリアにはビーコンエリアがあってそこからもリスポーンできる
+   *  ようにして（起動したら）左右にもっとメリットを与えて、例えば爆撃機を呼べるとか"
+   *
+   * The two are ONE feature here, because the second one asks for a reward the
+   * flanks can call in and the first one is the biggest thing this file owns.
+   *
+   * WHAT IT IS. The `CATHEDRAL` salvo — three bays of aisle roof off both
+   * elevations, 1467 chunks, a five-column dust wall standing in the nave for
+   * twenty seconds — fired TOGETHER with a bomber run down the middle of the map.
+   * The salvo is this system's own; the aeroplane is `Bomber`'s, and it is asked
+   * politely and optionally (`?.`), so if it is disarmed, already flown or absent
+   * the collapse still happens on its own. Both telegraph themselves: 4.4 s of
+   * jet and whistle, and an aircraft that is on screen for 2.4 s before it drops
+   * anything. Nothing in this method is a new kind of event for anything
+   * listening — it is the two that already exist, on the same second.
+   *
+   * WHERE IT SHOULD LIVE. In `src/match/index.js`, one line in the TAP-F branch
+   * of `_updateCacheUse`, next to `plantBeacon`. That file is outside this
+   * change's scope, so the trigger is polled here instead: `_pollFlankCall`
+   * watches `match.caches.beacon` — one match module reading another match
+   * module's public state through the registry, never `ai`, `ui` or `world` —
+   * and fires when the square that was just lit is one of the FLANK beacon
+   * squares `src/world/features.js` publishes. IF THAT LINE IS EVER ADDED IN
+   * `index.js`, DELETE THE POLL: two triggers on one event is a double strike.
+   */
+  callCathedralCollapse() {
+    if (!this.ready || !this.enabled) return false;
+    if (!this.callSalvo('CATHEDRAL')) return false;
+    /** The aeroplane. Optional on purpose — see the note above. */
+    this.ctx.peek?.('match')?.bomber?.fire?.('MAIN');
+    return true;
+  }
+
+  /**
+   * A flank beacon has just been lit. One call per PLANT — the key is the square
+   * plus the moment it expires, so re-lighting the same square after its 30 s is
+   * a new event and holding one is not.
+   */
+  _pollFlankCall(live) {
+    if (!live) return;
+    const b = this.ctx.peek?.('match')?.caches?.beacon;
+    if (!b || !b.active || typeof b.at !== 'string') return;
+    const key = `${b.at}:${b.until}`;
+    if (key === this._flankKey) return;
+    this._flankKey = key;
+    if (!b.at.startsWith('FLANK-')) return;
+    this.callCathedralCollapse();
+  }
+
   struck(which = 0) {
     return !!this._siteOf(which)?.struck;
   }
@@ -1473,6 +1540,9 @@ export class Airstrike {
    */
   update(dt, live) {
     if (!this.ready) return;
+
+    /* ---- the flanks, calling it in ------------------------------------ */
+    this._pollFlankCall(live);
 
     /* ---- the clock the shader reads ---------------------------------- */
     for (let i = this._live.length - 1; i >= 0; i--) {

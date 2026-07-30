@@ -499,6 +499,9 @@ const result = await page.evaluate(() => {
       plan,
       arrive: arr,
       arriveS: { attack: +(arr.attack / 4.57).toFixed(1), defend: +(arr.defend / 4.57).toFixed(1) },
+      /** Which ruleset is live. The perch verdict asks a different question of
+       *  each — see the note over `defenceFirstPerch` in the verdict below. */
+      mode: m.domination ? 'domination' : 'demolition',
     });
   }
 
@@ -569,10 +572,44 @@ for (const s of result.sites) {
   const bad = [];
   if (s.overwatchBest < MIN.overwatchBest) bad.push(`no perch sees ${pct(MIN.overwatchBest)} of the zone (best ${pct(s.overwatchBest)})`);
   if (s.overwatchCount < MIN.overwatchCount) bad.push(`only ${s.overwatchCount} perch(es) over 15 % (want ${MIN.overwatchCount})`);
-  if (s.defFirstBest < MIN.defenceFirstPerch) {
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * WHOSE ELEVATION IT HAS TO BE IS A QUESTION ABOUT THE MODE
+   * ──────────────────────────────────────────────────────────────────────────
+   * This metric was written for DEMOLITION, where one side attacks a site and
+   * the other defends it, the two swap at `RULES.swapAfterRound`, and "the
+   * elevation belongs to the attack" is therefore a real and fixable fault.
+   *
+   * DOMINATION HAS NO ATTACKERS. Both sides take and hold all three points, the
+   * labels `attack`/`defend` are just which base cluster a man spawns in, and
+   * they NEVER SWAP. A point beside the north base is 31 m from the north spawns
+   * and 156 m from the south ones, so every perch within 26 m of it is one the
+   * north side reaches first BY A HUNDRED METRES AND MORE — measured on this map:
+   *
+   *              perches over 15 %   best    reached first by   by
+   *   zone A            271          67.7 %      the north       127 m
+   *   zone C             40          78.9 %      either          6-9 m
+   *   zone B            280          67.3 %      the south       117 m
+   *
+   * There is no geometry that fixes zone A's row. Ground the south side gets to
+   * first, next to the north side's spawn, would mean the north side is spawn
+   * trapped. The old test therefore failed zone A for being SYMMETRIC with zone
+   * B, which passed it — the mirror image of the same map, scored differently
+   * because of which cluster is called "defend".
+   *
+   * So in domination the question is asked of the side that actually garrisons
+   * the point: the one that ARRIVES FIRST. It must have overwatch of its own, and
+   * a zone whose elevation belongs to the side coming to TAKE it still fails —
+   * which is the thing the metric was always about. Demolition is unchanged.
+   */
+  const dom = s.mode === 'domination';
+  const holder = !dom ? 'defend' : s.arrive.attack < s.arrive.defend ? 'attack' : 'defend';
+  const holderBest = holder === 'defend' ? s.defFirstBest : s.atkFirstBest;
+  if (holderBest < MIN.defenceFirstPerch) {
     bad.push(
-      `the best perch the DEFENCE reaches first sees only ${pct(s.defFirstBest)} of the zone ` +
-        `(want ${pct(MIN.defenceFirstPerch)}) — the elevation over this site belongs to the attack`
+      `the best perch the ${holder === 'defend' ? 'DEFENCE' : 'ATTACK'} reaches first sees only ` +
+        `${pct(holderBest)} of the zone (want ${pct(MIN.defenceFirstPerch)}) — the elevation over ` +
+        `this ${dom ? 'point belongs to the side coming to take it' : 'site belongs to the attack'}`
     );
   }
   if (s.groundMean - s.attackMean < MIN.groundEdge) {
