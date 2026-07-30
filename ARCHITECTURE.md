@@ -96,8 +96,21 @@ player.respawnAt(position, yaw)     player.health.regenEnabled
 weapons.locked              weapons.resetAmmo()
 weapons.scavenge(mags)      weapons.needsAmmo
 ui.setRound(state)          ui.matchDriven      ui.isFriendlyTarget(actor)
+ui.airAlert(a)              ui.airImpact(title)   ui.clearAirAlert()
+ui.airDanger(position, life, label)
 world.levelYaw              world.levelToWorld(x, y, z, out)
 ```
+
+`ui.airAlert` and `ui.airDanger` are INCOMING AIR, and they exist because the
+three air weapons in `src/match` fired correctly for weeks while the player
+reported that they never happened. Both statements were true: measured at real
+time, `ui.banner.text` and `ui.prompt.text` were `null` through a whole round
+with three air events in it, and the impacts land on fixed geography that can be
+100 m away behind a block. `airAlert` is ONE call when a strike is CALLED — the
+strip then runs its own clock, points an arrow at the impact in the player's own
+frame and puts itself away; `airDanger` is one world-space impact reticle per
+impact point in the event, so a salvo or a gun line reads as an area to leave
+rather than as a dot to look at. See `src/ui/airalert.js`.
 
 `weapons.scavenge(mags)` is AMMUNITION OFF A BODY — "スカベンジャー". `match`
 leaves a pouch where every man falls (`src/match/ammo.js`) and the player walks
@@ -153,8 +166,12 @@ Emit and listen via `ctx.events`. Payloads are plain objects. The canonical set:
 | ↳ | somebody is back on their feet inside the round. Fires for a bot and for the local player on the same path, `RULES.respawnDelay` after the death. A respawned bot is a NEW `Agent`; anything holding the old one has a corpse. | |
 | `match:airstrike` | `{ phase: 'inbound'\|'impact'\|'settled', site, position }` | match |
 | ↳ | an airstrike on one of the eight fixed strike sites (three that take a storey down and change the map, five smaller ones over the attackers' approach). `inbound` is the telegraph (4.4 s of jet and whistle before it lands), `impact` is the frame it goes off, `settled` is when the rubble stops moving and becomes collision. The blast itself is a normal `explosion` event, so nothing has to listen to this to take damage. The payload object is REUSED — copy what you need. See `src/match/airstrike.js`. | |
+| ↳ | an airstrike may also be a SALVO: three adjacent sites on one city block, called as one telegraphed event and fired a fifth of a second apart (`airstrike.callSalvo`, `RULES.airstrikeSalvoPerRound`). Every member still emits its own `inbound`/`impact`/`settled`, so nothing listening has to know; what changes is that ~2100 chunks come down over 30 m of frontage and a five-column dust wall occludes the lane for ~20 s. | |
 | `match:bomber` | `{ phase: 'inbound'\|'impact'\|'settled', run, position }` | match |
 | ↳ | an aircraft crossing the map and walking a STICK of 5-8 bombs along one of four fixed lines. `inbound` is the launch — the aeroplane itself is the telegraph and is on screen for 2.4 s before the first bomb is even released; `impact` fires once PER BOMB, with `position` at that bomb's crater; `settled` is when the debris stops moving. It changes no collision and no navigation, unlike the airstrike. Each bomb is a normal `explosion` event. The payload object is REUSED — copy what you need. See `src/match/bomber.js`. | |
+
+| `match:strafe` | `{ phase: 'inbound'\|'impact'\|'settled', run, position }` | match |
+| ↳ | FIGHTER SUPPORT FIRE — an aircraft crossing low along one of four fixed lines with its gun open, walking 11-31 cannon impacts down a lane in about a second. `inbound` is the launch (the aeroplane and its gun are the telegraph, ~3.3 s before the first round lands); `impact` fires once per impact that carries a blast, which is every fourth one — see the DAMAGE IS SAMPLED note in the file; `settled` is when the grit stops moving. It changes no collision and no navigation. The payload object is REUSED — copy what you need. See `src/match/strafe.js`. | |
 
 Two additive fields on existing payloads, both optional and both ignorable:
 
