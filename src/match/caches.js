@@ -172,7 +172,21 @@ export class Caches {
     /** Just the ones a bot can walk to. A subset of `list`, same objects. */
     this.botList = [];
 
-    const primaries = weapons?.primaryIds ?? [];
+    /**
+     * WHAT MAY BE ON A RACK, and it is not quite `weapons.primaryIds`.
+     *
+     * `primaryIds` is `WEAPON_IDS` minus `class: 'pistol'` and `class: 'melee'`
+     * — which leaves the FRAG GRENADE in it, because its class is `'grenade'`.
+     * Measured on the first run of `_cachetest.mjs`: rack E2 offered "M67", i.e.
+     * a weapon rack whose reward was making a hand grenade your primary weapon.
+     *
+     * Filtered here rather than in `weapons.primaryIds`, because that getter is
+     * also what the pause menu's loadout list is built from and changing it is a
+     * change to a screen this pass was not asked to touch. @see the spawned note.
+     */
+    const primaries = (weapons?.primaryIds ?? []).filter(
+      (id) => weapons.states.get(id)?.def?.class !== 'grenade'
+    );
     let weaponSeen = 0;
     for (const f of features ?? []) {
       if (!f || !KINDS.has(f.kind) || !f.position) continue;

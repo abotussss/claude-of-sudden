@@ -639,6 +639,14 @@ export class WeaponSystem {
    */
   pickUpPrimary(id) {
     if (!this.states.has(id) || id === this.primaryId) return null;
+    /**
+     * NOT THE FRAG. `primaryIds` is derived by excluding `pistol` and `melee`,
+     * which leaves `class: 'grenade'` in it — so `setPrimary('grenade')` is
+     * currently legal and would make slot 1 draw a hand grenade with no
+     * magazine, no reserve and no fire mode. Nothing off a cache may do that.
+     */
+    const cls = this.states.get(id).def.class;
+    if (cls === 'grenade' || cls === 'melee') return null;
     const prev = this.primaryId;
     if (!this.setPrimary(id)) return null;
     const s = this.states.get(id);
