@@ -1912,7 +1912,7 @@ BUILDINGS.push(
    * down to z 15 so it seals the strip x -70..-60 against BW2's north face
    * rather than leaving 14 units of dune behind the row.
    */
-  { id: 'NW1', x: -65, z: 24.5, w: 10, d: 19, floors: 3, wallKey: 'plaster_blue', streetSide: 1, secondarySide: 3, damage: 0.25, balconies: 0.25, doorBays: { 3: 1 }, roofProps: 3 },
+  { id: 'NW1', x: -65, z: 24, w: 10, d: 20, floors: 3, wallKey: 'plaster_blue', streetSide: 1, secondarySide: 3, damage: 0.25, balconies: 0.25, doorBays: { 3: 1 }, roofProps: 3 },
   /** The two blocks that close the district's north side. They meet flush at
    *  x -34 and NW3's east face is inside the compound wall's own thickness, so
    *  the boundary is continuous from the map edge to the spawn's wall. */
@@ -1929,7 +1929,7 @@ BUILDINGS.push(
 
   /* ---- the south-east district: zone B, ρ of the above ------------------ */
   /** ρ(NW1) exactly, and cut in the same two places for the same reason. */
-  { id: 'SE1', x: 65, z: -26.5, w: 10, d: 19, floors: 3, wallKey: 'plaster_pink', streetSide: 3, secondarySide: 1, damage: 0.25, balconies: 0.25, doorBays: { 1: 1 }, roofProps: 3 },
+  { id: 'SE1', x: 65, z: -26, w: 10, d: 20, floors: 3, wallKey: 'plaster_pink', streetSide: 3, secondarySide: 1, damage: 0.25, balconies: 0.25, doorBays: { 1: 1 }, roofProps: 3 },
   { id: 'SE2', x: 47, z: -65, w: 26, d: 10, floors: 2, wallKey: 'plaster_sand', streetSide: 2, secondarySide: 3, damage: 0.3, balconies: 0.3, doorBays: { 2: 1 }, roofProps: 3 },
   { id: 'SE3', x: 25, z: -65, w: 18, d: 10, floors: 2, wallKey: 'plaster_blue', streetSide: 2, secondarySide: 1, damage: 0.35, balconies: 0.25, doorBays: { 2: 1 }, roofProps: 3 },
   { id: 'SE4', x: 46, z: -32, w: 7, d: 8, floors: 1, groundH: 3.5, wallKey: 'plaster_cream', streetSide: 3, damage: 0.4, parapetH: 0.7, roofProps: 2 },
@@ -2248,7 +2248,7 @@ BUILDINGS.push(
  * and three different plasters, because 45 units of one wallKey at one storey
  * count is the "flat/untextured" failure the quality bar names.
  */
-pairBuilding({ id: 'WC1', x: -89, z: 22.5, w: 12, d: 15, floors: 3, wallKey: 'plaster_cream', streetSide: 1, damage: 0.35, balconies: 0.3, doorBays: { 1: 1 }, roofProps: 3 });
+pairBuilding({ id: 'WC1', x: -89, z: 22, w: 12, d: 16, floors: 3, wallKey: 'plaster_cream', streetSide: 1, damage: 0.35, balconies: 0.3, doorBays: { 1: 1 }, roofProps: 3 });
 pairBuilding({ id: 'WC2', x: -89, z: 39, w: 12, d: 18, floors: 4, wallKey: 'plaster_pink', streetSide: 1, damage: 0.25, balconies: 0.35, doorBays: { 1: 1 }, roofProps: 4 });
 pairBuilding({ id: 'WC3', x: -89, z: 55, w: 12, d: 14, floors: 3, wallKey: 'plaster_blue', streetSide: 1, damage: 0.4, balconies: 0.25, doorBays: { 1: 1 }, roofProps: 3 });
 
@@ -2267,8 +2267,8 @@ pairBuilding({ id: 'WC3', x: -89, z: 55, w: 12, d: 14, floors: 3, wallKey: 'plas
  * east) and is 60 units from either capture point.
  */
 pairBuilding(
-  { id: 'WC4', x: -77.5, z: 10, w: 35, d: 10, floors: 2, wallKey: 'plaster_sand', streetSide: 2, secondarySide: 1, damage: 0.35, balconies: 0.3, doorBays: { 2: 1 }, roofProps: 3 },
-  { x: 79, w: 32 }
+  { id: 'WC4', x: -77.5, z: 9.5, w: 35, d: 9, floors: 2, wallKey: 'plaster_sand', streetSide: 2, secondarySide: 1, damage: 0.35, balconies: 0.3, doorBays: { 2: 1 }, roofProps: 3 },
+  { x: 79, w: 32, z: -11.5 }
 );
 pairBuilding({ id: 'WC5', x: -77.5, z: 67, w: 35, d: 10, floors: 2, wallKey: 'plaster_cream', streetSide: 0, secondarySide: 3, damage: 0.3, balconies: 0.3, doorBays: { 0: 1 }, roofProps: 3 });
 
@@ -2328,11 +2328,11 @@ pairBuilding({ id: 'WC7', x: -80.25, z: 57.75, w: 5.5, d: 5.5, floors: 1, ground
  */
 const SHED = { w: 5.4, d: 5.4, floors: 1, groundH: 3.2, damage: 0.3, parapetH: 0.25, enterable: true, roofProps: 2 };
 BUILDINGS.push(
-  { id: 'WC8', x: -72.7, z: 28.7, wallKey: 'plaster_cream', streetSide: 0, secondarySide: 2, ...SHED,
+  { id: 'WC8', x: -74.2, z: 28.7, wallKey: 'plaster_cream', streetSide: 0, secondarySide: 2, ...SHED,
     doorBays: { 0: 0, 2: 1 },
     route: [['s0', [0.21, 0.25], [0.21, 0.75], 's2']],
     rooms: [{ walls: [], furnish: [{ kind: 'shop', x0: 0.62, z0: 0.0, x1: 1.0, z1: 1.0 }] }] },
-  { id: 'EC8', x: 72.7, z: -30.7, wallKey: 'plaster_blue', streetSide: 2, secondarySide: 0, ...SHED,
+  { id: 'EC8', x: 74.2, z: -30.7, wallKey: 'plaster_blue', streetSide: 2, secondarySide: 0, ...SHED,
     doorBays: { 2: 2, 0: 1 },
     route: [['s2', [0.79, 0.75], [0.79, 0.25], 's0']],
     rooms: [{ walls: [], furnish: [{ kind: 'shop', x0: 0.0, z0: 0.0, x1: 0.38, z1: 1.0 }] }] }
@@ -2367,12 +2367,12 @@ BUILDINGS.push(
  * dressing off all three rungs.
  */
 RELIEF.blocks.push(
-  { id: 'WC8 step 3', rect: [-72.9, 25.0, -71.0, 26.0], h: 3.7, key: 'metal_green' },
-  { id: 'WC8 step 2', rect: [-72.9, 24.0, -71.0, 25.0], h: 2.6, key: 'metal_blue' },
-  { id: 'WC8 step 1', rect: [-72.9, 22.9, -71.0, 24.0], h: 1.4, key: 'metal_green' },
-  { id: 'EC8 step 3', rect: [71.0, -28.0, 72.9, -27.0], h: 3.7, key: 'metal_blue' },
-  { id: 'EC8 step 2', rect: [71.0, -27.0, 72.9, -26.0], h: 2.6, key: 'metal_green' },
-  { id: 'EC8 step 1', rect: [71.0, -26.0, 72.9, -24.9], h: 1.4, key: 'metal_blue' }
+  { id: 'WC8 step 3', rect: [-74.4, 25.0, -72.5, 26.0], h: 3.7, key: 'metal_green' },
+  { id: 'WC8 step 2', rect: [-74.4, 24.0, -72.5, 25.0], h: 2.6, key: 'metal_blue' },
+  { id: 'WC8 step 1', rect: [-74.4, 22.9, -72.5, 24.0], h: 1.4, key: 'metal_green' },
+  { id: 'EC8 step 3', rect: [72.5, -28.0, 74.4, -27.0], h: 3.7, key: 'metal_blue' },
+  { id: 'EC8 step 2', rect: [72.5, -27.0, 74.4, -26.0], h: 2.6, key: 'metal_green' },
+  { id: 'EC8 step 1', rect: [72.5, -26.0, 74.4, -24.9], h: 1.4, key: 'metal_blue' }
 );
 
 /**
@@ -2381,10 +2381,10 @@ RELIEF.blocks.push(
  * a count per square metre and two rects over the same tarmac scatter it twice.
  */
 ALLEYS.push(
-  { rect: [-83, 15, -70, 62], surface: 'dirt', density: 0.4 },     // the WEST AVENUE — ZONE A
+  { rect: [-83, 14, -70, 62], surface: 'dirt', density: 0.4 },     // the WEST AVENUE — ZONE A
   { rect: [-70, 34, -60, 40], surface: 'gravel', density: 0.55 },  // …its south mouth, into the NW throat
   { rect: [-70, 52, -60, 62], surface: 'gravel', density: 0.5 },   // …its north mouth, into the NW yard
-  { rect: [70, -64, 83, -17], surface: 'dirt', density: 0.4 },     // the EAST AVENUE — ZONE B
+  { rect: [70, -64, 83, -16], surface: 'dirt', density: 0.4 },     // the EAST AVENUE — ZONE B
   { rect: [60, -42, 70, -36], surface: 'gravel', density: 0.55 },
   { rect: [60, -64, 70, -54], surface: 'gravel', density: 0.5 }
 );
@@ -2450,8 +2450,8 @@ KEEPOUT.push(
    * own 9.5-unit circle. These two are the same idea authored explicitly: 6.2
    * units covers the shed, both thresholds and the two rungs south of it.
    */
-  [-72.7, 27.2, 6.2], // WC8 — the west city's shed and its ladder
-  [72.7, -29.2, 6.2]  // EC8 — its ρ image
+  [-74.2, 27.2, 6.2], // WC8 — the west city's shed and its ladder
+  [74.2, -29.2, 6.2]  // EC8 — its ρ image
 );
 
 /**
