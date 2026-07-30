@@ -1,472 +1,336 @@
 /**
- * AUDIO / VOICE — formant synthesis for enemy barks
+ * AUDIO / RADIO SIGNALS — what the squad net sounds like.
  *
- * No speech samples, so barks are built the way a vocal tract works:
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHY THERE IS NO VOICE HERE ANY MORE
+ * ════════════════════════════════════════════════════════════════════════════
  *
- *   glottal pulse train (PeriodicWave, 1/n^1.15 harmonics)
- *     + aspiration noise
- *     ─► three parallel band-passes at the formant frequencies F1..F3
- *     ─► chest/throat shaping, presence peak, mild saturation (shouting)
- *     + separately mixed consonant bursts (plosives and fricatives)
+ * This file used to synthesise SPEECH: a glottal pulse train through three
+ * parallel formant band-passes, ramped between vowels, with consonant bursts
+ * mixed on top, composed into thirty phrases from a syllable-level word table.
+ * It was built to sound like "a human shouting a word you cannot quite make
+ * out". Played, it sounds like a machine imitating a person, and the player
+ * said so:
  *
- * The formant centres are ramped between vowels, the f0 follows a per-syllable
- * pitch contour, and both are jittered every ~25 ms. That jitter is the single
- * most important ingredient: without it the result is a Speak&Spell, with it a
- * player reads it as a human shouting a word they cannot quite make out — which
- * is exactly the goal for enemy chatter at 30 m.
+ *   「AIが発生する無線音声が機械音声なので不気味すぎるからやめて、
+ *     YouTubeとかでまともな音声拾ってきて、ないなら変な機械音声やめて」
+ *
+ * There is no real speech to fetch. This project ships no assets at all — every
+ * texture, mesh, animation and sound is generated at load time, `three` is the
+ * only dependency, and the game must run offline; pulling somebody's voice off a
+ * video site is neither available here nor ours to use. The player named the
+ * fallback himself, so this is the fallback: THE MACHINE VOICE IS GONE.
+ *
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHAT REPLACES IT
+ * ════════════════════════════════════════════════════════════════════════════
+ *
+ * The net itself was never the problem. `src/ai/radio.js` is a measured system —
+ * two rate-limited nets, seventeen kinds in use, ~30 transmissions a minute in
+ * contact, answered about half the time, and it never evicts gunfire. All of
+ * that is untouched. What changed is what a transmission SOUNDS like, and the
+ * answer is the language a real radio uses when nobody is talking:
+ *
+ *   SQUELCH BREAK   the carrier opening — a short burst of band-limited noise
+ *                   with a click on the front. This is the "somebody keyed a
+ *                   handset" that makes the rest read as a radio at all.
+ *   SIGNAL          one to three filtered tones whose SHAPE is the message
+ *                   class: rising for a contact, three fast highs for a threat,
+ *                   falling for a status call, low doubles for stores, a run up
+ *                   for a point taken and the same run down for a point lost.
+ *   CLICK-ACK       an acknowledgement is not a tone at all, it is two clicks of
+ *                   the squelch. That is what "roger" sounds like on a net where
+ *                   nobody wants to say anything, and it reads instantly as
+ *                   "somebody answered" without pretending to be a word.
+ *   TAIL            the carrier closing.
+ *
+ * All of it runs through the same radio band the old voice path used for its
+ * `radio: true` case (420 Hz .. 3.2 kHz, saturated), because it is coming out of
+ * a handset either way — in the player's ear, or across the street on somebody's
+ * chest.
+ *
+ * WHAT IS HONESTLY LOST: the bearing. `contact_north` and `contact_east` are now
+ * the same signal, because there is no non-verbal way to say "north" that a
+ * player could learn without a manual, and the syllables that used to carry it
+ * were never intelligible either. The information still exists — the man is on
+ * the minimap the moment somebody sees him (`ai.getHudActors`), he is bracketed
+ * in the world if the player has line of sight, and the killfeed carries the
+ * rest. A radio tone says "there is traffic and this is what kind"; the HUD says
+ * where.
+ *
+ * WHAT IS NOT A RADIO. Being hit, being hurt and dying are not transmissions —
+ * they are a man's own body, and a beep for them would be worse than the voice
+ * was. Those three are NOISE ONLY: a filtered breath burst with an envelope and
+ * no pitched source anywhere in the chain, so there is nothing in them that can
+ * read as a synthesised vowel. They skip the radio band entirely and keep the
+ * reverb send the old vocal path had.
+ *
+ * WHAT THIS COSTS. One transmission is 1-3 short oscillators and 2-3 noise
+ * bursts, against the old path's oscillator + three band-passes + a noise source
+ * per syllable (up to nine syllables in a composed phrase) — strictly cheaper.
+ * The emitter count per bark is unchanged at ONE, which is what the voice bus
+ * budget is written against.
+ *
+ * The public surface is unchanged: `BARKS` (every name `src/ai/radio.js` asks
+ * for), `bark(actx, bank, rng, o)` returning `{ node, end, send }`, and
+ * `barkFor(kind, rng)`.
  */
 
-import { ad, adsr, biquad, clamp, gain, hit, saturationCurve, series, shaper, sweep } from './dsp.js';
+import { ad, biquad, clamp, gain, hit, saturationCurve, series, shaper, sweep } from './dsp.js';
 
-/** F1, F2, F3 (Hz) and their bandwidths, adult male, shouted register. */
-const VOWELS = {
-  a: [730, 1090, 2440, 110, 130, 180],  // "father"
-  e: [530, 1840, 2480, 90, 120, 170],   // "bed"
-  i: [300, 2290, 3010, 70, 130, 190],   // "see"
-  o: [570, 840, 2410, 90, 110, 170],    // "law"
-  u: [325, 700, 2530, 70, 100, 170],    // "boot"
-  ah: [640, 1200, 2500, 110, 140, 190],
-  ehr: [490, 1350, 1690, 100, 130, 180], // "her"
-  ohh: [450, 900, 2300, 95, 115, 175],
+/* ------------------------------------------------------------------ */
+/* The signal vocabulary                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A CLASS is a shape, not a word. Seven of them plus the click, and they are
+ * told apart in one hearing because they differ in the two things a listener
+ * reads first: how many tones there are, and which way they go.
+ *
+ * `tones` is `[frequencyHz, seconds]` pairs, `gap` the silence between them,
+ * `wave` the oscillator, `level` the class's own loudness — a threat is louder
+ * than a stores call, which is most of the point of having classes at all.
+ */
+const SIGNALS = {
+  /* enemy seen — two tones, up, quick. The most common call on the net. */
+  contact: { tones: [[880, 0.070], [1330, 0.095]], gap: 0.028, wave: 'square', level: 1.00 },
+  /* grenade / pinned / man down / frag out — three fast highs, unmistakable */
+  threat: { tones: [[1560, 0.052], [1560, 0.052], [1560, 0.070]], gap: 0.034, wave: 'square', level: 1.12 },
+  /* moving, holding, reloading, suppressing — two tones, down, unhurried */
+  status: { tones: [[1180, 0.080], [790, 0.105]], gap: 0.030, wave: 'triangle', level: 0.80 },
+  /* ammunition and grenades — two low tones at the same pitch */
+  stores: { tones: [[620, 0.075], [620, 0.095]], gap: 0.045, wave: 'triangle', level: 0.78 },
+  /* one of theirs is down — a single mid confirm */
+  confirm: { tones: [[1040, 0.115]], gap: 0, wave: 'triangle', level: 0.84 },
+  /* a capture point taken — a run up */
+  objective: { tones: [[740, 0.070], [990, 0.070], [1245, 0.120]], gap: 0.026, wave: 'square', level: 1.02 },
+  /* a capture point lost — the same run, down */
+  lost: { tones: [[1245, 0.070], [990, 0.070], [740, 0.130]], gap: 0.026, wave: 'square', level: 1.02 },
+  /* "roger" — two clicks of the squelch and nothing else */
+  ack: { tones: [], gap: 0, clicks: 2, level: 0.72 },
 };
 
 /**
- * Bark scripts. Each syllable: v vowel, d duration, a amplitude, p pitch
- * multiplier, on onset consonant ('p' plosive, 'f' fricative, 'n' nasal),
- * g gap after the syllable.
+ * NOT A RADIO — the three vocalisations that are a body rather than a handset.
+ * `band` is the noise band-pass, swept from `band[0]` to `band[1]`; `dur` the
+ * envelope; `tail` an optional second, longer exhale.
  */
-export const BARKS = {
-  /* "CONTACT!" */
-  contact: {
-    f0: 1.18, drive: 1.25, syl: [
-      { v: 'o', d: 0.13, a: 1.0, p: 1.06, on: 'p', g: 0.012 },
-      { v: 'a', d: 0.19, a: 1.0, p: 1.16, on: 'p', g: 0 },
-    ],
-  },
-  /* "ENEMY SPOTTED" */
-  spotted: {
-    f0: 1.1, drive: 1.1, syl: [
-      { v: 'e', d: 0.1, a: 0.9, p: 1.05, g: 0.01 },
-      { v: 'a', d: 0.08, a: 0.7, p: 1.0, on: 'n', g: 0.01 },
-      { v: 'i', d: 0.1, a: 0.8, p: 0.95, g: 0.06 },
-      { v: 'a', d: 0.12, a: 1.0, p: 1.1, on: 'f', g: 0.02 },
-      { v: 'e', d: 0.13, a: 0.75, p: 0.9, on: 'p', g: 0 },
-    ],
-  },
-  /* "RELOADING!" */
-  reloading: {
-    f0: 1.05, drive: 1.0, syl: [
-      { v: 'i', d: 0.09, a: 0.8, p: 1.0, g: 0.01 },
-      { v: 'ohh', d: 0.16, a: 1.0, p: 1.12, g: 0.015 },
-      { v: 'i', d: 0.13, a: 0.7, p: 0.9, on: 'p', g: 0 },
-    ],
-  },
-  /* "GRENADE!" — panicked, pitch climbs hard */
-  grenade: {
-    f0: 1.3, drive: 1.5, syl: [
-      { v: 'e', d: 0.1, a: 0.9, p: 1.0, on: 'p', g: 0.012 },
-      { v: 'a', d: 0.26, a: 1.15, p: 1.35, on: 'n', g: 0 },
-    ],
-  },
-  /* "FLANKING!" */
-  flanking: {
-    f0: 1.12, drive: 1.2, syl: [
-      { v: 'a', d: 0.16, a: 1.0, p: 1.1, on: 'f', g: 0.015 },
-      { v: 'i', d: 0.13, a: 0.8, p: 0.95, on: 'n', g: 0 },
-    ],
-  },
-  /* "SUPPRESSING FIRE!" */
-  suppressing: {
-    f0: 1.08, drive: 1.15, syl: [
-      { v: 'u', d: 0.09, a: 0.75, p: 0.98, on: 'f', g: 0.01 },
-      { v: 'e', d: 0.14, a: 1.0, p: 1.12, on: 'p', g: 0.02 },
-      { v: 'i', d: 0.1, a: 0.7, p: 0.9, g: 0.05 },
-      { v: 'a', d: 0.18, a: 0.95, p: 1.05, on: 'f', g: 0 },
-    ],
-  },
-  /* "MOVE UP!" */
-  moveup: {
-    f0: 1.1, drive: 1.2, syl: [
-      { v: 'u', d: 0.16, a: 1.0, p: 1.08, on: 'n', g: 0.03 },
-      { v: 'a', d: 0.14, a: 0.9, p: 1.0, g: 0 },
-    ],
-  },
-  /* wordless taking-fire grunt */
-  hit: {
-    f0: 1.25, drive: 1.6, breath: 0.5, syl: [
-      { v: 'ah', d: 0.16, a: 1.1, p: 1.2, on: 'p', g: 0 },
-    ],
-  },
-  /* pain, longer, wavering */
-  pain: {
-    f0: 1.15, drive: 1.3, breath: 0.65, tremolo: 14, syl: [
-      { v: 'ah', d: 0.34, a: 0.95, p: 1.0, g: 0 },
-    ],
-  },
-  /* death: pitch collapses, breath takes over, ends in an exhale */
+const EFFORTS = {
+  hit: { band: [780, 700], dur: 0.10, attack: 0.006, level: 0.62, q: 0.75, makeup: 11 },
+  pain: { band: [820, 540], dur: 0.30, attack: 0.014, level: 0.58, q: 0.62, wobble: 13, makeup: 3.4 },
   death: {
-    f0: 1.05, drive: 1.4, breath: 1.0, tremolo: 22, dying: true, syl: [
-      { v: 'ah', d: 0.3, a: 1.0, p: 1.15, g: 0.02 },
-      { v: 'ehr', d: 0.42, a: 0.6, p: 0.62, g: 0 },
-    ],
-  },
-  /* short affirmative, for squad chatter */
-  copy: {
-    f0: 1.0, drive: 0.9, syl: [
-      { v: 'a', d: 0.1, a: 0.85, p: 1.0, on: 'p', g: 0.02 },
-      { v: 'i', d: 0.12, a: 0.7, p: 0.88, on: 'p', g: 0 },
-    ],
+    band: [760, 380], dur: 0.30, attack: 0.012, level: 0.66, q: 0.6, wobble: 9, makeup: 3.8,
+    tail: { band: [520, 240], dur: 0.70, level: 0.30, q: 0.5, makeup: 4.6 },
   },
 };
 
 /**
- * ════════════════════════════════════════════════════════════════════════════
- * THE RADIO VOCABULARY — "RogerとかEnemy Spottedとか"
- * ════════════════════════════════════════════════════════════════════════════
- * The nine barks above are EXCLAMATIONS: one man shouting one thing at nobody
- * in particular. A radio net is not that. It is a small number of PHRASES that
- * carry information — a bearing, a landmark, a zone letter — and an even
- * smaller number that carry none at all and exist purely so the net sounds like
- * two people ("ROGER", "COPY", "SET"). You cannot build the first kind by
- * adding nine more one-word specs, because "CONTACT" times eight bearings times
- * three zones is thirty-three specs written by hand and thirty-three chances to
- * get a formant wrong.
- *
- * So the unit here is the WORD, and a phrase is words concatenated with a
- * word gap. `compose()` runs once at module load and writes finished specs into
- * `BARKS` under names `src/ai/radio.js` asks for directly (`barkFor` passes any
- * name it recognises straight through). One phrase is still ONE emitter and one
- * oscillator — a two-word callout costs exactly what "CONTACT!" always cost,
- * which matters because the voice bus is 12 % of the field.
- *
- * The words are not intelligible English and are not trying to be; the note at
- * the top of this file applies unchanged. What a phrase carries is a SHAPE —
- * syllable count, stress placement, the pitch fall at the end of a statement
- * against the flat two-beat of an acknowledgement — and that is what a player
- * reads at 30 m through gunfire.
+ * MAKEUP IS NOT DECORATION. A band-pass has unity gain only at its centre, so a
+ * short white burst through a Q of 0.75 comes out ~26 dB down and a longer one
+ * through 0.62 comes out ~17 dB down — MEASURED, by rendering these through the
+ * real mixer offline and reading the peak: the first cut of this file peaked at
+ * 0.0076 for `hit` against 0.19 for a radio signal, i.e. inaudible next to
+ * everything else on the voice bus. `makeup` is per spec because the loss is a
+ * function of the band and the envelope, not a constant.
  */
 
-/** A sibilant coda. English "-st"/"-ce" endings; no amplitude of its own. */
-const SIB = { v: 'i', d: 0.035, a: 0.10, p: 0.90, on: 'f' };
+/**
+ * EVERY NAME `src/ai/radio.js` AND `src/audio/index.js` CAN ASK FOR, mapped to a
+ * class. The names are the net's vocabulary and are deliberately not renamed:
+ * `radio.js` composes them from what a man knows (a bearing, a zone letter,
+ * whether he is indoors) and nothing there had to change to make this file stop
+ * talking. Several names collapse onto one signal — that is exactly where the
+ * bearing is dropped, and it is stated in the header.
+ *
+ * `src/audio/selftest.js` renders every key in here through the real mixer and
+ * the offline probe checks each for silence, NaN, DC and clipping, so a name
+ * without a class would be caught as a silent case rather than shipped.
+ */
+export const BARKS = {};
 
-/** Words. Each is a syllable run; gaps BETWEEN words are added by `compose`. */
-const WORDS = {
-  /* — bearings ------------------------------------------------------ */
-  north: [{ v: 'o', d: 0.20, a: 1.00, p: 1.10, on: 'n' }],
-  south: [{ v: 'a', d: 0.12, a: 0.95, p: 1.06, on: 'f' }, { v: 'u', d: 0.13, a: 0.85, p: 0.94 }, SIB],
-  east: [{ v: 'i', d: 0.19, a: 1.00, p: 1.05 }, SIB],
-  west: [{ v: 'e', d: 0.18, a: 1.00, p: 1.06, on: 'n' }, SIB],
+const CLASS_OF = {
+  contact: 'contact', spotted: 'contact',
+  contact_north: 'contact', contact_south: 'contact',
+  contact_east: 'contact', contact_west: 'contact',
+  contact_northeast: 'contact', contact_northwest: 'contact',
+  contact_southeast: 'contact', contact_southwest: 'contact',
+  contact_inside: 'contact', contact_rooftop: 'contact',
 
-  /* — landmarks ----------------------------------------------------- */
-  inside: [{ v: 'i', d: 0.09, a: 0.70, p: 0.96, on: 'n' },
-    { v: 'a', d: 0.15, a: 1.00, p: 1.12, on: 'f' }, { v: 'i', d: 0.07, a: 0.50, p: 0.94 }],
-  rooftop: [{ v: 'u', d: 0.14, a: 1.00, p: 1.08 }, { v: 'o', d: 0.12, a: 0.70, p: 0.92, on: 'p' }],
-  /* — zone letters (DOMINATION calls them A / C / B) ----------------- */
-  alpha: [{ v: 'a', d: 0.14, a: 1.00, p: 1.08 }, { v: 'a', d: 0.12, a: 0.70, p: 0.90, on: 'f' }],
-  bravo: [{ v: 'a', d: 0.13, a: 1.00, p: 1.10, on: 'p' }, { v: 'ohh', d: 0.14, a: 0.75, p: 0.90, on: 'f' }],
-  charlie: [{ v: 'a', d: 0.14, a: 1.00, p: 1.08, on: 'f' }, { v: 'i', d: 0.13, a: 0.70, p: 0.90 }],
+  grenade: 'threat', fragout: 'threat', pinned: 'threat',
+  coverme: 'threat', mandown: 'threat',
 
-  /* — acknowledgements ---------------------------------------------- */
-  roger: [{ v: 'ohh', d: 0.14, a: 1.00, p: 1.06 }, { v: 'ehr', d: 0.15, a: 0.72, p: 0.90, on: 'f' }],
-  set: [{ v: 'e', d: 0.17, a: 1.00, p: 1.06, on: 'f' }],
+  reloading: 'status', flanking: 'status', suppressing: 'status',
+  moveup: 'status', movingup: 'status', pushing: 'status',
+  holding: 'status', inposition: 'status',
 
-  /* — movement ------------------------------------------------------ */
-  moving: [{ v: 'u', d: 0.13, a: 1.00, p: 1.08, on: 'n' }, { v: 'i', d: 0.12, a: 0.72, p: 0.94, on: 'n' }],
-  up: [{ v: 'a', d: 0.14, a: 0.95, p: 1.04, on: 'p' }],
-  pushing: [{ v: 'u', d: 0.14, a: 1.00, p: 1.10, on: 'p' }, { v: 'i', d: 0.12, a: 0.70, p: 0.92, on: 'f' }],
-  holding: [{ v: 'ohh', d: 0.15, a: 1.00, p: 1.08 }, { v: 'i', d: 0.12, a: 0.70, p: 0.90, on: 'p' }],
-  in: [{ v: 'i', d: 0.09, a: 0.72, p: 0.98, on: 'n' }],
-  position: [{ v: 'o', d: 0.10, a: 0.78, p: 1.00, on: 'p' },
-    { v: 'i', d: 0.13, a: 1.00, p: 1.10, on: 'f' }, { v: 'a', d: 0.11, a: 0.58, p: 0.88, on: 'f' }],
+  ammolow: 'stores', ammodry: 'stores', ammoup: 'stores',
 
-  /* — trouble ------------------------------------------------------- */
-  cover: [{ v: 'a', d: 0.14, a: 1.00, p: 1.08, on: 'p' }, { v: 'ehr', d: 0.13, a: 0.74, p: 0.92, on: 'f' }],
-  me: [{ v: 'i', d: 0.16, a: 0.92, p: 1.00, on: 'n' }],
-  pinned: [{ v: 'i', d: 0.20, a: 1.05, p: 1.14, on: 'p' }, { v: 'e', d: 0.08, a: 0.50, p: 0.88, on: 'n' }],
-  man: [{ v: 'a', d: 0.16, a: 1.00, p: 1.06, on: 'n' }],
-  down: [{ v: 'a', d: 0.16, a: 1.00, p: 1.04, on: 'p' }, { v: 'u', d: 0.10, a: 0.68, p: 0.86, on: 'n' }],
-  enemy: [{ v: 'e', d: 0.10, a: 0.90, p: 1.05 }, { v: 'a', d: 0.08, a: 0.70, p: 1.00, on: 'n' },
-    { v: 'i', d: 0.10, a: 0.80, p: 0.95 }],
+  enemydown: 'confirm',
 
-  /* — ordnance and stores ------------------------------------------- */
-  frag: [{ v: 'a', d: 0.17, a: 1.05, p: 1.12, on: 'f' }],
-  out: [{ v: 'a', d: 0.13, a: 0.95, p: 1.02 }, { v: 'u', d: 0.09, a: 0.60, p: 0.86, on: 'p' }],
-  ammo: [{ v: 'a', d: 0.13, a: 1.00, p: 1.06 }, { v: 'ohh', d: 0.13, a: 0.74, p: 0.90, on: 'n' }],
-  low: [{ v: 'ohh', d: 0.19, a: 1.00, p: 1.04, on: 'n' }],
-  dry: [{ v: 'a', d: 0.20, a: 1.05, p: 1.14, on: 'p' }, { v: 'i', d: 0.08, a: 0.55, p: 0.92 }],
+  secured_alpha: 'objective', secured_bravo: 'objective', secured_charlie: 'objective',
+  lost_alpha: 'lost', lost_bravo: 'lost', lost_charlie: 'lost',
 
-  /* — objective ----------------------------------------------------- */
-  secured: [{ v: 'i', d: 0.10, a: 0.70, p: 0.98, on: 'f' },
-    { v: 'u', d: 0.17, a: 1.00, p: 1.10, on: 'p' }, { v: 'ehr', d: 0.09, a: 0.50, p: 0.86 }],
-  lost: [{ v: 'o', d: 0.19, a: 1.00, p: 1.06, on: 'n' }, SIB],
-  we: [{ v: 'i', d: 0.10, a: 0.70, p: 0.98, on: 'n' }],
-  contact: BARKS.contact.syl,
+  roger: 'ack', copy: 'ack', setpos: 'ack',
+
+  hit: 'effort', pain: 'effort', death: 'effort',
 };
 
-/** The gap between two words of one transmission. Shorter than a breath. */
-const WORD_GAP = 0.075;
+for (const name of Object.keys(CLASS_OF)) {
+  const cls = CLASS_OF[name];
+  BARKS[name] = cls === 'effort'
+    ? { cls, effort: EFFORTS[name] ?? EFFORTS.hit }
+    : { cls, signal: SIGNALS[cls] };
+}
+
+/* ------------------------------------------------------------------ */
+/* Synthesis                                                           */
+/* ------------------------------------------------------------------ */
 
 /**
- * Write `BARKS[name]` as the concatenation of `words`.
- *
- * The last syllable of every word but the last gets `WORD_GAP`; the phrase's
- * final syllable keeps `g: 0` so `bark()`'s "last syllable decays longer" rule
- * still fires on the right one. Nothing is mutated: the run is rebuilt with
- * spread, so `WORDS.down` is safe to use in six phrases.
+ * A squelch burst: the carrier opening or closing. Noise through a narrow band,
+ * 30-42 ms, straight into a decay so the front of it is a click. Two of these
+ * back to back IS the acknowledgement, so this is the most reused piece here.
  */
-function compose(name, f0, drive, words) {
-  const syl = [];
-  for (let w = 0; w < words.length; w++) {
-    const run = WORDS[words[w]];
-    for (let i = 0; i < run.length; i++) {
-      const last = i === run.length - 1;
-      syl.push({ ...run[i], g: last ? (w === words.length - 1 ? 0 : WORD_GAP) : (run[i].g ?? 0.012) });
-    }
+function squelch(actx, bank, rng, out, t, level, bright) {
+  const src = bank.source('white', rng, rng.range(0.95, 1.2));
+  const hp = biquad(actx, 'highpass', 520, 0.7);
+  const bp = biquad(actx, 'bandpass', bright ? 2100 : 1500, 0.85);
+  const g = gain(actx, 0);
+  series(src, hp, bp, g).connect(out);
+  const dur = bright ? 0.030 : 0.042;
+  hit(g.gain, t, level, dur);
+  src.start(t, src._offset, dur + 0.02);
+  return t + dur;
+}
+
+/** One filtered tone of the signal. */
+function beep(actx, out, t, freq, dur, wave, level) {
+  const o = actx.createOscillator();
+  o.type = wave;
+  o.frequency.setValueAtTime(freq, t);
+  // A hair of drift across the tone: a perfectly steady square is the thing that
+  // sounds like a test bench rather than a handset.
+  o.frequency.linearRampToValueAtTime(freq * 0.995, t + dur);
+  const bp = biquad(actx, 'bandpass', freq, 1.1);
+  const g = gain(actx, 0);
+  series(o, bp, g).connect(out);
+  // 5 ms in, then decayed out over the tone — the shortest edges a small speaker
+  // can make without adding a click of its own.
+  ad(g.gain, t, level, 0.005, dur);
+  o.start(t);
+  o.stop(t + dur + 0.05);
+  return t + dur;
+}
+
+/** The body-noise vocalisations. No oscillator anywhere in this signal path. */
+function effort(actx, bank, rng, out, t, spec, level) {
+  const src = bank.source('white', rng, rng.range(0.75, 1.05));
+  const bp = biquad(actx, 'bandpass', spec.band[0], spec.q);
+  const lp = biquad(actx, 'lowpass', 2600, 0.7);
+  const g = gain(actx, 0);
+  const mk = gain(actx, spec.makeup ?? 1);
+  series(src, bp, lp, g, mk).connect(out);
+  sweep(bp.frequency, t, spec.band[0], spec.band[1], spec.dur);
+  const attack = spec.attack ?? 0.01;
+  ad(g.gain, t, spec.level * level, attack, spec.dur);
+  src.start(t, src._offset, spec.dur + attack + 0.1);
+  let end = t + attack + spec.dur;
+  if (spec.wobble) {
+    // amplitude waver, not pitch: a wavering NOISE band is a man breathing hard,
+    // a wavering tone is a siren.
+    const lfo = actx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = spec.wobble * rng.range(0.85, 1.15);
+    const lg = gain(actx, 0.3);
+    lfo.connect(lg);
+    lg.connect(g.gain);
+    lfo.start(t);
+    lfo.stop(end + 0.05);
   }
-  BARKS[name] = { f0, drive, syl };
-}
-
-/**
- * CONTACT REPORTS. A bearing or a landmark, which is the whole difference
- * between "there is a man" and "there is a man to the north-east": `src/ai`
- * knows the direction from the speaker to what he saw and picks the name.
- * Urgent register — f0 1.16, drive 1.25, same as the bare "CONTACT!".
- */
-for (const dir of ['north', 'south', 'east', 'west']) {
-  compose(`contact_${dir}`, 1.16, 1.25, ['contact', dir]);
-}
-compose('contact_northeast', 1.16, 1.25, ['contact', 'north', 'east']);
-compose('contact_northwest', 1.16, 1.25, ['contact', 'north', 'west']);
-compose('contact_southeast', 1.16, 1.25, ['contact', 'south', 'east']);
-compose('contact_southwest', 1.16, 1.25, ['contact', 'south', 'west']);
-compose('contact_inside', 1.16, 1.25, ['contact', 'inside']);
-compose('contact_rooftop', 1.16, 1.25, ['contact', 'rooftop']);
-
-/**
- * ANSWERS. Flat, unhurried, and SHORT — an acknowledgement that sounds as
- * urgent as the contact report it answers reads as two men panicking rather
- * than as one man being told something. f0 1.0 and drive 0.9 is the "copy"
- * register that already existed.
- */
-compose('roger', 1.00, 0.90, ['roger']);
-compose('setpos', 1.00, 0.95, ['set']);
-compose('inposition', 1.00, 0.95, ['in', 'position']);
-
-/* — status, trouble, ordnance, objective ---------------------------- */
-compose('movingup', 1.08, 1.10, ['moving', 'up']);
-compose('pushing', 1.12, 1.20, ['pushing']);
-compose('holding', 1.02, 1.00, ['holding']);
-compose('coverme', 1.22, 1.35, ['cover', 'me']);
-compose('pinned', 1.26, 1.45, ['pinned', 'down']);
-compose('mandown', 1.18, 1.30, ['man', 'down']);
-compose('enemydown', 1.06, 1.05, ['enemy', 'down']);
-compose('fragout', 1.28, 1.40, ['frag', 'out']);
-compose('ammolow', 1.08, 1.05, ['ammo', 'low']);
-compose('ammodry', 1.24, 1.35, ['ammo', 'dry']);
-compose('ammoup', 1.02, 0.95, ['ammo', 'up']);
-for (const z of ['alpha', 'bravo', 'charlie']) {
-  compose(`secured_${z}`, 1.06, 1.05, [z, 'secured']);
-  compose(`lost_${z}`, 1.16, 1.25, ['we', 'lost', z]);
-}
-
-const WAVE_CACHE = new WeakMap();
-
-/** Glottal-ish pulse: strong fundamental, 1/n^1.15 rolloff, alternating phase. */
-function glottalWave(actx) {
-  let w = WAVE_CACHE.get(actx);
-  if (w) return w;
-  const N = 40;
-  const real = new Float32Array(N);
-  const imag = new Float32Array(N);
-  for (let n = 1; n < N; n++) {
-    imag[n] = (1 / Math.pow(n, 1.15)) * (n % 2 === 0 ? -0.75 : 1);
+  if (spec.tail) {
+    end = effort(actx, bank, rng, out, end + 0.04,
+      { ...spec.tail, attack: 0.05, wobble: 0 }, level);
   }
-  w = actx.createPeriodicWave(real, imag, { disableNormalization: false });
-  WAVE_CACHE.set(actx, w);
-  return w;
+  return end;
 }
 
 /**
- * Synthesize a bark.
+ * Synthesize one transmission.
  *
- * @param {object} o { when, bark, f0 (base Hz), tract (0.9..1.1), level,
- *                     radio (bool), distance }
+ * @param {object} o { when, bark, f0 (per-set tuning), tract (accepted and
+ *                     unused), level, radio (bool) }
+ * @returns {{node: AudioNode, end: number, send: number}}
  */
 export function bark(actx, bank, rng, o = {}) {
   const t0 = o.when ?? actx.currentTime;
   const spec = BARKS[o.bark] ?? BARKS.contact;
-  const tract = o.tract ?? rng.range(0.94, 1.07);
-  const f0 = (o.f0 ?? rng.range(96, 132)) * spec.f0;
   const level = o.level ?? 1;
-  const out = gain(actx, 0.2); // VOICE TRIM
+  /**
+   * VOICE TRIM, set against the OLD path rather than by ear. The formant voice
+   * this replaced rendered at peak 0.065-0.11 through the real mixer (offline
+   * self test, `bark:*` rows); the first cut of the signals came out at
+   * 0.15-0.21, i.e. twice as loud as the thing it replaced, which would have
+   * quietly rebalanced the whole voice bus. The per-element levels below are
+   * halved to land in the same band.
+   */
+  const out = gain(actx, 0.32); // VOICE TRIM
 
-  const total = spec.syl.reduce((s, x) => s + x.d + (x.g ?? 0), 0);
-
-  /* ---- source ---------------------------------------------------- */
-  const src = actx.createOscillator();
-  src.setPeriodicWave(glottalWave(actx));
-  const srcGain = gain(actx, 0);
-  src.connect(srcGain);
-
-  // Aspiration: always a little, a lot when hurt or dying.
-  const breathLevel = (spec.breath ?? 0.16) * rng.range(0.8, 1.25);
-  const noise = bank.source('white', rng, rng.range(0.9, 1.2));
-  const noiseBP = biquad(actx, 'bandpass', 1400, 0.6);
-  const noiseGain = gain(actx, 0);
-  series(noise, noiseBP, noiseGain);
-
-  const excite = gain(actx, 1);
-  srcGain.connect(excite);
-  noiseGain.connect(excite);
-
-  /* ---- formant bank ---------------------------------------------- */
-  const first = VOWELS[spec.syl[0].v] ?? VOWELS.a;
-  const fs = [];
-  for (let i = 0; i < 3; i++) {
-    const f = first[i] * tract;
-    const bw = first[i + 3];
-    const bp = biquad(actx, 'bandpass', f, clamp(f / bw, 1.5, 14));
-    const g = gain(actx, [1.0, 0.55, 0.24][i]);
-    excite.connect(bp);
-    bp.connect(g);
-    fs.push({ bp, g });
+  /* ---- a body, not a handset -------------------------------------- */
+  if (spec.effort) {
+    const end = effort(actx, bank, rng, out, t0, spec.effort, level);
+    return { node: out, end: end + 0.25, send: 0.45 };
   }
 
-  /* ---- vocal tract output shaping -------------------------------- */
-  const throat = biquad(actx, 'peaking', 480, 1.1, 4);      // chest resonance
-  const presence = biquad(actx, 'peaking', 2600, 1.4, 5);   // shout presence
-  const hp = biquad(actx, 'highpass', 150, 0.7);
-  const lp = biquad(actx, 'lowpass', 5200, 0.7);
-  const drv = shaper(actx, saturationCurve(1.6 * (spec.drive ?? 1), 0.35), '2x');
-  const bodyGain = gain(actx, 1.5 * level);
-  for (const f of fs) f.g.connect(throat);
-  series(throat, presence, hp, lp, drv, bodyGain).connect(out);
+  /**
+   * PER-SET TUNING. `o.f0` used to be the speaker's vocal pitch (96..136 Hz) and
+   * is still handed over per speaker id by `audio.bark`; here it detunes his
+   * handset by ±12 %, so two men on the same net are still two men and the
+   * existing per-speaker seeding did not have to change.
+   */
+  const tune = clamp(0.92 + (((o.f0 ?? 112) - 96) / 40) * 0.16, 0.88, 1.12);
+  const sig = spec.signal ?? SIGNALS.contact;
+  const lvl = (sig.level ?? 1) * level;
 
-  /* ---- tremolo (pain / death gargle) ----------------------------- */
-  let trem = null;
-  if (spec.tremolo) {
-    trem = actx.createOscillator();
-    trem.type = 'sine';
-    trem.frequency.value = spec.tremolo * rng.range(0.85, 1.15);
-    const tg = gain(actx, 0.35);
-    trem.connect(tg);
-    tg.connect(bodyGain.gain);
-    trem.start(t0);
-    trem.stop(t0 + total + 0.4);
+  let t = squelch(actx, bank, rng, out, t0, 0.24 * lvl, false) + 0.022;
+
+  /* an acknowledgement is clicks, not tones */
+  for (let i = 1; i < (sig.clicks ?? 0); i++) {
+    t = squelch(actx, bank, rng, out, t + 0.055, 0.28 * lvl, true);
   }
 
-  /* ---- per-syllable automation ----------------------------------- */
-  let t = t0;
-  src.frequency.setValueAtTime(f0 * spec.syl[0].p, t0);
-  for (let i = 0; i < spec.syl.length; i++) {
-    const s = spec.syl[i];
-    const v = VOWELS[s.v] ?? VOWELS.a;
-    const amp = s.a * 0.5;
-
-    /* onset consonant, mixed straight to the output */
-    if (s.on) {
-      // Onsets lead the vowel; never let that run off the start of the timeline.
-      const ct = Math.max(t - (s.on === 'f' ? 0.055 : 0.018), 0);
-      const cs = bank.source('white', rng, rng.range(0.9, 1.3));
-      const cbp = biquad(actx, s.on === 'f' ? 'bandpass' : 'highpass',
-        s.on === 'f' ? rng.range(3800, 6500) : rng.range(1400, 2600),
-        s.on === 'f' ? 1.1 : 0.7);
-      const cg = gain(actx, 0);
-      series(cs, cbp, cg).connect(out);
-      if (s.on === 'f') {
-        ad(cg.gain, ct, 0.1 * level, 0.012, 0.05);
-        cs.start(ct, cs._offset, 0.12);
-      } else if (s.on === 'n') {
-        // Nasal: hum through a low formant instead of a burst.
-        ad(cg.gain, ct, 0.02 * level, 0.01, 0.04);
-        cs.start(ct, cs._offset, 0.08);
-        fs[0].bp.frequency.setValueAtTime(260 * tract, ct);
-      } else {
-        hit(cg.gain, ct, 0.16 * level, 0.014);
-        cs.start(ct, cs._offset, 0.05);
-      }
-    }
-
-    /* formant glide into this vowel — 35 ms transition reads as articulation */
-    for (let k = 0; k < 3; k++) {
-      const f = v[k] * tract * (1 + rng.range(-0.02, 0.02));
-      const bw = v[k + 3];
-      fs[k].bp.frequency.setTargetAtTime(f, Math.max(t - 0.03, t0), 0.014);
-      fs[k].bp.Q.setTargetAtTime(clamp(f / bw, 1.5, 14), Math.max(t - 0.03, t0), 0.02);
-    }
-
-    /* pitch contour: rise into the stressed syllable, sag at the end */
-    const pTarget = f0 * s.p;
-    src.frequency.setTargetAtTime(pTarget, t, 0.03);
-    if (spec.dying && i === spec.syl.length - 1) {
-      sweep(src.frequency, t + 0.05, pTarget, pTarget * 0.45, s.d);
-    } else {
-      src.frequency.setTargetAtTime(pTarget * 0.94, t + s.d * 0.6, 0.06);
-    }
-
-    /* amplitude: fast onset, held, quick release; last syllable decays longer */
-    const last = i === spec.syl.length - 1;
-    const rel = last ? (spec.dying ? s.d * 0.9 : 0.055) : 0.028;
-    adsr(srcGain.gain, t, amp * level, 0.014, s.d * 0.22, s.d * 0.5, 0.72, rel);
-    ad(noiseGain.gain, t, amp * breathLevel * level, 0.02, s.d + rel);
-
-    t += s.d + (s.g ?? 0);
+  for (let i = 0; i < sig.tones.length; i++) {
+    const [f, d] = sig.tones[i];
+    t = beep(actx, out, t, f * tune, d, sig.wave ?? 'square', 0.34 * lvl);
+    if (i < sig.tones.length - 1) t += sig.gap;
   }
 
-  /* ---- dying exhale ---------------------------------------------- */
-  if (spec.dying) {
-    const et = t + 0.05;
-    const es = bank.source('white', rng, rng.range(0.6, 0.9));
-    const ebp = biquad(actx, 'bandpass', 700, 0.55);
-    const eg = gain(actx, 0);
-    series(es, ebp, eg).connect(out);
-    sweep(ebp.frequency, et, 900, 380, 0.6);
-    ad(eg.gain, et, 0.16 * level, 0.08, 0.6);
-    es.start(et, es._offset, 0.9);
-    t = et + 0.7;
-  }
+  /* carrier closing */
+  const end = squelch(actx, bank, rng, out, t + 0.030, 0.17 * lvl, false);
 
-  const end = t + 0.35;
-  const srcStart = Math.max(t0 - 0.01, 0);
-  src.start(srcStart);
-  src.stop(end);
-  noise.start(srcStart, noise._offset, end - srcStart + 0.05);
-
-  /* ---- radio treatment (squad comms) ----------------------------- */
-  if (o.radio) {
-    const rbp1 = biquad(actx, 'highpass', 420, 0.8);
-    const rbp2 = biquad(actx, 'lowpass', 3200, 0.9);
-    const rdrv = shaper(actx, saturationCurve(7, 0.3), '2x');
-    const rg = gain(actx, 1.1);
-    const radioOut = gain(actx, 1);
-    series(out, rbp1, rbp2, rdrv, rg).connect(radioOut);
-    // Squelch click at both ends of the transmission.
-    for (const st of [Math.max(t0 - 0.05, 0), end - 0.2]) {
-      const cs = bank.source('white', rng, 1.1);
-      const cbp = biquad(actx, 'bandpass', 2600, 1.6);
-      const cg = gain(actx, 0);
-      series(cs, cbp, cg).connect(radioOut);
-      hit(cg.gain, st, 0.09, 0.03);
-      cs.start(st, cs._offset, 0.06);
-    }
-    return { node: radioOut, end: end + 0.1, send: 0.05 };
-  }
-
-  return { node: out, end: end + 0.1, send: 0.45 };
+  /**
+   * THE RADIO BAND — the same chain the old voice path used for `radio: true`,
+   * now on every transmission, because it is a handset either way: in the
+   * player's ear (`o.radio`, dry and head-locked) or on the chest of a man across
+   * the street (spatialised, with the room on it).
+   */
+  const hp = biquad(actx, 'highpass', 420, 0.8);
+  const lp = biquad(actx, 'lowpass', 3200, 0.9);
+  const drv = shaper(actx, saturationCurve(o.radio ? 7 : 4.5, 0.3), '2x');
+  const trim = gain(actx, o.radio ? 1.1 : 0.95);
+  const radioOut = gain(actx, 1);
+  series(out, hp, lp, drv, trim).connect(radioOut);
+  return { node: radioOut, end: end + 0.10, send: o.radio ? 0.05 : 0.4 };
 }
 
-/** Pick a plausible bark for an AI event without the ai agent knowing our list. */
+/**
+ * Pick a signal for an AI event without the caller knowing our list.
+ *
+ * A CALLER MAY NAME A SIGNAL EXACTLY. `src/ai/radio.js` composes a transmission
+ * from what the man actually knows and passes the finished name; anything
+ * already in `BARKS` goes through untouched. The semantic kinds below are the
+ * older, coarser callers in `src/audio/index.js`.
+ */
 export function barkFor(kind, rng) {
-  /**
-   * A CALLER MAY NAME A VOICE EXACTLY. `src/ai/radio.js` composes a transmission
-   * from what the man actually knows — a bearing, a zone letter, whether he is
-   * indoors — and there is no way to express that through the nine semantic
-   * kinds below. Anything already in `BARKS` passes through untouched.
-   *
-   * This changes nothing for the existing callers: of their kinds only
-   * `grenade`, `copy` and `death` are `BARKS` keys, and each already mapped to
-   * the spec of the same name.
-   */
   if (BARKS[kind]) return kind;
   switch (kind) {
     case 'spot': return rng.float() < 0.5 ? 'contact' : 'spotted';

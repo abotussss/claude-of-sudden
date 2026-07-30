@@ -22,7 +22,7 @@
  * each from what he is standing against.
  */
 import { chromium } from 'playwright';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { PNG } from 'pngjs';
 
 const args = Object.fromEntries(
@@ -255,8 +255,22 @@ const fmt = (c) => c ? `${c.r.toFixed(0)}/${c.g.toFixed(0)}/${c.b.toFixed(0)}` :
 
 const report = [];
 /* Both lanes against one frozen level, before a single screenshot is taken. */
-const lanes = {};
+/**
+ * PINNED, so a before/after pair is the same two places. The level is not the
+ * same object twice: the match calls airstrikes while the harness is working and
+ * the rubble becomes collision, so a lane found in run A can be blocked in run B
+ * and the search silently answers with a different street. The first run writes
+ * the two lanes to `lanes.json` and every later run reuses them; `--relane`
+ * forces a fresh search.
+ */
+const LANEFILE = `${DIR}/lanes.json`;
+let lanes = {};
+if (!args.relane && existsSync(LANEFILE)) {
+  lanes = JSON.parse(readFileSync(LANEFILE, 'utf8'));
+  console.log('[teamread] lanes pinned from', LANEFILE);
+}
 for (const want of ['sun', 'shade']) {
+  if (lanes[want]) continue;
   /**
    * STRICT FIRST, THEN WITHOUT THE BACKDROP TEST. Seventy metres of continuously
    * shadowed street with a clear head-height sightline AND a building behind
@@ -269,6 +283,7 @@ for (const want of ['sun', 'shade']) {
   lanes[want] = await page.evaluate(([w, d, s]) => window.__FINDLANE__(w, d, s, false), [want, DIST, 1.0]);
   if (lanes[want]) lanes[want].strict = false;
 }
+if (lanes.sun && lanes.shade) writeFileSync(LANEFILE, JSON.stringify(lanes, null, 1));
 for (const want of ['sun', 'shade']) {
   const lane = lanes[want];
   if (!lane) { console.log(`[teamread] NO ${want.toUpperCase()} LANE FOUND`); continue; }
