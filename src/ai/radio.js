@@ -465,8 +465,7 @@ export class Radio {
        * FRIENDLY IS THE RADIO, ENEMY IS A MAN IN THE STREET. @see the header.
        * `bark` with a null position plays dry (head-locked); with one it goes
        * through the spatial field with the propagation delay and the occlusion.
-       */
-      /**
+       *
        * `force` SKIPS `audio.bark`'S OWN 0.42 s MUSH GUARD, and this is the one
        * place in the codebase entitled to. MEASURED, first live run of
        * `src/ai/radiocheck.mjs`: 60 % of transmissions came back false, and the
