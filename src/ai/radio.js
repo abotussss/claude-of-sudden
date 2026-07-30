@@ -36,7 +36,13 @@
  *                   contact, 6.0 s while it is not. This is what makes the
  *                   traffic thin out when nothing is happening, and it is a
  *                   property of the SIDE, so a quiet defence does not have to
- *                   share a budget with a firefight on the other half of the map
+ *                   share a budget with a firefight on the other half of the
+ *                   map. A NET IS A SQUAD here and not an approximation of one:
+ *                   `MatchSystem` builds exactly one `Squad` per team
+ *                   (`this._squads[team]`), so `nets[team]` and `ai.squads[i]`
+ *                   are the same fifteen men. Keyed on the team rather than on
+ *                   the `Squad` object because a squad is rebuilt with the
+ *                   roster and the net's clocks must survive that
  *       per SPEAKER `SPEAKER_GAP` seconds between one man's own transmissions,
  *                   so a single agent in a long firefight cannot become the
  *                   whole net. Answers get a shorter gate: being asked a
