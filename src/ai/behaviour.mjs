@@ -59,13 +59,17 @@ await page.evaluate((scale) => {
     if (bots.length) { m.bomb.giveTo(bots[0]); m._assignObjectives(); }
   });
 
-  const bots = new Map();          // "team:callsign" -> record
+  // Bucketed by ROLE as well as callsign: the sides swap at half time, and
+  // "are the defenders still standing where they were put" is a question about
+  // the role, not about the team.
+  const bots = new Map();          // "role:team:callsign" -> record
   const rec = (a) => {
-    const key = `${a.team}:${a.name}`;
+    const key = `${a.role}:${a.team}:${a.name}`;
     let r = bots.get(key);
     if (!r) {
-      r = { name: a.name, team: a.team, dist: 0, shots: 0, live: 0, kills: 0,
-        states: {}, static: 0, atCover: 0, peek: 0, skills: [], traits: null };
+      r = { name: a.name, team: a.team, role: a.role, arch: a.archetype ?? null,
+        dist: 0, shots: 0, live: 0, states: {}, static: 0, atCover: 0, peek: 0,
+        skills: [], traits: null };
       bots.set(key, r);
     }
     return r;
@@ -74,6 +78,31 @@ await page.evaluate((scale) => {
 
   const origFire = ai.onAgentFire.bind(ai);
   ai.onAgentFire = (a, o, d) => { rec(a).shots++; return origFire(a, o, d); };
+
+  // FRAME COST. `aiMs` is the AI subsystem's own time per frame (same wrap as
+  // `aicost.mjs`); `frameMs` is the whole unscaled frame. Sampled only while the
+  // round is live, so what is reported is the cost at a full roster.
+  const perf = { aiMs: [], frameMs: [], actors: 0, actorsMax: 0 };
+  window.__PERF__ = perf;
+  let acc = 0;
+  for (const k of ['update', 'lateUpdate']) {
+    const orig = ai[k].bind(ai);
+    ai[k] = (...a) => { const t0 = performance.now(); orig(...a); acc += performance.now() - t0; };
+  }
+  let lastRaw = performance.now();
+  const perfTick = () => {
+    const now = performance.now();
+    if (m.phase === 'live') {
+      perf.aiMs.push(acc);
+      perf.frameMs.push(now - lastRaw);
+      perf.actors = ai.stats.alive;
+      if (ai.stats.alive > perf.actorsMax) perf.actorsMax = ai.stats.alive;
+    }
+    acc = 0;
+    lastRaw = now;
+    requestAnimationFrame(perfTick);
+  };
+  requestAnimationFrame(perfTick);
 
   let last = e.time.elapsed;
   const tick = () => {
@@ -116,7 +145,7 @@ const out = await page.evaluate(() => {
   return {
     live: +b.live.toFixed(1), rounds: b.rounds, deaths: b.deaths,
     bots: [...b.bots.values()].map((r) => ({ ...r, live: +r.live.toFixed(1) })),
-    frameMs: +(window.__ENGINE__.time.dt / window.__ENGINE__.time.scale * 1000).toFixed(2),
+    perf: window.__PERF__,
   };
 });
 await browser.close();
@@ -135,8 +164,9 @@ const stat = (v) => {
     max: +s[s.length - 1]?.toFixed(1), cv: cv(v) };
 };
 
-const side = (team) => {
-  const rows = out.bots.filter((r) => r.team === team && r.live > 8);
+const side = (which) => {
+  const rows = out.bots.filter((r) =>
+    (which === 'attack' || which === 'defend' ? r.role === which : r.team === which) && r.live > 20);
   const perMin = rows.map((r) => (r.dist / r.live) * 60);
   const shotsMin = rows.map((r) => (r.shots / r.live) * 60);
   const staticFrac = rows.map((r) => (r.static / r.live) * 100);
@@ -147,12 +177,15 @@ const side = (team) => {
   for (const k of Object.keys(states).sort((a, b) => states[b] - states[a])) {
     pct[k] = +((states[k] / live) * 100).toFixed(1);
   }
+  // Rounds a minute this side put in the air, over LIVE round time — not over
+  // actor-time, which is fifteen times larger.
+  const shots = rows.reduce((a, r) => a + r.shots, 0);
   return {
     bots: rows.length,
     actorMinutes: +(live / 60).toFixed(1),
     metresPerBotPerMin: stat(perMin),
     shotsPerBotPerMin: stat(shotsMin),
-    shotsPerMinTotal: +((rows.reduce((a, r) => a + r.shots, 0) / live) * 60 * rows.length).toFixed(0),
+    shotsPerMinOfRound: +((shots / out.live) * 60).toFixed(0),
     staticPctOfTime: stat(staticFrac),
     atCoverPct: +((rows.reduce((a, r) => a + r.atCover, 0) / live) * 100).toFixed(1),
     peekPct: +((rows.reduce((a, r) => a + r.peek, 0) / live) * 100).toFixed(1),
@@ -160,17 +193,26 @@ const side = (team) => {
   };
 };
 
+const pct = (v, p) => (v.length ? +v.slice().sort((a, b) => a - b)[Math.min(v.length - 1, Math.floor(v.length * p))].toFixed(2) : NaN);
+const cost = (v) => ({
+  n: v.length,
+  mean: v.length ? +(v.reduce((a, x) => a + x, 0) / v.length).toFixed(2) : NaN,
+  p50: pct(v, 0.5), p95: pct(v, 0.95), p99: pct(v, 0.99),
+});
+
 console.log(JSON.stringify({
   label: LABEL,
   liveSeconds: out.live, rounds: out.rounds, deaths: out.deaths,
+  perf: { actorsAtEnd: out.perf.actors, actorsMax: out.perf.actorsMax, aiMs: cost(out.perf.aiMs), frameMs: cost(out.perf.frameMs) },
+  attack: side('attack'), defend: side('defend'),
   team0: side(0), team1: side(1),
-  perBot: out.bots.filter((r) => r.live > 8).map((r) => ({
-    t: r.team, name: r.name, skill: r.skills[0],
+  perBot: out.bots.filter((r) => r.live > 20).map((r) => ({
+    t: r.team, role: r.role, arch: r.arch, name: r.name, skill: r.skills[0],
     mPerMin: +((r.dist / r.live) * 60).toFixed(0),
     shotsPerMin: +((r.shots / r.live) * 60).toFixed(0),
     staticPct: +((r.static / r.live) * 100).toFixed(0),
     live: r.live,
     traits: r.traits,
-  })).sort((a, b) => a.t - b.t || b.mPerMin - a.mPerMin),
+  })).sort((a, b) => String(a.role).localeCompare(String(b.role)) || b.mPerMin - a.mPerMin),
   errors: errors.slice(0, 6),
 }, null, 2));
