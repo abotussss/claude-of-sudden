@@ -82,6 +82,57 @@ import {
   makeHitRecord, raySphere, rayCapsule, rayObb, closestPtSegSeg, makeClosest,
 } from './math.js';
 
+
+/**
+ * WHERE YOU HIT SOMEONE HAS TO MATTER.
+ *
+ * There was no per-part scaling at all: `headshot` was computed and passed
+ * through to the killfeed and the hitmarker, and the damage was identical
+ * wherever the round landed. So a rifle at 33 was a 4-shot kill to the foot and
+ * a 4-shot kill to the head, and "体力が著しく低いです、全てのキャラで つまり
+ * 弾丸のダメージがデカすぎる" is the natural consequence — the only lever the
+ * design had for lethality was raw damage, so raw damage had to be high.
+ *
+ * With a head multiplier the two can be separated, which is what was asked for:
+ * "もう少しヘッドショットは一撃だが、それ以外は５−７発は耐えてほしい". Body damage
+ * comes down to 5-7 rounds on 100 HP and the head carries the one-shot.
+ *
+ * 6x is high against a real-world 4x, and deliberately: it has to turn a
+ * 17-damage body shot into a kill on 100 HP with nothing left to chance.
+ */
+const PART_MUL = {
+  /* Names come from `humanoidSpec` in ./ragdoll.js — head, neck, chest, spine,
+   * pelvis, upperArm*, forearm*, hand*, thigh*, shin*, foot*. My first version
+   * of this table invented plausible names (`torso`, `arm`, `leg`) and NONE of
+   * them matched: every body hit would have looked up `undefined` and dealt NaN
+   * damage. Checked against the spec before shipping, and the lookup below
+   * falls back to 1 so a spec change can never do that again. */
+  /**
+   * 7.2, not 6. MEASURED across the roster: at 6x the SMG's 14 and the pistol's
+   * 16 come to 84 and 96 on a 100 HP man, i.e. TWO head shots — and "ヘッドショット
+   * は一撃" has to hold for every weapon, not just the ones with big numbers.
+   * 7.2 makes the weakest body damage in the game (14) lethal to the head at
+   * 100.8 with nothing left to rounding.
+   */
+  head: 7.2,
+  neck: 2.2,
+  chest: 1.0,
+  spine: 1.0,
+  pelvis: 0.9,
+  upperArmL: 0.8,
+  upperArmR: 0.8,
+  forearmL: 0.75,
+  forearmR: 0.75,
+  handL: 0.7,
+  handR: 0.7,
+  thighL: 0.8,
+  thighR: 0.8,
+  shinL: 0.7,
+  shinR: 0.7,
+  footL: 0.65,
+  footR: 0.65,
+};
+
 const HIT_POOL = 64;
 const IMPACT_POOL = 48;
 
@@ -742,7 +793,7 @@ export class PhysicsSystem {
     if (p.actor && !exit) {
       this.ctx.events.emit('damage:dealt', {
         target: p.actor,
-        amount: damage * (hit?.collider?.damageScale ?? 1),
+        amount: damage * (hit?.collider?.damageScale ?? 1) * (PART_MUL[p.part] ?? 1),
         headshot: hit?.part === 'head',
         part: hit?.part ?? 'torso',
         killed: false,

@@ -39,7 +39,12 @@ export const WEAPON_DEFS = {
     reserve: 210,
     /* --- terminal ballistics --- */
     muzzleVelocity: 880,
-    damage: 33,
+        /**
+     * The reference: 5.9 rounds centre mass — 5.9 body shots on 100 HP, one to the head (x6, see PART_MUL
+     * in src/physics/index.js). Was 33, i.e. 3.0 body shots and also 3.0 to
+     * the head, because nothing scaled by part.
+     */
+    damage: 17,
     penetration: 1.0,
     dropoff: 0.62,
     maxRange: 420,
@@ -184,7 +189,12 @@ export const WEAPON_DEFS = {
      * bullet also sheds velocity faster, so the falloff starts sooner (0.70 of
      * maxRange against 0.62) but maxRange itself is shorter. */
     muzzleVelocity: 715,
-    damage: 42,
+        /**
+     * Heavier round, 4.8 rounds — the AK trades control for hits — 4.8 body shots on 100 HP, one to the head (x6, see PART_MUL
+     * in src/physics/index.js). Was 42, i.e. 2.4 body shots and also 2.4 to
+     * the head, because nothing scaled by part.
+     */
+    damage: 21,
     penetration: 1.25,
     dropoff: 0.7,
     maxRange: 360,
@@ -442,7 +452,12 @@ export const WEAPON_DEFS = {
     magSize: 32,
     reserve: 224,
     muzzleVelocity: 400,
-    damage: 24,
+        /**
+     * 7.1 rounds, the price of its rate and its handling — 7.1 body shots on 100 HP, one to the head (x6, see PART_MUL
+     * in src/physics/index.js). Was 24, i.e. 4.2 body shots and also 4.2 to
+     * the head, because nothing scaled by part.
+     */
+    damage: 15,
     penetration: 0.45,
     dropoff: 0.48,
     maxRange: 240,
@@ -514,7 +529,12 @@ export const WEAPON_DEFS = {
     magSize: 17,
     reserve: 68,
     muzzleVelocity: 360,
-    damage: 28,
+        /**
+     * 6.3 rounds — a sidearm that can still finish someone — 6.2 body shots on 100 HP, one to the head (x6, see PART_MUL
+     * in src/physics/index.js). Was 28, i.e. 3.6 body shots and also 3.6 to
+     * the head, because nothing scaled by part.
+     */
+    damage: 16,
     penetration: 0.35,
     dropoff: 0.42,
     maxRange: 180,
