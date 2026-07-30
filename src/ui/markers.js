@@ -76,6 +76,29 @@ function nadeGlyph(parent) {
 }
 
 /**
+ * The impact reticle: a bracketed cross on the point that is about to stop
+ * existing. Deliberately NOT the grenade glyph — a grenade is a thing you look
+ * for on the floor, a strike is an AREA you have to not be in, and the two
+ * calling for different actions have to look different.
+ */
+function airGlyph(parent) {
+  const s = svg('svg', { viewBox: '0 0 24 24' }, parent);
+  svg(
+    'path',
+    {
+      d: 'M12 2.4V8.4M12 15.6v6M2.4 12h6M15.6 12h6',
+      stroke: 'currentColor',
+      'stroke-width': 2.1,
+      'stroke-linecap': 'butt',
+      fill: 'none',
+    },
+    s
+  );
+  svg('circle', { cx: 12, cy: 12, r: 2.6, fill: 'currentColor' }, s);
+  return s;
+}
+
+/**
  * Everything anchored to a world position: objective markers with distance,
  * grenade danger indicators, and floating damage numbers.
  *
@@ -117,6 +140,30 @@ export class WorldMarkers {
         nadeGlyph(core);
         const label = el('div', 'ow-nade-label', node, 'GRENADE');
         node._ring = ring;
+        node._label = label;
+        node._pos = new THREE.Vector3();
+        return node;
+      },
+      this.objRoot
+    );
+
+    /**
+     * INCOMING AIR. Eight, because a salvo marks three impact points and a
+     * bomber stick or a strafing line marks three or four along its axis, and
+     * two events can be in the air across a round reset.
+     */
+    this.airPool = new Pool(
+      8,
+      () => {
+        const node = el('div', 'ow-air');
+        const ring = el('div', 'ow-air-ring', node);
+        const core = el('div', 'ow-air-core', node);
+        airGlyph(core);
+        const chev = chevron(el('div', 'ow-air-chev', node));
+        const label = el('div', 'ow-air-label', node, 'INCOMING');
+        node._ring = ring;
+        node._core = core;
+        node._chev = chev.parentNode;
         node._label = label;
         node._pos = new THREE.Vector3();
         return node;
@@ -219,6 +266,70 @@ export class WorldMarkers {
     }
   }
 
+  /**
+   * A POINT THAT IS ABOUT TO BE HIT FROM THE AIR.
+   *
+   * The whole complaint this answers is that an airstrike was indistinguishable
+   * from nothing happening: the telegraph is 4.4 s of jet and whistle, and a
+   * sound with no direction on a 114x141 m map tells you nothing you can act on.
+   * So the impact point is drawn in the world for the length of the telegraph
+   * with a ring that CONTRACTS onto it — a converging ring reads as something
+   * arriving, an expanding one reads as something that already went off — and
+   * with an edge chevron when it is behind you, so "get out of that area" is
+   * legible from any facing.
+   *
+   * @param {THREE.Vector3} position where it lands
+   * @param {number} life  seconds of telegraph left
+   * @param {string} label short read: 'AIRSTRIKE', 'BOMBS', 'CANNON'
+   */
+  spawnDanger(position, life = 4.4, label = 'INCOMING') {
+    const it = this.airPool.acquire();
+    it.life = Math.max(0.35, life);
+    it.node._pos.copy(position);
+    // `s` is the Pool record's own string slot — the label is re-written every
+    // frame (it changes to CLEAR THE AREA up close) so it is kept, not applied.
+    it.s = label;
+    return it;
+  }
+
+  updateDanger(dt, camera, w, h, k) {
+    const items = this.airPool.items;
+    const margin = 62 * k;
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (!it.alive) continue;
+      it.t += dt;
+      // Held for a beat past the impact, so the marker is still on the thing
+      // that just went off rather than vanishing on the frame it matters most.
+      if (it.t >= it.life + 0.85) {
+        this.airPool.release(it);
+        continue;
+      }
+      const node = it.node;
+      const p = project(node._pos, camera, w, h, margin);
+      setStyle(node, 'transform', `translate(${p.x.toFixed(1)}px,${p.y.toFixed(1)}px)`);
+      const edge = p.offscreen;
+      setStyle(node._core, 'display', edge ? 'none' : '');
+      setStyle(node._chev, 'display', edge ? '' : 'none');
+      setStyle(node._ring, 'display', edge ? 'none' : '');
+      if (edge) setStyle(node._chev, 'transform', `rotate(${p.angle.toFixed(1)}deg)`);
+      const u = clamp01(it.t / it.life);
+      // Two rings' worth of travel over the telegraph, each one converging from
+      // 3.4x onto the point. The rate doubles in the last third.
+      const rate = u < 0.66 ? 1.1 : 2.2;
+      const ph = (it.t * rate) % 1;
+      const rs = 3.4 - 2.4 * ease.outCubic(ph);
+      setStyle(node._ring, 'transform', `scale(${rs.toFixed(3)})`);
+      setStyle(node._ring, 'opacity', (0.28 + 0.62 * ph).toFixed(3));
+      setClass(node, 'close', p.dist < 22);
+      setText(node._label, p.dist < 22 ? 'CLEAR THE AREA' : it.s || 'INCOMING');
+      // Fade in fast, then out over the post-impact beat.
+      const a =
+        it.t > it.life ? clamp01(1 - (it.t - it.life) / 0.85) : clamp01(it.t / 0.14);
+      setStyle(node, 'opacity', (a * (edge ? 0.85 : 1)).toFixed(3));
+    }
+  }
+
   /** @param {'hit'|'hs'|'kill'|'armour'} kind */
   spawnDamage(position, amount, kind = 'hit') {
     const it = this.dnPool.acquire();
@@ -265,7 +376,15 @@ export class WorldMarkers {
 
   clear() {
     this.nadePool.releaseAll();
+    this.airPool.releaseAll();
     this.dnPool.releaseAll();
+  }
+
+  /** How many air-danger markers are live. For the HUD's own harnesses. */
+  get dangerCount() {
+    let n = 0;
+    for (const it of this.airPool.items) if (it.alive) n++;
+    return n;
   }
 
   dispose() {

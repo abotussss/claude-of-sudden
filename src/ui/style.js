@@ -528,6 +528,43 @@ const CSS = `
   text-shadow: var(--sh);
 }
 
+/* ---------------------------------------------------- incoming air (world)
+   The impact reticle for an airstrike / bomb stick / cannon line. Bigger and
+   colder than the grenade indicator on purpose: a grenade is a thing on the
+   floor near you, this is an AREA to leave, and it has to be readable at 90 m.
+   `.close` (inside 22 m) goes to full red and gains a seat, because at that
+   range the marker is no longer information, it is an instruction. */
+.ow-air { position:absolute; left:0; top:0; color:#ff6a52; will-change: transform, opacity; }
+.ow-air-ring {
+  position:absolute; left:50%; top:50%;
+  width:calc(26px * var(--k)); height:calc(26px * var(--k));
+  margin:calc(-13px * var(--k)) 0 0 calc(-13px * var(--k));
+  border: calc(1.6px * var(--k)) solid currentColor; border-radius:50%;
+  box-shadow: 0 0 calc(3px * var(--k)) rgba(0,0,0,.75);
+  will-change: transform, opacity;
+}
+.ow-air-core {
+  position:absolute; left:50%; top:50%;
+  width:calc(30px * var(--k)); height:calc(30px * var(--k));
+  margin:calc(-15px * var(--k)) 0 0 calc(-15px * var(--k));
+}
+.ow-air-core svg { width:100%; height:100%; display:block;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.95)); }
+.ow-air-chev {
+  position:absolute; left:50%; top:50%;
+  width:calc(22px * var(--k)); height:calc(22px * var(--k));
+  margin:calc(-11px * var(--k)) 0 0 calc(-11px * var(--k));
+}
+.ow-air-chev svg { width:100%; height:100%; display:block; overflow:visible;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.9)); }
+.ow-air-label {
+  position:absolute; left:50%; top:calc(19px * var(--k)); transform:translateX(-50%);
+  font-size: calc(9.5px * var(--k)); letter-spacing:.24em; font-weight:700;
+  color: currentColor; white-space:nowrap; text-shadow: var(--sh-o1);
+}
+.ow-air.close { color: var(--red); }
+.ow-air.close .ow-air-label { font-size: calc(11px * var(--k)); }
+
 /* ======================================================== damage numbers */
 .ow-dn {
   position:absolute; left:0; top:0; font-family: var(--fd);
@@ -596,6 +633,56 @@ const CSS = `
   margin: calc(var(--u) * 1.4) auto 0; width: calc(120px * var(--k)); height:1px;
   background: linear-gradient(to right, transparent, rgba(255,255,255,.5), transparent);
 }
+
+/* =========================================================== incoming air
+   The strip, top centre, under the round line. It is the only element in the
+   HUD with a hard red rule and a solid seat: everything else in this sheet is
+   information you read when you choose to, and this is information that has
+   four seconds to change what you are doing. Sits at 128px @1080p, clear of
+   .ow-round (72px + type) and well above the crosshair. */
+.ow-aa {
+  position:absolute; left:50%; top: calc(var(--pad) * .7 + 106px * var(--k));
+  transform: translateX(-50%);
+  display:flex; align-items:center; gap: calc(var(--u) * 2.2);
+  padding: calc(var(--u) * 1.4) calc(var(--u) * 3.4) calc(var(--u) * 1.4) calc(var(--u) * 2.4);
+  background: linear-gradient(180deg, rgba(26,6,4,.56), rgba(10,4,4,.40));
+  border-left: calc(2.5px * var(--k)) solid var(--red);
+  box-shadow: 0 calc(2px * var(--k)) calc(14px * var(--k)) rgba(0,0,0,.55);
+  will-change: opacity, transform;
+}
+.ow-aa-arrow {
+  width: calc(22px * var(--k)); height: calc(22px * var(--k));
+  color: var(--red); flex: 0 0 auto;
+  will-change: transform;
+}
+.ow-aa-arrow svg { width:100%; height:100%; display:block;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.9)); }
+.ow-aa-col { min-width: calc(186px * var(--k)); }
+.ow-aa-t {
+  font-family: var(--fd);
+  font-size: calc(18px * var(--k)); letter-spacing:.22em; font-weight:700;
+  color: #ffd9cf; text-shadow: var(--sh-o1);
+}
+.ow-aa-s {
+  margin-top: calc(var(--u) * .4);
+  font-size: calc(10px * var(--k)); letter-spacing:.22em;
+  color: var(--ink-2); text-shadow: var(--sh);
+}
+.ow-aa-bar {
+  margin-top: calc(var(--u) * 1.1);
+  height: calc(2px * var(--k)); background: rgba(255,255,255,.16);
+}
+.ow-aa-bar > i {
+  display:block; height:100%; width:100%; background: var(--red);
+  transform-origin:left; transform:scaleX(1);
+}
+/* The salvo is a different weapon and says so: amber rule, wider type. */
+.ow-aa.salvo { border-left-color: var(--amber);
+  background: linear-gradient(180deg, rgba(34,18,2,.58), rgba(12,7,2,.42)); }
+.ow-aa.salvo .ow-aa-t { color: #ffe6bd; letter-spacing:.3em; }
+.ow-aa.salvo .ow-aa-arrow { color: var(--amber); }
+.ow-aa.salvo .ow-aa-bar > i { background: var(--amber); }
+.ow-aa.landed .ow-aa-t { color: #fff; }
 
 /* ================================================================== menu */
 .ow-menu {

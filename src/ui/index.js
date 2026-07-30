@@ -11,6 +11,7 @@ import { Compass, MatchBar } from './compass.js';
 import { Minimap } from './minimap.js';
 import { WorldMarkers } from './markers.js';
 import { Prompt, Banner } from './prompts.js';
+import { AirAlert } from './airalert.js';
 import { PauseMenu } from './menu.js';
 import { ScopeOverlay } from './scope.js';
 import { RoundStrip, BombPanel, Scoreboard, SpectateBar } from './round.js';
@@ -41,6 +42,17 @@ const MAX_BLIPS = 48;
  *   ui.setObjectives([{position,label,name}])
  *   ui.setBlips([{x,z,kind:'enemy'|'friend',heading}])
  *   ui.spawnGrenade(worldPos, fuse)
+ *   ui.airAlert({kind,title,impactTitle,name,x,y,z,lead})
+ *                                       INCOMING AIR. One call when a strike is
+ *                                       CALLED; the strip runs its own clock,
+ *                                       points an arrow at the impact in the
+ *                                       player's frame and puts itself away.
+ *                                       See src/ui/airalert.js for why the
+ *                                       banner alone was not enough.
+ *   ui.airImpact(title)                 it went off; switch the strip's read
+ *   ui.clearAirAlert()
+ *   ui.airDanger(worldPos, life, label) world-space impact reticle, one per
+ *                                       point, for the length of the telegraph
  *   ui.setMatch({scoreUs,scoreThem,timeLeft,mode})
  *   ui.setRound(state)                  the demolition HUD: alive counts, phase,
  *                                       C4 fuse, scoreboard. See src/match.
@@ -102,6 +114,8 @@ export class UiSystem {
     this.ammo = new AmmoPanel(this.chromeLayer);
     this.prompt = new Prompt(this.chromeLayer);
     this.banner = new Banner(this.chromeLayer);
+    /** Incoming air. Inert until `match` calls airAlert(). */
+    this.airAlertStrip = new AirAlert(this.chromeLayer);
     // Demolition-mode HUD. Inert until `match` calls setRound().
     this.roundStrip = new RoundStrip(this.chromeLayer);
     this.bombPanel = new BombPanel(this.chromeLayer);
@@ -391,6 +405,36 @@ export class UiSystem {
     this.sfx('grenade_warn', 0.6);
   }
 
+  /**
+   * INCOMING AIR — announce it. See the header of src/ui/airalert.js: the air
+   * events have always fired and the player has never been told, which from the
+   * seat is the same thing as them not happening.
+   *
+   * @param {object} a { kind, title, impactTitle, name, x, y, z, lead }
+   *                   the caller's own reused object; every field is copied.
+   */
+  airAlert(a) {
+    if (!a) return;
+    this.airAlertStrip.set(a);
+    // The alarm the strip cannot make. Deliberately the grenade warning: it is
+    // the sound this HUD already means "something lethal is on its way" with.
+    this.sfx('grenade_warn', 0.9);
+  }
+
+  airImpact(title) {
+    this.airAlertStrip.impact(title);
+  }
+
+  clearAirAlert() {
+    this.airAlertStrip.clear();
+  }
+
+  /** One world-space impact reticle. `life` is the remaining telegraph. */
+  airDanger(worldPos, life = 4.4, label = 'INCOMING') {
+    if (!worldPos) return;
+    this.markers.spawnDanger(worldPos, life, label);
+  }
+
   setMatch(m) {
     Object.assign(this.state, m);
   }
@@ -576,6 +620,9 @@ export class UiSystem {
     this.matchBar.update(s);
     this.prompt.update(dt);
     this.banner.update(dt);
+    // Fed the heading and the eye, not the camera: the arrow is "turn this way",
+    // which is a bearing difference and nothing to do with projection.
+    this.airAlertStrip.update(dt, heading, pos.x, pos.z);
 
     // ---- demolition HUD --------------------------------------------------
     const r = this.round;
@@ -594,6 +641,7 @@ export class UiSystem {
 
     this.markers.updateObjectives(this._objectives, ctx.camera, this.vw, this.vh, this.k);
     this.markers.updateGrenades(dt, ctx.camera, this.vw, this.vh, this.k);
+    this.markers.updateDanger(dt, ctx.camera, this.vw, this.vh, this.k);
     this.markers.updateDamage(dt, ctx.camera, this.vw, this.vh, this.k);
 
     // ---- minimap ---------------------------------------------------------
@@ -682,6 +730,7 @@ export class UiSystem {
     this.markers.dispose();
     this.prompt.dispose();
     this.banner.dispose();
+    this.airAlertStrip.dispose();
     this.roundStrip.dispose();
     this.bombPanel.dispose();
     this.spectateBar.dispose();
