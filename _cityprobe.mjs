@@ -8,9 +8,12 @@
  *
  *   1. the LONGEST spawn -> zone A* route on the map, which is the number the
  *      distance between A and B is actually bounded by;
- *   2. whether the CATHEDRAL IS VISIBLE from either zone — a real raycast from
- *      eye height at the zone centre to five points up the dome, reporting the
- *      hit distance and the collider that stopped it, not an opinion;
+ *   2. whether the CATHEDRAL IS VISIBLE from either zone — real raycasts from
+ *      eye height, reporting the hit distance and the surface that stopped each
+ *      one rather than an opinion. Two passes: five named points up the section
+ *      from the zone CENTRE, and then 1 600 rays per zone from sixteen stances
+ *      round the capture circle to a lattice over the whole building, because
+ *      five rays from one square metre is not "you cannot see it";
  *   3. that B is still the exact 180-degree rotation image of A about the
  *      cathedral centre, which is the only thing that keeps a mode that never
  *      swaps ends fair.
@@ -85,38 +88,74 @@ const r = await page.evaluate(() => {
   ok.sort((a, b) => b.m - a.m);
 
   /* ---- cathedral visibility -------------------------------------------- */
-  // The cathedral's own centre and section, read off the level rather than
-  // retyped: crossing at level (0, -1) * 1.5, dome crown and tower in metres.
-  const cathL = { x: 0 * 1.5, z: -1 * 1.5 };
-  const cath = world.levelToWorld(cathL.x, 0, cathL.z, new V3());
+  /**
+   * The cathedral's plan and section are read off `world.layout`, not retyped,
+   * so this cannot go stale when the building moves. `CATHEDRAL.w/d/x/z` are
+   * already scaled; the heights in it are metres and never scale.
+   */
+  const C = world.layout.CATHEDRAL;
+  const cath = world.levelToWorld(C.x, 0, C.z, new V3());
   const TARGETS = [
-    ['dome crown', 23.5],
-    ['dome haunch', 19.0],
-    ['nave ridge', 15.0],
-    ['tower', 29.0],
-    ['aisle roof', 7.4],
+    ['campanile', C.towerY],
+    ['dome crown', C.domeY],
+    ['dome haunch', (C.domeY + C.naveY) / 2],
+    ['nave ridge', C.naveY],
+    ['aisle roof', C.aisleY],
   ];
   const EYE = 1.62;
+  const MASK = phys.MASK.WORLD;
   const vis = [];
   const dir = new V3();
+  const shoot = (from, to) => {
+    dir.copy(to).sub(from);
+    const dist = dir.length();
+    dir.multiplyScalar(1 / dist);
+    const h = phys.raycast(from, dir, dist, MASK);
+    return { dist, hit: h.hit, d: h.hit ? h.distance : null, tag: h.hit ? String(h.tag ?? h.surface ?? '?') : null };
+  };
   for (const s of m.sites) {
     for (const [label, y] of TARGETS) {
       const from = new V3(s.position.x, s.position.y + EYE, s.position.z);
-      const to = new V3(cath.x, cath.y + y, cath.z);
-      dir.copy(to).sub(from);
-      const dist = dir.length();
-      dir.multiplyScalar(1 / dist);
-      const h = phys.raycast(from, dir, dist, phys.MASK ? phys.MASK.WORLD : undefined);
+      const r = shoot(from, new V3(cath.x, cath.y + y, cath.z));
       vis.push({
-        zone: s.id,
-        target: label,
-        rangeM: +dist.toFixed(1),
-        clear: !h.hit,
-        hitM: h.hit ? +h.distance.toFixed(1) : null,
-        hitTag: h.hit ? String(h.tag ?? h.name ?? h.surface ?? '?') : null,
-        surface: h.hit ? String(h.surface ?? '?') : null,
+        zone: s.id, target: label, rangeM: +r.dist.toFixed(1), clear: !r.hit,
+        hitM: r.hit ? +r.d.toFixed(1) : null, hitTag: r.tag,
       });
     }
+  }
+  /**
+   * …AND THE SAME QUESTION ASKED OF THE WHOLE BUILDING FROM THE WHOLE CIRCLE.
+   * A capture point is 16 m across and the cathedral is 30 x 45 m of masonry
+   * 23 m tall; five rays from one square metre is not "you cannot see it".
+   * 16 stances around the capture radius x a 5 x 5 x 4 lattice over the
+   * building's bounding box = 1600 rays per zone, every one of them from eye
+   * height, and the answer is how many arrived.
+   */
+  const sweep = [];
+  for (const s of m.sites) {
+    let clear = 0, total = 0, nearest = Infinity, nearestAt = null;
+    for (let a = 0; a < 16; a++) {
+      const th = (a / 16) * Math.PI * 2;
+      const px = s.position.x + Math.cos(th) * s.radius;
+      const pz = s.position.z + Math.sin(th) * s.radius;
+      const gy = ai.groundAt?.(px, pz, 4);
+      const from = new V3(px, (Number.isFinite(gy) ? gy : s.position.y) + EYE, pz);
+      for (let i = 0; i < 5; i++) {
+        for (let j = 0; j < 5; j++) {
+          for (let k = 0; k < 4; k++) {
+            const to = new V3(
+              cath.x + (i / 4 - 0.5) * C.w,
+              cath.y + C.floorY + (k / 3) * C.domeY,
+              cath.z + (j / 4 - 0.5) * C.d
+            );
+            const r = shoot(from, to);
+            total++;
+            if (!r.hit) { clear++; if (r.dist < nearest) { nearest = r.dist; nearestAt = [i, j, k]; } }
+          }
+        }
+      }
+    }
+    sweep.push({ zone: s.id, clear, total, nearest: clear ? +nearest.toFixed(1) : null, nearestAt });
   }
 
   return {
@@ -146,6 +185,7 @@ const r = await page.evaluate(() => {
       };
     }),
     vis,
+    sweep,
     cathWorld: [+cath.x.toFixed(1), +cath.y.toFixed(2), +cath.z.toFixed(1)],
   };
 });
@@ -177,6 +217,9 @@ for (const v of r.vis)
     `  ${v.zone} -> ${v.target.padEnd(12)} ${String(v.rangeM).padStart(6)} m  ` +
       (v.clear ? '*** CLEAR — VISIBLE ***' : `blocked at ${String(v.hitM).padStart(6)} m by ${v.hitTag} [${v.surface}]`)
   );
+console.log('  SWEEP — 16 stances round each circle x a 5x5x4 lattice over the whole building');
+for (const s of r.sweep)
+  console.log(`  ${s.zone}: ${s.clear} of ${s.total} rays arrived` + (s.clear ? ` — NEAREST CLEAR ${s.nearest} m at ${s.nearestAt}` : ' — none'));
 if (errs.length) { console.log('PAGE ERRORS'); for (const e of errs) console.log('  !', e); }
 for (const l of logs) console.log('  |', l);
 await browser.close();
