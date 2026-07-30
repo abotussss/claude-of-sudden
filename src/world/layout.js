@@ -195,6 +195,153 @@ export const RELIEF = {
 };
 
 /**
+ * ────────────────────────────────────────────────────────────────────────────
+ * SITEWORKS — the mass that makes a bomb site a place you can fight over.
+ * ────────────────────────────────────────────────────────────────────────────
+ *
+ * "爆破サイトが剥き出しで、攻撃側有利すぎる" — the sites are BARE and the attack has
+ * far too much advantage. `tools/sitecheck.mjs` was written to answer that and
+ * it agreed, in numbers nothing else in the repo was measuring:
+ *
+ *              cover 0.9-2.8 m inside the plant zone   attacker mouth widths
+ *   site A            10.0 m² of 201  (5.0 %)          15.2 / 12.8 m
+ *   site B            11.0 m² of 201  (5.5 %)          15.6 / 12.8 m
+ *
+ * and its `--map` plan view showed why: both courtyards are a rectangle of dots.
+ * The lorry, the sandbags, the container and the stalls are all pushed out to
+ * the walls, because `KEEPOUT` reserved a 5.1 m circle in the middle of each and
+ * nothing was ever authored in the ring outside it. The middle of a bomb site —
+ * the part both teams have to stand in — was 200 m² of flat gravel.
+ *
+ * Two consequences, and only the second one was ever measured:
+ *
+ *   A PLANT CANNOT BE MADE AND A DEFUSE CANNOT BE CONTESTED. There is nothing
+ *   to break line of sight behind, so planting is standing still for four
+ *   seconds in the open with fifteen men able to see you.
+ *
+ *   ARRIVING FIRST IS WORTHLESS. `navcheck` says the defence gets there 19 m
+ *   ahead. On an empty pan that buys them nothing: five men standing in the open
+ *   are traded out by fifteen whatever order they arrived in. That is the whole
+ *   gap between "defence arrives first by 18.5 m" and "攻撃側有利すぎる".
+ *
+ * So this is the mass that goes in. Three kinds, and the split is a NAVIGATION
+ * split, not a stylistic one — `src/ai/nav.js` is a 2.5D height field and the
+ * plant zone has to stay ground BOTH sides walk, or a planted charge is one no
+ * bot can ever defuse:
+ *
+ *   `wall`    0.9-1.6 m of broken coursed masonry. Chest high to a standing man,
+ *             full cover to a crouching one, and you shoot OVER it. This is the
+ *             cover the plant is made behind. Laid in RUNS WITH GAPS: a
+ *             continuous wall across a courtyard is a wall A* cannot cross, so
+ *             every run leaves openings of 1.3 m or more (2 m once scaled).
+ *   `pier`    2.4-3.4 m of solid single-storey mass, coped. Full cover, and at a
+ *             mouth it is the CHOKEPOINT: a 15 m entry with a pier flush to one
+ *             kerb and a baffle off the other is two 2.4-5 m slots instead of an
+ *             open field. Costly to cross, still crossable — which is the line
+ *             `navcheck` draws and the reason the cross streets got wrecks
+ *             instead of blocks (see the note under BUILDINGS).
+ *   `plinth`  1.0-1.3 m concrete pads either side of the charge. Waist-high mass
+ *             2-3 m off the plant spot, so the man planting is behind something
+ *             and the men retaking it have something to come up behind.
+ *
+ * WHY NOT MORE SET PIECES INSTEAD. `SET_PIECES` tops out at 0.92 m (a jersey
+ * barrier) and a five-course sandbag run measures 0.75 m. `CoverMap.build` in
+ * src/ai/nav.js probes for a blocker at 1.32 m to call a spot STANDING cover, so
+ * everything the dressing pass can place is crouch cover by construction. A site
+ * held only from crouch cover is a site you cannot hold: you have to break cover
+ * to shoot. Hence purpose-built geometry, built by `src/world/sitework.js`.
+ *
+ * AUTHORED AS `{x, z, w, d, h}` in UNSCALED level space, exactly like BUILDINGS:
+ * the centre and the footprint go through the 1.5x transform at the bottom of
+ * this file, `h` does not (a storey is 3.45 m because a man is 1.78 m). A run
+ * authored 0.55 m thick therefore stands 0.83 m thick, and the gap figures in
+ * the comments are the AUTHORED ones — multiply by 1.5 for metres on the ground.
+ *
+ * Re-run `navcheck`, `lanecheck` and `sitecheck` after touching any number here.
+ * Every one of these is on ground A* has to cross.
+ */
+export const SITEWORKS = [
+  // ═══════════════════════════════════════════════════════ SITE A (west) ═══
+  /**
+   * THE NORTH MOUTH — the attack's own lane, and the widest thing on the map
+   * that was not a street. Measured 15.2 m of walkable entry. The gatehouse goes
+   * flush to the west kerb (x -31, which is also BW1's east face, so it reads as
+   * part of the block rather than a lump in a field) and the baffle stands off
+   * the east wall with a 2.4 m slot behind it. What is left to cross is 3.3 m
+   * and 2.4 m authored — 5.0 m and 3.6 m on the ground — offset in Z from each
+   * other, so you cannot see the plant spot through either one until you are in.
+   */
+  { id: 'A north gatehouse', kind: 'pier', x: -29.2, z: 3.2, w: 3.6, d: 3.2, h: 3.2, key: 'plaster_sand' },
+  { id: 'A north baffle', kind: 'wall', x: -23.5, z: 4.2, w: 1.2, d: 2.8, h: 1.6, key: 'brick' },
+  /**
+   * THE CONNECTOR — the flank from the mid street. The blockhouse sits INSIDE
+   * connector 2's west arm, flush to its south kerb (W3's north face at z -8),
+   * not in the courtyard: the flank then has to come round a solid 2.6 m mass
+   * before it can see the site at all, instead of stepping out of an alley with
+   * the plant spot already in its sights. Kept 4.2 m clear of `flankLevel`
+   * (-13, -4.5) so the staging point stays walkable ground.
+   */
+  { id: 'A connector blockhouse', kind: 'pier', x: -18.6, z: -6.8, w: 2.8, d: 2.4, h: 2.6, key: 'concrete' },
+  /**
+   * THE SPINE — the single most important piece here. A broken wall across the
+   * courtyard 2.7 m north of the plant spot, on the attack's line, in two runs:
+   *
+   *   [A-deck step -34..-32 @1.5]  gap 2.0  [Z1 -30..-26.2]  gap 1.6  [Z2 -24.6..-21.8]  gap 1.3
+   *
+   * Z1 covers x -28, which IS the plant spot's line, so the charge is behind
+   * masonry from the north and the man planting it is not standing in the open.
+   * The three gaps are what keeps A* alive through it — and they are the three
+   * doors the defence holds, which is what a chokepoint inside a site is for.
+   */
+  { id: 'A spine west', kind: 'wall', x: -28.1, z: -4.0, w: 3.8, d: 0.55, h: 1.45, key: 'brick' },
+  { id: 'A spine east', kind: 'wall', x: -23.2, z: -4.0, w: 2.8, d: 0.55, h: 1.3, key: 'brick' },
+  /**
+   * THE CHARGE SCREEN — a short run standing along Z between the charge and the
+   * connector mouth, so the flank's angle onto the plant spot is a corner rather
+   * than a corridor. 4.4 m off the charge on the ground.
+   */
+  { id: 'A charge screen', kind: 'wall', x: -24.8, z: -6.7, w: 0.55, d: 2.6, h: 1.3, key: 'plaster_cream' },
+  /**
+   * THE TWO PLINTHS. Both are SOUTH of the charge on purpose: they are the cover
+   * a defender contests the plant from and the cover a retake walks up behind,
+   * and putting them north of it would only have given the attack somewhere to
+   * plant from that the defence cannot clear. 3.2 m and 3.3 m off the centre on
+   * the ground — outside `RULES.defuseRadius` (1.8 m), so three men can still
+   * stand on the charge and cut it.
+   */
+  { id: 'A plinth west', kind: 'plinth', x: -30.2, z: -9.3, w: 1.6, d: 1.4, h: 1.2, key: 'concrete' },
+  { id: 'A plinth south', kind: 'plinth', x: -26.8, z: -9.8, w: 2.0, d: 1.2, h: 1.2, key: 'concrete' },
+  /**
+   * THE RETAKE WALL, in the south lane a metre outside the courtyard. Offset to
+   * the west so it leaves 7.1 m of the defence's own 10.5 m mouth open — the
+   * defence's approach is the one thing on this map that must not be choked, or
+   * arriving first stops being true. Kept 3.6 m clear of `holdLevel` (-24, -12).
+   */
+  { id: 'A retake wall', kind: 'wall', x: -29.1, z: -12.6, w: 3.0, d: 0.55, h: 1.3, key: 'plaster_blue' },
+
+  // ═══════════════════════════════════════════════════════ SITE B (east) ═══
+  /**
+   * The mirror, with two numbers that are NOT mirrored, for the same reason
+   * `flankLevel` is not: the east side's dressing is not the west side's.
+   *   - the baffle is at z 4.2 like A's, but B's courtyard stall sits at
+   *     (24, 1.6) rather than A's (-22.4, -1), so the clearance is checked
+   *     against a different prop;
+   *   - the connector blockhouse is 0.6 m further from the kerb, because the
+   *     jersey barrier at (16.7, -5.5) has no counterpart on the west side and a
+   *     concrete barrier standing inside a blockhouse looks like a bug.
+   */
+  { id: 'B north gatehouse', kind: 'pier', x: 29.2, z: 3.2, w: 3.6, d: 3.2, h: 3.2, key: 'plaster_cream' },
+  { id: 'B north baffle', kind: 'wall', x: 23.5, z: 4.2, w: 1.2, d: 2.8, h: 1.6, key: 'brick' },
+  { id: 'B connector blockhouse', kind: 'pier', x: 18.6, z: -6.8, w: 2.8, d: 2.4, h: 2.6, key: 'concrete' },
+  { id: 'B spine east', kind: 'wall', x: 28.1, z: -4.0, w: 3.8, d: 0.55, h: 1.45, key: 'brick' },
+  { id: 'B spine west', kind: 'wall', x: 23.2, z: -4.0, w: 2.8, d: 0.55, h: 1.3, key: 'brick' },
+  { id: 'B charge screen', kind: 'wall', x: 24.8, z: -6.7, w: 0.55, d: 2.6, h: 1.3, key: 'plaster_cream' },
+  { id: 'B plinth east', kind: 'plinth', x: 30.2, z: -9.3, w: 1.6, d: 1.4, h: 1.2, key: 'concrete' },
+  { id: 'B plinth south', kind: 'plinth', x: 26.8, z: -9.8, w: 2.0, d: 1.2, h: 1.2, key: 'concrete' },
+  { id: 'B retake wall', kind: 'wall', x: 29.1, z: -12.6, w: 3.0, d: 0.55, h: 1.3, key: 'plaster_pink' },
+];
+
+/**
  * GROUND THAT MUST STAY WALKABLE — [x, z, radius] in level space.
  *
  * This is not a style rule, it is a nav rule, and it cost two debugging runs to
@@ -214,9 +361,34 @@ export const RELIEF = {
  * That is deliberate: `world` may not import `match`. If a site moves, move it
  * here too.
  */
+/**
+ * THESE FOUR WERE STALE, AND IT IS WHY THE SITES WERE BARE.
+ *
+ * Commit "The plant zone moves onto the defence's half of the courtyard" moved
+ * `SITES[].level` from (-28, -4) / (28.4, -3.6) to (-28, -7) / (28, -7) and
+ * `holdLevel` from (-26, -9.8) / (26.4, -9.4) to (-24, -12) / (24, -12). The
+ * note two paragraphs up says IF A SITE MOVES, MOVE IT HERE TOO, and it was not
+ * done, so for four commits this list has been reserving flat ground 4.5 m north
+ * of the real plant circle and 4.5 m north-west of the real hold. Both halves of
+ * that are wrong in a way no gate could see:
+ *
+ *   - the ground that actually needs protecting — the cell the site resolve ray
+ *     lands on, and the disc three men have to stand in to defuse — was NOT on
+ *     the list, so one reroll of the dressing dice could have put a crate on it;
+ *   - a 5.1 m circle was being held empty in the middle of each courtyard for no
+ *     reason at all, which is a large part of why the middle of each courtyard
+ *     WAS 200 m² of nothing.
+ *
+ * So: the real centres, and the radius cut from 3.4 to 2.2 authored (5.1 m to
+ * 3.3 m on the ground). 3.3 m is what the job actually needs — it clears the
+ * resolve ray, and it is comfortably outside `RULES.defuseRadius` (1.8 m) so the
+ * defuse crew of three still has flat ground under it. Everything from 3.3 m out
+ * is now ground the dressing pass and `SITEWORKS` are allowed to put mass on,
+ * which is the whole point.
+ */
 export const KEEPOUT = [
-  [-28.0, -4.0, 3.4], // site A plant area
-  [28.4, -3.6, 3.4], // site B plant area
+  [-28.0, -7.0, 2.2], // site A plant area
+  [28.0, -7.0, 2.2], // site B plant area
   /**
    * The two HOLD points, and they belong on this list for exactly the reason
    * the site centres do. `navcheck` proves that every defender can reach the
@@ -227,8 +399,8 @@ export const KEEPOUT = [
    * `SITES[].holdLevel` in src/match/sites.js for the same reason the centres
    * are: `world` may not import `match`. If one moves, move the other.
    */
-  [-26.0, -9.8, 3.0], // site A hold
-  [26.4, -9.4, 3.0], // site B hold
+  [-24.0, -12.0, 2.2], // site A hold
+  [24.0, -12.0, 2.2], // site B hold
   /**
    * The spawn pockets. Radius 6 covered a seven-man cluster spread over 8 m of
    * z; both clusters are fifteen men over 10.4 m now, and at 1.5x that is 15.6
@@ -1195,6 +1367,10 @@ for (const d of RELIEF.decks) scRect(d.rect);           // `y` is a height: left
 for (const b of RELIEF.blocks) scRect(b.rect);          // `h` is the mantle ladder: left
 
 for (const k of KEEPOUT) { k[0] *= S; k[1] *= S; k[2] *= S; }
+
+// Centre and footprint scale exactly as a BUILDING's do; `h` is a height and
+// does not. See the long note over SITEWORKS.
+for (const p of SITEWORKS) { p.x *= S; p.z *= S; p.w *= S; p.d *= S; }
 
 for (const b of BUILDINGS) {
   b.x *= S; b.z *= S; b.w *= S; b.d *= S;

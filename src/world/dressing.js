@@ -29,6 +29,7 @@ import {
 } from './util.js';
 import { STREET, ALLEYS, BUILDINGS, SET_PIECES, GATE, KEEPOUT, SCALE } from './layout.js';
 import { reliefY, inRelief } from './relief.js';
+import { inSitework } from './sitework.js';
 
 /**
  * WORLD — set dressing.
@@ -151,6 +152,13 @@ export function isOpen(x, z, m = 0.3) {
    * through it, and one dropped on a container floats a metre and a half up.
    */
   if (inRelief(x, z, m)) return false;
+  /**
+   * Nor is the inside of a bomb site's pier, spine wall or plinth. Same failure
+   * as above with a different cause: `SITEWORKS` is authored ON ground the
+   * dressing pass considers open, so without this a market stall gets pitched
+   * inside the north gatehouse and a rubble mound gets poured through the spine.
+   */
+  if (inSitework(x, z, m)) return false;
   if (Math.abs(x) < STREET.kerb - 0.1 && z > STREET.zMin && z < STREET.zMax) return true;
   for (const a of ALLEYS) {
     const [x0, z0, x1, z1] = a.rect;

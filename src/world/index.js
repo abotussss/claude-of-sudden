@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { Assembler } from './builder.js';
-import { BUILDINGS, STREET, SET_PIECES, GATE, SCALE } from './layout.js';
+import { BUILDINGS, STREET, SET_PIECES, GATE, SCALE, RELIEF, ALLEYS } from './layout.js';
 import { buildGround } from './ground.js';
 import { buildBuilding, collapseRoof } from './buildings.js';
 import { buildRelief } from './relief.js';
+import { buildSiteWorks } from './sitework.js';
 import { registerProps } from './props.js';
 import {
   registerDressingProps,
@@ -138,6 +139,10 @@ export class WorldSystem {
     // Height goes in BEFORE the dressing, because `groundY` reads it and every
     // scattered prop, stain and skirt is placed off `groundY`.
     buildRelief(A, rng);
+    // …and the site works with it, for the same reason: `isOpen` consults
+    // `inSitework` before the dressing pass drops anything, so a crate cannot be
+    // scattered inside a pier.
+    buildSiteWorks(A, rng);
     dressStreet(A, rng);
     dressBuildings(A, rng, infos);
     scatterDebris(A, rng);
@@ -177,8 +182,13 @@ export class WorldSystem {
      * and prove you can actually get inside; `navcheck` cannot tell, because it
      * tests the BOT height field and that has no opinion about whether a doorway
      * fits the player or whether a prop was dressed across it.
+     *
+     * `RELIEF` and `ALLEYS` are here for `tools/sitecheck.mjs`: it has to know
+     * where the authored overwatch decks are in order to say whether they see
+     * the plant spot, and where each courtyard's rect is in order to find that
+     * courtyard's entry mouths by walking its boundary.
      */
-    this.layout = { BUILDINGS, STREET, SET_PIECES, GATE, SCALE };
+    this.layout = { BUILDINGS, STREET, SET_PIECES, GATE, SCALE, RELIEF, ALLEYS };
 
     const ms = performance.now() - t0;
     console.info(
