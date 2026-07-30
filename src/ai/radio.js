@@ -173,13 +173,29 @@ const TTL = {
 /** Which of the composed voices answers which call. @see src/audio/vox.js */
 const ACK_VOICES = ['roger', 'copy', 'setpos'];
 
-/** Zone id -> the phonetic word the composed voices are named after. */
-const ZONE_WORD = { A: 'alpha', B: 'bravo', C: 'charlie' };
+/**
+ * Zone id -> the two composed voices for it. DOMINATION's zones are A / C / B
+ * (`src/match/capture.js`), which map onto the phonetic words the specs in
+ * `src/audio/vox.js` are named after. A table rather than a template literal
+ * for the same reason as `BEARING_VOICE`, and because an id that is not one of
+ * the three must produce nothing rather than a voice that does not exist.
+ */
+const ZONE_VOICE = {
+  A: { secured: 'secured_alpha', lost: 'lost_alpha' },
+  B: { secured: 'secured_bravo', lost: 'lost_bravo' },
+  C: { secured: 'secured_charlie', lost: 'lost_charlie' },
+};
 
-/** Eight-point compass, level-space, +Z is north. Index = round(a / 45°) & 7. */
-const BEARING = [
-  'north', 'northeast', 'east', 'southeast',
-  'south', 'southwest', 'west', 'northwest',
+/**
+ * Eight-point compass, level-space, +Z is north. Index = round(a / 45°) & 7.
+ *
+ * The finished VOICE NAME, not the bearing word: `_contactVoice` runs on every
+ * target acquisition — thirty men on the map, several a second between them —
+ * and a template literal there would mint a string every time for no reason.
+ */
+const BEARING_VOICE = [
+  'contact_north', 'contact_northeast', 'contact_east', 'contact_southeast',
+  'contact_south', 'contact_southwest', 'contact_west', 'contact_northwest',
 ];
 
 let _nextMsg = 1;
@@ -288,10 +304,10 @@ export class Radio {
    * already listens for `explosion`.
    */
   zone(id, owner, previous) {
-    const word = ZONE_WORD[id];
-    if (!word) return;
-    if (owner >= 0) this.announce(owner, 'zone', `secured_${word}`, true);
-    if (previous >= 0 && previous !== owner) this.announce(previous, 'zone', `lost_${word}`, false);
+    const v = ZONE_VOICE[id];
+    if (!v) return;
+    if (owner >= 0) this.announce(owner, 'zone', v.secured, true);
+    if (previous >= 0 && previous !== owner) this.announce(previous, 'zone', v.lost, false);
   }
 
   /**
@@ -595,7 +611,7 @@ export class Radio {
     const lx = dx * c - dz * s;
     const lz = dx * s + dz * c;
     const oct = ((Math.round(Math.atan2(lx, lz) / (Math.PI / 4)) % 8) + 8) % 8;
-    return `contact_${BEARING[oct]}`;
+    return BEARING_VOICE[oct];
   }
 
   _insideBuilding(p) {
