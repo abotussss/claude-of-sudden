@@ -178,9 +178,49 @@ export class CaptureZones {
     z.counts[0] = n[0];
     z.counts[1] = n[1];
 
-    // ---- contested: both sides in the circle, nothing moves ------------
+    /**
+     * ---- contested: both sides in the circle -------------------------
+     *
+     * THE SIDE THAT OUTNUMBERS THE OTHER STILL MAKES GROUND, at the rate for the
+     * DIFFERENCE. Equal numbers freeze.
+     *
+     * This was a hard freeze — both sides present, nothing moves — and it is the
+     * single rule that stopped the mode working. MEASURED over two full headless
+     * matches: with a hard freeze, a garrison of two men held a point against a
+     * side that had committed thirteen, for a hundred and ten seconds and then
+     * for a hundred and sixty-seven, because thirty men strung out over a sixty
+     * metre approach only ever put two or three inside the circle at once and two
+     * versus three is a freeze. Neither losing side ever retook anything and both
+     * matches ended 250-82 / 252-42 with the score decided in the first forty
+     * seconds. From the outside that is not a capture point, it is a wall.
+     *
+     * The difference rule fixes it without making a point cheap. One man sneaking
+     * onto a defended zone achieves exactly nothing — 3 against 3 is still frozen
+     * — but a side that masses more men than the garrison takes the ground, which
+     * is the tactic `_assignDomination`'s `focus` exists to produce and the thing
+     * a human team does. Six against five is one man's worth of rate: nine
+     * seconds of standing there under fire.
+     *
+     * `contested` stays true whenever both sides are present, so the HUD's amber
+     * bar still means "this is a fight" — it now crawls instead of stopping.
+     */
     if (n[0] > 0 && n[1] > 0) {
       z.contested = true;
+      const major = n[0] > n[1] ? 0 : n[1] > n[0] ? 1 : -1;
+      if (major < 0) return;
+      const edge = n[major] - n[1 - major];
+      if (z.owner === major) {
+        // The holder is winning the fight on his own point: push the enemy's
+        // leftover bar back down.
+        if (z.capTeam < 0) return;
+        z.progress -= this._rate(edge) * dt;
+        if (z.progress <= 0) {
+          z.progress = 0;
+          z.capTeam = -1;
+        }
+        return;
+      }
+      this._advanceToward(dt, z, major, edge, elapsed, playerIn, playerTeam);
       return;
     }
     z.contested = false;
@@ -212,10 +252,22 @@ export class CaptureZones {
     }
 
     // Somebody else's, or nobody's, and he is standing in it.
+    this._advanceToward(dt, z, team, count, elapsed, playerIn, playerTeam);
+  }
+
+  /**
+   * Move `zone`'s bar toward `team` at the rate for `count` men, and flip it if
+   * the bar fills. Shared by the uncontested path and the outnumbered-contest
+   * path so a zone that changes hands twice in one fight reads as one continuous
+   * bar rather than two.
+   *
+   * @param {number} count  effective men: the headcount when uncontested, the
+   *                        numeric ADVANTAGE when contested
+   */
+  _advanceToward(dt, z, team, count, elapsed, playerIn, playerTeam) {
     if (z.capTeam !== team) {
       // The other side had a bar going: burn it down first rather than snapping
-      // to zero, so a contested point that changes hands twice reads as one
-      // continuous fight over one bar.
+      // to zero.
       if (z.capTeam >= 0 && z.progress > 0) {
         z.progress -= this._rate(count) * dt;
         if (z.progress > 0) return;

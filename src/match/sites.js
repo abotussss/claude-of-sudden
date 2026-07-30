@@ -155,59 +155,101 @@ export const SITES = [
 ];
 
 /**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE THREE DOMINATION ZONES, AND WHY THEY ARE NOT THE TWO BOMB SITES
+ * ════════════════════════════════════════════════════════════════════════════
+ * Two points is not domination, it is a tug of war: 1-1 is stable, whoever takes
+ * the second has already won, and there is nothing to rotate. Three is the
+ * genre's number because 2-1 is a lead you have to keep working at.
+ *
+ * So: the two courtyards, plus the mid street. Same geometry the C4 mode fights
+ * over, one point further along each lane.
+ *
  * ────────────────────────────────────────────────────────────────────────────
- * C — THE MID STREET, AND WHY DOMINATION NEEDED A THIRD POINT HERE
+ * ALL THREE SIT ON LEVEL z 0, AND THAT IS THE WHOLE POINT
  * ────────────────────────────────────────────────────────────────────────────
- * Two points is not domination, it is a tug of war: 1-1 is stable, whoever
- * takes the second one has already won, and there is nothing to rotate. Three
- * is the genre's number because 2-1 is a lead you have to keep working at.
+ * MEASURED, and it decided the first two full headless matches. `SITES` above
+ * puts A and B at level z -7, three metres of authored level SOUTH of their
+ * courtyards' centres, and the long note in the A entry says exactly why: it is
+ * a deliberate 22 m route advantage to the DEFENCE, who spawn in the south
+ * pocket. In demolition that is fair, because the sides swap at
+ * `RULES.swapAfterRound` and each half is played from both ends of it.
  *
- * The two courtyards above come for free — they are already fortified, already
- * gated by three mouths each, and already proved reachable by `navcheck`. The
- * third has to be the MID lane, and it has to sit in the ONE stretch of it that
- * is open ground: the mid street runs x ±6.5 (kerb) with two single-storey
- * islands standing in it, K1 at level (0, 12) and K2 at level (-0.4, -4.6) —
- * see `src/world/layout.js`. K2's north face is at level z -1.5 and K1's south
- * face at level z 9.3, so the gap between them is 10.8 m of authored level
- * (16.2 m of world ground) and its centre is level z 3.9.
+ * DOMINATION NEVER SWAPS. Each side keeps one base for the whole match, so that
+ * advantage stops being a round's tension and becomes a permanent property of
+ * the map. `tools/navcheck.mjs` on the bomb-site placement:
  *
- * That is where the circle goes. Radius 8 world metres spans the gap almost
- * exactly, both islands stand at its shoulders as hard cover, and it is the one
- * zone on the map that BOTH connectors feed into — which is what makes taking A
- * and B worth anything, because a side that owns C owns the rotation between
- * them.
+ *              attack (north)   defend (south)
+ *   site A          77.5 m           59.1 m      south arrives first by 18.4 m
+ *   site B          79.4 m           59.6 m      south arrives first by 19.8 m
  *
- * HEIGHT FIELD, NOT A BUILDING. `src/ai/nav.js` is one floor per (x, z) cell,
- * so anything inside a footprint resolves onto its roof and no bot can ever
- * path to it. This zone is deliberately the tarmac BETWEEN the two islands and
- * not either island's roof, both of which a player can reach (there are steps)
- * and no bot ever can. A capture point bots cannot take is a capture point that
- * does not exist. @see the same argument at the top of the A entry.
+ * Two of three zones handed to the south side before anybody moves. Both matches
+ * opened 2-1 to the south inside forty seconds, and 2-1 plus forward spawns is a
+ * closed loop: 252-100 and 252-42.
+ *
+ * The spawn clusters are at level z +39.4 and -39.4 (`SPAWNS` below), so the
+ * equidistant line between them is level z 0. Every zone centre is on it. The
+ * courtyards are level z -11..3, so z 0 is inside both of them — at the north
+ * end, covering the courtyard's north half and the mouth of its lane, which is
+ * genuinely contestable ground rather than a corner.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * C, AND THE ONE PLACE IT CAN BE
+ * ────────────────────────────────────────────────────────────────────────────
+ * The mid lane runs x ±6.5 (kerb) with two single-storey islands standing in it:
+ * K1 at level (0, 12) and K2 at level (-0.4, -4.6) — see `src/world/layout.js`.
+ * K2's north face is at level z -1.5 and K1's south face at level z 9.3, so the
+ * open tarmac between them is level z -1.5..9.3 and level z 0 is 1.5 units
+ * (2.25 m of world ground) inside its southern end. That is the only value of z
+ * that is both on the equidistant line and not inside a building.
+ *
+ * HEIGHT FIELD, NOT A ROOF. `src/ai/nav.js` is one floor per (x, z) cell, so
+ * anything inside a footprint resolves onto the roof above it and no bot can
+ * ever path there. C is deliberately the tarmac BETWEEN the two islands, both of
+ * whose roofs a player can reach (there are steps) and no bot ever can. The
+ * southern arc of C's circle laps over K2's footprint; `standRing` drops the
+ * standing points that land on it and keeps the rest. A capture point bots
+ * cannot take is a capture point that does not exist. @see the same argument at
+ * the top of the A entry.
+ *
+ * `holdLevel` is the zone itself for all three: in domination a garrison holds
+ * the point it owns, and `Agent._pickHoldSpot`'s 3-13 m ring is what spreads it
+ * over the courtyard and its mouths. There is no separate rally point to author
+ * and no side whose rotation arrives from a fixed direction.
+ *
+ * `flankLevel` is null for all three, and the flank leg is gone with it — see
+ * the removals list at the top of src/match/index.js. Three live points on a
+ * three-lane map is the rotation; a staging alley on the way to one of them was
+ * a demolition answer to a demolition problem (fifteen men, one objective).
  */
-const MID = {
-  id: 'C',
-  name: 'MID STREET',
-  level: L(0.0, 3.9),
-  /** Two metres north, still in the gap, in case the dressing dice land on the centre. */
-  fallback: L(0.0, 5.6),
-  /**
-   * Both sides arrive down the same street from opposite ends, so "the mouth my
-   * rotation comes through" is not a single point here the way it is in a
-   * courtyard. The hold is the zone itself and `Agent._pickHoldSpot`'s ring
-   * spreads a garrison over the gap and the two island shoulders.
-   */
-  holdLevel: L(0.0, 3.9),
-  /** No staging point: there is no long way round to the middle of the map. */
-  flankLevel: null,
-};
-
-/**
- * THE THREE CAPTURE POINTS, in domination. A and B are the courtyards the C4
- * mode already used — same geometry, same nav proof, a different verb — plus the
- * mid street. Ordered west-to-east so the HUD strip reads A C B left to right
- * the way the map is laid out.
- */
-export const ZONES = [SITES[0], MID, SITES[1]];
+export const ZONES = [
+  {
+    id: 'A',
+    name: 'WEST COURTYARD',
+    level: L(-28.0, 0.0),
+    /** Two units south-east, still inside the courtyard, off the north wall. */
+    fallback: L(-27.0, -2.5),
+    holdLevel: L(-28.0, 0.0),
+    flankLevel: null,
+  },
+  {
+    id: 'C',
+    name: 'MID STREET',
+    level: L(0.0, 0.0),
+    /** Further into the gap, away from K2's wall. */
+    fallback: L(0.0, 2.5),
+    holdLevel: L(0.0, 0.0),
+    flankLevel: null,
+  },
+  {
+    id: 'B',
+    name: 'EAST COURTYARD',
+    level: L(28.0, 0.0),
+    fallback: L(27.0, -2.5),
+    holdLevel: L(28.0, 0.0),
+    flankLevel: null,
+  },
+];
 
 /**
  * Spawns, `[x, z, yaw]` in level space.

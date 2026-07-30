@@ -90,6 +90,31 @@ import { AmmoDrops } from './ammo.js';
 
 const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', MATCH_OVER: 'matchover' };
 
+/**
+ * THE `role` HANDED TO `ai.spawn` IN DOMINATION, AND WHY IT IS NOT 'defend'.
+ *
+ * MEASURED, and it decided a whole match before this existed. `Agent.role` is
+ * only ever read by `ai.personaFor` -> `drawPersona`, where it does two things:
+ * it picks the archetype mix (`ARCHETYPE_MIX.attack` is rusher-heavy,
+ * `.defend` is anchor-heavy) and it adds `ai.defenderSkill` — a flat +0.10 on
+ * the skill mean — to anybody whose role is `'defend'`.
+ *
+ * In demolition that is fair, because the sides SWAP at `swapAfterRound` and
+ * each half of the match is played from both ends of it. Domination never swaps:
+ * `roleOf` is a fixed statement about which base you spawn at. So the south side
+ * would carry a permanent 0.44-vs-0.54 skill edge and a permanently different
+ * personality mix, for the whole match, on every match. The first full headless
+ * match ran 252-100 to the south side with the north side pinned on one zone for
+ * three minutes.
+ *
+ * Passing a role that is neither `'attack'` nor `'defend'` makes `drawPersona`
+ * fall through to `ARCHETYPE_MIX.any` and skip the bonus, for both sides. It also
+ * keeps `ai.defenderSkill` alone, which is `src/ai`'s number to own — `match`
+ * drives `ai` through the hooks in ARCHITECTURE.md and does not reach in and
+ * rewrite its tuning.
+ */
+const AI_ROLE_FIELD = 'field';
+
 /** Metres. Close enough to the flank staging point to count as "been there". */
 const FLANK_ARRIVE = 7;
 /** Seconds. A staging point he has not reached by now is not worth any more of the round. */
@@ -356,6 +381,14 @@ export class MatchSystem {
     this._live = [];
     this._taken = [];
     this._plan = this.sites.map((z) => ({ zone: z, mode: 'hold', want: 0, prio: 0, filled: 0 }));
+    /** Plan records the spare men are spread over. @see `_assignDomination` */
+    this._spare = [];
+    /**
+     * The ONE zone each side is currently trying to take. Sticky across the two
+     * second refresh, or a side re-cuts its target every two seconds and arrives
+     * nowhere in strength. Cleared with the match.
+     */
+    this._focus = [null, null];
     /** Where each side comes from, so a held position is actually watched. */
     this._approach = [new THREE.Vector3(), new THREE.Vector3()];
     /** The centre of the fight, handed to the three air systems. @see `_updateAirFocus` */
@@ -513,6 +546,8 @@ export class MatchSystem {
     if (this.capture) {
       this.capture.reset(this.ctx.time.elapsed);
       for (const z of this.sites) this.marks.setOwner(z, -1);
+      this._focus[0] = null;
+      this._focus[1] = null;
       this._forwardSpawns[0] = 0;
       this._forwardSpawns[1] = 0;
       this._baseSpawns[0] = 0;
@@ -614,7 +649,8 @@ export class MatchSystem {
       const agent = this.ai.spawn(variant, this._v, sp.yaw, {
         team,
         name: names[slot % names.length],
-        role,
+        // Symmetric personalities in domination. @see AI_ROLE_FIELD
+        role: this.domination ? AI_ROLE_FIELD : role,
       });
       squad.add(agent);
       this._botsByTeam[team].push(agent);
@@ -808,7 +844,9 @@ export class MatchSystem {
     const agent = this.ai.spawn(rec.variant ?? TEAM_VARIANTS[team][0], pos, yawOut.yaw, {
       team,
       name: rec.name,
-      role,
+      // Must match `_spawnTeam` or a respawn draws a DIFFERENT man: the persona
+      // cache is keyed on team + callsign + role. @see AI_ROLE_FIELD
+      role: this.domination ? AI_ROLE_FIELD : role,
     });
     this._squads[team]?.add(agent);
     this._botsByTeam[team].push(agent);
@@ -940,7 +978,44 @@ export class MatchSystem {
     const majority = Math.floor(this.sites.length / 2) + 1;
     const ahead = owned >= majority;
 
-    /* ---- 1. what each zone is worth ---------------------------------- */
+    /* ---- 1a. ONE zone to take, not two ------------------------------- */
+    /**
+     * MEASURED, and it is the difference between a mode and a deadlock.
+     *
+     * The first version scored both enemy zones the same and filled their slots
+     * nearest-first, which split a fifteen-man side seven and seven. Seven men
+     * arriving in ones and twos across sixty metres never outnumbered the two
+     * defenders already standing on the point, so the bar sat frozen on
+     * CONTESTED and the zone never moved: 3-0 to the side that got the opening,
+     * for a hundred and ten seconds, with both sides at full strength. From the
+     * outside that is the mode not working.
+     *
+     * So a side that is not holding the majority picks ONE zone and puts the
+     * bulk of itself on it, which is what a human team does and what actually
+     * breaks a held point. `focus` is scored on the things that make a point
+     * cheap — near our own base, thin on defenders, neutral rather than theirs,
+     * and a bar we already have running — and it is STICKY, because the two
+     * second refresh must not re-cut the team's target every two seconds.
+     */
+    const myBase = this._spawnCentre[team === this.attackers ? 'attack' : 'defend'];
+    const last = this._focus[team];
+    let focus = null;
+    let focusScore = -Infinity;
+    for (const z of this.sites) {
+      if (z.owner === team) continue;
+      let sc = -myBase.distanceTo(z.position) * 0.35;
+      sc -= z.counts[foe] * 6;
+      if (z.owner < 0) sc += 18;
+      if (z.capTeam === team) sc += 14 + z.progress * 20;
+      if (z === last) sc += 12;
+      if (sc > focusScore) {
+        focusScore = sc;
+        focus = z;
+      }
+    }
+    this._focus[team] = focus;
+
+    /* ---- 1b. what each zone is worth --------------------------------- */
     const plan = this._plan;
     for (let i = 0; i < plan.length; i++) {
       const e = plan[i];
@@ -951,32 +1026,30 @@ export class MatchSystem {
       const enemyIn = z.counts[foe] > 0;
       const beingTaken = z.capTeam === foe && z.progress > 0;
       if (mine && (enemyIn || beingTaken)) {
-        // Ours and under threat. Nothing else on the map matters as much.
+        // Ours and under threat. Nothing else on the map matters as much: it is
+        // the only way to lose points that are already coming in.
         e.mode = 'defuse';
-        e.want = 5;
+        e.want = 4 + Math.min(3, z.counts[foe]);
         e.prio = 140;
       } else if (mine) {
         e.mode = 'hold';
         e.want = RULES.zoneGarrison;
-        e.prio = ahead ? 45 : 22;
-      } else if (z.owner < 0) {
-        // Neutral: the cheapest points on the map.
+        e.prio = ahead ? 45 : 25;
+      } else if (z === focus) {
         e.mode = 'defuse';
-        e.want = 5;
-        e.prio = 95 + (z.capTeam === team ? 12 : 0);
+        e.want = 5 + Math.min(3, z.counts[foe]);
+        e.prio = 120;
       } else {
-        // Theirs. Worth more when we are losing, which is the rotation rule.
+        /**
+         * The zone we are NOT going for still gets one man. Not for the capture
+         * — one man against a garrison takes nothing — but so the side has eyes
+         * on it, and so a point the enemy walks off is picked up for free
+         * instead of sitting neutral for the rest of the match.
+         */
         e.mode = 'defuse';
-        e.want = 5;
-        e.prio = 70 + (behind ? 25 : 0) - (ahead ? 25 : 0);
+        e.want = 1;
+        e.prio = 12 + (behind ? 6 : 0);
       }
-      /**
-       * A zone the enemy is already massed in wants more men than one he is
-       * walking through, but never so many that the other two are abandoned:
-       * `want` is capped at a third of the side plus two, so three zones can
-       * always be manned.
-       */
-      e.want = Math.min(e.want + Math.min(3, z.counts[foe]), ((live.length / 3) | 0) + 2);
     }
     // Insertion sort by priority, descending. Three elements; allocates nothing.
     for (let i = 1; i < plan.length; i++) {
@@ -1001,16 +1074,47 @@ export class MatchSystem {
       }
     }
     /**
-     * WHOEVER IS LEFT goes to the top priority zone. A side that has taken all
-     * three still has men over after the garrisons, and men with no objective
-     * fall through `Agent._think` to PATROL — which on this map is a soldier
-     * wandering a street for no reason. They reinforce instead.
+     * WHOEVER IS LEFT — and there are always eight or nine of them, because the
+     * wants above deliberately add up to less than a side.
+     *
+     * A man with no objective falls through `Agent._think` to PATROL, which on
+     * this map is a soldier wandering a street for no reason, so everybody gets
+     * somewhere. WHERE depends on the score, and this is the "rotate when the
+     * score demands it" rule in its most concrete form:
+     *
+     *   NOT holding the majority -> every spare man onto the FOCUS. Thirteen men
+     *     on one point is what takes a point off a garrison; that is the whole
+     *     reason `focus` exists.
+     *   holding the majority -> spread over the zones we already own, so the
+     *     lead is defended in depth instead of thrown at a third point we do not
+     *     need. A side that is winning on points wins by not losing them.
      */
     if (assigned < live.length) {
-      const e = plan[0];
+      const spare = this._spare;
+      spare.length = 0;
+      if (ahead) {
+        /**
+         * The zones we own AND the focus, round-robined. MEASURED: with the
+         * spares going only onto owned zones, the leading side put eight and then
+         * eleven men inside two courtyards and one man on the third point, and
+         * the match froze at 2-1 for two hundred seconds. Including the focus
+         * keeps a third of the lead's spare strength pressing, which is what
+         * makes the third zone change hands and the match have a middle.
+         */
+        for (const e of plan) if (e.zone.owner === team) spare.push(e);
+        if (focus) for (const e of plan) if (e.zone === focus) spare.push(e);
+      }
+      if (!spare.length) {
+        let e = plan[0];
+        // No `find`: a closure every two seconds is still a closure.
+        if (focus) for (const p of plan) if (p.zone === focus) e = p;
+        spare.push(e);
+      }
+      let k = 0;
       for (let i = 0; i < live.length; i++) {
         if (taken[i]) continue;
         taken[i] = true;
+        const e = spare[k++ % spare.length];
         this._orderZone(live[i], e.zone, e.mode, e.filled++, face);
       }
     }
