@@ -473,6 +473,8 @@ export class Airstrike {
     this._pending = [];
     /** The flank beacon this system has already answered. @see `_pollFlankCall`. */
     this._flankKey = null;
+    /** The rolling city-wide collapse, or null. @see `callEverything` */
+    this._final = null;
     /** Seconds until the scheduler may pick a site. Set by `armRound`. */
     this._next = Infinity;
     /** Strikes called this round, against `RULES.airstrikeMaxPerRound`. */
@@ -1502,6 +1504,47 @@ export class Airstrike {
    * squares `src/world/features.js` publishes. IF THAT LINE IS EVER ADDED IN
    * `index.js`, DELETE THE POLL: two triggers on one event is a double strike.
    */
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * THE LAST EVENT: EVERYTHING STILL STANDING, IN ONE ROLL
+   * ────────────────────────────────────────────────────────────────────────────
+   * "最後に街全体が崩壊するイベント" — the map becomes a melee.
+   *
+   * It is not a new kind of destruction and it must not be: every site left
+   * unstruck is fired on a rolling stagger through the SAME `fire()` the
+   * scheduler uses, so the masses, the trajectories, the settled poses, the
+   * collision flips and the nav patches are all the ones baked at boot and
+   * already proved harmless to every route by `_verifyRoutes` WITH ALL OF THEM
+   * DOWN AT ONCE. That proof is what makes this safe to do at all: the map after
+   * this event is exactly the map the route gate signed off.
+   *
+   * The stagger is the whole spectacle. Eleven sites at 0.55 s apart is six
+   * seconds of the town coming apart in sequence rather than one frame with
+   * 5696 chunks in it — and it also keeps the eleven `_bakeSettled` memcpys and
+   * the eleven nav patches on eleven different frames six and a half seconds
+   * later, which is the same reason `SALVOS` have a stagger.
+   *
+   * @param {number} stagger seconds between members
+   * @returns {number} how many sites are going to come down
+   */
+  callEverything(stagger = 0.55) {
+    if (!this.ready || this._final) return 0;
+    const left = [];
+    for (const s of this.sites) if (!s.struck) left.push(s);
+    if (!left.length) return 0;
+    this._final = { list: left, k: 0, t: 0, stagger };
+    // One jet for the whole thing, placed over the middle of the town. The
+    // per-site whistles are what the individual telegraph is for and there is no
+    // "get clear of" a city-wide collapse — the alert is the banner `match` puts
+    // up, and this is the noise underneath it.
+    const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+    audio?.play?.('strike_jet', left[0].position, {
+      level: 0.85, dur: JET_LEAD + 1.5, maxDist: 400, gain: 2.0, occlusion: 0.3,
+    });
+    console.info(`[airstrike] FINAL COLLAPSE armed — ${left.length} sites, ${stagger}s apart, ${JET_LEAD}s lead`);
+    return left.length;
+  }
+
   callCathedralCollapse() {
     if (!this.ready || !this.enabled) return false;
     if (!this.callSalvo('CATHEDRAL')) return false;
@@ -1605,6 +1648,20 @@ export class Airstrike {
           this._pending.splice(i, 1);
         }
       }
+    }
+
+    /* ---- the final collapse, rolling ---------------------------------- */
+    // Outside the `live`/`enabled` gate below on purpose: once the town has been
+    // told to come down it comes down, the same way a mass already in the air
+    // still has to land when a round ends.
+    if (this._final) {
+      const f = this._final;
+      f.t += dt;
+      while (f.k < f.list.length && f.t >= JET_LEAD + f.k * f.stagger) {
+        const s = f.list[f.k++];
+        if (!s.struck) this.fire(s.index);
+      }
+      if (f.k >= f.list.length) this._final = null;
     }
 
     /* ---- scheduler ---------------------------------------------------- */
@@ -1840,6 +1897,7 @@ export class Airstrike {
   reset() {
     this.disarm();
     this._live.length = 0;
+    this._final = null;
     // Last round's dust does not hang over this round's street.
     for (const d of this._dust) this._fx?.removeSmokeSource(d.tag);
     this._dust.length = 0;
@@ -2017,6 +2075,16 @@ export function mergeGeometries(list) {
  * step with that loop by hand: `ai` owns the rule, we only re-run it locally.
  */
 const _probe = { flag: 0, floor: 0, enclosure: 0 };
+/**
+ * Re-probe ONE nav cell exactly the way `NavGrid.build`'s OPEN-AIR pass did at
+ * boot: one ray down from above the level.
+ *
+ * NOT USABLE INDOORS, and `src/match/index.js` says so where it re-probes the
+ * cathedral ruin: inside a footprint this ray can only ever hit the ROOF, which
+ * is the entire reason `NavGrid._carveInteriors` exists. Run over the nave it
+ * would put all ~400 cells of site D on the vault at 26.2 m and take the
+ * building out of the height field.
+ */
 function probeCell(g, phys, ix, iz) {
   const MASK = phys.MASK.WORLD;
   const x = g.worldX(ix);

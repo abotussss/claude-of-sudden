@@ -216,7 +216,16 @@ export class MatchSystem {
 
     /* ---- layout ------------------------------------------------------- */
     const layout = resolveLayout(this.world, this.ai);
+    /** The LIVE zones. A locked zone joins this array when the match opens it. */
     this.sites = layout.sites;
+    /**
+     * EVERY authored zone, live or not, in authored order. Used only by the
+     * things that have to be right about the whole map at BOOT — the site paint,
+     * and the route gate `Airstrike._verifyRoutes` runs — because a zone that
+     * appears at t=210 s must have been proved against the same intact map as
+     * the other three, not against whatever the town looks like when it opens.
+     */
+    this.allZones = layout.all;
     this.spawns = layout.spawns;
     this._spawnCentre = { attack: centroid(layout.spawns.attack), defend: centroid(layout.spawns.defend) };
     for (const s of this.sites) {
@@ -284,7 +293,11 @@ export class MatchSystem {
     // Paint the sites on the ground from the RESOLVED positions, so the paint is
     // always where the plant trigger is even when `resolveLayout` has had to
     // move a site off sealed geometry. See src/match/sitemark.js.
-    this.marks = new SiteMarks(ctx, this.sites);
+    // EVERY zone, including the locked one: the paint has to be built from the
+    // resolved position (that is why it lives here and not in `world`), and a
+    // locked zone is then hidden until it opens. @see SiteMarks.setVisible
+    this.marks = new SiteMarks(ctx, this.allZones);
+    for (const z of this.allZones) if (z.locked) this.marks.setVisible(z, false);
     /**
      * Ammunition on the bodies. The round's budget is still what you walk out
      * of spawn with (`weapons.resetAmmo`), but a five minute round with
@@ -352,7 +365,10 @@ export class MatchSystem {
      * `Airstrike._verifyRoutes`.
      */
     const navRoutes = [];
-    for (const site of this.sites) {
+    // `allZones`, not `sites`: D is not live yet and the mounds must still be
+    // proved not to cost anybody a route to it, because they will all have come
+    // down long before it opens.
+    for (const site of this.allZones) {
       for (const kind of ['attack', 'defend']) {
         for (const sp of this.spawns[kind]) navRoutes.push([sp.position, site.position]);
       }
@@ -453,27 +469,7 @@ export class MatchSystem {
        * makes you work out which of RED and BLUE you are is a HUD you misread
        * under fire.
        */
-      zones: this.sites.map((z) => ({
-        id: z.id,
-        name: z.name,
-        /** 'neutral' | 'mine' | 'theirs' */
-        owner: 'neutral',
-        /** 0..1 on the bar, and whose bar it is. */
-        progress: 0,
-        capture: 'none',
-        contested: false,
-        /**
-         * Bar-units per second, signed, as `capture.js` advanced it THIS frame.
-         * `src/ui/capture.js` turns it into the countdown and the GAINING /
-         * LOSING read — the two things a bar alone cannot say.
-         */
-        rate: 0,
-        /** Live bodies inside the circle, from the player's point of view. */
-        mine: 0,
-        theirs: 0,
-        /** True when the local player is standing in this one. */
-        here: false,
-      })),
+      zones: this.sites.map((z) => this._zoneHudRecord(z)),
       /** How many zones each side holds, player's point of view. */
       ownedUs: 0,
       ownedThem: 0,
@@ -572,6 +568,18 @@ export class MatchSystem {
     /** The centre of the fight, handed to the three air systems. @see `_updateAirFocus` */
     this._airFocus = new THREE.Vector3();
     this._airFocusTimer = 0;
+    /* ---- the scheduled map changes. @see `_updateMapEvents` ---- */
+    /** The one authored `locked` zone (D), or null. It never leaves `allZones`. */
+    this.lockedZone = this.allZones.find((z) => z.locked) ?? null;
+    this._cathedralCalled = false;
+    this._cathedralPending = -1;
+    this._finalCalled = false;
+    this._finalLeft = 0;
+    this._bombardIn = RULES.zoneBombardFirst;
+    /** The live bombardment: which zone, the lead left, how many have landed. */
+    this._bombard = { zone: null, t: 0, shot: 0 };
+    /** Reused `explosion` payload for the bombardment. Listeners copy out of it. */
+    this._blast = { position: null, radius: 0, damage: 0, source: null };
     /** Reused `ui.airAlert` argument — the HUD copies out of it synchronously. */
     this._airHud = {
       kind: 'STRIKE',
@@ -722,6 +730,19 @@ export class MatchSystem {
      * opening a 1-1 stalemate and remove the one moment when all three are live.
      */
     if (this.capture) {
+      /**
+       * D GOES BACK IN ITS BOX. A new match starts with the cathedral standing,
+       * so the fourth zone leaves the live list before `capture.reset` walks it
+       * — and the three scheduled map events re-arm on the new clock.
+       */
+      if (this.lockedZone) this._setZoneLive(this.lockedZone, false);
+      this._cathedralCalled = false;
+      this._cathedralPending = -1;
+      this._finalCalled = false;
+      this._finalLeft = 0;
+      this._bombardIn = RULES.zoneBombardFirst;
+      this._bombard.zone = null;
+      this._bombard.shot = 0;
       this.capture.reset(this.ctx.time.elapsed);
       for (const z of this.sites) this.marks.setOwner(z, -1);
       this._focus[0] = null;
@@ -2087,6 +2108,16 @@ export class MatchSystem {
          * another" state all turn over on the frame it actually runs out.
          */
         if (this.caches?.update(ctx.time.elapsed)) this.ui.banner.show('BEACON OFFLINE', '', 1.2);
+        /**
+         * THE MAP CHANGES UNDER YOU: D opening in the cathedral ruin, the
+         * artillery that makes camping A or B cost you, and the final city-wide
+         * collapse. Domination only — none of the three has a meaning in a
+         * two-site demolition round. @see `_updateMapEvents`
+         */
+        if (this.domination) {
+          this._updateMapEvents(dt);
+          this._updateBombard(dt);
+        }
         this._updatePlayerInteraction(dt);
         this._updateAmmoDrops(dt, audio);
         this._checkWinConditions();
@@ -2273,6 +2304,335 @@ export class MatchSystem {
     // A salvo is the round's event and gets the full banner; the rest have
     // already had theirs on the way in and would only be shouting twice.
     if (info.kind === 'SALVO') this.ui.banner.show(title, `${info.name} · DOWN`, 2.4);
+  }
+
+  /* ==================================================================== */
+  /* THE MAP CHANGES UNDER YOU — D, the bombardment, the final collapse    */
+  /* ==================================================================== */
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THREE SCHEDULED EVENTS, ONE CLOCK, AND NOTHING BUILT WHEN THEY FIRE
+   * ────────────────────────────────────────────────────────────────────────
+   * All three are `Airstrike`'s existing machinery aimed by this file. Nothing
+   * below allocates, bakes, fractures or rebuilds anything: the cathedral salvo
+   * and every strike site were cut, solved and nav-patched at BOOT, and firing
+   * one is two booleans per mesh and a uniform write. What this method owns is
+   * WHEN, which is the part that is a ruleset and not an effect.
+   *
+   *   `cathedralOpenAt`   the cathedral comes down and D opens in the wreckage
+   *   `zoneBombard*`      A and B are shelled on a random gap, so holding a
+   *                       point means moving inside it rather than sitting on it
+   *   `finalCollapseAt`   everything still standing, in one rolling event
+   *
+   * The whole match clock is `RULES.matchTime` (600 s) and it can end early on
+   * `scoreTarget`, so every one of these is a "if we get there" — a match
+   * decided in four minutes never sees the final collapse, which is correct.
+   */
+  _updateMapEvents(dt) {
+    const t = RULES.matchTime - this.roundClock;
+
+    /* ---- D ------------------------------------------------------------ */
+    if (this._cathedralPending > 0) {
+      this._cathedralPending -= dt;
+      if (this._cathedralPending <= 0) this._openCathedral();
+    } else if (!this._cathedralCalled && this.lockedZone && t >= RULES.cathedralOpenAt) {
+      this._cathedralCalled = true;
+      // `callCathedralCollapse` is the salvo plus a bomber run; it declines if
+      // the sites are already struck or the system is disarmed, and D opens on
+      // the delay either way — a cathedral that is already rubble is still a
+      // ruin to fight in.
+      const fired = this.airstrike?.callCathedralCollapse?.() ?? false;
+      this._cathedralPending = RULES.cathedralOpenDelay;
+      console.info(
+        `[match] cathedral collapse called at t=${t.toFixed(0)}s (salvo ${fired ? 'fired' : 'declined — already down'}) ` +
+          `— D opens in ${RULES.cathedralOpenDelay}s`
+      );
+    }
+
+    /* ---- the bombardment of A and B ----------------------------------- */
+    this._bombardIn -= dt;
+    if (this._bombardIn <= 0) this._callZoneBombard();
+
+    /* ---- the last event ----------------------------------------------- */
+    if (!this._finalCalled && t >= RULES.finalCollapseAt) {
+      this._finalCalled = true;
+      this._finalLeft = this.airstrike?.callEverything?.(RULES.finalCollapseStagger) ?? 0;
+      if (this._finalLeft > 0) {
+        this.ui.banner.show('THE CITY IS COMING DOWN', `${this._finalLeft} SITES · FIND OPEN GROUND`, 4.0);
+        this._airHud.kind = 'SALVO';
+        this._airHud.title = 'THE CITY IS COMING DOWN';
+        this._airHud.impactTitle = 'CITY LEVELLED';
+        this._airHud.name = 'EVERYTHING STILL STANDING';
+        this._airHud.lead = 4.4;
+        const c = this._spawnCentre.attack;
+        this._airHud.x = 0;
+        this._airHud.y = c.y;
+        this._airHud.z = 0;
+        this.ui.airAlert(this._airHud);
+      }
+      console.info(`[match] FINAL COLLAPSE at t=${t.toFixed(0)}s — ${this._finalLeft} sites still standing`);
+    }
+  }
+
+  /**
+   * D GOES LIVE IN THE WRECKAGE.
+   *
+   * Three things, in this order, and the first is the one the brief is about:
+   *
+   * 1. RE-PROBE THE NAV. `Airstrike` re-probes the cells its own mounds cover
+   *    and applies them as a loop over three flat arrays; the ruin's own floor
+   *    is a different question and it is asked here, over D's circle, with the
+   *    town in the state it is actually in. It is the same `probeCell` the
+   *    strike uses and it NEVER calls `grid.build()` — 400-odd cells against
+   *    205 000. Measured and printed: if the collapse changed nothing under the
+   *    dome, the number is zero and that is the honest answer.
+   * 2. PUSH IT INTO `sites`. Every consumer in this file — the objective plan,
+   *    the HUD strip, forward spawns, the win check, `CaptureZones` itself —
+   *    iterates that one array, so a zone joining the match is one push and no
+   *    special case anywhere. @see `_setZoneLive`
+   * 3. TELL THE PLAYER, in the same three places every air event uses.
+   */
+  _openCathedral() {
+    const z = this.lockedZone;
+    if (!z || this.sites.includes(z)) return;
+    const cells = this._reprobeZoneNav(z);
+    this._setZoneLive(z, true);
+    this.capture?.resetZone(z, this.ctx.time.elapsed);
+    this.ui.banner.show('SITE D IS OPEN', `${z.name} · CONTEST THE RUIN`, 3.4);
+    this._airHud.kind = 'STRIKE';
+    this._airHud.title = 'SITE D OPEN';
+    this._airHud.impactTitle = 'SITE D OPEN';
+    this._airHud.name = z.name;
+    this._airHud.lead = 6;
+    this._airHud.x = z.position.x;
+    this._airHud.y = z.position.y;
+    this._airHud.z = z.position.z;
+    this.ui.airAlert(this._airHud);
+    this.ui.airDanger(z.position, 6, 'SITE D');
+    this._assignObjectives();
+    console.info(
+      `[match] SITE D OPEN — ${z.name} at ${z.position.x.toFixed(1)}, ${z.position.z.toFixed(1)} ` +
+        `· ${z.stand.length} standing points · ${cells} nav cells re-probed in the ruin ` +
+        `· ${this.sites.length} zones live`
+    );
+    this.ctx.events.emit('match:capture', {
+      zone: z.id,
+      owner: -1,
+      previous: -1,
+      score: this.score,
+    });
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * RE-PROBE THE HEIGHT FIELD IN THE RUIN, FROM INSIDE IT
+   * ────────────────────────────────────────────────────────────────────────
+   * A loop over the ~400 cells of D's circle, not the grid's 205 209, and it
+   * never calls `grid.build()` — that is seconds on this map and a zone that
+   * opens mid-match cannot afford one of them. Same shape as
+   * `Airstrike._bakeNavPatch`: re-probe a rectangle, write three flat arrays.
+   *
+   * THE ONE THING IT DOES DIFFERENTLY IS THE ONLY THING THAT MATTERS HERE.
+   * `Airstrike`'s `probeCell` drops ONE RAY FROM ABOVE THE LEVEL, which is what
+   * `NavGrid.build`'s open-air pass does and is correct for a mound of rubble in
+   * a street. Run over the nave it would find the CATHEDRAL VAULT AT 26.2 m and
+   * put every cell of site D on the roof — the exact failure
+   * `NavGrid._carveInteriors` exists to defeat (the boot probe measures the nave
+   * floor at 0.16 m and a sky ray at 26.20 m over the same cell).
+   *
+   * So this probes DOWNWARD FROM JUST ABOVE THE FLOOR THE GRID ALREADY HAS, and
+   * refuses any answer more than `MAX_STEP` away from it. That makes the pass
+   * strictly conservative: it can raise a cell on to new rubble, and it can shut
+   * a cell that is now blocked, and it CANNOT move a cell to another storey. A
+   * mistake here is a ruin bots will not enter, which is the one outcome the
+   * whole feature is about.
+   *
+   * Returns how many cells actually changed, so "the ruin is walkable" is a
+   * number in the log rather than a claim in a comment.
+   */
+  _reprobeZoneNav(z) {
+    const g = this.ai?.grid;
+    const ph = this.ctx.peek('physics');
+    if (!g || !ph) return 0;
+    const MASK = ph.MASK.WORLD;
+    /** How far above the known floor the ray starts, and how far it may move. */
+    const START_UP = 5.0;
+    const MAX_STEP = 2.5;
+    const pad = z.radius + 2.4;
+    const ix0 = Math.max(0, g.cellX(z.position.x - pad));
+    const ix1 = Math.min(g.nx - 1, g.cellX(z.position.x + pad));
+    const iz0 = Math.max(0, g.cellZ(z.position.z - pad));
+    const iz1 = Math.min(g.nz - 1, g.cellZ(z.position.z + pad));
+    let changed = 0;
+    for (let iz = iz0; iz <= iz1; iz++) {
+      for (let ix = ix0; ix <= ix1; ix++) {
+        const i = g.index(ix, iz);
+        if (g.flags[i] === 0) continue; // it was not walkable; rubble cannot open it
+        const x = g.worldX(ix);
+        const zz = g.worldZ(iz);
+        const y0 = g.floor[i];
+        const down = ph.raycast(x, y0 + START_UP, zz, 0, -1, 0, START_UP + 0.6, MASK);
+        if (!down.hit) continue; // nothing under it any more: leave the old answer
+        const ny = down.point.y;
+        if (Math.abs(ny - y0) > MAX_STEP) continue; // a different storey — not ours
+        // Too steep to stand on is the same test the grid's own pass makes.
+        if (down.normal.y < g.maxSlope) {
+          if (g.flags[i] !== 0) {
+            g.flags[i] = 0;
+            changed++;
+          }
+          continue;
+        }
+        const up = ph.raycast(x, ny + 0.25, zz, 0, 1, 0, g.height - 0.2, MASK);
+        const flag = !up.hit ? 1 : up.distance > g.crouchHeight - 0.25 ? 2 : 0;
+        if (g.flags[i] === flag && Math.abs(g.floor[i] - ny) <= 0.02) continue;
+        g.flags[i] = flag;
+        g.floor[i] = ny;
+        changed++;
+      }
+    }
+    return changed;
+  }
+
+  /**
+   * Add or remove a zone from the LIVE list, keeping the three parallel arrays
+   * that are indexed by it in step.
+   *
+   * `this.sites`, `this._plan` and `this._hud.zones` are all walked by index —
+   * `_assignDomination` and `_publishZones` both do `for (i < sites.length)` and
+   * write `plan[i]` / `h.zones[i]` — so they grow and shrink together or the
+   * fourth zone reads off the end of the second array. `CaptureZones` holds the
+   * SAME array object as `this.sites`, which is why it needs no call here.
+   */
+  _setZoneLive(z, on) {
+    const i = this.sites.indexOf(z);
+    if (on) {
+      if (i >= 0) return;
+      this.sites.push(z);
+      this._plan.push({ zone: z, mode: 'hold', want: 0, prio: 0, filled: 0 });
+      this._hud.zones.push(this._zoneHudRecord(z));
+      this.marks.setVisible(z, true);
+      this.marks.setOwner(z, -1);
+      return;
+    }
+    if (i < 0) return;
+    this.sites.splice(i, 1);
+    this._plan.splice(i, 1);
+    this._hud.zones.splice(i, 1);
+    this.marks.setVisible(z, false);
+    if (this._focus[0] === z) this._focus[0] = null;
+    if (this._focus[1] === z) this._focus[1] = null;
+  }
+
+  /**
+   * A STRIKE ON A CAPTURE POINT — "camping kills you", with an answer.
+   *
+   * It picks whichever of A and B has been held longest by the side that holds
+   * it, so it lands on the point that is being SAT on rather than on the one
+   * being fought over, and it walks `zoneBombardShells` impacts across the
+   * circle so there is no safe metre inside it. `zoneBombardLead` seconds of
+   * `ui.airAlert` with the zone named and a world marker on every impact point
+   * is what makes the right answer "move for ten seconds": step outside r8, let
+   * it land, walk back on. Standing still is the only thing it punishes.
+   */
+  _callZoneBombard() {
+    const [lo, hi] = RULES.zoneBombardInterval;
+    this._bombardIn = this.rng.range(lo, hi);
+    const now = this.ctx.time.elapsed;
+    let target = null;
+    let best = -1;
+    for (const z of this.sites) {
+      if (z.id !== 'A' && z.id !== 'B') continue;
+      if (z.owner < 0) continue;
+      const held = now - z.ownedSince;
+      if (held > best) {
+        best = held;
+        target = z;
+      }
+    }
+    // Nobody is camping anything: nothing to punish, ask again on the next gap.
+    if (!target || best < 20) return;
+    this._bombard.zone = target;
+    this._bombard.t = RULES.zoneBombardLead;
+    this._bombard.shot = 0;
+    this._announceBombard(target);
+    console.info(
+      `[match] ZONE BOMBARDMENT on ${target.id} — held by ${TEAM_NAME[target.owner]} for ` +
+        `${best.toFixed(0)}s, ${RULES.zoneBombardShells} shells in ${RULES.zoneBombardLead}s`
+    );
+  }
+
+  /** The telegraph: the strip, a world marker per impact point, the banner. */
+  _announceBombard(z) {
+    const h = this._airHud;
+    h.kind = 'BOMBARD';
+    h.title = `ARTILLERY ON ${z.id}`;
+    h.impactTitle = `${z.id} UNDER FIRE`;
+    h.name = z.name;
+    h.lead = RULES.zoneBombardLead;
+    h.x = z.position.x;
+    h.y = z.position.y;
+    h.z = z.position.z;
+    this.ui.airAlert(h);
+    for (let i = 0; i < RULES.zoneBombardShells; i++) {
+      this.ui.airDanger(this._bombardPoint(z, i), RULES.zoneBombardLead, 'ARTILLERY');
+    }
+    const mine = z.owner === this.playerTeam;
+    this.ui.banner.show(
+      `ARTILLERY ON ${z.id}`,
+      mine ? `${z.name} · GET OFF THE POINT` : `${z.name} · ${TEAM_NAME[z.owner]} UNDER FIRE`,
+      2.6
+    );
+  }
+
+  /**
+   * Impact `i` of the walk, in the zone's own frame. Reused vector — every
+   * caller copies out of it synchronously (`ui.airDanger` and the blast payload
+   * both do), and this runs five times per bombardment, not per frame.
+   */
+  _bombardPoint(z, i) {
+    const n = RULES.zoneBombardShells;
+    const a = (i / n) * Math.PI * 2 + z.position.x * 0.37;
+    const r = i === 0 ? 0 : RULES.zoneBombardSpread * (0.45 + 0.55 * ((i * 7) % n) / n);
+    return this._bombPos.set(
+      z.position.x + Math.cos(a) * r,
+      z.position.y + 0.4,
+      z.position.z + Math.sin(a) * r
+    );
+  }
+
+  /** The shells landing, one every `zoneBombardLead / shells` seconds. */
+  _updateBombard(dt) {
+    const b = this._bombard;
+    if (!b.zone) return;
+    b.t -= dt;
+    const step = RULES.zoneBombardLead / (RULES.zoneBombardShells + 3);
+    // The lead is the WARNING; the walk starts when it expires and takes three
+    // more steps to cross the circle, so leaving late still costs you.
+    if (b.t > 0) return;
+    const due = Math.min(RULES.zoneBombardShells, Math.floor(-b.t / step) + 1);
+    while (b.shot < due) {
+      const at = this._bombardPoint(b.zone, b.shot);
+      const p = this._blast;
+      p.position = at;
+      p.radius = RULES.zoneBombardRadius;
+      p.damage = RULES.zoneBombardDamage;
+      p.source = null;
+      this.ctx.events.emit('explosion', p);
+      const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
+      if (fx) {
+        fx.explosion?.({ position: at, radius: RULES.zoneBombardRadius * 0.6 });
+        fx.scorch?.(at.x, at.y - 0.3, at.z, RULES.zoneBombardRadius * 0.5);
+        fx.hazeRing?.(at.x, at.y, at.z, 3.0, 16, 0.5, 1.8);
+        if (fx.lights) fx.lights.flash(at.x, at.y + 1, at.z, 1, 0.68, 0.36, 1100, 0.55, 7, 46, 4);
+      }
+      const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+      audio?.play?.('strike_tail', at, { level: 0.95, dur: 2.4, maxDist: 300, gain: 1.9, occlusion: 0.2 });
+      if (b.shot === 0) this.ui.airImpact(`${b.zone.id} UNDER FIRE`);
+      b.shot++;
+    }
+    if (b.shot >= RULES.zoneBombardShells) b.zone = null;
   }
 
   /* ------------------------------------------------------------- armour -- */
@@ -3014,6 +3374,41 @@ export class MatchSystem {
    * rather than red and blue — because the one thing a HUD must never make you do
    * while being shot at is work out which colour you are.
    */
+  /**
+   * ONE HUD RECORD PER ZONE, ALLOCATED ONCE AND WRITTEN IN PLACE.
+   *
+   * `ui` reads the array every frame and must never retain it. `mine` and
+   * `theirs` are from the LOCAL player's point of view, because a HUD that makes
+   * you work out which of RED and BLUE you are is a HUD you misread under fire.
+   *
+   * A method rather than an inline literal because a zone can now JOIN the match
+   * — D, when the cathedral comes down — and its record has to be the same shape
+   * as the three that were built at boot. @see `_setZoneLive`
+   */
+  _zoneHudRecord(z) {
+    return {
+      id: z.id,
+      name: z.name,
+      /** 'neutral' | 'mine' | 'theirs' */
+      owner: 'neutral',
+      /** 0..1 on the bar, and whose bar it is. */
+      progress: 0,
+      capture: 'none',
+      contested: false,
+      /**
+       * Bar-units per second, signed, as `capture.js` advanced it THIS frame.
+       * `src/ui/capture.js` turns it into the countdown and the GAINING /
+       * LOSING read — the two things a bar alone cannot say.
+       */
+      rate: 0,
+      /** Live bodies inside the circle, from the player's point of view. */
+      mine: 0,
+      theirs: 0,
+      /** True when the local player is standing in this one. */
+      here: false,
+    };
+  }
+
   _publishZones() {
     const h = this._hud;
     const me = this.playerTeam;

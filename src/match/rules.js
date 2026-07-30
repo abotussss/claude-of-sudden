@@ -533,6 +533,63 @@ export const RULES = {
   tankDeathRadius: 12,
   tankDeathDamage: 240,
 
+  /* ---- the cathedral, and what its destruction opens ---- */
+  /**
+   * D — "大聖堂をDサイトとして途中で出現させて 大聖堂破壊イベントを通して".
+   *
+   * Seconds into a LIVE match before the cathedral is brought down. 210 of a 600
+   * second clock is a bit past the first third: late enough that the three
+   * original zones have changed hands and both sides have settled into a shape,
+   * early enough that a fourth point is a whole second act rather than a
+   * flourish. The collapse itself telegraphs for 4.4 s and the wreckage takes
+   * `cathedralOpenDelay` more to stop moving, so D goes live about eleven
+   * seconds after the first thing the player hears.
+   */
+  cathedralOpenAt: 210,
+  /**
+   * Seconds after the collapse FIRES before D is contestable. It is the salvo's
+   * own settle time (6.5 s) plus a beat — the point opens when the dust has a
+   * floor under it, not while masonry is still in the air. @see Airstrike.
+   */
+  cathedralOpenDelay: 7.4,
+  /**
+   * D is worth the same tick as any other zone, on purpose. A fourth point that
+   * printed double would decide the match by itself and the answer to it would
+   * be "everybody stands in the church" — which is one fight, not a map.
+   */
+
+  /* ---- the last event, and the two that keep you moving ---- */
+  /**
+   * THE FINAL COLLAPSE — "街を破壊するようなイベント", at the end.
+   *
+   * Seconds into a LIVE match before the city-wide collapse: every strike site
+   * that is still standing, fired as one rolling event. At 470 of 600 that is
+   * the last two minutes, and what it leaves is a map with no intact frontage,
+   * no roofline to hold and every lane full of rubble — a melee.
+   */
+  finalCollapseAt: 470,
+  /** Seconds between the members of the final collapse. Eleven sites, rolling. */
+  finalCollapseStagger: 0.55,
+  /**
+   * PERIODIC BOMBING OF A AND B — "camping kills you".
+   *
+   * A strike walked on to whichever of A and B has been held longest, on a
+   * random gap, telegraphed through `ui.airAlert` like every other air event.
+   * The point is that the right answer is "move for ten seconds", not "never
+   * stand here": the alert names the zone, the impact is on the zone centre, and
+   * `bombardLead` is how long you have.
+   */
+  zoneBombardFirst: 95,
+  zoneBombardInterval: [70, 105],
+  /** How long the strip counts down before it lands. Ten seconds to walk out. */
+  zoneBombardLead: 10,
+  /** Blast at the zone centre. Survivable at the rim of an r8 circle. */
+  zoneBombardRadius: 10,
+  zoneBombardDamage: 210,
+  /** How many impacts walk across the circle, and how far apart. */
+  zoneBombardShells: 5,
+  zoneBombardSpread: 5.5,
+
   /* ---- combat ---- */
   /**
    * SA has no health regeneration — the 100 HP you spawn with is the 100 HP you

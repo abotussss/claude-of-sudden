@@ -482,6 +482,50 @@ export const ZONES = [
     holdLevel: L(76.5, -48.0),
     flankLevel: null,
   },
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * D — THE CATHEDRAL, AND IT IS NOT A CAPTURE POINT UNTIL IT IS RUBBLE
+   * ────────────────────────────────────────────────────────────────────────
+   * "大聖堂をDサイトとして途中で出現させて 大聖堂破壊イベントを通して"
+   *
+   * `locked: true` is the whole feature. The zone is AUTHORED, RESOLVED, PROVED
+   * REACHABLE and PAINTED at boot exactly like the other three — so `navcheck`,
+   * `Airstrike._verifyRoutes` and `standRing` all measure it against the map
+   * they measure everything else against — and then it is held out of
+   * `MatchSystem.sites` until the cathedral comes down. Before that moment it is
+   * not on the HUD, not in the objective plan, not a forward spawn and not worth
+   * a point. After it, it is a zone like any other, standing in the wreckage.
+   *
+   * WHY THE CENTRE IS (0, -1). That is the cathedral's own centre — the point
+   * the ρ symmetry in the note above is taken about, so A, B and D are one
+   * figure rather than three placements. Measured on the built map: the nave
+   * floor at that cell is `flags = 1`, `floor = 0.16 m`, 232 of its ~314 cells
+   * are walkable, and A* solves from ALL FIFTEEN attack spawn points to it on
+   * the INTACT map, because `NavGrid._carveInteriors` carves the cathedral's
+   * ground storey (it is `CATH` in `world.interiorVolumes`). A downward ray from
+   * the sky finds the roof at 26.20 m and the FLOOR at 0.16 m is only there
+   * because of that carve — which is exactly why this is proved and not assumed,
+   * and why `MatchSystem._reprobeZoneNav` may not use the strike's own top-down
+   * cell probe on it.
+   *
+   * `KEEPOUT` IS NOT AVAILABLE TO THIS CHANGE. It lives in `src/world/layout.js`
+   * and `world` belongs to another agent, so the r3.0 reservation the other
+   * three zone centres get cannot be added for this one. The substitute is a
+   * measurement rather than a hope: `resolveLayout` proves the centre walkable,
+   * `standRing` proves eight standing points inside the circle against A* from
+   * both sides, and both counts are printed at boot. If the dressing ever drops
+   * a crate on the nave crossing, those numbers fall and the boot log says so.
+   */
+  {
+    id: 'D',
+    name: 'THE CATHEDRAL',
+    locked: true,
+    level: L(0.0, -1.0),
+    /** Four units up the nave, still under the crossing. */
+    fallback: L(0.0, -5.0),
+    holdLevel: L(0.0, -1.0),
+    flankLevel: null,
+  },
 ];
 
 /**
@@ -647,6 +691,13 @@ export function resolveLayout(world, ai) {
     const zone = {
       id: s.id,
       name: s.name,
+      /**
+       * AUTHORED SHUT. A locked zone is resolved, proved and painted here like
+       * any other and then held out of `MatchSystem.sites` until the match opens
+       * it — see the note on D above. Nothing downstream of this file needs to
+       * know: `sites` is the live list, and opening one is a push.
+       */
+      locked: !!s.locked,
       // No per-site override authored: the default lives in rules.js.
       radius,
       position,
@@ -719,12 +770,19 @@ export function resolveLayout(world, ai) {
       }
       console.info(
         `[match] zone ${z.id} "${z.name}" at ${z.position.x.toFixed(1)}, ` +
-          `${z.position.z.toFixed(1)} · r${z.radius} · ${z.stand.length} standing points`
+          `${z.position.z.toFixed(1)} · r${z.radius} · ${z.stand.length} standing points` +
+          (z.locked ? ' · LOCKED until the match opens it' : '')
       );
     }
   }
 
-  return { sites, spawns };
+  /**
+   * `sites` is the LIVE list and `all` is every authored zone in order. A locked
+   * zone is in `all` and not in `sites`, and opening it is one `push` into the
+   * array `CaptureZones`, the HUD, the marks and the objective plan all already
+   * hold — @see `MatchSystem._setZoneLive`.
+   */
+  return { sites: sites.filter((z) => !z.locked), all: sites, spawns };
 }
 
 /**

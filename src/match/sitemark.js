@@ -90,6 +90,18 @@ export class SiteMarks {
     for (const mesh of list) mesh.material = m;
   }
 
+  /**
+   * Show or hide one zone's paint. A LOCKED zone (D, the cathedral) is built at
+   * boot with everything else — the resolved position is the only place the
+   * paint can be correct — and then hidden, because a capture circle painted on
+   * a floor nobody may capture yet is the map telling the player a lie.
+   */
+  setVisible(site, on) {
+    const list = this._meshes.get(site);
+    if (!list) return;
+    for (const mesh of list) mesh.visible = !!on;
+  }
+
   _buildOne(site) {
     this._current = [];
     this._meshes.set(site, this._current);

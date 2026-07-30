@@ -85,18 +85,28 @@ export class CaptureZones {
     this._n = [0, 0];
   }
 
+  /**
+   * ONE zone back to neutral.
+   *
+   * Split out of `reset` because a zone can now JOIN the list mid-match — D, the
+   * cathedral, which is authored `locked` and pushed into `zones` when the
+   * building comes down. It has to arrive neutral, with an `ownedSince` on the
+   * current clock, or `meanOwnership` counts it as having been held since t=0.
+   */
+  resetZone(z, elapsed) {
+    z.owner = -1;
+    z.capTeam = -1;
+    z.progress = 0;
+    z.contested = false;
+    z.counts[0] = 0;
+    z.counts[1] = 0;
+    z.rate = 0;
+    z.ownedSince = elapsed;
+  }
+
   /** Every zone back to neutral. Called when a match starts. */
   reset(elapsed) {
-    for (const z of this.zones) {
-      z.owner = -1;
-      z.capTeam = -1;
-      z.progress = 0;
-      z.contested = false;
-      z.counts[0] = 0;
-      z.counts[1] = 0;
-      z.rate = 0;
-      z.ownedSince = elapsed;
-    }
+    for (const z of this.zones) this.resetZone(z, elapsed);
     this.score[0] = 0;
     this.score[1] = 0;
     this._scoreTimer = RULES.scoreInterval;
