@@ -439,13 +439,15 @@ export class Ragdoll {
     // bone LENGTH, so bone length is what has to be exact at the moment the AABB
     // and the skeleton are read, not merely in the middle of the iteration loop.
     //
-    // Three alternating sweeps, attachments first and length last each time,
+    // Four alternating sweeps, attachments first and length last each time,
     // because one sweep is not enough: Gauss-Seidel makes each constraint exact
     // in turn and the pelvis is the first bone in the table, so every projection
     // after it moves its tail again. MEASURED on the peak frame of an airstrike
-    // landing on a settled body: one sweep 1.24x, three sweeps 1.05x. The cost is
-    // six flat loops over 25 bones and 20 attachments on a doll that is awake.
-    for (let it = 0; it < 3; it++) {
+    // landing on a settled body: one sweep 1.24x, three sweeps 1.06x, four
+    // 1.04x. The cost is eight flat loops over 25 bones and 20 attachments on a
+    // doll that is awake, and `step()` returns before any of it on one that is
+    // not — which is every corpse on the map after the first second.
+    for (let it = 0; it < 4; it++) {
       this._solveAttach();
       this._solveDistance();
     }
@@ -604,7 +606,19 @@ export class Ragdoll {
       }
       const pl = Math.hypot(pushx, pushy, pushz);
       if (pl < 1e-6) continue;
-      const cap = 0.2;
+      /**
+       * 0.10 m, down from 0.20.
+       *
+       * This is the depenetration a single bone may be given in ONE iteration,
+       * and 0.20 m is longer than the pelvis bone (110 mm) and the first spine
+       * bone (126 mm) ARE. A contact that jams a corpse into a step could
+       * therefore ask for a correction that no length projection can absorb, and
+       * the corpse read as stretched for as long as it was wedged — measured at
+       * 1.20x on the pelvis during the peak frame of a blast. It still runs every
+       * iteration, so the per-step budget is 8 x 0.10 = 0.8 m, which is far more
+       * depenetration than a 1/120 s step can ever need.
+       */
+      const cap = 0.1;
       if (pl > cap) {
         const s = cap / pl;
         pushx *= s; pushy *= s; pushz *= s;
@@ -651,7 +665,18 @@ export class Ragdoll {
       } else {
         nx = 0; ny = 1; nz = 0;
       }
-      const push = (rad - d) * 0.5;
+      /**
+       * Capped at 50 mm for the same reason `_solveContacts` is capped at 100.
+       *
+       * Two thighs are 185 mm capsules, so a pair that has ended up concentric
+       * asks for 170 mm of separation in one go — more than the pelvis bone
+       * (110 mm) and the first spine bone (126 mm) are LONG, and this pass is the
+       * last thing before the length projections have to absorb it. Measured on
+       * the peak frame of an airstrike landing on a pile of bodies, that was the
+       * remaining 1.27x stretch. 50 mm per step is 6 m/s of separation speed at
+       * 120 Hz, which is far more than two limbs need to stop overlapping.
+       */
+      const push = Math.min((rad - d) * 0.5, 0.05);
       const s = cl.s, t = cl.t;
       const wa0 = this.invMass[a0] * (1 - s), wa1 = this.invMass[a1] * s;
       const wb0 = this.invMass[b0] * (1 - t), wb1 = this.invMass[b1] * t;

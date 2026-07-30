@@ -788,9 +788,22 @@ export class AudioSystem {
       // frame the collision appears reads as a switch being thrown.
       extraDelay: 0.12,
     }, 'weapons',
-    // Below a footstep at 3 m on purpose: this is scenery, and it must never be
-    // the thing that takes the last weapons slot off a shot.
-    0.55);
+    /**
+     * 0.35, AND THE NUMBER IS ARITHMETIC RATHER THAN TASTE.
+     *
+     * `SpatialField.acquire` will only steal a voice whose priority is at most
+     * `pri + 0.25`, and a remote shot's priority is `clamp(0.95 - dist*0.006,
+     * 0.4, 0.95)`. At 0.35 the settle can evict nothing above 0.60, i.e. nothing
+     * closer than 58 m — and `_onFire` already refuses remote shots past 60 m, so
+     * there is no shot in the field that this can take a slot from. That is the
+     * guarantee "a bigger explosion must not evict the firefight" needs, and 0.55
+     * did not give it: 0.55 + 0.25 = 0.80 reaches a shot at 25 m.
+     *
+     * The price is that the settle is itself cheap to steal, which is the correct
+     * way round for scenery: you hear the block finish coming down when there is
+     * not a firefight in your ear, and you do not when there is.
+     */
+    0.35);
   }
 
   _onFire(p) {

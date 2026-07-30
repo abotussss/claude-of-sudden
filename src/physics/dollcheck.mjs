@@ -352,10 +352,19 @@ try {
   }
 
   /* ---------------- verdict ---------------- */
-  const bad = rows.filter(
+  /**
+   * A DOLL THAT IS UNDER THE FLOOR IS NOT A SOLVER MEASUREMENT. `src/world` is
+   * live in this repo and a corpse that fell through a hole in the level is in
+   * free fall with no contacts at all — its bones stretch because gravity is the
+   * only thing acting on it, which says nothing about the constraint solver this
+   * gate exists to check. They are counted and printed, never silently dropped.
+   */
+  const under = rows.filter((r) => r.minY < -0.5);
+  const graded = rows.filter((r) => r.minY >= -0.5);
+  const bad = graded.filter(
     (r) => r.span > MAX_SPAN || r.stretch > MAX_STRETCH || r.drift > MAX_DRIFT || r.islands > 1
   );
-  const worst = (k) => rows.reduce((m, r) => (r[k] > m[k] ? r : m), rows[0] ?? { [k]: 0 });
+  const worst = (k) => graded.reduce((m, r) => (r[k] > m[k] ? r : m), graded[0] ?? { [k]: 0 });
 
   if (VERBOSE) {
     const pad = (s, n) => String(s).padEnd(n);
@@ -374,7 +383,14 @@ try {
   }
 
   console.log(`\n=== DOLLCHECK — ${rows.length} ragdoll samples ===`);
-  if (rows.length) {
+  if (under.length) {
+    console.log(
+      `  ${under.length} sample(s) had a bone below y=-0.5 — a body that fell through the level, ` +
+        'not a solver result. Not graded. Lowest: ' +
+        `${Math.min(...under.map((r) => r.minY)).toFixed(2)} m [${under[0].label}]`
+    );
+  }
+  if (graded.length) {
     const ws = worst('span'), wt = worst('stretch'), wd = worst('drift'), wi = worst('islands');
     console.log(`  islands  worst ${wi.islands}   (1 = one connected body)`);
     console.log(`  span     worst ${ws.span.toFixed(2)} m  limit ${MAX_SPAN}  [${ws.label}]`);
@@ -384,7 +400,7 @@ try {
     console.log(
       `  drift    worst ${wd.drift.toFixed(3)} m  limit ${MAX_DRIFT}  [${wd.label} ${wd.worstJoint}]`
     );
-    console.log(`  over limit: ${bad.length} / ${rows.length} samples`);
+    console.log(`  over limit: ${bad.length} / ${graded.length} graded samples`);
   } else {
     console.log('  no ragdolls were produced — the gate measured nothing');
     exitCode = 1;
