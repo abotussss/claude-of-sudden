@@ -46,17 +46,27 @@ export class RoundStrip {
     this._pips(this.usPips, s.aliveUs, s.rosterUs ?? s.aliveUs);
     this._pips(this.themPips, s.aliveThem, s.rosterThem ?? s.aliveThem);
 
+    /**
+     * DOMINATION HAS NO ROUND AND NO SIDE. "ROUND 1 · ATTACK" was actively
+     * misleading there — there is one match and neither side attacks — so the
+     * middle line carries the mode and the zone count instead.
+     */
+    const domination = s.mode === 'domination';
     const role = s.role === 'attack' ? 'ATTACK' : 'DEFEND';
     setText(
       this.phase,
-      s.round < 1 ? 'WARM UP' : `ROUND ${s.round} · ${role}`
+      s.round < 1
+        ? 'WARM UP'
+        : domination
+          ? `DOMINATION · ${s.ownedUs ?? 0}-${s.ownedThem ?? 0} ZONES`
+          : `ROUND ${s.round} · ${role}`
     );
     setText(this.alert, s.alert ?? '');
     setStyle(this.alert, 'display', s.alert ? '' : 'none');
 
     // A live fuse pulses the alert line; nothing else on the HUD does, so the
-    // motion alone means "the C4 is down".
-    const armed = s.bombState === 'planted';
+    // motion alone means "the C4 is down". Never true in domination.
+    const armed = !domination && s.bombState === 'planted';
     this._alertPulse = armed ? this._alertPulse + dt * (2.2 + (1 - s.bombFuse / 40) * 5) : 0;
     const a = armed ? 0.55 + 0.45 * (Math.sin(this._alertPulse * Math.PI * 2) * 0.5 + 0.5) : 1;
     setStyle(this.alert, 'opacity', a.toFixed(3));
@@ -77,7 +87,164 @@ export class RoundStrip {
 }
 
 /**
- * C4 PANEL — bottom centre, above the interaction prompt.
+ * ZONE STRIP — DOMINATION: who holds A, C and B, and what is happening to them.
+ *
+ * Sits directly under the round strip, one chip per zone in map order (west to
+ * east), which is the same order the compass and the paint on the ground put them
+ * in. Each chip is:
+ *
+ *   • the letter, tinted by owner — cold for yours, hot for theirs, amber for
+ *     neutral. Owner is the ONLY thing colour means here.
+ *   • an ownership underline, so a chip reads at a glance with no colour vision.
+ *   • a capture bar that fills toward whoever is taking it, and goes amber and
+ *     STOPS when the point is contested. A frozen amber bar is the mode's one
+ *     unambiguous "kill them or leave".
+ *   • the head count inside the circle, yours over theirs. This is the number a
+ *     player actually rotates on.
+ *
+ * The chip the player is STANDING IN is boxed and brightened, because the one
+ * question the HUD has to answer instantly is "am I on the point".
+ *
+ * WHY THE STYLES ARE INLINE. Every other widget's CSS lives in src/ui/style.js;
+ * this one is built with `setStyle` in the constructor instead, so the whole
+ * feature is contained in the two files the HUD change was scoped to. Nothing is
+ * animated by CSS — the fills are written from `update(dt, s)` like the rest of
+ * the HUD, so a captured frame is deterministic. Only text, colour and one
+ * transform are written per frame, all through the change-guarded setters.
+ */
+const MAX_ZONES = 5;
+
+export class ZoneStrip {
+  constructor(parent) {
+    this.root = el('div', 'ow-zones', parent);
+    setStyle(this.root, 'position', 'absolute');
+    setStyle(this.root, 'left', '50%');
+    // Below .ow-match (45px) and .ow-round (72px), both in style.js.
+    setStyle(this.root, 'top', 'calc(var(--pad) * .7 + 104px * var(--k))');
+    setStyle(this.root, 'transform', 'translateX(-50%)');
+    setStyle(this.root, 'display', 'flex');
+    setStyle(this.root, 'align-items', 'flex-start');
+    setStyle(this.root, 'gap', 'calc(var(--u) * 2.2)');
+    setStyle(this.root, 'white-space', 'nowrap');
+
+    this.chips = [];
+    for (let i = 0; i < MAX_ZONES; i++) {
+      const chip = el('div', 'ow-zone', this.root);
+      setStyle(chip, 'display', 'flex');
+      setStyle(chip, 'flex-direction', 'column');
+      setStyle(chip, 'align-items', 'center');
+      setStyle(chip, 'gap', 'calc(var(--u) * .55)');
+      setStyle(chip, 'padding', 'calc(var(--u) * .7) calc(var(--u) * 1.5)');
+      setStyle(chip, 'border', '1px solid transparent');
+
+      const letter = el('div', null, chip, '?');
+      setStyle(letter, 'font-family', 'var(--fd)');
+      setStyle(letter, 'font-size', 'calc(20px * var(--k))');
+      setStyle(letter, 'line-height', '1');
+      setStyle(letter, 'letter-spacing', '.06em');
+      setStyle(letter, 'text-shadow', 'var(--sh-o1)');
+
+      const rule = el('div', null, chip);
+      setStyle(rule, 'width', 'calc(30px * var(--k))');
+      setStyle(rule, 'height', 'calc(2.5px * var(--k))');
+
+      const track = el('div', null, chip);
+      setStyle(track, 'width', 'calc(30px * var(--k))');
+      setStyle(track, 'height', 'calc(2px * var(--k))');
+      setStyle(track, 'background', 'rgba(255,255,255,.14)');
+      const fill = el('i', null, track);
+      setStyle(fill, 'display', 'block');
+      setStyle(fill, 'height', '100%');
+      setStyle(fill, 'width', '100%');
+      setStyle(fill, 'transform-origin', 'left');
+      setStyle(fill, 'transform', 'scaleX(0)');
+
+      const count = el('div', null, chip, '');
+      setStyle(count, 'font-family', 'var(--fm)');
+      setStyle(count, 'font-size', 'calc(9px * var(--k))');
+      setStyle(count, 'letter-spacing', '.1em');
+      setStyle(count, 'text-shadow', 'var(--sh-o1)');
+
+      this.chips.push({ root: chip, letter, rule, track, fill, count });
+    }
+    /** Held-count line, so "2 / 3" is on screen without counting chips. */
+    this.held = el('div', null, this.root, '');
+    setStyle(this.held, 'align-self', 'center');
+    setStyle(this.held, 'font-size', 'calc(10px * var(--k))');
+    setStyle(this.held, 'letter-spacing', '.22em');
+    setStyle(this.held, 'color', 'var(--ink-2)');
+    setStyle(this.held, 'text-shadow', 'var(--sh-o1)');
+    setStyle(this.held, 'padding-left', 'calc(var(--u) * 1.5)');
+    setStyle(this.held, 'border-left', '1px solid var(--hair)');
+
+    this.shown = 0;
+    this._pulse = 0;
+    setStyle(this.root, 'display', 'none');
+  }
+
+  update(dt, s) {
+    const zones = s?.mode === 'domination' ? s.zones : null;
+    const want = zones && zones.length ? 1 : 0;
+    this.shown = damp(this.shown, want, 16, dt);
+    setStyle(this.root, 'display', this.shown < 0.005 ? 'none' : 'flex');
+    if (this.shown < 0.005) return;
+    setStyle(this.root, 'opacity', this.shown.toFixed(3));
+    // One shared pulse so every contested bar breathes together rather than each
+    // one on its own phase, which reads as noise.
+    this._pulse += dt;
+    const breathe = 0.55 + 0.45 * (Math.sin(this._pulse * Math.PI * 2.4) * 0.5 + 0.5);
+
+    for (let i = 0; i < this.chips.length; i++) {
+      const c = this.chips[i];
+      const z = zones[i];
+      setStyle(c.root, 'display', z ? 'flex' : 'none');
+      if (!z) continue;
+      const own =
+        z.owner === 'mine' ? 'var(--friend)' : z.owner === 'theirs' ? 'var(--enemy)' : 'var(--amber)';
+      setText(c.letter, z.id);
+      setStyle(c.letter, 'color', z.here ? 'var(--ink)' : own);
+      setStyle(c.rule, 'background', own);
+      // Standing on it: a box and a brighter letter. Nothing else on this strip
+      // draws a border, so the box can only mean one thing.
+      setStyle(c.root, 'border-color', z.here ? own : 'transparent');
+      setStyle(c.root, 'background', z.here ? 'rgba(8,11,14,.42)' : 'transparent');
+
+      const p = clamp01(z.progress);
+      setStyle(c.fill, 'transform', `scaleX(${p.toFixed(3)})`);
+      const barColour = z.contested
+        ? 'var(--amber)'
+        : z.capture === 'mine'
+          ? 'var(--friend)'
+          : z.capture === 'theirs'
+            ? 'var(--enemy)'
+            : 'var(--ink-3)';
+      setStyle(c.fill, 'background', barColour);
+      setStyle(c.fill, 'opacity', z.contested ? breathe.toFixed(3) : '1');
+      setStyle(c.track, 'opacity', p > 0.001 || z.contested ? '1' : '0.35');
+
+      setText(c.count, z.contested ? 'CONTESTED' : `${z.mine} / ${z.theirs}`);
+      setStyle(
+        c.count,
+        'color',
+        z.contested ? 'var(--amber)' : z.mine || z.theirs ? 'var(--ink-2)' : 'var(--ink-3)'
+      );
+    }
+    setText(
+      this.held,
+      `${s.ownedUs ?? 0}/${zones.length} · ${s.score?.[s.playerTeam ?? 0] ?? 0}` +
+        ` of ${s.scoreTarget ?? 0}`
+    );
+  }
+
+  dispose() {
+    this.root.remove();
+  }
+}
+
+/**
+ * C4 PANEL — bottom centre, above the interaction prompt. DEMOLITION only; it
+ * hides itself when nothing is carrying, dropped or armed, which in domination is
+ * every frame.
  *
  * Only on screen when the charge is in play. The fuse bar is the round clock
  * once it is armed, which is exactly the point of the mode: the two minutes
@@ -185,11 +352,19 @@ export class Scoreboard {
     const colors = s.teamColor ?? ['#ff6a52', '#66b4ff'];
     // The local player's side is always the left-hand column.
     const order = [s.playerTeam ?? 0, 1 - (s.playerTeam ?? 0)];
-    setText(this.title, `DEMOLITION · ROUND ${s.round} / ${s.maxRounds}`);
+    const domination = s.mode === 'domination';
+    setText(
+      this.title,
+      domination
+        ? `DOMINATION · FIRST TO ${s.scoreTarget ?? 0}`
+        : `DEMOLITION · ROUND ${s.round} / ${s.maxRounds}`
+    );
     setText(
       this.sub,
       `${names[order[0]]} ${s.score[order[0]]} — ${s.score[order[1]]} ${names[order[1]]}` +
-        `   ·   ${s.role === 'attack' ? 'YOU ATTACK' : 'YOU DEFEND'}`
+        (domination
+          ? `   ·   ZONES ${s.ownedUs ?? 0} — ${s.ownedThem ?? 0}`
+          : `   ·   ${s.role === 'attack' ? 'YOU ATTACK' : 'YOU DEFEND'}`)
     );
 
     for (let c = 0; c < 2; c++) {

@@ -17,6 +17,7 @@
  */
 
 import * as THREE from 'three';
+import { TEAM_COLOR } from './rules.js';
 
 const RING_W = 0.32;
 
@@ -30,6 +31,8 @@ export class SiteMarks {
     this.group = new THREE.Group();
     this.group.name = 'match-site-marks';
     this._geos = [];
+    /** site -> the meshes painting it, so ownership can retint one zone. */
+    this._meshes = new Map();
 
     /**
      * PAINTED CONCRETE, from the shared library — not a bare
@@ -49,20 +52,47 @@ export class SiteMarks {
      * marking actually looks like.
      */
     const lib = ctx.peek('materials');
-    this.paint =
+    const make = (tint) =>
       lib?.get?.('concrete_floor', {
-        tint: 0xd8ad22,
+        tint,
         roughness: [0.74, 0.16, 0.4],
         wear: [0.42, 0.8, 0.6, 0],
-      }) ??
-      new THREE.MeshStandardMaterial({ color: 0xc8a01c, roughness: 0.82 });
+      }) ?? new THREE.MeshStandardMaterial({ color: tint, roughness: 0.82 });
+    this.paint = make(0xd8ad22);
+    /**
+     * WHO HOLDS IT, PAINTED ON THE GROUND — domination's single most useful piece
+     * of readability, and free: three variants of the same worn road paint, and a
+     * capture swaps `mesh.material` on a dozen flat quads.
+     *
+     * The tints are the TEAM colours from rules.js, so the paint, the zone strip,
+     * the compass chevron and the minimap dot are one palette. Darkened a third
+     * from the HUD values because a road under a bright sky reads far lighter than
+     * the same hex on a dark overlay — at full value both sides looked like
+     * fluorescent plastic, which is exactly what the note above this warns about.
+     */
+    this.ownerPaint = [make(tintOf(TEAM_COLOR[0])), make(tintOf(TEAM_COLOR[1]))];
+    /** Everything `render.patcher` has to see. @see MatchSystem.init */
+    this.materials = [this.paint, ...this.ownerPaint];
     this._ownMaterial = !lib?.get;
 
     for (const s of sites) this._buildOne(s);
     ctx.scene.add(this.group);
   }
 
+  /**
+   * Repaint one zone. `team` is -1 for neutral. Called by `match` on every
+   * capture; a no-op in the C4 mode, which never calls it.
+   */
+  setOwner(site, team) {
+    const list = this._meshes.get(site);
+    if (!list) return;
+    const m = team < 0 ? this.paint : this.ownerPaint[team];
+    for (const mesh of list) mesh.material = m;
+  }
+
   _buildOne(site) {
+    this._current = [];
+    this._meshes.set(site, this._current);
     const r = site.radius;
     const y = site.position.y + 0.012; // just proud, so it never z-fights the road
 
@@ -139,21 +169,35 @@ export class SiteMarks {
     m.userData.owNoShadow = true;
     this.group.add(m);
     this._geos.push(geo);
+    this._current?.push(m);
   }
 
   dispose() {
     this.group.parent?.remove(this.group);
     for (const g of this._geos) g.dispose();
     this._geos.length = 0;
+    this._meshes.clear();
     // Library materials are shared and owned by `materials`; only free our own.
-    if (this._ownMaterial) this.paint.dispose();
+    if (this._ownMaterial) for (const m of this.materials) m.dispose();
   }
 }
 
 /**
+ * A HUD hex darkened for daylight ground. `#ff6a52` on a sunlit road at this
+ * engine's exposure comes out as a sheet of orange plastic; two thirds of the
+ * value keeps the hue that identifies the side and lets the concrete's own grain
+ * and wear read through the tint.
+ */
+function tintOf(css) {
+  const c = new THREE.Color(css);
+  c.multiplyScalar(0.66);
+  return c.getHex();
+}
+
+/**
  * Block letters from boxes, authored in a 1x1 square and scaled to `size`.
- * Only the two glyphs the mode uses — adding more is a matter of listing
- * strokes, not of pulling in a font.
+ * Only the glyphs the mode uses — adding one is a matter of listing strokes, not
+ * of pulling in a font. Domination added C for the mid street.
  */
 function letterStrokes(ch, size) {
   const t = 0.2; // stroke thickness, in glyph units
@@ -173,6 +217,16 @@ function letterStrokes(ch, size) {
       [0.02, -0.4, 0.5, t, 0],
       [0.28, 0.2, t, 0.4, 0],
       [0.28, -0.2, t, 0.4, 0],
+    ],
+    /**
+     * C: a squared-off bracket — spine plus top and bottom arms, and NO right
+     * hand side. Drawn open the way the block A and B are drawn square, so the
+     * three glyphs read as one alphabet from a shallow angle at 20 m.
+     */
+    C: [
+      [-0.3, 0, t, 1.0, 0],
+      [-0.02, 0.4, 0.62, t, 0],
+      [-0.02, -0.4, 0.62, t, 0],
     ],
   };
   const list = STROKES[ch] ?? STROKES.A;

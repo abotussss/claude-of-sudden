@@ -14,7 +14,7 @@ import { Prompt, Banner } from './prompts.js';
 import { AirAlert } from './airalert.js';
 import { PauseMenu } from './menu.js';
 import { ScopeOverlay } from './scope.js';
-import { RoundStrip, BombPanel, Scoreboard, SpectateBar } from './round.js';
+import { RoundStrip, ZoneStrip, BombPanel, Scoreboard, SpectateBar } from './round.js';
 import { CombatDemo } from './demo.js';
 
 const MAX_BLIPS = 48;
@@ -54,8 +54,11 @@ const MAX_BLIPS = 48;
  *   ui.airDanger(worldPos, life, label) world-space impact reticle, one per
  *                                       point, for the length of the telegraph
  *   ui.setMatch({scoreUs,scoreThem,timeLeft,mode})
- *   ui.setRound(state)                  the demolition HUD: alive counts, phase,
- *                                       C4 fuse, scoreboard. See src/match.
+ *   ui.setRound(state)                  the round HUD: alive counts, phase, the
+ *                                       domination zone strip (state.mode ===
+ *                                       'domination' + state.zones), the C4 fuse
+ *                                       in the other mode, scoreboard. See
+ *                                       src/match.
  *   ui.matchDriven                      true ⇒ `match` owns the killfeed and the
  *                                       score; stop inferring them from damage
  *   ui.setHudVisible(bool)              hide everything (cinematics)
@@ -116,8 +119,11 @@ export class UiSystem {
     this.banner = new Banner(this.chromeLayer);
     /** Incoming air. Inert until `match` calls airAlert(). */
     this.airAlertStrip = new AirAlert(this.chromeLayer);
-    // Demolition-mode HUD. Inert until `match` calls setRound().
+    // Round HUD. Inert until `match` calls setRound(), and each widget hides
+    // itself when the running mode has nothing to say through it: the zone strip
+    // needs `mode === 'domination'`, the C4 panel needs a charge in play.
     this.roundStrip = new RoundStrip(this.chromeLayer);
+    this.zoneStrip = new ZoneStrip(this.chromeLayer);
     this.bombPanel = new BombPanel(this.chromeLayer);
     this.spectateBar = new SpectateBar(this.chromeLayer);
     this.scoreboard = new Scoreboard(this.root);
@@ -624,10 +630,11 @@ export class UiSystem {
     // which is a bearing difference and nothing to do with projection.
     this.airAlertStrip.update(dt, heading, pos.x, pos.z);
 
-    // ---- demolition HUD --------------------------------------------------
+    // ---- round HUD (domination / demolition) -----------------------------
     const r = this.round;
     this.roundStrip.update(dt, r);
     setStyle(this.roundStrip.root, 'display', r ? '' : 'none');
+    this.zoneStrip.update(dt, r);
     this.bombPanel.update(dt, r);
     this.spectateBar.update(dt, r);
     // Held on Tab, and shown for free between rounds — which is when you
@@ -732,6 +739,7 @@ export class UiSystem {
     this.banner.dispose();
     this.airAlertStrip.dispose();
     this.roundStrip.dispose();
+    this.zoneStrip.dispose();
     this.bombPanel.dispose();
     this.spectateBar.dispose();
     this.scoreboard.dispose();

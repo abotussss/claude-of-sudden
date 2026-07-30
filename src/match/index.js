@@ -1,66 +1,85 @@
 /**
- * MATCH — the Sudden Attack demolition ruleset.
+ * MATCH — DOMINATION, with the demolition ruleset kept behind a mode flag.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * WHAT THIS SUBSYSTEM IS
  * ────────────────────────────────────────────────────────────────────────────
  * Everything in `src/render`, `src/materials`, `src/sky`, `src/world`,
  * `src/physics`, `src/fx` and `src/audio` is the engine this repo shipped with
- * and is untouched. What changed is the GAME: instead of a garrison to shoot
- * your way through, this is 7 v 7, one life a round, a two minute clock and a
- * C4 charge — 폭파미션, the mode Sudden Attack is actually played in.
+ * and is untouched. What changed is the GAME.
  *
- *   src/match/rules.js    every duration, count and radius
- *   src/match/sites.js    bomb sites and both spawns, in the level's own space
- *   src/match/bomb.js     the charge: carry / drop / plant / defuse / detonate
- *   src/match/spectate.js the camera you get when you die, because you stay dead
- *
- * ────────────────────────────────────────────────────────────────────────────
- * ROUND STATE MACHINE
- * ────────────────────────────────────────────────────────────────────────────
- *   warmup -> freeze -> live -> over -> (freeze | matchover)
- *
- *   freeze  weapons locked, movement free, loadout changeable
- *   live    the round. The clock only matters until the C4 is armed; after
- *           that the fuse is the only clock, which is the rule that makes a
- *           4 v 1 losable.
- *   over    scoreboard dwell, bodies left where they fell
+ *   src/match/rules.js    every duration, count and radius, and `RULES.mode`
+ *   src/match/sites.js    the three capture zones (and the two bomb sites), both
+ *                         spawn clusters, in the level's own space
+ *   src/match/capture.js  DOMINATION: presence, the capture bar, the score tick
+ *   src/match/bomb.js     DEMOLITION: carry / drop / plant / defuse / detonate
+ *   src/match/spectate.js the camera you get while you wait to come back
  *
  * ────────────────────────────────────────────────────────────────────────────
- * RESPAWNS
+ * WHY DOMINATION, AND WHAT THAT REPLACED
  * ────────────────────────────────────────────────────────────────────────────
- * Death inside a round costs `RULES.respawnDelay` seconds, not the round. The
- * queue is one entry per dead ROSTER RECORD, so a bot and the human come back
- * on identical rules and the scoreboard row survives the death — a respawned
- * bot is a NEW `Agent` (the old one is a ragdoll and cannot be un-died), so the
- * record's `actor` is re-pointed and everything that looks a man up by his
- * record keeps working.
+ * "爆破サイトにするとゲーム性が悪いのでドミネーションにします。占領サイトを一定時間
+ * いるとポイント加算で、サイトを占領するとそこからリスポーン可能で、奪われたら既定の
+ * リスポーン位置からのスポーンのみ"
  *
- * Respawns CLOSE when the charge is armed or the clock drops under
- * `RULES.respawnCutoff`, which is what keeps the win condition intact: only
- * once the queue can no longer refill can a side be eliminated, so the last
- * stretch of every round is the one-life mode this is a version of.
+ * Three zones, A / C / B west to east. Standing in one takes it, holding one
+ * prints `RULES.scorePerZone` every `RULES.scoreInterval`, first side to
+ * `RULES.scoreTarget` wins, and a zone you hold is a spawn for your side that
+ * disappears the instant it is taken off you.
+ *
+ * WHAT DOMINATION DOES NOT USE (all of it still runs under
+ * `RULES.mode = MODE.DEMOLITION`, none of it is half-converted):
+ *   • the C4 entirely — no plant, no defuse, no fuse, no `match:bomb`
+ *   • rounds. There is ONE match: no `roundsToWin`, no `maxRounds`, no side
+ *     swap, no per-round rebuild. `m.round` stays 1.
+ *   • attack and defence as roles. Both sides want all three zones; `role` now
+ *     only names which base cluster you spawn at, and it never swaps.
+ *   • elimination as a win condition, and with it `RULES.respawnCutoff` — a side
+ *     with nobody alive is a side losing three points every four seconds, which
+ *     is punishment enough. Respawns never close.
+ *   • the flank staging leg (`_flankTarget`) and the contact-report rotation
+ *     (`_threatenedSite`). Domination has real zone state to rotate on, which is
+ *     strictly better information than a guess about which site is being hit.
+ * KEPT: warmup (the level finishes streaming), freeze (both sides hold at spawn
+ * so the match does not open mid-firefight), the respawn queue and its 6 s / 4 s
+ * protection, the three air weapons, the ammunition pouches, spectating.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * STATE MACHINE
+ * ────────────────────────────────────────────────────────────────────────────
+ *   warmup -> freeze -> live -> over -> matchover -> (freeze, a fresh match)
+ *
+ *   freeze    weapons locked, feet locked, both sides at their base
+ *   live      the match. `roundClock` is `RULES.matchTime` counting down.
+ *   over      scoreboard dwell
+ *   matchover the result, then a restart
+ *
+ * In demolition the same graph loops `over -> freeze` for the next round.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * PUBLIC API — `const m = ctx.get('match')`
  * ────────────────────────────────────────────────────────────────────────────
  *   m.phase / m.round / m.score      -> [red, blue]
- *   m.attackers / m.defenders        -> TEAM ids for the current round
- *   m.playerRole                     -> 'attack' | 'defend'
- *   m.bomb                           -> the Bomb
- *   m.sites                          -> [{ id, name, position, radius }]
+ *   m.attackers / m.defenders        -> TEAM ids (in domination: fixed bases)
+ *   m.playerRole                     -> 'attack' | 'defend' (which base)
+ *   m.sites                          -> the zones: [{ id, name, position, radius,
+ *                                      owner, progress, capTeam, contested }]
+ *   m.capture                        -> the CaptureZones, or null in demolition
+ *   m.bomb                           -> the Bomb (inert in domination)
  *   m.roster                         -> [{ name, team, kills, deaths, alive }]
  *   m.getHudState()                  -> the snapshot `ui` draws the round HUD from
  *
  * EVENTS EMITTED (added to the table in ARCHITECTURE.md)
  *   match:round    { round, phase, attackers, score }
- *   match:bomb     { state, site, fuse, carrier }
+ *   match:capture  { zone, owner, previous, score }
+ *   match:bomb     { state, site, fuse, carrier }      demolition only
  *   match:result   { winner, reason, score, matchOver }
  */
 
 import * as THREE from 'three';
-import { RULES, TEAM, TEAM_NAME, TEAM_COLOR, ROLE, attackingTeam, roleOf, BOT_NAMES, TEAM_VARIANTS } from './rules.js';
+import { RULES, MODE, TEAM, TEAM_NAME, TEAM_COLOR, ROLE, attackingTeam, roleOf, BOT_NAMES, TEAM_VARIANTS } from './rules.js';
 import { resolveLayout } from './sites.js';
+import { CaptureZones } from './capture.js';
 import { Bomb, BOMB } from './bomb.js';
 import { Spectator } from './spectate.js';
 import { SiteMarks } from './sitemark.js';
@@ -88,6 +107,8 @@ export class MatchSystem {
     this.weapons = ctx.get('weapons');
     this.ui = ctx.get('ui');
     this.world = ctx.get('world');
+    /** Which ruleset is running. Read all over this file. @see RULES.mode */
+    this.domination = RULES.mode === MODE.DOMINATION;
 
     /* ---- layout ------------------------------------------------------- */
     const layout = resolveLayout(this.world, this.ai);
@@ -109,7 +130,7 @@ export class MatchSystem {
     this.round = 0;
     this.phase = PHASE.WARMUP;
     this.timer = RULES.warmup;
-    this.roundClock = RULES.roundTime;
+    this.roundClock = this.domination ? RULES.matchTime : RULES.roundTime;
     this.result = null;
     this.matchOver = false;
 
@@ -137,6 +158,23 @@ export class MatchSystem {
     this.weapons.locked = true;
     this.ai.combatEnabled = false;
 
+    /* ---- the zones ----------------------------------------------------- */
+    /**
+     * DOMINATION lives here. `this.score` is ADOPTED from it rather than copied:
+     * the HUD, the scoreboard, `match:round` and `match:result` all read
+     * `m.score`, and pointing them at the capture system's own array means there
+     * is exactly one score in the process and no way for the two to drift.
+     */
+    this.capture = this.domination ? new CaptureZones(this.sites) : null;
+    if (this.capture) {
+      this.score = this.capture.score;
+      this.capture.onCapture = (z, previous, byPlayer) => this._onCaptured(z, previous, byPlayer);
+      this.capture.onScoreTick = null; // silent on purpose; the HUD already shows it
+    }
+    /** Forward vs base spawns actually used, per team. Reported, not gameplay. */
+    this._forwardSpawns = [0, 0];
+    this._baseSpawns = [0, 0];
+
     /* ---- bomb + spectator --------------------------------------------- */
     this.bomb = new Bomb(ctx);
     // Paint the sites on the ground from the RESOLVED positions, so the paint is
@@ -155,7 +193,8 @@ export class MatchSystem {
     if (patcher) {
       for (const m of this.bomb.materials) patcher.patch(m);
       for (const m of this.ammoDrops.materials) patcher.patch(m);
-      patcher.patch(this.marks.paint);
+      // Three paints, not one: neutral plus a tint per side. @see SiteMarks.
+      for (const m of this.marks.materials) patcher.patch(m);
     }
     this.spectator = new Spectator(ctx);
 
@@ -257,6 +296,36 @@ export class MatchSystem {
       /** '' | 'plant' | 'defuse' | 'plant-player' | 'defuse-player' */
       working: '',
       roster: this.roster,
+      /* ---- domination ---- */
+      /** 'domination' | 'demolition'. `ui` branches the HUD on this. */
+      mode: RULES.mode,
+      scoreTarget: RULES.scoreTarget,
+      /**
+       * ONE RECORD PER ZONE, ALLOCATED ONCE AND WRITTEN IN PLACE.
+       *
+       * `ui` reads this array every frame and must never retain it. `mine` and
+       * `theirs` are from the LOCAL player's point of view, because a HUD that
+       * makes you work out which of RED and BLUE you are is a HUD you misread
+       * under fire.
+       */
+      zones: this.sites.map((z) => ({
+        id: z.id,
+        name: z.name,
+        /** 'neutral' | 'mine' | 'theirs' */
+        owner: 'neutral',
+        /** 0..1 on the bar, and whose bar it is. */
+        progress: 0,
+        capture: 'none',
+        contested: false,
+        /** Live bodies inside the circle, from the player's point of view. */
+        mine: 0,
+        theirs: 0,
+        /** True when the local player is standing in this one. */
+        here: false,
+      })),
+      /** How many zones each side holds, player's point of view. */
+      ownedUs: 0,
+      ownedThem: 0,
     };
     this._hud.respawnIn = 0;
     this._interact = { held: 0, kind: null };
@@ -277,6 +346,16 @@ export class MatchSystem {
      * ragdoll alive. @see `_flankTarget`
      */
     this._flankLeg = new Map();
+    /**
+     * DOMINATION OBJECTIVE SCRATCH, all preallocated: `_assignDomination` runs
+     * every two seconds over thirty actors and must not allocate.
+     *   _live   the live bots of the side being tasked
+     *   _taken  parallel to `_live`; true once that man has a zone
+     *   _plan   one record per zone, rewritten in place each refresh
+     */
+    this._live = [];
+    this._taken = [];
+    this._plan = this.sites.map((z) => ({ zone: z, mode: 'hold', want: 0, prio: 0, filled: 0 }));
     /** Where each side comes from, so a held position is actually watched. */
     this._approach = [new THREE.Vector3(), new THREE.Vector3()];
     /** The centre of the fight, handed to the three air systems. @see `_updateAirFocus` */
@@ -305,14 +384,25 @@ export class MatchSystem {
       this._playerLastAttacker = e.source ?? null;
     });
 
-    console.info(
-      `[match] SUDDEN CLAUDE — demolition ${RULES.teamSize}v${RULES.teamSize}, ` +
-        `${RULES.roundTime | 0}s rounds, first to ${RULES.roundsToWin}, ` +
-        `sides swap after round ${RULES.swapAfterRound}` +
-        (RULES.respawns
-          ? ` · respawn ${RULES.respawnDelay}s, closes at ${RULES.respawnCutoff}s or on the plant`
-          : ' · one life')
-    );
+    if (this.domination) {
+      console.info(
+        `[match] SUDDEN CLAUDE — DOMINATION ${RULES.teamSize}v${RULES.teamSize} · ` +
+          `${this.sites.length} zones (${this.sites.map((z) => z.id).join('/')}) · ` +
+          `first to ${RULES.scoreTarget} · ${RULES.scorePerZone} pts per zone every ` +
+          `${RULES.scoreInterval}s · ${RULES.matchTime | 0}s clock · capture ` +
+          `${RULES.captureTime}s solo, r${RULES.captureRadius} · respawn ` +
+          `${RULES.respawnDelay}s, forward spawns on held zones`
+      );
+    } else {
+      console.info(
+        `[match] SUDDEN CLAUDE — demolition ${RULES.teamSize}v${RULES.teamSize}, ` +
+          `${RULES.roundTime | 0}s rounds, first to ${RULES.roundsToWin}, ` +
+          `sides swap after round ${RULES.swapAfterRound}` +
+          (RULES.respawns
+            ? ` · respawn ${RULES.respawnDelay}s, closes at ${RULES.respawnCutoff}s or on the plant`
+            : ' · one life')
+      );
+    }
   }
 
   /** Compile the C4's materials before the frame loop — see src/core/prewarm.js. */
@@ -396,7 +486,7 @@ export class MatchSystem {
     this.round++;
     const atk = this.attackers;
     const def = this.defenders;
-    this.roundClock = RULES.roundTime;
+    this.roundClock = this.domination ? RULES.matchTime : RULES.roundTime;
     this.result = null;
     this._interact.held = 0;
 
@@ -409,9 +499,25 @@ export class MatchSystem {
 
     // Attackers commit to one site; defenders split, weighted to the site the
     // attackers did NOT pick only by chance, because they do not know either.
-    this.targetSite = this.sites[this.rng.int(0, this.sites.length - 1)];
+    // DOMINATION has no target: every zone is everybody's.
+    this.targetSite = this.domination
+      ? null
+      : this.sites[this.rng.int(0, this.sites.length - 1)];
     for (const s of this.sites) s.defenders.length = 0;
     this._flankLeg.clear();
+    /**
+     * Every zone back to NEUTRAL, and the paint with it. A match starts with the
+     * map up for grabs — starting each side on its nearest zone would make the
+     * opening a 1-1 stalemate and remove the one moment when all three are live.
+     */
+    if (this.capture) {
+      this.capture.reset(this.ctx.time.elapsed);
+      for (const z of this.sites) this.marks.setOwner(z, -1);
+      this._forwardSpawns[0] = 0;
+      this._forwardSpawns[1] = 0;
+      this._baseSpawns[0] = 0;
+      this._baseSpawns[1] = 0;
+    }
 
     this._spawnTeam(atk, ROLE.ATTACK);
     this._spawnTeam(def, ROLE.DEFEND);
@@ -432,34 +538,54 @@ export class MatchSystem {
     // already refilled the reserve, so leaving them would be free ammunition
     // for a budget that is already full.
     this.ammoDrops.clear();
+    // The charge is reset in both modes — in domination that is what keeps it
+    // hidden and inert (state CARRIED, no carrier, group invisible) rather than
+    // leaving a live object nobody drives.
     this.bomb.reset();
-    if (this.playerTeam === atk) {
-      // The human gets the C4 when their side attacks: the mode is only
-      // interesting if the objective is yours to carry.
-      this.bomb.giveTo(this.player);
-    } else {
-      const carriers = this._botsByTeam[atk];
-      this.bomb.giveTo(carriers[this.rng.int(0, Math.max(0, carriers.length - 1))] ?? null);
+    if (!this.domination) {
+      if (this.playerTeam === atk) {
+        // The human gets the C4 when their side attacks: the mode is only
+        // interesting if the objective is yours to carry.
+        this.bomb.giveTo(this.player);
+      } else {
+        const carriers = this._botsByTeam[atk];
+        this.bomb.giveTo(carriers[this.rng.int(0, Math.max(0, carriers.length - 1))] ?? null);
+      }
     }
     this._assignObjectives();
 
     this._setPhase(PHASE.FREEZE, RULES.freeze);
-    const mine = this.playerRole === ROLE.ATTACK;
-    this.ui.banner.show(
-      `ROUND ${this.round}`,
-      mine ? 'PLANT THE C4' : 'DEFEND BOTH SITES',
-      2.4
-    );
+    if (this.domination) {
+      this.ui.banner.show(
+        'DOMINATION',
+        `CAPTURE ${this.sites.map((z) => z.id).join(' · ')} — FIRST TO ${RULES.scoreTarget}`,
+        2.8
+      );
+    } else {
+      const mine = this.playerRole === ROLE.ATTACK;
+      this.ui.banner.show(
+        `ROUND ${this.round}`,
+        mine ? 'PLANT THE C4' : 'DEFEND BOTH SITES',
+        2.4
+      );
+    }
     this.ctx.events.emit('match:round', {
       round: this.round,
       phase: this.phase,
       attackers: atk,
       score: this.score,
     });
-    console.info(
-      `[match] round ${this.round}: ${TEAM_NAME[atk]} attack, ${TEAM_NAME[def]} defend · ` +
-        `score ${this.score[0]}-${this.score[1]}`
-    );
+    if (this.domination) {
+      console.info(
+        `[match] domination match live: ${TEAM_NAME[atk]} north base, ` +
+          `${TEAM_NAME[def]} south base · all ${this.sites.length} zones neutral`
+      );
+    } else {
+      console.info(
+        `[match] round ${this.round}: ${TEAM_NAME[atk]} attack, ${TEAM_NAME[def]} defend · ` +
+          `score ${this.score[0]}-${this.score[1]}`
+      );
+    }
   }
 
   _spawnTeam(team, role) {
@@ -534,12 +660,16 @@ export class MatchSystem {
    * to end, which it cannot while either side can replace a loss.
    */
   _respawnsOpen() {
-    return (
-      RULES.respawns &&
-      this.phase === PHASE.LIVE &&
-      !this.bomb.armed &&
-      this.roundClock > RULES.respawnCutoff
-    );
+    if (!RULES.respawns || this.phase !== PHASE.LIVE) return false;
+    /**
+     * DOMINATION: ALWAYS OPEN. Both gates below exist to protect a win condition
+     * domination does not have — there is no charge to make undefusable and no
+     * elimination to reach, and a side with nobody alive is already losing three
+     * points every four seconds. Closing respawns here would only mean the last
+     * forty-five seconds of a decided match are played 15 v 3.
+     */
+    if (this.domination) return true;
+    return !this.bomb.armed && this.roundClock > RULES.respawnCutoff;
   }
 
   /** Men of `team` waiting to come back. Reads as "not eliminated yet". */
@@ -600,36 +730,80 @@ export class MatchSystem {
    */
   _safeSpawn(team, role, outYaw) {
     const spawns = role === ROLE.ATTACK ? this.spawns.attack : this.spawns.defend;
-    const foes = this._botsByTeam[1 - team];
-    const playerIsFoe = this.playerTeam !== team && !this.player.dead;
     let best = spawns[0];
-    let bestD = -Infinity;
+    let bestScore = -Infinity;
+    let forward = null;
     for (const sp of spawns) {
-      let nearest = Infinity;
-      for (const f of foes) {
-        if (!f.alive) continue;
-        const d = f.position.distanceToSquared(sp.position);
-        if (d < nearest) nearest = d;
-      }
-      if (playerIsFoe) {
-        const d = this.player.position.distanceToSquared(sp.position);
-        if (d < nearest) nearest = d;
-      }
       // Break ties randomly so fifteen men do not queue on the same square.
-      const score = nearest + this.rng.range(0, 36);
-      if (score > bestD) {
-        bestD = score;
+      const score = this._nearestFoeDist(team, sp.position) + this.rng.range(0, 6);
+      if (score > bestScore) {
+        bestScore = score;
         best = sp;
       }
     }
+    /**
+     * FORWARD SPAWNS — "サイトを占領するとそこからリスポーン可能で、奪われたら既定の
+     * リスポーン位置からのスポーンのみ".
+     *
+     * The ONLY test is `z.owner === team`, evaluated at the moment of the
+     * respawn. That is what makes losing a zone remove the option immediately
+     * and with no bookkeeping: there is no cached spawn list to invalidate, so
+     * there is no window in which somebody can be dropped into a point his side
+     * no longer holds. A neutral zone is not a spawn either — you have to own it.
+     *
+     * The base cluster is ALWAYS in the running above, so a side that holds
+     * nothing, or whose every forward point currently has an enemy standing on
+     * it, still respawns.
+     */
+    if (this.domination) {
+      for (const z of this.sites) {
+        if (z.owner !== team) continue;
+        for (const sp of z.spawnFor[team]) {
+          const d = this._nearestFoeDist(team, sp.position);
+          // Owning the zone is not the same as it being safe this second.
+          if (d < RULES.forwardSpawnBlockRadius) continue;
+          const score = d + RULES.forwardSpawnBias + this.rng.range(0, 6);
+          if (score <= bestScore) continue;
+          bestScore = score;
+          best = sp;
+          forward = z;
+        }
+      }
+    }
+    if (forward) this._forwardSpawns[team]++;
+    else if (this.domination) this._baseSpawns[team]++;
     outYaw.yaw = best.yaw;
+    outYaw.zone = forward ? forward.id : '';
     return this._jitterOnto(best, this._spawnPick);
+  }
+
+  /**
+   * Metres to the nearest LIVE enemy of `team`, including the human.
+   *
+   * Linear rather than the squared distance this used to compare, because
+   * `RULES.forwardSpawnBias` is a distance in metres and the two have to be in
+   * the same units to be added. `max` over a monotonic function is the same
+   * `max`, so the choice between base points is unchanged; only the tie-break
+   * jitter is now 6 m instead of 6 m worth of squared distance.
+   */
+  _nearestFoeDist(team, p) {
+    let nearest = Infinity;
+    for (const f of this._botsByTeam[1 - team]) {
+      if (!f.alive) continue;
+      const d = f.position.distanceToSquared(p);
+      if (d < nearest) nearest = d;
+    }
+    if (this.playerTeam !== team && !this.player.dead) {
+      const d = this.player.position.distanceToSquared(p);
+      if (d < nearest) nearest = d;
+    }
+    return nearest === Infinity ? 1e4 : Math.sqrt(nearest);
   }
 
   _respawnBot(rec) {
     const team = rec.team;
     const role = roleOf(team, this.round);
-    const yawOut = this._yawOut ?? (this._yawOut = { yaw: 0 });
+    const yawOut = this._yawOut ?? (this._yawOut = { yaw: 0, zone: '' });
     const pos = this._safeSpawn(team, role, yawOut);
     const agent = this.ai.spawn(rec.variant ?? TEAM_VARIANTS[team][0], pos, yawOut.yaw, {
       team,
@@ -646,7 +820,7 @@ export class MatchSystem {
 
   _respawnPlayer(rec) {
     const role = this.playerRole;
-    const yawOut = this._yawOut ?? (this._yawOut = { yaw: 0 });
+    const yawOut = this._yawOut ?? (this._yawOut = { yaw: 0, zone: '' });
     const pos = this._safeSpawn(this.playerTeam, role, yawOut);
     this.spectator.stop();
     this.player.respawnAt(pos, yawOut.yaw);
@@ -655,7 +829,11 @@ export class MatchSystem {
     rec.alive = true;
     this._playerWasDead = false;
     this.ai.protect(this.player, RULES.spawnProtect);
-    this.ui.banner.show('RESPAWN', `${RULES.spawnProtect | 0}S PROTECTED`, 1.6);
+    this.ui.banner.show(
+      yawOut.zone ? `RESPAWN — ZONE ${yawOut.zone}` : 'RESPAWN',
+      `${RULES.spawnProtect | 0}S PROTECTED`,
+      1.6
+    );
     this.ctx.events.emit('match:respawn', { name: rec.name, team: this.playerTeam, isPlayer: true });
   }
 
@@ -683,9 +861,191 @@ export class MatchSystem {
 
   /**
    * Hand every bot the thing it should be walking toward. Called at round start
-   * and again whenever the objective moves (plant, drop, pickup).
+   * and again whenever the objective moves (plant, drop, pickup), and on a two
+   * second timer.
    */
   _assignObjectives() {
+    if (this.domination) {
+      this._assignDomination(0);
+      this._assignDomination(1);
+      return;
+    }
+    this._assignDemolition();
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * DOMINATION: WHAT ONE SIDE'S FIFTEEN MEN ARE DOING
+   * ────────────────────────────────────────────────────────────────────────────
+   * Called for each team independently, so both sides play the mode — there is
+   * no "the bots defend and the player attacks" asymmetry left anywhere in here.
+   *
+   * Three steps, and the order is the whole design:
+   *
+   *  1. SCORE EVERY ZONE by how badly this side needs bodies in it. A zone of
+   *     ours with an enemy standing in it is the most urgent thing on the map,
+   *     because it is the only way to LOSE points that are already coming in; a
+   *     neutral zone is next, because it is free; an enemy zone after that, and
+   *     it is worth more when we are behind, which is the "rotate when the score
+   *     demands it" rule; and a quiet zone of ours only wants a garrison.
+   *
+   *  2. FILL THE SLOTS NEAREST-FIRST. For each zone in priority order, take the
+   *     closest man who has not been given a job yet. That is what makes "take
+   *     the nearest uncaptured point" true without ever writing it down: the man
+   *     already beside C is the man C gets.
+   *
+   *  3. THE VERB. Two of them, and they are `src/ai`'s words, not new ones —
+   *     `match` may not add behaviour to `src/ai`, only drive it.
+   *
+   *       TAKE / CONTEST -> `'defuse'`, aimed at one of the zone's STANDING
+   *         POINTS. `Agent._advance` treats a non-anchored objective as a single
+   *         destination with a 1 m arrival radius, and `_combat`'s urgency table
+   *         gives `'defuse'` a 2.5 s break-off — so the man walks onto the point,
+   *         stands on it, and leaves a firefight to do it. That is exactly the
+   *         behaviour a capture needs, and it is why the objective is a standing
+   *         point rather than the centre: `sites.js` proves every standing point
+   *         is inside the capture radius and reachable from both bases, so a bot
+   *         that ARRIVES is a bot that is CAPTURING. Fifteen men handed the
+   *         centre would instead scrum at the edge of one square.
+   *
+   *       GARRISON -> `'hold'`, aimed at the zone centre with the enemy base as
+   *         the facing. That is the sector-roam path (`Agent._pickHoldSpot`), so
+   *         a garrison spreads over the courtyard and its mouths instead of
+   *         standing on the paint. A holder does not need to be inside the circle
+   *         — ownership does not decay — he needs to be able to shoot whoever
+   *         walks into it, and the moment somebody does the zone becomes
+   *         contested and step 1 turns those men into contesters.
+   *
+   * Everything here writes into preallocated arrays. @see `_live` / `_plan`
+   */
+  _assignDomination(team) {
+    const live = this._live;
+    const taken = this._taken;
+    live.length = 0;
+    for (const a of this._botsByTeam[team]) if (a.alive) live.push(a);
+    if (!live.length) return;
+    taken.length = live.length;
+    for (let i = 0; i < live.length; i++) taken[i] = false;
+
+    const foe = 1 - team;
+    /**
+     * Where the enemy arrives from, handed to every garrison as its facing so
+     * `Agent._pickHoldSpot` knows which side of the zone is "forward". Each side
+     * keeps one base all match, so this is a constant per team.
+     */
+    const face = this._spawnCentre[team === this.attackers ? 'defend' : 'attack'];
+    const behind = this.score[team] < this.score[foe];
+    const owned = this.capture.ownedBy(team);
+    /** Two of three is the lead worth defending; below it, go and get one. */
+    const majority = Math.floor(this.sites.length / 2) + 1;
+    const ahead = owned >= majority;
+
+    /* ---- 1. what each zone is worth ---------------------------------- */
+    const plan = this._plan;
+    for (let i = 0; i < plan.length; i++) {
+      const e = plan[i];
+      const z = this.sites[i];
+      e.zone = z;
+      e.filled = 0;
+      const mine = z.owner === team;
+      const enemyIn = z.counts[foe] > 0;
+      const beingTaken = z.capTeam === foe && z.progress > 0;
+      if (mine && (enemyIn || beingTaken)) {
+        // Ours and under threat. Nothing else on the map matters as much.
+        e.mode = 'defuse';
+        e.want = 5;
+        e.prio = 140;
+      } else if (mine) {
+        e.mode = 'hold';
+        e.want = RULES.zoneGarrison;
+        e.prio = ahead ? 45 : 22;
+      } else if (z.owner < 0) {
+        // Neutral: the cheapest points on the map.
+        e.mode = 'defuse';
+        e.want = 5;
+        e.prio = 95 + (z.capTeam === team ? 12 : 0);
+      } else {
+        // Theirs. Worth more when we are losing, which is the rotation rule.
+        e.mode = 'defuse';
+        e.want = 5;
+        e.prio = 70 + (behind ? 25 : 0) - (ahead ? 25 : 0);
+      }
+      /**
+       * A zone the enemy is already massed in wants more men than one he is
+       * walking through, but never so many that the other two are abandoned:
+       * `want` is capped at a third of the side plus two, so three zones can
+       * always be manned.
+       */
+      e.want = Math.min(e.want + Math.min(3, z.counts[foe]), ((live.length / 3) | 0) + 2);
+    }
+    // Insertion sort by priority, descending. Three elements; allocates nothing.
+    for (let i = 1; i < plan.length; i++) {
+      const e = plan[i];
+      let j = i - 1;
+      while (j >= 0 && plan[j].prio < e.prio) {
+        plan[j + 1] = plan[j];
+        j--;
+      }
+      plan[j + 1] = e;
+    }
+
+    /* ---- 2. and 3. nearest man to each slot, then the verb ------------ */
+    let assigned = 0;
+    for (const e of plan) {
+      for (let k = 0; k < e.want && assigned < live.length; k++) {
+        const pick = this._nearestFreeIndex(live, taken, e.zone.position);
+        if (pick < 0) break;
+        taken[pick] = true;
+        assigned++;
+        this._orderZone(live[pick], e.zone, e.mode, e.filled++, face);
+      }
+    }
+    /**
+     * WHOEVER IS LEFT goes to the top priority zone. A side that has taken all
+     * three still has men over after the garrisons, and men with no objective
+     * fall through `Agent._think` to PATROL — which on this map is a soldier
+     * wandering a street for no reason. They reinforce instead.
+     */
+    if (assigned < live.length) {
+      const e = plan[0];
+      for (let i = 0; i < live.length; i++) {
+        if (taken[i]) continue;
+        taken[i] = true;
+        this._orderZone(live[i], e.zone, e.mode, e.filled++, face);
+      }
+    }
+  }
+
+  /**
+   * Give one man one zone. `slot` spreads consecutive men around the standing
+   * ring so a squad taking a point covers it instead of stacking on one cell.
+   */
+  _orderZone(a, zone, mode, slot, face) {
+    if (mode === 'hold') {
+      a.setObjective('hold', zone.position, zone, face);
+      return;
+    }
+    const ring = zone.stand;
+    a.setObjective('defuse', ring[slot % ring.length], zone);
+  }
+
+  /** Index into `live` of the nearest man with no job yet, or -1. */
+  _nearestFreeIndex(live, taken, point) {
+    let best = -1;
+    let bestD = Infinity;
+    for (let i = 0; i < live.length; i++) {
+      if (taken[i]) continue;
+      const d = live[i].position.distanceToSquared(point);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  /** The C4 mode's objective assignment, unchanged. @see RULES.mode */
+  _assignDemolition() {
     const atk = this.attackers;
     const def = this.defenders;
     const armed = this.bomb.armed;
@@ -1114,10 +1474,27 @@ export class MatchSystem {
         break;
 
       case PHASE.LIVE:
-        if (!this.bomb.armed) this.roundClock -= dt;
-        if (this.bomb.update(dt, audio) === 'detonate') {
+        // In domination the match clock is the only clock there is; in demolition
+        // it stops the moment the fuse starts.
+        if (this.domination || !this.bomb.armed) this.roundClock -= dt;
+        if (!this.domination && this.bomb.update(dt, audio) === 'detonate') {
           this._endRound(this.attackers, 'C4 DETONATED');
           break;
+        }
+        /**
+         * THE ZONES, BEFORE ANYTHING READS THEM. Presence, the bar, the flips and
+         * the score tick all land here, so `_assignObjectives` below is deciding
+         * on this frame's ownership rather than last frame's, and
+         * `_checkWinConditions` sees the score the tick just wrote.
+         */
+        if (this.capture) {
+          this.capture.update(
+            dt,
+            ctx.time.elapsed,
+            this._botsByTeam,
+            this.player,
+            this.playerTeam
+          );
         }
         // Re-task on a timer, not only on a death. MEASURED: with reassignment
         // driven purely by `actor:death`, a dropped charge stayed on the floor
@@ -1132,7 +1509,7 @@ export class MatchSystem {
           this._pruneDead();
           this._assignObjectives();
         }
-        this._updateBotObjectiveWork(dt);
+        if (!this.domination) this._updateBotObjectiveWork(dt);
         this._updatePlayerInteraction(dt);
         this._updateAmmoDrops(dt, audio);
         this._checkWinConditions();
@@ -1140,7 +1517,7 @@ export class MatchSystem {
 
       case PHASE.OVER:
         this.timer -= dt;
-        this.bomb.update(dt, null);
+        if (!this.domination) this.bomb.update(dt, null);
         if (this.timer <= 0) {
           if (this.matchOver) this._endMatch();
           else this._beginRound();
@@ -1446,6 +1823,20 @@ export class MatchSystem {
       ui.clearPrompt();
       return;
     }
+    /**
+     * DOMINATION HAS NO INTERACTION. Presence is the whole verb — a capture point
+     * you have to hold a key on does not exist in this genre, and in this engine
+     * it would be actively wrong: `Agent.working` freezes a bot where it stands,
+     * so a "use" gate would have to be human-only and the bots could never take
+     * anything. The player's feedback is the zone strip on the HUD (`h.zones`,
+     * with `here` set on the one he is standing in), so there is nothing to
+     * prompt and the prompt is cleared rather than left showing the last thing
+     * the C4 mode put in it.
+     */
+    if (this.domination) {
+      ui.clearPrompt();
+      return;
+    }
     const b = this.bomb;
     const held = this.ctx.input.action('use') && this.ctx.input.enabled;
     const mine = this.playerRole;
@@ -1550,6 +1941,7 @@ export class MatchSystem {
   /* ------------------------------------------------------ win conditions -- */
 
   _checkWinConditions() {
+    if (this.domination) return this._checkDominationWin();
     const atk = this.attackers;
     const def = this.defenders;
     const aAlive = this.aliveCount(atk);
@@ -1573,6 +1965,103 @@ export class MatchSystem {
       this.roundClock = 0;
       this._endRound(def, 'TIME');
     }
+  }
+
+  /**
+   * DOMINATION HAS TWO ENDINGS AND NEITHER OF THEM IS A BODY COUNT.
+   *
+   * The score target, or the clock with the higher score taking it. Elimination
+   * is deliberately absent: with respawns permanently open a side is never
+   * eliminated, and a side that is being wiped is already losing the score race
+   * because it is not standing in anything. That is the mode punishing it, on the
+   * same axis it is played on.
+   */
+  _checkDominationWin() {
+    const s = this.score;
+    if (s[0] >= RULES.scoreTarget || s[1] >= RULES.scoreTarget) {
+      // Both can cross on the same tick (a 1-1 split, both on 248): the larger
+      // total takes it, and a genuine dead heat is a draw.
+      const w = s[0] === s[1] ? -1 : s[0] > s[1] ? 0 : 1;
+      this._finishMatch(w, `${RULES.scoreTarget} POINTS`);
+      return;
+    }
+    if (this.roundClock <= 0) {
+      this.roundClock = 0;
+      this._finishMatch(s[0] === s[1] ? -1 : s[0] > s[1] ? 0 : 1, 'TIME');
+    }
+  }
+
+  /**
+   * The domination match is over. Replaces `_endRound` rather than reusing it:
+   * `_endRound` increments `this.score`, which in this mode IS the capture score
+   * and must not be touched by the thing that reads it.
+   */
+  _finishMatch(winner, reason) {
+    if (this.phase !== PHASE.LIVE) return;
+    this._respawnQueue.length = 0;
+    for (const a of this.ai.agents) a.working = null;
+    this.result = { winner, reason };
+    this.matchOver = true;
+    this._pendingMatchWinner = winner;
+    this.ui.banner.show(
+      winner < 0 ? 'DRAW' : winner === this.playerTeam ? 'MATCH WON' : 'MATCH LOST',
+      `${winner < 0 ? 'LEVEL' : TEAM_NAME[winner]} · ${reason} · ` +
+        `${this.score[0]} — ${this.score[1]}`,
+      3.6
+    );
+    this.ctx.events.emit('match:result', {
+      winner,
+      reason,
+      score: this.score,
+      matchOver: false,
+    });
+    const mean = this.capture.meanOwnership(this.ctx.time.elapsed);
+    const st = this.capture.stats;
+    console.info(
+      `[match] DOMINATION over — ${winner < 0 ? 'DRAW' : TEAM_NAME[winner]} (${reason}) ` +
+        `${this.score[0]}-${this.score[1]} · captures ${st.captures[0]}/${st.captures[1]} ` +
+        `(bots ${st.capturesByBots[0]}/${st.capturesByBots[1]}) · mean hold ` +
+        `${mean[0]}s/${mean[1]}s · forward spawns ` +
+        `${this._forwardSpawns[0]}/${this._forwardSpawns[1]} of ` +
+        `${this._forwardSpawns[0] + this._baseSpawns[0]}/` +
+        `${this._forwardSpawns[1] + this._baseSpawns[1]}`
+    );
+    this._setPhase(PHASE.OVER, RULES.roundOverTime);
+  }
+
+  /**
+   * A zone changed hands. The banner is the LOCAL player's news, so it is worded
+   * from their side; the killfeed row is what makes a capture visible to somebody
+   * who was looking down a sight when it happened.
+   */
+  _onCaptured(zone, previous, byPlayer) {
+    this.marks.setOwner(zone, zone.owner);
+    const mine = zone.owner === this.playerTeam;
+    this.ui.banner.show(
+      mine ? `ZONE ${zone.id} CAPTURED` : `ZONE ${zone.id} LOST`,
+      byPlayer
+        ? `${zone.name} · YOURS`
+        : `${zone.name} · ${TEAM_NAME[zone.owner]} · ${this.capture.ownedBy(zone.owner)}/${this.sites.length}`,
+      2.0
+    );
+    this.ui.killfeed.push({
+      attacker: TEAM_NAME[zone.owner],
+      victim: `ZONE ${zone.id}`,
+      headshot: false,
+      mine: false,
+      attackerFriendly: mine,
+    });
+    // Everybody hears a point go. Same call the C4 used, same 70 m.
+    for (const a of this.ai.agents) if (a.alive) a.hear(zone.position, 70);
+    this.ctx.events.emit('match:capture', {
+      zone: zone.id,
+      owner: zone.owner,
+      previous,
+      score: this.score,
+    });
+    // The map just changed shape for both sides: re-task immediately rather than
+    // waiting up to two seconds for the refresh.
+    this._assignObjectives();
   }
 
   /* ------------------------------------------------------------- to ui -- */
@@ -1607,31 +2096,91 @@ export class MatchSystem {
     h.spectating = this.spectator.active ? this.spectator.targetName : '';
     h.progress = b.progress;
     h.working = b.workKind ?? '';
+    if (this.domination) this._publishZones();
     h.alert =
       this.phase === PHASE.FREEZE
         ? 'PREPARE'
         : this.phase === PHASE.OVER || this.phase === PHASE.MATCH_OVER
           ? this.result
-            ? `${TEAM_NAME[this.result.winner]} WIN`
+            ? this.result.winner < 0
+              ? 'DRAW'
+              : `${TEAM_NAME[this.result.winner]} WIN`
             : ''
-          : b.armed
-            ? `C4 ARMED — SITE ${b.site?.id ?? '?'}`
-            : '';
+          : this.domination
+            ? h.ownedUs === this.sites.length
+              ? 'ALL ZONES HELD'
+              : h.ownedUs
+                ? `HOLDING ${h.ownedUs} / ${this.sites.length}`
+                : 'NO ZONES HELD'
+            : b.armed
+              ? `C4 ARMED — SITE ${b.site?.id ?? '?'}`
+              : '';
 
     this.ui.setMatch({
       scoreUs: this.score[this.playerTeam],
       scoreThem: this.score[1 - this.playerTeam],
       timeLeft: h.clock,
-      mode: 'DEMOLITION',
+      mode: this.domination ? 'DOMINATION' : 'DEMOLITION',
     });
     this.ui.setRound?.(h);
     this._publishObjectives();
+  }
+
+  /**
+   * The zone strip's snapshot, written into the records allocated in `init`.
+   *
+   * Everything is expressed from the LOCAL player's side — `mine` / `theirs`
+   * rather than red and blue — because the one thing a HUD must never make you do
+   * while being shot at is work out which colour you are.
+   */
+  _publishZones() {
+    const h = this._hud;
+    const me = this.playerTeam;
+    const here = this.player.dead ? null : this.capture.zoneAt(this.player.position);
+    let us = 0;
+    let them = 0;
+    for (let i = 0; i < this.sites.length; i++) {
+      const z = this.sites[i];
+      const r = h.zones[i];
+      r.owner = z.owner < 0 ? 'neutral' : z.owner === me ? 'mine' : 'theirs';
+      r.progress = z.progress;
+      r.capture = z.capTeam < 0 ? 'none' : z.capTeam === me ? 'mine' : 'theirs';
+      r.contested = z.contested;
+      r.mine = z.counts[me];
+      r.theirs = z.counts[1 - me];
+      r.here = z === here;
+      if (z.owner === me) us++;
+      else if (z.owner >= 0) them++;
+    }
+    h.ownedUs = us;
+    h.ownedThem = them;
   }
 
   /** Site markers on the compass and the minimap, and the C4 once it is down. */
   _publishObjectives() {
     const out = this._objectives;
     out.length = 0;
+    /**
+     * DOMINATION: one marker per zone, coloured by who holds it. Amber is
+     * neutral, your own team tint is yours, theirs is theirs — the same palette
+     * the zone strip and the paint on the ground use, so the compass, the minimap
+     * and the courtyard you are standing in all agree.
+     */
+    if (this.domination) {
+      for (const z of this.sites) {
+        out.push(
+          this._marker(
+            z.id,
+            z.id,
+            z.position,
+            z.owner < 0 ? '#ffb02a' : TEAM_COLOR[z.owner]
+          )
+        );
+      }
+      this._publishEnemyMarkers(out);
+      this.ui.setObjectives(out);
+      return;
+    }
     const b = this.bomb;
     if (b.armed) {
       out.push(this._marker('bomb', 'C4', b.position, '#ff3f31'));

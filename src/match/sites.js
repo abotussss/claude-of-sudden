@@ -14,7 +14,7 @@
  */
 
 import * as THREE from 'three';
-import { RULES } from './rules.js';
+import { RULES, MODE } from './rules.js';
 
 /**
  * ONE SITE AT THE END OF EACH OUTER LANE, 56 m apart.
@@ -155,6 +155,61 @@ export const SITES = [
 ];
 
 /**
+ * ────────────────────────────────────────────────────────────────────────────
+ * C — THE MID STREET, AND WHY DOMINATION NEEDED A THIRD POINT HERE
+ * ────────────────────────────────────────────────────────────────────────────
+ * Two points is not domination, it is a tug of war: 1-1 is stable, whoever
+ * takes the second one has already won, and there is nothing to rotate. Three
+ * is the genre's number because 2-1 is a lead you have to keep working at.
+ *
+ * The two courtyards above come for free — they are already fortified, already
+ * gated by three mouths each, and already proved reachable by `navcheck`. The
+ * third has to be the MID lane, and it has to sit in the ONE stretch of it that
+ * is open ground: the mid street runs x ±6.5 (kerb) with two single-storey
+ * islands standing in it, K1 at level (0, 12) and K2 at level (-0.4, -4.6) —
+ * see `src/world/layout.js`. K2's north face is at level z -1.5 and K1's south
+ * face at level z 9.3, so the gap between them is 10.8 m of authored level
+ * (16.2 m of world ground) and its centre is level z 3.9.
+ *
+ * That is where the circle goes. Radius 8 world metres spans the gap almost
+ * exactly, both islands stand at its shoulders as hard cover, and it is the one
+ * zone on the map that BOTH connectors feed into — which is what makes taking A
+ * and B worth anything, because a side that owns C owns the rotation between
+ * them.
+ *
+ * HEIGHT FIELD, NOT A BUILDING. `src/ai/nav.js` is one floor per (x, z) cell,
+ * so anything inside a footprint resolves onto its roof and no bot can ever
+ * path to it. This zone is deliberately the tarmac BETWEEN the two islands and
+ * not either island's roof, both of which a player can reach (there are steps)
+ * and no bot ever can. A capture point bots cannot take is a capture point that
+ * does not exist. @see the same argument at the top of the A entry.
+ */
+const MID = {
+  id: 'C',
+  name: 'MID STREET',
+  level: L(0.0, 3.9),
+  /** Two metres north, still in the gap, in case the dressing dice land on the centre. */
+  fallback: L(0.0, 5.6),
+  /**
+   * Both sides arrive down the same street from opposite ends, so "the mouth my
+   * rotation comes through" is not a single point here the way it is in a
+   * courtyard. The hold is the zone itself and `Agent._pickHoldSpot`'s ring
+   * spreads a garrison over the gap and the two island shoulders.
+   */
+  holdLevel: L(0.0, 3.9),
+  /** No staging point: there is no long way round to the middle of the map. */
+  flankLevel: null,
+};
+
+/**
+ * THE THREE CAPTURE POINTS, in domination. A and B are the courtyards the C4
+ * mode already used — same geometry, same nav proof, a different verb — plus the
+ * mid street. Ordered west-to-east so the HUD strip reads A C B left to right
+ * the way the map is laid out.
+ */
+export const ZONES = [SITES[0], MID, SITES[1]];
+
+/**
  * Spawns, `[x, z, yaw]` in level space.
  *
  * Both clusters sit in the MID lane behind their own cross street — the attack
@@ -209,11 +264,20 @@ export const SPAWNS = {
  * Turn the authored level coordinates into world-space points that a character
  * can actually stand on.
  *
+ * The returned list is still called `sites` and every entry still carries
+ * `{ id, name, position, radius, hold, flank }`, in domination as in demolition.
+ * That is deliberate: `tools/navcheck.mjs`, `sitecheck`, `lanecheck` and
+ * `src/match/airstrike.js`'s route proof all read those field names, and a mode
+ * change must not quietly turn the map's own gate off.
+ *
  * @param {object} world  the `world` subsystem (for levelToWorld)
  * @param {object} ai     the `ai` subsystem (for the nav grid + ground probe)
  * @returns {{sites: Array, spawns: {attack: Array, defend: Array}}}
  */
 export function resolveLayout(world, ai) {
+  const domination = RULES.mode === MODE.DOMINATION;
+  const authored = domination ? ZONES : SITES;
+  const defaultRadius = domination ? RULES.captureRadius : RULES.plantRadius;
   const snap = (lx, lz, fx, fz, tag) => {
     const primary = groundPoint(world, ai, lx, lz);
     if (walkable(ai, primary)) return primary;
@@ -233,7 +297,7 @@ export function resolveLayout(world, ai) {
   const spawns = { attack: bake(SPAWNS.attack), defend: bake(SPAWNS.defend) };
   for (const k of ['attack', 'defend']) for (const sp of spawns[k]) walkable(ai, sp.position);
 
-  const sites = SITES.map((s) => {
+  const sites = authored.map((s) => {
     const position = snap(s.level[0], s.level[1], s.fallback[0], s.fallback[1], `site ${s.id}`);
     ensureReachable(ai, position, spawns, ['attack', 'defend'], `site ${s.id}`, false);
     const hold = groundPoint(world, ai, s.holdLevel[0], s.holdLevel[1]);
@@ -274,17 +338,43 @@ export function resolveLayout(world, ai) {
       else console.warn(`[match] site ${s.id} flank: no usable staging point — flank disabled`);
     }
 
-    return {
+    const radius = s.radius ?? defaultRadius;
+    const zone = {
       id: s.id,
       name: s.name,
       // No per-site override authored: the default lives in rules.js.
-      radius: s.radius ?? RULES.plantRadius,
+      radius,
       position,
       hold: holdOk ? hold : position.clone(),
       flank,
       /** Filled in by the match each round. */
       defenders: [],
+      /* ---- domination state, owned by src/match/capture.js ---- */
+      /** -1 neutral, else the team id that holds it. */
+      owner: -1,
+      /** The team currently making progress on it, or -1. */
+      capTeam: -1,
+      /** 0..1 toward `capTeam` owning it. */
+      progress: 0,
+      /** Both sides inside the circle ⇒ progress frozen. */
+      contested: false,
+      /** Live bodies of each team inside the circle, refreshed every tick. */
+      counts: [0, 0],
+      /** `ctx.time.elapsed` when the current owner took it. */
+      ownedSince: 0,
+      /**
+       * STANDING GROUND INSIDE THE CIRCLE — see `standRing`.
+       *
+       * Bots are sent to one of these rather than to the centre, so fifteen men
+       * taking a point spread over it instead of stacking on one square, and
+       * every one of them is provably INSIDE the capture radius. It is also
+       * where a forward spawn puts you.
+       */
+      stand: [],
+      /** `[{position, yaw}]` per team, for `_safeSpawn`. Built below. */
+      spawnFor: [[], []],
     };
+    return zone;
   });
 
   // A SPAWN THAT CANNOT REACH THE OBJECTIVE IS A DEAD MAN. Sites are placed
@@ -301,7 +391,101 @@ export function resolveLayout(world, ai) {
     }
   }
 
+  /**
+   * The standing ring, and the forward spawns cut from it. Domination only —
+   * demolition has no use for either and must not pay the path queries.
+   */
+  if (domination) {
+    for (const z of sites) standRing(ai, z, spawns);
+    for (const z of sites) {
+      for (const team of [0, 1]) {
+        /**
+         * Face the way the enemy arrives. A forward spawn that puts you looking
+         * at your own wall is a free kill for whoever is already in the zone,
+         * and `role` here is "which base cluster is NOT yours".
+         */
+        const foeBase = centroidOf(team === RULES.playerTeam ? spawns.defend : spawns.attack);
+        for (const p of z.stand) {
+          z.spawnFor[team].push({
+            position: p,
+            yaw: Math.atan2(foeBase.x - p.x, -(foeBase.z - p.z)) + Math.PI,
+          });
+        }
+      }
+      console.info(
+        `[match] zone ${z.id} "${z.name}" at ${z.position.x.toFixed(1)}, ` +
+          `${z.position.z.toFixed(1)} · r${z.radius} · ${z.stand.length} standing points`
+      );
+    }
+  }
+
   return { sites, spawns };
+}
+
+/**
+ * Up to `STAND_POINTS` walkable, REACHABLE points inside a zone's circle.
+ *
+ * Why this exists rather than "send everybody to the centre": `Agent._advance`
+ * treats a non-anchored objective as a single destination with a 1 m arrival
+ * radius, so fifteen men handed the same Vector3 all try to stand on the same
+ * square and local avoidance turns the capture into a scrum at the edge of it.
+ * A ring at 0.5 r spreads them across the zone and — the part that matters for
+ * the mode working at all — every point is inside the capture radius by
+ * construction, so a bot that arrives is a bot that is capturing.
+ *
+ * Each candidate is snapped to a nav cell and then PROVED: it must have an A*
+ * route from at least one spawn of each side, the same relaxed rule the zone
+ * centres are anchored with. A standing point nobody can walk to would be a man
+ * standing still in an alley, which is the exact failure `ensureReachable`'s
+ * header is about.
+ */
+const STAND_POINTS = 8;
+function standRing(ai, zone, spawns) {
+  const g = ai?.grid;
+  // The centre is always a legal answer — it is snapped and proved above.
+  const centre = zone.position;
+  if (!g) {
+    zone.stand.push(centre.clone());
+    return;
+  }
+  const path = [];
+  const reach = (q) => {
+    for (const kind of ['attack', 'defend']) {
+      let any = false;
+      for (const sp of spawns[kind]) if (g.findPath(sp.position, q, path) > 0) { any = true; break; }
+      if (!any) return false;
+    }
+    return true;
+  };
+  const probe = new THREE.Vector3();
+  const r = zone.radius * 0.5;
+  for (let i = 0; i < STAND_POINTS; i++) {
+    const th = (i / STAND_POINTS) * Math.PI * 2 + 0.31;
+    probe.set(centre.x + Math.cos(th) * r, centre.y, centre.z + Math.sin(th) * r);
+    if (!walkable(ai, probe)) continue;
+    // `walkable` snapped it; two bearings can land on the same cell.
+    let dup = false;
+    for (const p of zone.stand) if (p.distanceToSquared(probe) < 1.2 * 1.2) dup = true;
+    if (dup) continue;
+    // And it must still be inside the circle after the snap.
+    const dx = probe.x - centre.x;
+    const dz = probe.z - centre.z;
+    if (dx * dx + dz * dz > zone.radius * zone.radius) continue;
+    if (!reach(probe)) continue;
+    zone.stand.push(probe.clone());
+  }
+  if (!zone.stand.length) {
+    console.warn(`[match] zone ${zone.id}: no standing ring resolved — using the centre alone`);
+    zone.stand.push(centre.clone());
+  }
+}
+
+/** Mean position of a spawn cluster. Boot-time only; allocates once. */
+function centroidOf(list) {
+  const out = new THREE.Vector3();
+  for (const s of list) out.add(s.position);
+  if (list.length) out.multiplyScalar(1 / list.length);
+  return out;
 }
 
 /** True when `p` has an A* route to every bomb site. */

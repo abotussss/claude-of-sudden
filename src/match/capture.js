@@ -1,0 +1,279 @@
+/**
+ * MATCH — DOMINATION: the capture points and the score they print.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT THIS IS
+ * ────────────────────────────────────────────────────────────────────────────
+ * "占領サイトを一定時間いるとポイント加算で、サイトを占領するとそこからリスポーン
+ * 可能で、奪われたら既定のリスポーン位置からのスポーンのみ"
+ *
+ * Three zones (see `ZONES` in src/match/sites.js). Standing in one takes it;
+ * holding one prints points on a tick; holding one is also what opens a forward
+ * spawn on it (that half lives in `MatchSystem._safeSpawn`, because spawning is
+ * the match's business and this file only decides who owns what).
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE RULES, AND THE ONES DELIBERATELY NOT TAKEN
+ * ────────────────────────────────────────────────────────────────────────────
+ *   PRESENCE, NOT A KEYPRESS. A body inside the circle counts. There is no hold-F
+ *   on a capture point in any game in this genre, and more to the point `working`
+ *   in `src/ai` freezes an actor where he stands — a bot that had to "use" a zone
+ *   would stop moving and shooting in the middle of the one fight that decides
+ *   the zone.
+ *
+ *   ONE BAR, NOT TWO. Taking a point off the enemy runs the same single bar as
+ *   taking a neutral one; the owner does not drop to neutral halfway. Battlefield
+ *   splits it, Call of Duty does not, and a single bar with an owner colour is
+ *   the version a player can read at a glance from 30 m away while being shot at.
+ *
+ *   CONTESTED FREEZES. Both sides in the circle and the bar stops dead rather
+ *   than racing on a headcount. A frozen amber bar says "kill them or leave" with
+ *   no arithmetic; a race says "you are losing by a number you cannot see".
+ *
+ *   CROWD SCALES THE RATE, capped. `RULES.captureCrowdBonus` /
+ *   `RULES.captureMaxRate` — four men take a point in under four seconds, and
+ *   fifteen men cannot take one in half a second.
+ *
+ *   AN EMPTY BAR BLEEDS BACK. `RULES.captureDecay`. A half-finished capture that
+ *   persisted for ever would flip a zone minutes later for no visible reason.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * ALLOCATION
+ * ────────────────────────────────────────────────────────────────────────────
+ * `update()` runs every frame with thirty actors and three zones. Everything it
+ * touches — the per-zone counts, the score gains, the stats — is preallocated
+ * here, and the two callbacks are handed reused objects the listener must copy
+ * out of. Nothing in this file allocates after construction.
+ */
+
+import { RULES } from './rules.js';
+
+export class CaptureZones {
+  /**
+   * @param {Array} zones  the resolved zones from `resolveLayout`
+   */
+  constructor(zones) {
+    this.zones = zones;
+    /** Points this match. Index is the team id. */
+    this.score = [0, 0];
+    this._scoreTimer = RULES.scoreInterval;
+    /** Reused score-tick payload: points added to each side this tick. */
+    this._gains = [0, 0];
+
+    /** Fired the frame a zone changes hands. `(zone, previousOwner, byPlayer)` */
+    this.onCapture = null;
+    /** Fired on every score tick. `(gains, score)` — both reused arrays. */
+    this.onScoreTick = null;
+
+    /* ---- measurement, which is the only way to know the mode works ---- */
+    this.stats = {
+      /** Flips to each team. */
+      captures: [0, 0],
+      /** Flips where the local player was inside the circle at the moment. */
+      capturesWithPlayer: [0, 0],
+      /** Flips with no player involvement — i.e. a BOT capture. */
+      capturesByBots: [0, 0],
+      /** Total seconds of ownership, summed over completed and current spells. */
+      ownedSeconds: [0, 0],
+      /** Completed ownership spells, so `ownedSeconds / spells` is the mean. */
+      spells: [0, 0],
+      /** Score ticks awarded. */
+      ticks: 0,
+    };
+
+    /** Scratch: how many of each side are in the zone being evaluated. */
+    this._n = [0, 0];
+  }
+
+  /** Every zone back to neutral. Called when a match starts. */
+  reset(elapsed) {
+    for (const z of this.zones) {
+      z.owner = -1;
+      z.capTeam = -1;
+      z.progress = 0;
+      z.contested = false;
+      z.counts[0] = 0;
+      z.counts[1] = 0;
+      z.ownedSince = elapsed;
+    }
+    this.score[0] = 0;
+    this.score[1] = 0;
+    this._scoreTimer = RULES.scoreInterval;
+    const s = this.stats;
+    for (let t = 0; t < 2; t++) {
+      s.captures[t] = 0;
+      s.capturesWithPlayer[t] = 0;
+      s.capturesByBots[t] = 0;
+      s.ownedSeconds[t] = 0;
+      s.spells[t] = 0;
+    }
+    s.ticks = 0;
+  }
+
+  /** How many zones `team` currently holds. */
+  ownedBy(team) {
+    let n = 0;
+    for (const z of this.zones) if (z.owner === team) n++;
+    return n;
+  }
+
+  /**
+   * The zone whose circle contains `p`, or null. Same 3 m vertical tolerance the
+   * C4's `_siteAt` used, and for the same reason: a man on a 2.9 m catwalk over
+   * the courtyard is not standing in the courtyard.
+   */
+  zoneAt(p) {
+    for (const z of this.zones) {
+      const dx = p.x - z.position.x;
+      const dz = p.z - z.position.z;
+      if (dx * dx + dz * dz <= z.radius * z.radius && Math.abs(p.y - z.position.y) < 3) return z;
+    }
+    return null;
+  }
+
+  /**
+   * One frame of capture and score.
+   *
+   * @param {number} dt
+   * @param {number} elapsed          `ctx.time.elapsed`, for ownership spells
+   * @param {Array[]} botsByTeam      `[[Agent], [Agent]]` — live bots only is not
+   *                                  required; dead ones are skipped here
+   * @param {object|null} player      the local player, or null when dead
+   * @param {number} playerTeam
+   */
+  update(dt, elapsed, botsByTeam, player, playerTeam) {
+    for (const z of this.zones) this._updateZone(dt, elapsed, z, botsByTeam, player, playerTeam);
+
+    // ---- the tick ------------------------------------------------------
+    this._scoreTimer -= dt;
+    if (this._scoreTimer > 0) return;
+    this._scoreTimer += RULES.scoreInterval;
+    const g = this._gains;
+    g[0] = this.ownedBy(0) * RULES.scorePerZone;
+    g[1] = this.ownedBy(1) * RULES.scorePerZone;
+    this.score[0] += g[0];
+    this.score[1] += g[1];
+    this.stats.ticks++;
+    if (g[0] || g[1]) this.onScoreTick?.(g, this.score);
+  }
+
+  _updateZone(dt, elapsed, z, botsByTeam, player, playerTeam) {
+    const n = this._n;
+    n[0] = 0;
+    n[1] = 0;
+    let playerIn = false;
+    for (let t = 0; t < 2; t++) {
+      const list = botsByTeam[t];
+      for (let i = 0; i < list.length; i++) {
+        const a = list[i];
+        if (!a.alive) continue;
+        if (!this._inside(z, a.position)) continue;
+        n[t]++;
+      }
+    }
+    if (player && !player.dead && this._inside(z, player.position)) {
+      n[playerTeam]++;
+      playerIn = true;
+    }
+    z.counts[0] = n[0];
+    z.counts[1] = n[1];
+
+    // ---- contested: both sides in the circle, nothing moves ------------
+    if (n[0] > 0 && n[1] > 0) {
+      z.contested = true;
+      return;
+    }
+    z.contested = false;
+
+    // ---- empty: the bar bleeds back ------------------------------------
+    if (n[0] === 0 && n[1] === 0) {
+      if (z.capTeam < 0) return;
+      z.progress -= RULES.captureDecay * dt;
+      if (z.progress <= 0) {
+        z.progress = 0;
+        z.capTeam = -1;
+      }
+      return;
+    }
+
+    // ---- one side present ----------------------------------------------
+    const team = n[0] > 0 ? 0 : 1;
+    const count = n[team];
+    if (z.owner === team) {
+      // He already owns it. Any progress on the bar is the ENEMY's leftover, and
+      // standing on your own point is what pushes it back down.
+      if (z.capTeam < 0) return;
+      z.progress -= RULES.captureDecay * 4 * dt;
+      if (z.progress <= 0) {
+        z.progress = 0;
+        z.capTeam = -1;
+      }
+      return;
+    }
+
+    // Somebody else's, or nobody's, and he is standing in it.
+    if (z.capTeam !== team) {
+      // The other side had a bar going: burn it down first rather than snapping
+      // to zero, so a contested point that changes hands twice reads as one
+      // continuous fight over one bar.
+      if (z.capTeam >= 0 && z.progress > 0) {
+        z.progress -= this._rate(count) * dt;
+        if (z.progress > 0) return;
+      }
+      z.capTeam = team;
+      z.progress = 0;
+    }
+    z.progress += this._rate(count) * dt;
+    if (z.progress < 1) return;
+
+    // ---- it changes hands ----------------------------------------------
+    const previous = z.owner;
+    // AVERAGE OWNERSHIP DURATION comes from here: one completed spell per flip,
+    // measured off the clock rather than sampled. `ownedSeconds / spells` is the
+    // mean, and `liveSpells()` folds in the spells still running at the end.
+    if (previous >= 0) {
+      this.stats.spells[previous]++;
+      this.stats.ownedSeconds[previous] += Math.max(0, elapsed - z.ownedSince);
+    }
+    z.owner = team;
+    z.capTeam = -1;
+    z.progress = 0;
+    z.ownedSince = elapsed;
+    this.stats.captures[team]++;
+    if (playerIn && team === playerTeam) this.stats.capturesWithPlayer[team]++;
+    else this.stats.capturesByBots[team]++;
+    this.onCapture?.(z, previous, playerIn && team === playerTeam);
+  }
+
+  /**
+   * Fold the spells that are still running into the stats and hand back the
+   * mean ownership duration per side, in seconds. Report-time only.
+   */
+  meanOwnership(elapsed) {
+    const s = this.stats;
+    const out = this._mean ?? (this._mean = [0, 0]);
+    for (let t = 0; t < 2; t++) {
+      let secs = s.ownedSeconds[t];
+      let spells = s.spells[t];
+      for (const z of this.zones) {
+        if (z.owner !== t) continue;
+        secs += Math.max(0, elapsed - z.ownedSince);
+        spells++;
+      }
+      out[t] = spells ? +(secs / spells).toFixed(1) : 0;
+    }
+    return out;
+  }
+
+  /** Capture rate per second at `count` men in the circle. */
+  _rate(count) {
+    const mult = Math.min(RULES.captureMaxRate, 1 + RULES.captureCrowdBonus * (count - 1));
+    return mult / RULES.captureTime;
+  }
+
+  _inside(z, p) {
+    const dx = p.x - z.position.x;
+    const dz = p.z - z.position.z;
+    return dx * dx + dz * dz <= z.radius * z.radius && Math.abs(p.y - z.position.y) < 3;
+  }
+}

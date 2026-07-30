@@ -1,11 +1,18 @@
 /**
  * MATCH — the ruleset.
  *
- * Sudden Attack's 폭파미션 (demolition), retuned into a WAR rather than a duel:
- * fifteen a side, a five minute clock, and respawns inside the round the way a
- * team deathmatch runs them. The bomb is still the only thing that wins it early
- * and the clock is still the only thing that ends it late — respawning changes
- * the TEXTURE of the fight, not the win condition.
+ * TWO MODES LIVE HERE AND `RULES.mode` PICKS ONE.
+ *
+ * `domination` is what the game is played in now — "爆破サイトにするとゲーム性が
+ * 悪いのでドミネーションにします". Three capture points (A/B/C), a point tick per
+ * held zone, forward spawns on what you hold, first side to `scoreTarget` wins.
+ * See the DOMINATION block below and src/match/capture.js.
+ *
+ * `demolition` is Sudden Attack's 폭파미션, which this file used to be the only
+ * ruleset for. It is kept REACHABLE — set `RULES.mode = MODE.DEMOLITION` and the
+ * C4, the round-per-site win conditions and the side swap all come back — but it
+ * is no longer the mode the game boots into, and none of the domination numbers
+ * touch it.
  *
  * WHAT CHANGED FROM THE ONE-LIFE VERSION, and why each number is what it is:
  *   teamSize 7 -> 15      thirty actors on the map; see the LOD notes in src/ai
@@ -16,6 +23,9 @@
  * hardcodes a duration or a count.
  */
 
+/** The two rulesets `MatchSystem` can run. @see RULES.mode */
+export const MODE = { DEMOLITION: 'demolition', DOMINATION: 'domination' };
+
 export const TEAM = { RED: 0, BLUE: 1 };
 export const TEAM_NAME = ['RED', 'BLUE'];
 /** Team tints, matched to the HUD's --enemy / --friend so the palette is one system. */
@@ -24,6 +34,12 @@ export const TEAM_COLOR = ['#ff6a52', '#66b4ff'];
 export const ROLE = { ATTACK: 'attack', DEFEND: 'defend' };
 
 export const RULES = {
+  /**
+   * WHICH RULESET. `MODE.DOMINATION` is the game; `MODE.DEMOLITION` is the C4
+   * mode this repo shipped with, kept switchable rather than deleted.
+   */
+  mode: MODE.DOMINATION,
+
   /* ---- teams ---- */
   /**
    * Players per side, INCLUDING the human on their team.
@@ -50,8 +66,107 @@ export const RULES = {
   roundsToWin: 4,
   /** Hard cap — 3-3 goes to a single decider. */
   maxRounds: 7,
-  /** Attack and defence swap once this many rounds have been played. */
+  /**
+   * Attack and defence swap once this many rounds have been played.
+   * DEMOLITION ONLY — domination is symmetric, both sides want all three points,
+   * and each side keeps one base for the whole match. @see `attackingTeam`
+   */
   swapAfterRound: 3,
+
+  /* ==================================================================== */
+  /* DOMINATION                                                           */
+  /* ==================================================================== */
+  /**
+   * "占領サイトを一定時間いるとポイント加算で、サイトを占領するとそこからリスポーン
+   * 可能で、奪われたら既定のリスポーン位置からのスポーンのみ"
+   *
+   * Three zones, presence captures them, holding them prints points, and holding
+   * one moves your spawn on to it. Every number below was picked against the map
+   * this actually runs on, not against a genre average — the notes say which.
+   */
+
+  /**
+   * Zone radius, metres. The two courtyards are 15 x 14 m and the mid street's
+   * gap between the K1 and K2 islands is ~16 m of open tarmac, so an 8 m circle
+   * is "the whole courtyard / the whole gap and nothing outside it". It is the
+   * same figure the C4's `plantRadius` used for the same courtyards, which is
+   * not a coincidence: it is what fits.
+   */
+  captureRadius: 8,
+  /**
+   * Seconds for ONE man alone to take a zone from neutral or from the enemy.
+   *
+   * Nine. It has to be long enough that a lone bot walking through cannot flip
+   * the map by accident and short enough that a squad of four takes a point in
+   * about three seconds — see `captureCrowdBonus`. It is ONE bar, not
+   * neutralise-then-capture: a single readable HUD bar with an owner colour is
+   * worth more here than Battlefield's two-stage rule.
+   */
+  captureTime: 9,
+  /**
+   * Every man in the zone beyond the first adds this much of the base rate, so
+   * n men capture at `1 + 0.42(n-1)` times solo speed: 1 man 9.0 s, 2 men 6.3 s,
+   * 4 men 3.7 s, and the cap below lands at 5 men. "占領時間は人数でスケール".
+   */
+  captureCrowdBonus: 0.42,
+  /** Ceiling on that multiplier — fifteen men must not flip a point in 0.6 s. */
+  captureMaxRate: 2.8,
+  /**
+   * Progress bleed-back per second when NOBODY is standing in the zone. A
+   * half-finished capture that survives for ever means a zone flips minutes
+   * later for no reason the player can see; at 0.18 a 60 % bar is gone in about
+   * three and a half seconds of an empty point.
+   */
+  captureDecay: 0.18,
+  /**
+   * CONTESTED: both sides inside the circle. Progress FREEZES rather than
+   * racing, because a race is decided by a number nobody on the ground can read.
+   * The bar going amber and stopping is a legible "kill them or leave".
+   */
+
+  /** Seconds between score ticks. */
+  scoreInterval: 4,
+  /** Points per zone owned, per tick. Two zones ⇒ 1 point/second. */
+  scorePerZone: 2,
+  /**
+   * First side to this wins. At the two-zone hold that a competent side settles
+   * into that is 250 s of holding; a 3-0 lockout takes 167 s and a 1-1-1 split
+   * runs the clock. Tuned so a full match is 5-8 minutes, which is what
+   * `matchTime` then has to cover.
+   */
+  scoreTarget: 250,
+  /**
+   * Match clock, seconds. Runs out ⇒ the higher score wins, equal ⇒ a draw.
+   * Replaces demolition's per-round `roundTime` (which is still used by that
+   * mode). Ten minutes is roughly 1.5x the length of a decisive score race, so
+   * the clock only decides genuinely deadlocked matches.
+   */
+  matchTime: 600,
+  /**
+   * FORWARD SPAWNS. A zone you own is a spawn for your side; the moment it is
+   * taken, that option disappears and your base is all you have. Two guards:
+   *
+   * `forwardSpawnBlockRadius` — a forward point with a live enemy this close is
+   * skipped, because respawning a man inside a firefight he cannot see is worse
+   * than six more seconds of walking. Ownership already rules out spawning into
+   * an ENEMY-held zone; this is about the one being contested right now.
+   *
+   * `forwardSpawnBias` — metres of "virtual safety" added to a forward point's
+   * score so it beats the base whenever it is not obviously dangerous. Without a
+   * bias the base cluster wins nearly every draw (it is 60 m from the fight, so
+   * its nearest-enemy distance is always larger) and forward spawns would be a
+   * feature that never fires. Measured: see the forward-spawn share reported by
+   * the domination harness.
+   */
+  forwardSpawnBlockRadius: 14,
+  forwardSpawnBias: 34,
+  /**
+   * How many men a QUIET zone we already own keeps. The rest go and take
+   * something. Two is enough to contest a capture long enough for the objective
+   * refresh to send help, and small enough that a side that owns two points
+   * still has eleven men doing something about the third.
+   */
+  zoneGarrison: 2,
 
   /* ---- clocks (seconds) ---- */
   /** One-off, before the first round: lets the level finish streaming in. */
@@ -337,8 +452,17 @@ export const RULES = {
 /**
  * Which side attacks in a given round (1-based). Rounds 1..swapAfterRound are
  * the human team's half on whichever side `RULES.playerTeam` starts on.
+ *
+ * IN DOMINATION THERE IS NO ATTACKER. Both sides want all three zones and each
+ * keeps ONE base for the whole match, so this collapses to a fixed answer: the
+ * human's team owns the north spawn pocket (`SPAWNS.attack`) and the other side
+ * owns the south one. The name is kept because `role` is how `sites.js`,
+ * `_spawnTeam` and `_safeSpawn` already say "which base cluster", and because
+ * `m.attackers` is read from outside `src/match` (src/ai/behaviour.mjs,
+ * tools/matchtest.mjs) and must stay a valid team id.
  */
 export function attackingTeam(round) {
+  if (RULES.mode === MODE.DOMINATION) return RULES.playerTeam;
   const swapped = round > RULES.swapAfterRound;
   return swapped ? 1 - RULES.playerTeam : RULES.playerTeam;
 }
