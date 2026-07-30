@@ -104,7 +104,7 @@ ui.setRound(state)          ui.matchDriven      ui.isFriendlyTarget(actor)
 ui.airAlert(a)              ui.airImpact(title)   ui.clearAirAlert()
 ui.airDanger(position, life, label)
 world.levelYaw              world.levelToWorld(x, y, z, out)
-world.features              world.links
+world.features              world.links          world.interiorVolumes
 ```
 
 `world.features` and `world.links` are PLACES THE LEVEL AUTHORED AND MARKED, and
@@ -128,23 +128,42 @@ one holds (`weapon` → `weapons.pickUpPrimary`, `grenade` →
 same key switches on a 30 s respawn beacon that joins `_safeSpawn`'s existing
 forward-spawn auction.
 
-`botReachable` IS A CANDIDACY FLAG, NOT A MEASUREMENT. It is `floor === 0`,
+`botReachable` IS STILL A CANDIDACY FLAG, NOT A MEASUREMENT. It is `floor === 0`,
 which is all `world` can know — the nav grid belongs to `ai` and does not exist
-when `buildFeatures` runs. **On this map it is false for all 24.** `src/ai/nav.js`
-is a 2.5D height field built by dropping one ray per cell from above the level,
-so inside a footprint it can only find the ROOF: swept at boot, every walkable
-cell inside all eight enterable buildings is at 3.2 / 6.5 / 9.6 m and ZERO are at
-ground level, with 0 of 30 spawn points able to A* to any of them. Four of the
-eight ground-floor caches have a walkable cell within three rings and all four
-are 2.8-3.6 m away and outside the wall — doorways, not interiors. A consumer
-that trusts the flag will order a bot to a cell that is not in the grid and
-`Agent._advance` will stand him still. `src/match/caches.js` proves every cache
+when `buildFeatures` runs — so `src/match/caches.js` still PROVES every cache
 against the real grid at init and drops the rest, exactly as `src/match/sites.js`
-proves a zone's standing points, and its header carries the measured A/B of what
-ordering bots to the survivors did (bot time indoors 4.65 % → 0.00 %; the legs
-were removed). Making the caches worth anything to `ai` needs either a nav change
-or roof plates on `LAYER.CLIP` in `src/world/buildings.js`; until then they are a
-PLAYER feature. `world.links` are the four rooftop gangways; their decks are `LAYER.CLIP`
+proves a zone's standing points. What changed is the answer. It used to be false
+for all twenty-four:
+
+```js
+world.interiorVolumes // [{ building, cx, cz, c, s, hw, hd, floorY, probeY }]
+```
+
+is the GROUND STOREY of every enterable building, as an oriented box on the
+level's own axes with the height a downward ray must start at to find its floor,
+and it exists because `src/ai/nav.js` is a 2.5D height field built by dropping
+one ray per cell from ABOVE the level: inside a footprint that ray could only
+ever hit the ROOF. Swept before the fix, all 3353 walkable cells inside the eight
+enterable buildings were at 3.2 / 6.5 / 9.6 m, ZERO were at ground level, 0 of 30
+spawn points could A* to any of them, and the four caches that survived `prove()`
+snapped to cells 2.8-3.6 m away and OUTSIDE the wall — doorways, not interiors.
+Bot time inside a building measured 4.65 %, three of twenty-nine men, and
+ordering men to those four cells took it to 0.00 %.
+
+`NavGrid._carveInteriors` re-samples those cells from inside the building
+instead, and `world` changes no geometry and no collision to make it possible —
+nothing moved to `LAYER.CLIP`, a floor still stops a bullet, a roof is still a
+roof to everything except A*. Walkability indoors is the real bot capsule rather
+than the open-air pass's shoulder rays, every diagonal the corner rule refuses
+near an interior is re-asked as a swept capsule (a 1.12 m door on a 0.8 m lattice
+rotated 33.7° is otherwise a locked door), and the probe reaches 1.6 m past the
+wall so the balcony hanging over the pavement stops making the doorstep an
+island. ~2620 ground-floor cells, 23 of 29 men inside a building at least once
+against 3 of 29, seven of the eight buildings entered against two. UPPER FLOORS
+AND ROOFS ARE STILL A PLAYER FEATURE — one height per cell means a stair is
+still 0 waypoints, and the sixteen upstairs caches are still the player's.
+
+`world.links` are the four rooftop gangways; their decks are `LAYER.CLIP`
 so the connectors they cross are still open ground to the bot height field.
 `tools/floorcheck.mjs` gates all of it — head clearance over every tread, a
 cache on the level every flight arrives at, and the real capsule walked across

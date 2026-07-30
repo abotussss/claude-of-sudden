@@ -41,30 +41,36 @@ import { sandbagWall } from './dressing.js';
  * `botReachable` on each entry says which is which, so nothing has to guess.
  *
  * ────────────────────────────────────────────────────────────────────────────
- * `botReachable` IS A CANDIDACY FLAG, NOT A MEASUREMENT, AND ON THIS MAP IT IS
- * FALSE FOR ALL TWENTY-FOUR. THE CONSUMER MUST PROVE IT.
+ * `botReachable` IS A CANDIDACY FLAG, NOT A MEASUREMENT. THE CONSUMER MUST
+ * PROVE IT — AND UNTIL THE NAV GRID GREW AN INDOORS IT PROVED FALSE FOR ALL 24.
  * ────────────────────────────────────────────────────────────────────────────
- * The paragraph above claims the eight ground-floor caches are "the ones a bot
- * can walk to". They are not, and this is the measurement rather than the claim.
- *
  * `world` CANNOT KNOW. The nav grid belongs to `ai` and does not exist when
  * `buildFeatures` runs, so `floor === 0` is the strongest statement this file is
  * in a position to make: it is NECESSARY (a bot certainly cannot use an upper
  * floor) and it is not SUFFICIENT.
  *
- * Swept at boot against the real 328x329 grid (`_navin.mjs`, `_cacheprobe.mjs`):
- * every walkable cell inside an enterable footprint is at 3.2 m, 6.5 m or 9.6 m
- * — the ROOF — and there are ZERO at ground level in any of the eight. A* from
- * all thirty spawn points reaches none of them. Four of the eight ground-floor
- * caches have a walkable cell within three rings, and all four of those cells are
- * 2.8-3.6 m away and OUTSIDE the building: they are doorways.
+ * For most of this map's life it was not even close. Swept against the real
+ * 328x329 grid (`_navin.mjs`, `_cacheprobe.mjs`): every walkable cell inside an
+ * enterable footprint was at 3.2 m, 6.5 m or 9.6 m — the ROOF — with ZERO at
+ * ground level in any of the eight, because `nav.js` builds its height field by
+ * dropping one ray per cell from ABOVE the level. A* from all thirty spawn
+ * points reached none of them, and the four ground-floor caches that had a
+ * walkable cell within three rings had it 2.8-3.6 m away and OUTSIDE the
+ * building: doorways.
  *
- * So a consumer that trusts this field will order a bot to a destination the
- * height field does not contain, and `Agent._advance` will set `objectiveBlocked`
- * and stand him still — the exact "AIが立ち止まる" failure. `src/match/caches.js`
- * therefore PROVES every cache against the grid at init and drops the rest, the
- * same way `src/match/sites.js` proves a zone's standing points, and its header
- * carries the full A/B on what ordering bots to the survivors actually did.
+ * `NavGrid._carveInteriors` re-samples those cells from INSIDE the building now,
+ * off `world.interiorVolumes` (see `src/world/index.js`), so the ground storeys
+ * are in the height field — ~2620 cells — and the eight ground-floor caches
+ * stand on cells a bot can occupy. The upper sixteen are exactly as they were: a
+ * stair is still 0 waypoints and they are still the PLAYER's.
+ *
+ * A consumer that trusts this field blindly is still wrong, because a doorway
+ * can be dressed shut and the dice are re-rolled every boot: it would order a bot
+ * to a destination the height field does not contain and `Agent._advance` would
+ * set `objectiveBlocked` and stand him still — the exact "AIが立ち止まる" failure.
+ * `src/match/caches.js` therefore PROVES every cache against the grid at init and
+ * drops the rest, the same way `src/match/sites.js` proves a zone's standing
+ * points.
  *
  * The field is left as it is on purpose: it is the correct thing for `world` to
  * publish and changing it to something `world` cannot compute would be worse
@@ -195,7 +201,8 @@ export function buildFeatures(A, infos) {
         building: spec.id,
         floor: s.floor,
         indoor: s.indoor,
-        /** A bot can only ever reach a GROUND-floor one: see the nav note above. */
+        /** A bot can only ever reach a GROUND-floor one: see the nav note above.
+         *  Necessary, not sufficient — `Caches.prove` measures it. */
         botReachable: s.floor === 0,
         level: { x: s.x, y: s.y, z: s.z },
         yaw,
