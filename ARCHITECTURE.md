@@ -3,8 +3,10 @@
 **Every agent must read this before writing code. It is the only coordination mechanism.**
 
 Target: a browser FPS whose *visual and tactile quality* stands next to a modern
-Call of Duty, playing Sudden Attack's demolition mode. WebGL2 + Three.js r180, no
-external art assets — all textures, meshes, animation and audio are generated
+Call of Duty, played as DOMINATION on a Sudden Attack map — three capture points,
+a point tick per zone held, forward spawns on what you hold. The demolition
+ruleset this repo shipped with is still switchable (`RULES.mode`).
+WebGL2 + Three.js r180, no external art assets — all textures, meshes, animation and audio are generated
 procedurally at load time.
 
 The engine and the game are separated on purpose. `src/render`, `src/materials`,
@@ -73,7 +75,7 @@ export class MySystem {
 | `ai` | `src/ai/` | enemy characters, navigation, perception, cover selection, combat behaviour |
 | `ui` | `src/ui/` | HUD, crosshair, hitmarkers, damage indicators, ammo, killfeed, menus |
 | `audio` | `src/audio/` | synthesized weapon/foley audio, spatialisation, reverb, occlusion, mix |
-| `match` | `src/match/` | the GAME: teams, the round state machine, bomb sites and spawns, the C4, scoring, spectating |
+| `match` | `src/match/` | the GAME: teams, the match state machine, the three capture zones and both spawns (base and forward), scoring, spectating — and the C4 in the demolition mode |
 
 Shared, owned by the lead (do not edit): `src/core/`, `src/main.js`,
 `src/dev/`, `tools/`, `vite.config.js`.
@@ -81,9 +83,10 @@ Shared, owned by the lead (do not edit): `src/core/`, `src/main.js`,
 ### `match` is the only gameplay owner
 
 Everything above `match` in that table is the engine. `match` is the ruleset —
-Sudden Attack's 폭파미션 — and it is the ONLY subsystem allowed to decide who is
-on which side, when a round starts, who has the C4 and who won. The subsystems
-it drives expose exactly these hooks and nothing more:
+DOMINATION, with Sudden Attack's 폭파미션 behind `RULES.mode` — and it is the ONLY
+subsystem allowed to decide who is on which side, when a match starts, who owns
+which capture point, where a man respawns and who won. The subsystems it drives
+expose exactly these hooks and nothing more:
 
 ```js
 ai.playerTeam / ai.friendlyFire / ai.combatEnabled / ai.matchControlled / ai.skill
@@ -160,7 +163,10 @@ Emit and listen via `ctx.events`. Payloads are plain objects. The canonical set:
 | `explosion` | `{ position, radius, damage }` | any |
 | `resize` | `{ width, height }` | engine |
 | `match:round` | `{ round, phase, attackers, score }` | match |
+| `match:capture` | `{ zone, owner, previous, score }` | match |
+| ↳ | DOMINATION: a capture point changed hands. `zone` is its id (`'A'`/`'C'`/`'B'`), `owner` the team that now holds it, `previous` the team that lost it or `-1` for neutral, `score` the live `[red, blue]` array. Emitted the frame the bar fills, and only in `RULES.mode === 'domination'`. Ownership is also the forward-spawn test, so this is the moment a spawn opens for one side and closes for the other. See `src/match/capture.js`. | |
 | `match:bomb` | `{ state, site, fuse, carrier }` | match |
+| ↳ | DEMOLITION only. | |
 | `match:result` | `{ winner, reason, score, matchOver }` | match |
 | `match:respawn` | `{ name, team, isPlayer }` | match |
 | ↳ | somebody is back on their feet inside the round. Fires for a bot and for the local player on the same path, `RULES.respawnDelay` after the death. A respawned bot is a NEW `Agent`; anything holding the old one has a corpse. | |

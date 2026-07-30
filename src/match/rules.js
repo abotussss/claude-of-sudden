@@ -119,9 +119,11 @@ export const RULES = {
    */
   captureDecay: 0.18,
   /**
-   * CONTESTED: both sides inside the circle. Progress FREEZES rather than
-   * racing, because a race is decided by a number nobody on the ground can read.
-   * The bar going amber and stopping is a legible "kill them or leave".
+   * CONTESTED: both sides inside the circle. Equal numbers freeze the bar; the
+   * side that OUTNUMBERS the other advances it at the rate for the difference, so
+   * one man on a defended point achieves nothing and a side that masses more men
+   * than the garrison takes the ground. The long note on `_updateZone` in
+   * src/match/capture.js has the two matches that a hard freeze deadlocked.
    */
 
   /** Seconds between score ticks. */
@@ -147,9 +149,17 @@ export const RULES = {
    * taken, that option disappears and your base is all you have. Two guards:
    *
    * `forwardSpawnBlockRadius` — a forward point with a live enemy this close is
-   * skipped, because respawning a man inside a firefight he cannot see is worse
+   * skipped, because respawning a man on top of somebody he cannot see is worse
    * than six more seconds of walking. Ownership already rules out spawning into
-   * an ENEMY-held zone; this is about the one being contested right now.
+   * an ENEMY-held zone; this is only about the metre or two in front of him.
+   *
+   * EIGHT, down from 14, and the direction of that number matters. At 14 a zone
+   * that was being attacked gave its owner NO forward spawn at all — so the side
+   * under pressure lost its reinforcement loop at exactly the moment it needed
+   * one, and every measured match snowballed for whoever got the opening. It is
+   * per POINT, not per zone, so the standing points on the far side of a
+   * courtyard from the fight stay usable while the contested edge does not, and
+   * `RULES.spawnProtect` covers the four seconds after.
    *
    * `forwardSpawnBias` — metres of "virtual safety" added to a forward point's
    * score so it beats the base whenever it is not obviously dangerous. Without a
@@ -158,7 +168,7 @@ export const RULES = {
    * feature that never fires. Measured: see the forward-spawn share reported by
    * the domination harness.
    */
-  forwardSpawnBlockRadius: 14,
+  forwardSpawnBlockRadius: 8,
   forwardSpawnBias: 34,
   /**
    * How many men a QUIET zone we already own keeps. The rest go and take
