@@ -43,13 +43,13 @@
  *                   question is not the same as talking
  *       per KIND    per net — "RELOADING" from four different men in six
  *                   seconds is four men saying nothing
- *       GLOBAL      `GLOBAL_GAP`, and it exists for a mechanical reason:
- *                   `audio.bark()` refuses anything inside 0.42 s of the last
- *                   bark and returns false. Two nets firing 0.1 s apart would
- *                   silently lose one, and a lost message is worse than a
- *                   delayed one because the ACK still goes out and answers
- *                   nothing. 0.55 s of clearance means the refusal path is
- *                   measured (`stats.refused`) rather than routine.
+ *       GLOBAL      `GLOBAL_GAP`, because two nets are still one pair of ears.
+ *                   A transmission from each side 0.1 s apart is mush whatever
+ *                   the per-net budgets say, so the map gets one voice at a
+ *                   time. It is a stricter version of the 0.42 s guard inside
+ *                   `audio.bark()`, which `_transmit` therefore bypasses — see
+ *                   the note there for the measurement that made that
+ *                   necessary.
  *
  * WHO IS FRIENDLY IS A MIX DECISION, NOT A LABEL. The player's own side comes
  * over the RADIO — `bark(kind, null, { radio: true })`, i.e. head-locked, band
@@ -90,6 +90,8 @@ const GLOBAL_GAP = 0.55;
 /** Per-net gap while that side is in contact, and while it is not. */
 const NET_GAP_HOT = 1.9;
 const NET_GAP_QUIET = 6.0;
+/** …except an answer, which is a beat and not a slot. @see `update`. */
+const ACK_NET_GAP = 0.7;
 /** Seconds between one man's own transmissions, and the same for an answer. */
 const SPEAKER_GAP = 5.0;
 const SPEAKER_GAP_ACK = 2.2;
@@ -350,7 +352,6 @@ export class Radio {
         const quiet = now - net.lastTx;
         if (quiet > net.maxHotSilence && net.lastTx > -1e8) net.maxHotSilence = quiet;
       }
-      if (now - net.lastTx < this._netGap(net)) continue;
       if (now - this.lastTxAny < GLOBAL_GAP) continue;
 
       let best = null;
@@ -375,6 +376,21 @@ export class Radio {
           || (s.priority === best.priority && s.at < best.at)) best = s;
       }
       if (!best) continue;
+      /**
+       * AN ANSWER DOES NOT QUEUE BEHIND THE NET'S GAP. MEASURED: with the gap
+       * applied to everything, a quiet net (6.0 s) answered NOTHING — 50 calls
+       * wanted an answer, 50 acks were queued and all 50 expired waiting for a
+       * turn, because `TTL.ack` is 2.6 s and 2.6 < 6.0. The exchange it exists
+       * to create cannot survive being scheduled like an announcement: "MOVING
+       * UP" … "SET" is a beat, not a slot, and a "ROGER" that arrives six
+       * seconds later answers nothing.
+       *
+       * `GLOBAL_GAP` above still applies, so an answer is still 0.55 s clear of
+       * whatever it is answering and the pair reads as two people rather than
+       * as one overlapping noise.
+       */
+      const gap = best.kind === 'ack' ? ACK_NET_GAP : this._netGap(net);
+      if (now - net.lastTx < gap) continue;
       this._transmit(net, best, now);
     }
   }
@@ -395,10 +411,28 @@ export class Radio {
        * `bark` with a null position plays dry (head-locked); with one it goes
        * through the spatial field with the propagation delay and the occlusion.
        */
+      /**
+       * `force` SKIPS `audio.bark`'S OWN 0.42 s MUSH GUARD, and this is the one
+       * place in the codebase entitled to. MEASURED, first live run of
+       * `src/ai/radiocheck.mjs`: 60 % of transmissions came back false, and the
+       * refused ones included FRIENDLY calls, which are `_playDry` and cannot
+       * fail for any budget reason. The guard is a single global clock shared
+       * with the death scream and the wounded grunt — `_onDeath` alone stamps
+       * it on every one of ~260 deaths a match, and `_onDamageDealt` stamps it
+       * on every wounding hit — so a net that transmits once every 1.9 s was
+       * losing most of its traffic to barks that are not radio traffic at all.
+       *
+       * That guard exists because nothing upstream of it had a scheduler. This
+       * one does: four limiters and a queue, and `GLOBAL_GAP` above is already
+       * a stricter version of the same rule for the transmissions it owns.
+       * Bypassing it does NOT bypass the voice budget — a positional bark still
+       * has to win an emitter from `SpatialField.acquire`, and losing there is
+       * correct and is counted as `refusedByAudio`.
+       */
       played = friendly
-        ? audio.bark(m.voice, null, { radio: true, voice: m.speaker.id, level: 0.85 })
+        ? audio.bark(m.voice, null, { radio: true, voice: m.speaker.id, level: 0.85, force: true })
         : audio.bark(m.voice, m.speaker.alive ? m.speaker.position : m.position,
-          { voice: m.speaker.id, level: 1 });
+          { voice: m.speaker.id, level: 1, force: true });
     }
     net.lastTx = now;
     this.lastTxAny = now;
