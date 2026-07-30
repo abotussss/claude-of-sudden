@@ -123,11 +123,7 @@ export class CaptureZones {
    * the courtyard is not standing in the courtyard.
    */
   zoneAt(p) {
-    for (const z of this.zones) {
-      const dx = p.x - z.position.x;
-      const dz = p.z - z.position.z;
-      if (dx * dx + dz * dz <= z.radius * z.radius && Math.abs(p.y - z.position.y) < 3) return z;
-    }
+    for (const z of this.zones) if (this._inside(z, p)) return z;
     return null;
   }
 
@@ -282,7 +278,7 @@ export class CaptureZones {
     const previous = z.owner;
     // AVERAGE OWNERSHIP DURATION comes from here: one completed spell per flip,
     // measured off the clock rather than sampled. `ownedSeconds / spells` is the
-    // mean, and `liveSpells()` folds in the spells still running at the end.
+    // mean, and `meanOwnership()` folds in the spells still running at the end.
     if (previous >= 0) {
       this.stats.spells[previous]++;
       this.stats.ownedSeconds[previous] += Math.max(0, elapsed - z.ownedSince);
