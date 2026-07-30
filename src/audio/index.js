@@ -933,7 +933,16 @@ export class AudioSystem {
     const dur = p?.duration ?? 0.78;
     if (isVec(pos)) {
       const dist = this.field.distanceTo(pos.x, pos.y, pos.z);
-      if (dist > 26) return;
+      /**
+     * 40 m, back up from 26. I cut it to 26 to stop foley flooding the voice
+     * pool, and that was the wrong lever — the flood was fixed properly by the
+     * per-bus quotas in spatial.js, and cutting the range as well made enemy
+     * and friendly movement inaudible. "敵味方の足音もかすかに聞こえるように
+     * して" is asking for exactly what I removed. 40 m is far enough to hear
+     * someone crossing the courtyard you are watching, and the level falls with
+     * distance anyway, so it is faint rather than loud.
+     */
+    if (dist > 40) return;
       this._playAt('bolt', pos.x, pos.y, pos.z, { dur, firstPerson: false }, 'foley', 0.62);
     } else {
       this._playDry('bolt', { dur, firstPerson: true }, 'foley', 0.2);

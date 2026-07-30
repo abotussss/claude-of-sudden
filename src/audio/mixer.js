@@ -222,7 +222,7 @@ export class Mixer {
      * the rest of the level answering, late and diffuse — at 1/6 of the level it
      * started at.
      */
-    this.reverbReturn = gain(actx, 0.15);
+    this.reverbReturn = gain(actx, 0.09);
     this.reverbReturn.connect(this.worldSum);
     this._irReady = false;
 
@@ -320,7 +320,29 @@ export class Mixer {
    * and starts a tinnitus tone that outlives the muffling.
    */
   concuss(level) {
-    level = clamp(level, 0, 1);
+    /**
+     * CAPPED AT 0.62, AND IT IS THE "音が消える" BUG.
+     *
+     * At 1.0 this sets the world low-pass to 480 Hz and drops its level 55% —
+     * near-total deafness — and recovery is `dt * (0.1 + deafness * 0.22)`,
+     * which integrates to about FOURTEEN SECONDS from 1.0. Worse, the guard
+     * below re-arms it: any louder blast resets it to full.
+     *
+     * That was survivable when the only big blast was the C4 ending a round.
+     * It is not survivable now: airstrikes, bomber sticks, strafing runs and
+     * salvos fire every ~30 s and are deliberately AIMED at the player (the air
+     * events weight the player's eye as four men when choosing a target), and
+     * `_onExplosion` concusses out to `radius * 1.3` — 19.5 m for a 15 m
+     * airstrike. So the player gets re-deafened before recovering and stays
+     * muffled indefinitely. Reported as "音が途中で消えるバグ … なんの条件で音が
+     * 消えるのかわからない", and the reason the condition is invisible is that the
+     * trigger is a blast that may be twenty metres away behind a building.
+     *
+     * 0.62 keeps the effect — 1.4 kHz and -34% is unmistakably a concussion —
+     * without ever silencing the game, and the recovery rate below is raised so
+     * a single hit clears in about four seconds rather than fourteen.
+     */
+    level = clamp(level, 0, 0.62);
     if (level <= this.deafness) return;
     this.deafness = level;
     const t = this.actx.currentTime;
@@ -384,7 +406,9 @@ export class Mixer {
     if (this.deafness > 0) {
       // Recovery is slow at first then quick — matches how temporary threshold
       // shift actually behaves, and it feels dramatic.
-      this.deafness = Math.max(0, this.deafness - dt * (0.1 + this.deafness * 0.22));
+      // 0.32 + 0.35x, up from 0.1 + 0.22x: a full hit clears in ~4 s instead of
+      // ~14, which is what stops repeated air events stacking into silence.
+      this.deafness = Math.max(0, this.deafness - dt * (0.32 + this.deafness * 0.35));
       const cutoff = 20000 * Math.pow(0.024, this.deafness);
       this.muffleLP.frequency.setTargetAtTime(clamp(cutoff, 320, 20000), t, 0.25);
       this.muffleHS.gain.setTargetAtTime(-22 * this.deafness, t, 0.25);
