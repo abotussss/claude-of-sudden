@@ -1962,11 +1962,21 @@ FLAT.push(
  * Zone C's circle is in the pre-widen table above, because the courtyard it
  * stands in is authored there. These are in WIDENED space.
  */
+/**
+ * …AND THE FIRST TWO PAIRS SWAPPED WHEN THE ZONES FINALLY MOVED INTO THE
+ * DISTRICTS. The capture points are the two yards now and the beacons are the two
+ * mid-street plazas — see the long note over `ZONES` in src/match/sites.js. A
+ * ZONE CIRCLE IS NOT ENOUGH ON ITS OWN: `KEEPOUT` holds off the DRESSING, and a
+ * beacon is not dressing but a `world.features` cache with real geometry under
+ * it (src/world/features.js), so the beacon had to leave the point rather than be
+ * fenced off it. It was standing on zone A's centre and made that cell a
+ * one-cell island 0.93 m above its neighbours.
+ */
 KEEPOUT.push(
-  [-10, 40, 3.0],     // ZONE A — north plaza, off the centreline to the west
-  [10, -42, 3.0],     // ZONE B — south plaza, its 180° image
-  [-38, 51, 2.2],     // BEACON — the north-west district
-  [38, -53, 2.2],     // BEACON — the south-east district
+  [-38, 51, 3.0],     // ZONE A — the north-west district's yard
+  [38, -53, 3.0],     // ZONE B — its 180° image, the south-east yard
+  [-10, 40, 2.2],     // BEACON — the north plaza, which zone A vacated
+  [10, -42, 2.2],     // BEACON — the south plaza, its 180° image
   [-34.75, -20, 2.2], // BEACON — west lane, south run
   [34.75, 18, 2.2],   // BEACON — east lane, north run
   [40, -3, 2.2]       // BEACON — east courtyard
@@ -2135,8 +2145,18 @@ SET_PIECES.tyres.push(
  * everything else. Each has a `KEEPOUT` circle above.
  */
 export const BEACON_SPOTS = [
-  { id: 'FLANK-NW', name: 'NORTH-WEST YARD', x: -38, z: 51, yaw: -Math.PI / 2 },
-  { id: 'FLANK-SE', name: 'SOUTH-EAST YARD', x: 38, z: -53, yaw: Math.PI / 2 },
+  /**
+   * THE FIRST PAIR MOVED OFF THE TWO YARDS, because the capture points went
+   * there. A beacon is a real crate on the ground, not a decal, so leaving one on
+   * a zone centre put a 0.98 m collider on the point: the nav cell under it sat
+   * 0.93 m over its four neighbours against a 0.45 m `maxStep` and was a
+   * connected component of ONE CELL, which is why nothing could ever path to zone
+   * A. The two mid-street plazas the zones vacated take them instead — still a ρ
+   * pair under (x, z) -> (-x, -2 - z), so neither side is nearer its own, and the
+   * plazas keep a reason to be walked through now that nothing is captured there.
+   */
+  { id: 'FLANK-NW', name: 'NORTH PLAZA', x: -10, z: 40, yaw: -Math.PI / 2 },
+  { id: 'FLANK-SE', name: 'SOUTH PLAZA', x: 10, z: -42, yaw: Math.PI / 2 },
   { id: 'FLANK-W', name: 'WEST LANE DEPOT', x: -34.75, z: -20, yaw: Math.PI / 2 },
   { id: 'FLANK-E', name: 'EAST LANE DEPOT', x: 34.75, z: 18, yaw: -Math.PI / 2 },
   { id: 'FLANK-C', name: 'EAST COURTYARD DEPOT', x: 40, z: -3, yaw: -Math.PI / 2 },

@@ -341,19 +341,72 @@ export const SITES = [
  * authored -29 is a widened -38. `KEEPOUT` in src/world/layout.js duplicates all
  * three — IF ONE MOVES, MOVE THE OTHER.
  */
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * AND THEN A AND B ACTUALLY WENT THERE, BECAUSE A* COULD FINALLY TAKE A MAN
+ * ════════════════════════════════════════════════════════════════════════════
+ * "どう考えても近いよね？？？もっと大聖堂からはなせ もっと街中に占領ポイント作れ
+ *  AもBも大聖堂から近すぎ なぜもっと対角かつ街中に作らない？？？意味ないってこの距離
+ *  物理的な距離って数メートルじゃねーわ もっともっともっと離せ
+ *  なぜAやBから視認できる距離にあんの？大聖堂が もっと街中に作れ 街中の戦闘を作れ"
+ *
+ * THE TABLE ABOVE WAS NEVER THE TABLE THIS FILE SHIPPED. The two corner
+ * districts were built (`THE MAP GROWS — PART 4`), the note was written, and then
+ * the zones were quietly left at the two mid-street plazas — widened (-10, 40)
+ * and (10, -42) — because nothing could path to the yards. That is the map the
+ * player was looking at: A and B 63 m from the cathedral, both on the mid street,
+ * both with the dome in plain sight down an open plaza. "近すぎ" was correct.
+ *
+ * IT WAS TWO BUGS AND NEITHER WAS THE LEVEL.
+ *
+ *   1. `src/ai/nav.js` closed no cell on pop. With no decrease-key, a stale heap
+ *      entry re-expanded a settled cell and the frontier compounded: 196 m across
+ *      a 122k-cell component cost two million expansions and still returned "no
+ *      route" under the ceiling. Every long query on this map failed silently,
+ *      `ensureReachable` read that as sealed ground, and it dragged the zones
+ *      back toward the middle. Fixed there, not here: the same route is now 10
+ *      waypoints in 1.0 ms.
+ *
+ *   2. The yard centres each had a CACHE CRATE standing on them. `BEACON_SPOTS`
+ *      put `FLANK-NW` / `FLANK-SE` on exactly the two points the zones wanted, and
+ *      `world/features.js` builds real geometry on a beacon, which `KEEPOUT` does
+ *      not govern — it only holds off the DRESSING. Measured on the nav grid: the
+ *      cell at widened (-38, 51) sat at floor 0.98 m with all four neighbours at
+ *      0.05, a 0.93 m step against `maxStep` 0.45, so it was a CONNECTED COMPONENT
+ *      OF ONE CELL. Its ρ-image happened to sample 0.4 m off the crate and was
+ *      fine, which is why the failure looked asymmetric and random.
+ *
+ * So the zones and the two beacons SWAP. The districts get the capture points
+ * they were built for; the plazas the zones vacate keep their `SITEWORKS` cover
+ * and get the beacons, and (-10, 40) / (10, -42) is a ρ pair exactly as
+ * `FLANK-NW` / `FLANK-SE` was, so the beacon invariant is unchanged.
+ *
+ *              level (widened)   from the cathedral   own base   far base
+ *   A   NW yard      (-38,  51)        96.6 m           53 u      184 u
+ *   C   west court   (-37,  -1)        63.0 m           75 u       75 u
+ *   B   SE yard      ( 38, -53)        96.6 m          184 u       53 u
+ *
+ *   A-B 186 m (was 63 m apart from the cathedral and 117 m from each other)
+ *   Bearings from the cathedral: A 140.9°, B -39.1° — 180.0° apart.
+ *
+ * AND THE CATHEDRAL IS NOT VISIBLE FROM EITHER, which is the half of the request
+ * that is a measurement rather than a distance. Swept as eye-height rays from 12
+ * points on each zone's capture circle to 5 points up the cathedral's mass:
+ * 0 of 60 clear from A and 0 of 60 from B. NW1's flank, the NW2/NW3 terrace and
+ * the west lane's own row stand in every one of them. @see `tools/navcheck.mjs`
+ * for the route half and the commit message for the raycast table.
+ */
 export const ZONES = [
   {
     id: 'A',
-    name: 'NORTH PLAZA WEST',
-    /** The plaza between W5 and E5, on its WEST side: the circle is r8 = 5.33
-     *  units and the plaza is 31 across, so at x -10 it runs -15.3..-4.7 and
-     *  still clears W5's facade by 0.2. `L`, not `LW` — like `SPAWNS` below,
-     *  these are authored in WIDENED space, where the mid street is 31 units
-     *  wide and `widenX` has already been applied. */
-    level: L(-10.0, 40.0),
-    /** Two units south, off the retake wall. */
-    fallback: L(-10.0, 38.0),
-    holdLevel: L(-10.0, 40.0),
+    name: 'NORTH-WEST DISTRICT',
+    /** The north-west corner district's yard, behind the west lane and out of
+     *  sight of the cathedral. `L`, not `LW` — like `SPAWNS` below, these are
+     *  authored in WIDENED space, where `widenX` has already been applied. */
+    level: L(-38.0, 51.0),
+    /** Three units south, still in the yard and clear of NW2's frontage. */
+    fallback: L(-38.0, 48.0),
+    holdLevel: L(-38.0, 51.0),
     flankLevel: null,
   },
   {
@@ -370,11 +423,11 @@ export const ZONES = [
   },
   {
     id: 'B',
-    name: 'SOUTH PLAZA EAST',
+    name: 'SOUTH-EAST DISTRICT',
     /** ρ(A) exactly: (-x, -2 - z). */
-    level: L(10.0, -42.0),
-    fallback: L(10.0, -40.0),
-    holdLevel: L(10.0, -42.0),
+    level: L(38.0, -53.0),
+    fallback: L(38.0, -50.0),
+    holdLevel: L(38.0, -53.0),
     flankLevel: null,
   },
 ];
