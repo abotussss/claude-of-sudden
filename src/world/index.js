@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { Assembler } from './builder.js';
-import { BUILDINGS, STREET, SET_PIECES, GATE, SCALE, RELIEF, ALLEYS } from './layout.js';
+import { BUILDINGS, STREET, SET_PIECES, GATE, SCALE, RELIEF, ALLEYS, SITEWORKS, FLAT } from './layout.js';
 import { buildGround } from './ground.js';
 import { buildBuilding, collapseRoof } from './buildings.js';
 import { buildRelief } from './relief.js';
+import { buildCordon } from './cordon.js';
 import { buildSiteWorks } from './sitework.js';
 import { registerProps } from './props.js';
 import {
@@ -136,6 +137,13 @@ export class WorldSystem {
 
     buildGate(A, rng);
     buildPerimeter(A, rng);
+    /**
+     * THE CORDON — the six holes the play area leaked out of, closed. It runs
+     * after `buildPerimeter` and draws from its OWN rng stream, so it cannot
+     * shift a single prop, stain or pock the dressing pass places below. See
+     * `src/world/cordon.js`; `tools/boundcheck.mjs` is the gate.
+     */
+    this.cordon = buildCordon(A);
     // Height goes in BEFORE the dressing, because `groundY` reads it and every
     // scattered prop, stain and skirt is placed off `groundY`.
     buildRelief(A, rng);
@@ -187,8 +195,14 @@ export class WorldSystem {
      * where the authored overwatch decks are in order to say whether they see
      * the plant spot, and where each courtyard's rect is in order to find that
      * courtyard's entry mouths by walking its boundary.
+     *
+     * `SITEWORKS` and `FLAT` are here for `tools/boundcheck.mjs`, which has to
+     * know what the level ACTUALLY AUTHORED in order to say whether a piece of
+     * ground the player can walk to has anything on it — the site works are
+     * most of the mass in both courtyards, and `FLAT` is the flattened play box
+     * itself.
      */
-    this.layout = { BUILDINGS, STREET, SET_PIECES, GATE, SCALE, RELIEF, ALLEYS };
+    this.layout = { BUILDINGS, STREET, SET_PIECES, GATE, SCALE, RELIEF, ALLEYS, SITEWORKS, FLAT };
 
     const ms = performance.now() - t0;
     console.info(

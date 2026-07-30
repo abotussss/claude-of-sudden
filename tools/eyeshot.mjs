@@ -39,6 +39,11 @@ const ONLY = args.only ? String(args.only).split(',') : null;
  *   from:  [x, z]  where the eye stands; the floor under it is measured
  *   look:  [x, z]  what it is pointed at, at `lookY` above that floor
  *   dy:    lift the eye off the floor by this (1.62 = standing eye)
+ *   lookY: how far above the FLOOR AT THE TARGET to aim
+ *   lookAbs: aim at this absolute height instead — use it whenever the target
+ *          stands next to a wall, a gate or a block, because the floor under a
+ *          point 1 m from a 10 m gate is the top of the gate and the frame comes
+ *          back pointing at the sky. Four of the boundary poses did exactly that.
  */
 const POSES = [
   // ---- SITE A, plant zone at level (-42, -10.5) ---------------------------
@@ -61,6 +66,20 @@ const POSES = [
    * coordinates `world.worldToLevel` hands back — so each is 1.5x its entry:
    * the A south plinth is authored at (-26.8, -9.8) and stands at (-40.2, -14.7).
    */
+  /**
+   * ---- THE EDGE OF THE MAP ------------------------------------------------
+   * The six places `tools/boundcheck.mjs` measured the play area leaking into
+   * 5 645 m² of empty sand, photographed from inside. There is no number that
+   * can tell you a boundary reads as a boundary rather than as a wall somebody
+   * dropped behind the spawn, so these are the frames that judge the cordon.
+   */
+  { id: 'bound-N-spawn', from: [0, 62], look: [0, 73], lookAbs: 2.2, doc: "the attack spawn looking north at the closed end of the street" },
+  { id: 'bound-N-west', from: [-4, 61], look: [-9.4, 70], lookAbs: 2.0, doc: 'the old west crossing at x -10, z 68, from inside the spawn' },
+  { id: 'bound-N-east', from: [4, 61], look: [9.4, 70], lookAbs: 2.0, doc: 'the same crossing on the east side' },
+  { id: 'bound-S-spawn', from: [0, -62], look: [0, -74], lookAbs: 3.0, doc: 'the defence spawn looking south at the gate and its flanks' },
+  { id: 'bound-S-gate', from: [4, -79], look: [-9, -84], lookAbs: 1.6, doc: 'the pocket behind the gate arch, now closed on both sides' },
+  { id: 'bound-party-A', from: [-33, 43], look: [-46, 50], lookAbs: 3.0, doc: 'the 0.75 m slot between BW1 and W5, now a party wall' },
+  { id: 'bound-party-B', from: [33, 43], look: [46, 50], lookAbs: 3.0, doc: 'the same slot on the east row' },
   { id: 'A-close-plinth', from: [-40.2, -19.4], look: [-40.2, -14.7], lookY: 0.7, doc: 'the south plinth at 4.7 m' },
   { id: 'A-close-spine', from: [-42.1, -9.6], look: [-42.1, -6.0], lookY: 0.9, doc: 'the spine wall at 3.6 m' },
   { id: 'A-close-gate', from: [-38.4, 9.6], look: [-43.8, 4.8], lookY: 1.8, doc: 'the north gatehouse at 7 m' },
@@ -112,6 +131,7 @@ for (const p of POSES) {
     };
     const from = floor(pose.from[0], pose.from[1]);
     const to = floor(pose.look[0], pose.look[1]);
+    if (pose.lookAbs !== undefined) to.y = pose.lookAbs - (pose.lookY ?? 1.2);
     const cam = e.camera;
     cam.position.set(from.x, from.y + (pose.dy ?? 1.62), from.z);
     cam.lookAt(new V3(to.x, to.y + (pose.lookY ?? 1.2), to.z));
