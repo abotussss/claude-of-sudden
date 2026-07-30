@@ -40,6 +40,36 @@ import { sandbagWall } from './dressing.js';
  * the ones a bot can walk to, and they are what can pull the fight indoors.
  * `botReachable` on each entry says which is which, so nothing has to guess.
  *
+ * ────────────────────────────────────────────────────────────────────────────
+ * `botReachable` IS A CANDIDACY FLAG, NOT A MEASUREMENT, AND ON THIS MAP IT IS
+ * FALSE FOR ALL TWENTY-FOUR. THE CONSUMER MUST PROVE IT.
+ * ────────────────────────────────────────────────────────────────────────────
+ * The paragraph above claims the eight ground-floor caches are "the ones a bot
+ * can walk to". They are not, and this is the measurement rather than the claim.
+ *
+ * `world` CANNOT KNOW. The nav grid belongs to `ai` and does not exist when
+ * `buildFeatures` runs, so `floor === 0` is the strongest statement this file is
+ * in a position to make: it is NECESSARY (a bot certainly cannot use an upper
+ * floor) and it is not SUFFICIENT.
+ *
+ * Swept at boot against the real 328x329 grid (`_navin.mjs`, `_cacheprobe.mjs`):
+ * every walkable cell inside an enterable footprint is at 3.2 m, 6.5 m or 9.6 m
+ * — the ROOF — and there are ZERO at ground level in any of the eight. A* from
+ * all thirty spawn points reaches none of them. Four of the eight ground-floor
+ * caches have a walkable cell within three rings, and all four of those cells are
+ * 2.8-3.6 m away and OUTSIDE the building: they are doorways.
+ *
+ * So a consumer that trusts this field will order a bot to a destination the
+ * height field does not contain, and `Agent._advance` will set `objectiveBlocked`
+ * and stand him still — the exact "AIが立ち止まる" failure. `src/match/caches.js`
+ * therefore PROVES every cache against the grid at init and drops the rest, the
+ * same way `src/match/sites.js` proves a zone's standing points, and its header
+ * carries the full A/B on what ordering bots to the survivors actually did.
+ *
+ * The field is left as it is on purpose: it is the correct thing for `world` to
+ * publish and changing it to something `world` cannot compute would be worse
+ * than documenting what it means.
+ *
  * PLACEMENT IS AUTHORED, in normalised interior coordinates, exactly like the
  * room plans and the stair flights in `layout.js` — the same coordinates, so a
  * spot follows its footprint if the map is rescaled again. They are hand-picked

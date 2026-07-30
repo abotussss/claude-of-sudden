@@ -26,16 +26,106 @@ import { RULES } from './rules.js';
  * (W2) that happens to sit on a route. That is the complaint, in a number.
  *
  * ────────────────────────────────────────────────────────────────────────────
- * EIGHT OF THE TWENTY-FOUR, AND WHY IT IS NOT A LIMITATION TO WORK AROUND
+ * `botReachable` IS NECESSARY AND IT IS NOT SUFFICIENT. MEASURED.
  * ────────────────────────────────────────────────────────────────────────────
  * `src/ai/nav.js` is a 2.5D HEIGHT FIELD — one floor per (x, z) cell — so no bot
  * on this map can climb a stair, and `features.js` marks that with
- * `botReachable`, which is true only on the eight GROUND-FLOOR caches. Those
- * eight are the whole of what `_assignDomination` can send anybody to, and they
- * are enough: a ground floor is where the doors are, and a door onto a capture
- * point is the fight the complaint is about. The sixteen upstairs and roof
- * caches stay the PLAYER's, which is the same split `sites.js` documents for the
- * overwatch decks.
+ * `botReachable`, which is `floor === 0`. That is the right thing for `world` to
+ * publish and it is all `world` can know: the nav grid does not exist when
+ * `buildFeatures` runs, and it belongs to `ai`, which inits later.
+ *
+ * It is also, on this map, WRONG FOR HALF OF THEM. `_cacheprobe.mjs` asks the
+ * real grid for a cell within three rings and 1.2 m of each cache and then A*s
+ * to it from all thirty spawn points:
+ *
+ *   cache            nav cell?   nearest cell     routes
+ *   W1-f0-ammo         yes       3.35 m away       30/30
+ *   E1-f0-ammo         yes       3.64 m away       30/30
+ *   K1-f0-ammo         yes       2.95 m away       30/30
+ *   K2-f0-grenade      yes       2.82 m away       30/30
+ *   W2-f0-ammo         NO        6.37 m ABOVE       0/30
+ *   W3-f0-ammo         NO        6.37 m ABOVE       0/30
+ *   E2-f0-ammo         NO        9.42 m ABOVE       0/30
+ *   E3-f0-ammo         NO        6.37 m ABOVE       0/30
+ *
+ * Four of the eight ground floors are not in the height field at all: the
+ * downward sample that builds the grid lands on their ROOF, which is what the
+ * long note in `sites.js` says happens and why the plant zone was never allowed
+ * upstairs. Ordering a bot to one of those is ordering him to stand still —
+ * `Agent._advance` sets `objectiveBlocked` and he holds position — which is the
+ * exact "AIが立ち止まる" failure the hold-spot code was written to kill.
+ *
+ * SO THIS PROVES THEM, at init, against the real grid, exactly the way
+ * `sites.js` proves a zone's standing points rather than trusting the author.
+ * `prove()` snaps each cache to the nav cell a bot would actually walk to,
+ * requires an A* route from at least one spawn of each side, and drops the rest.
+ * `stand` is that cell and is what `setObjective` is handed — the crate itself
+ * is up to 3.6 m from any cell a bot can occupy, so handing over `position`
+ * would be handing over a destination that does not exist.
+ *
+ * The sixteen upstairs and roof caches stay the PLAYER's, which is the same
+ * split `sites.js` documents for the overwatch decks.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND THEN: NO BOT ON THIS MAP CAN BE INDOORS AT ALL. DO NOT RE-TRY THIS.
+ * ────────────────────────────────────────────────────────────────────────────
+ * The obvious next step from the four proven caches is to have
+ * `_assignDomination` send men to them — resupply when low, contest one beside a
+ * contested zone. That was written, measured, and REMOVED, and the measurement
+ * is here so nobody writes it a third time.
+ *
+ * FIRST, THE GEOMETRY. `_navin.mjs` sweeps every walkable cell of the 328x329
+ * grid and asks which fall inside an `enterable` footprint, inset past the wall:
+ *
+ *   building   cells inside the footprint   …at GROUND level (< 2.5 m)
+ *   W1                 376                            0
+ *   W2                 424                            0
+ *   W3                 794                            0
+ *   E1                 376                            0
+ *   E2                 424                            0
+ *   E3                 794                            0
+ *   K1                  74                            0
+ *   K2                  91                            0
+ *
+ * Every one of those cells is at 3.2 m (K1/K2), 6.5 m (the west row) or 9.6 m
+ * (E1/E2) — they are ROOFS. The grid is built by dropping one ray per cell from
+ * above the level, so inside a footprint it can only ever find the roof; there
+ * is no ground floor in the height field anywhere on this map, and A* from all
+ * thirty spawn points reaches 0 of them. That is not a bug in `world` or in
+ * `match`: it is `src/ai/nav.js`'s documented 2.5D design, and `sites.js`'s own
+ * long note says the same thing about the plant zone.
+ *
+ * So `botReachable` — `floor === 0` — is not merely optimistic for four of the
+ * eight. It is FALSE FOR ALL TWENTY-FOUR. `prove()` above keeps the four whose
+ * nearest walkable cell is within three rings, and every one of those four cells
+ * is measurably OUTSIDE its building: W1 3.35 m, E1 3.64 m, K1 2.95 m, K2 2.82 m
+ * from the crate, all beyond the wall. They are DOORWAYS, not interiors.
+ *
+ * SECOND, WHAT ORDERING MEN TO THEM DID. Same build, one A/B, the legs neutered
+ * at runtime for the control (`_indoortime.mjs --nolegs`), ~4100 bot-samples each:
+ *
+ *                                        legs OFF   legs ON
+ *   bot time inside a footprint            4.65 %    0.00 %
+ *   …inside the walls (inset 0.6)          4.60 %    0.00 %
+ *   bot time at a building (within 3.5)   36.16 %   41.71 %
+ *   bot time within 4 m of a proved cache  1.85 %    4.06 %
+ *   bots on a cache leg (mean)              0.00      5.28
+ *
+ * The orders worked exactly as written — twice the time at a cache, six points
+ * more time against a building — and the number they existed to move went to
+ * ZERO, because every destination they could offer is a square of street outside
+ * a door, and standing men there takes them off the ground they were incidentally
+ * fighting over. A feature that scores 0.00 % on its own objective is not a
+ * feature to tune; it is a feature whose premise is false.
+ *
+ * WHAT WOULD ACTUALLY FIX IT, neither of which is `match`'s to do:
+ *   - `src/ai/nav.js` would have to sample more than one floor per cell, or
+ *   - `src/world/buildings.js` would have to put roof plates on `LAYER.CLIP`
+ *     (the way `src/world/links.js` already does for the rooftop gangways) so
+ *     the grid's downward ray reaches the ground floor instead of the roof.
+ * Until one of those happens the caches are a PLAYER feature, and the honest
+ * version of "give the AI a reason to go indoors" is that there is no indoors
+ * for the AI to go to.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * WHAT EACH KIND HANDS OVER
@@ -102,9 +192,15 @@ export class Caches {
          * first" is a real thing to have got.
          */
         readyAt: 0,
-        /** Only on `kind === 'weapon'`. @see `_assignWeapons` */
+        /** Only on `kind === 'weapon'`. */
         weaponId: null,
         label: '',
+        /**
+         * The nav cell a bot can actually stand on to use this, or null when
+         * there is none. Filled in by `prove()`; NOT the same point as
+         * `position`. @see the measured table in the header.
+         */
+        stand: null,
       };
       if (f.kind === 'weapon' && primaries.length) {
         /**
@@ -122,7 +218,6 @@ export class Caches {
         rec.label = weapons.states.get(rec.weaponId)?.def?.label ?? rec.weaponId;
       }
       this.list.push(rec);
-      if (rec.botReachable) this.botList.push(rec);
     }
 
     /**
@@ -148,6 +243,70 @@ export class Caches {
     /** Reported by `_publishHud`; written in place. */
     this.stats = { taken: 0, weapons: 0, ammo: 0, frags: 0, beacons: 0, beaconSpawns: 0 };
     this._v = new THREE.Vector3();
+  }
+
+  /**
+   * WHICH CACHES A BOT CAN ACTUALLY WALK TO, measured rather than believed.
+   *
+   * Called once from `MatchSystem.init`, after `resolveLayout` — by which point
+   * `ai.grid` exists and the spawn clusters have been snapped and proved. It is
+   * the same two-step `sites.js` uses on every zone centre and every standing
+   * point, for the same reason, and the reason is in this file's header:
+   * `world` published `botReachable` as `floor === 0` and four of the eight
+   * ground floors on this map are not in the nav grid at all.
+   *
+   * Step 1, WALKABLE: a cell within three rings and 1.2 m of the cache's own
+   * height. Three rings at `cell: 0.8` is 2.4 m, which is enough to find the
+   * open floor beside a crate and not enough to wander to the next room.
+   * Step 2, REACHABLE: an A* route from at least one spawn of EACH side — the
+   * relaxed rule, which is all `sites.js` asks of a zone centre too, and which
+   * proves the cell is part of the playable map rather than a sealed pocket.
+   *
+   * Populates `botList` and each survivor's `stand`. Idempotent.
+   */
+  prove(ai, spawns) {
+    const g = ai?.grid;
+    this.botList.length = 0;
+    if (!g) {
+      // No navigation: trust the author, exactly as `sites.js` does.
+      for (const c of this.list) if (c.botReachable) { c.stand = c.position; this.botList.push(c); }
+      return this.botList.length;
+    }
+    const path = [];
+    const dropped = [];
+    for (const c of this.list) {
+      c.stand = null;
+      if (!c.botReachable) continue;
+      const ci = g.nearest(c.position.x, c.position.z, c.position.y, 3, 1.2);
+      if (ci < 0) {
+        dropped.push(`${c.id} (no nav cell — the grid samples its roof)`);
+        continue;
+      }
+      const q = new THREE.Vector3(
+        g.worldX(ci % g.nx),
+        g.floor[ci],
+        g.worldZ((ci / g.nx) | 0)
+      );
+      let ok = true;
+      for (const kind of ['attack', 'defend']) {
+        let any = false;
+        for (const sp of spawns[kind]) if (g.findPath(sp.position, q, path) > 0) { any = true; break; }
+        if (!any) { ok = false; break; }
+      }
+      if (!ok) {
+        dropped.push(`${c.id} (walkable but no route from one of the bases)`);
+        continue;
+      }
+      c.stand = q;
+      this.botList.push(c);
+    }
+    if (dropped.length) {
+      console.warn(
+        `[match] ${dropped.length} cache(s) flagged botReachable that a bot cannot ` +
+          `actually walk to, dropped: ${dropped.join(', ')}`
+      );
+    }
+    return this.botList.length;
   }
 
   /** How many seconds of beacon are left, or 0. */
@@ -262,12 +421,17 @@ export class Caches {
   }
 
   /**
-   * The bot-reachable cache nearest `point` that is not already claimed, or
-   * null. `claimed` is a Set of cache records, so two men are never sent to the
-   * same crate — one man standing on a cache is a flank; two is a queue.
+   * The PROVEN cache nearest `point` that this side has not already claimed, or
+   * null. Measured from `stand`, the cell a bot walks to, not from the crate.
    *
-   * `maxDist` keeps a "resupply" order local: sending a man sixty metres across
-   * the map to a crate is sending him out of the match.
+   * `claimed` is per SIDE, not per map, and that is a deliberate change from the
+   * first version: two men of the same side on one crate is a queue, but two men
+   * of DIFFERENT sides converging on one crate is a fight in a doorway, which is
+   * the entire thing "屋内戦闘" asks for. Claiming globally capped the whole
+   * feature at four men on a map with four usable caches.
+   *
+   * `maxDist` keeps an order local: sending a man sixty metres across the map to
+   * a crate is sending him out of the match.
    */
   nearestBotCache(point, claimed, maxDist) {
     let best = null;
@@ -275,7 +439,7 @@ export class Caches {
     for (let i = 0; i < this.botList.length; i++) {
       const c = this.botList[i];
       if (claimed.has(c)) continue;
-      const d = c.position.distanceToSquared(point);
+      const d = c.stand.distanceToSquared(point);
       if (d < bestD) {
         bestD = d;
         best = c;

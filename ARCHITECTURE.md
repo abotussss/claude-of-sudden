@@ -98,6 +98,8 @@ player.team / player.name / player.alive
 player.respawnAt(position, yaw)     player.health.regenEnabled
 weapons.locked              weapons.resetAmmo()
 weapons.scavenge(mags)      weapons.needsAmmo
+weapons.pickUpPrimary(id)   weapons.primaryIds
+weapons.resupplyGrenades(n) weapons.needsGrenades   weapons.grenadeCapacity
 ui.setRound(state)          ui.matchDriven      ui.isFriendlyTarget(actor)
 ui.airAlert(a)              ui.airImpact(title)   ui.clearAirAlert()
 ui.airDanger(position, life, label)
@@ -120,10 +122,29 @@ world.links     // [{ id, from, to, a:Vector3, b:Vector3, width, span, fall }]
 
 There are 24 features — one per floor of every enterable building and one on
 every reachable roof — and each is a real cache of geometry standing on a
-painted square, not a marker. `botReachable` is the field that matters to `ai`:
-`src/ai/nav.js` is a 2.5D height field, so a bot cannot climb a stair anywhere in
-this level, and only the eight GROUND-FLOOR features can ever be walked to by
-one. `world.links` are the four rooftop gangways; their decks are `LAYER.CLIP`
+painted square, not a marker. `src/match/caches.js` binds them: HOLD F takes what
+one holds (`weapon` → `weapons.pickUpPrimary`, `grenade` →
+`weapons.resupplyGrenades`, `ammo`/`vantage` → `weapons.scavenge`), TAP F of the
+same key switches on a 30 s respawn beacon that joins `_safeSpawn`'s existing
+forward-spawn auction.
+
+`botReachable` IS A CANDIDACY FLAG, NOT A MEASUREMENT. It is `floor === 0`,
+which is all `world` can know — the nav grid belongs to `ai` and does not exist
+when `buildFeatures` runs. **On this map it is false for all 24.** `src/ai/nav.js`
+is a 2.5D height field built by dropping one ray per cell from above the level,
+so inside a footprint it can only find the ROOF: swept at boot, every walkable
+cell inside all eight enterable buildings is at 3.2 / 6.5 / 9.6 m and ZERO are at
+ground level, with 0 of 30 spawn points able to A* to any of them. Four of the
+eight ground-floor caches have a walkable cell within three rings and all four
+are 2.8-3.6 m away and outside the wall — doorways, not interiors. A consumer
+that trusts the flag will order a bot to a cell that is not in the grid and
+`Agent._advance` will stand him still. `src/match/caches.js` proves every cache
+against the real grid at init and drops the rest, exactly as `src/match/sites.js`
+proves a zone's standing points, and its header carries the measured A/B of what
+ordering bots to the survivors did (bot time indoors 4.65 % → 0.00 %; the legs
+were removed). Making the caches worth anything to `ai` needs either a nav change
+or roof plates on `LAYER.CLIP` in `src/world/buildings.js`; until then they are a
+PLAYER feature. `world.links` are the four rooftop gangways; their decks are `LAYER.CLIP`
 so the connectors they cross are still open ground to the bot height field.
 `tools/floorcheck.mjs` gates all of it — head clearance over every tread, a
 cache on the level every flight arrives at, and the real capsule walked across

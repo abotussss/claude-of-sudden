@@ -116,27 +116,6 @@ const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', 
  */
 const AI_ROLE_FIELD = 'field';
 
-/**
- * THE CACHE LEG'S THREE NUMBERS. @see `_assignCacheLegs`
- *
- * `CACHE_LEGS` is per side per two-second refresh and is also capped at a fifth
- * of the live side, so a team of fifteen sends at most three men inside and a
- * team of five sends one. Above that the mode stops being domination: a capture
- * point is taken by the side that put more bodies on it, and men in a building
- * are men not on the point.
- *
- * `CACHE_NEAR_ZONE` is 26 m, which is the distance at which a ground floor is
- * still part of the fight for a point rather than a different part of the map —
- * the same order as `sitecheck`'s 26 m overwatch span, for the same reason.
- *
- * `RESUPPLY_AFTER` / `RESUPPLY_RANGE`: a man who has been alive 40 s has been
- * shooting, and 22 m is close enough that the detour is on his way.
- */
-const CACHE_LEGS = 3;
-const CACHE_NEAR_ZONE = 26;
-const RESUPPLY_AFTER = 40;
-const RESUPPLY_RANGE = 22;
-
 /** Metres. Close enough to the flank staging point to count as "been there". */
 const FLANK_ARRIVE = 7;
 /** Seconds. A staging point he has not reached by now is not worth any more of the round. */
@@ -243,10 +222,17 @@ export class MatchSystem {
      * move (4.25 % of bot-time indoors before anything was bound to them).
      */
     this.caches = new Caches(ctx, this.world?.features ?? [], this.weapons);
+    /**
+     * …and then PROVED against the real nav grid, because `world.features`'s
+     * `botReachable` is `floor === 0` and four of the eight ground floors on
+     * this map are not in the height field at all. @see `Caches.prove`.
+     */
+    this.caches.prove(this.ai, this.spawns);
     console.info(
       `[match] ${this.caches.list.length} caches bound · ${this.caches.botList.length} ` +
-        `bot-reachable · racks: ${this.caches.list.filter((c) => c.weaponId)
-          .map((c) => `${c.building}=${c.label}`).join(' ') || 'none'}`
+        `of ${this.caches.list.filter((c) => c.botReachable).length} flagged bot-reachable ` +
+        `PROVED walkable · racks: ${this.caches.list.filter((c) => c.weaponId)
+          .map((c) => `${c.building}f${c.floor}=${c.label}`).join(' ') || 'none'}`
     );
     const patcher = ctx.peek('render')?.patcher;
     if (patcher) {
@@ -700,28 +686,12 @@ export class MatchSystem {
         role: this.domination ? AI_ROLE_FIELD : role,
       });
       squad.add(agent);
-      this._stampSpawn(agent);
       this._botsByTeam[team].push(agent);
       this.roster.push({
         name: agent.name, team, kills: 0, deaths: 0, alive: true, isPlayer: false, actor: agent,
         role, variant, slot,
       });
     }
-  }
-
-  /**
-   * When this man came into the round, on `match`'s own clock and on `match`'s
-   * own field.
-   *
-   * A respawned bot is a NEW `Agent` (see `match:respawn` in ARCHITECTURE.md), so
-   * there is nothing on the actor that survives a death and nothing in `src/ai`
-   * that says how long somebody has been fighting. `_assignCacheLegs` needs
-   * exactly that to decide who is worth sending to resupply, and `match` may not
-   * add a field to `src/ai`'s class — so it stamps one on the instance it was
-   * handed, underscore-prefixed to say whose it is.
-   */
-  _stampSpawn(agent) {
-    if (agent) agent._matchSpawnedAt = this.ctx.time.elapsed;
   }
 
   /** A spawn point plus a metre of scatter, dropped onto the floor. */
@@ -948,7 +918,6 @@ export class MatchSystem {
       role: this.domination ? AI_ROLE_FIELD : role,
     });
     this._squads[team]?.add(agent);
-    this._stampSpawn(agent);
     this._botsByTeam[team].push(agent);
     rec.actor = agent;
     rec.alive = true;
@@ -1219,104 +1188,6 @@ export class MatchSystem {
       }
     }
 
-    /**
-     * …AND THEN SOME OF THEM GET SENT INSIDE. @see `_assignCacheLegs`
-     * Last, deliberately: this RE-tasks men who already have a zone, so the
-     * zone plan above is always complete first and a cache leg can only ever
-     * take a man who was surplus to it.
-     */
-    this._assignCacheLegs(team, live, face);
-  }
-
-  /**
-   * ────────────────────────────────────────────────────────────────────────────
-   * THE REASON A BOT GOES INDOORS
-   * ────────────────────────────────────────────────────────────────────────────
-   * "もっと屋内戦闘をさせたいので屋内のエリアを作ってそこにもAIがいく利点やメリットを
-   *  与えて でないとAIが屋内戦闘しない"
-   *
-   * MEASURED BEFORE THIS EXISTED, over 4260 bot-samples of live match
-   * (`_indoortime.mjs`): 4.25 % of bot-time inside an enterable building, three
-   * of twenty-nine bots ever inside one at all, and almost all of that one
-   * building that happens to lie on a route. The caches were scenery.
-   *
-   * TWO REASONS, AND THEY ARE DIFFERENT REASONS.
-   *
-   *  1. CONTEST — a bot-reachable cache within `CACHE_NEAR_ZONE` of a zone this
-   *     side is fighting over (its focus, or one of ours with an enemy in it).
-   *     This is the one that answers the complaint, and it is not a detour: a
-   *     ground floor twenty metres off a capture point is a door onto that point
-   *     with a wall in front of it. Sending two men through the building instead
-   *     of eleven up the same street is what indoor fighting on this map IS.
-   *
-   *  2. RESUPPLY — the nearest cache to a man who has been in the fight a long
-   *     time. `src/ai` runs its own ammunition (`Agent.ammo`, refilled on its own
-   *     reload) and `match` may not reach in and rewrite it, so "low" here is
-   *     honest about what it can see: TIME SINCE HE SPAWNED. A man who has been
-   *     alive `RESUPPLY_AFTER` seconds has been shooting, and sending him to pull
-   *     a crate open on the way to his next objective is both plausible and, more
-   *     to the point, is the behaviour that was asked for.
-   *
-   * WHAT IT COSTS THE PLAN. `CACHE_LEGS` men per side per refresh, capped at a
-   * fifth of the side, and only ever men the zone plan had already filled its
-   * `want` from — i.e. the spare bodies. It cannot take the last man off a
-   * contested point.
-   *
-   * THE VERB IS `'pickup'`, which is `src/ai`'s own word (see `setObjective`'s
-   * doc) and not a new one: 1.0 m arrival radius, 2.5 s combat break-off. That is
-   * exactly "walk to that crate and stand on it, and leave a firefight to do it".
-   * `match` may not add behaviour to `src/ai`; it may only drive it.
-   *
-   * Allocates nothing: `_claimed` and `_cacheOrder` are built once.
-   */
-  _assignCacheLegs(team, live, face) {
-    const caches = this.caches;
-    if (!caches || !caches.botList.length || !live.length) return;
-    const claimed = this._claimed ?? (this._claimed = new Set());
-    claimed.clear();
-    /**
-     * A cache another live bot is ALREADY standing on or walking to is taken,
-     * whichever side he is on. Two men on one crate is a queue, not a flank.
-     */
-    for (const a of this.ai.agents) {
-      if (!a.alive) continue;
-      const o = a.objective;
-      if (o && o.mode === 'pickup' && o.cache) claimed.add(o.cache);
-    }
-
-    const now = this.ctx.time.elapsed;
-    let legs = Math.min(CACHE_LEGS, Math.max(1, (live.length / 5) | 0));
-    for (let i = 0; i < live.length && legs > 0; i++) {
-      const a = live[i];
-      // Never pull a man who is already working a cache leg off it.
-      if (a.objective?.mode === 'pickup' && a.objective.cache) {
-        legs--;
-        continue;
-      }
-      /**
-       * `spawnedAt` is stamped by `_stampSpawn`, not read out of `src/ai`: the
-       * agent object is replaced wholesale on a respawn (`match:respawn` says a
-       * respawned bot is a NEW Agent), so a field of our own on the actor is the
-       * only honest clock for "how long has this man been in it".
-       */
-      const veteran = now - (a._matchSpawnedAt ?? now) > RESUPPLY_AFTER;
-      const zone = this._focus[team] ?? null;
-      let c = null;
-      // 1. contest: a cache beside the point this side is trying to take.
-      if (zone) c = caches.nearestBotCache(zone.position, claimed, CACHE_NEAR_ZONE);
-      // 2. resupply: the nearest one to a man who has been out here a while.
-      if (!c && veteran) c = caches.nearestBotCache(a.position, claimed, RESUPPLY_RANGE);
-      if (!c) continue;
-      claimed.add(c);
-      legs--;
-      a.setObjective('pickup', c.position, null, face);
-      /**
-       * `setObjective` builds `{mode, position, site}` and does not carry a
-       * cache, so the tag goes on afterwards. It is read by the claim sweep
-       * above and by `_indoortime.mjs`; `src/ai` never looks at it.
-       */
-      if (a.objective) a.objective.cache = c;
-    }
   }
 
   /**
