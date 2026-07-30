@@ -1,7 +1,8 @@
 /**
  * AUDIO / AIRSTRIKE
  *
- * Four voices for the airstrike event in `src/match/airstrike.js`, built the
+ * Six voices for the air events in `src/match/airstrike.js`,
+ * `src/match/bomber.js` and `src/match/strafe.js`, built the
  * same way everything else in this directory is: oscillators, the shared
  * NoiseBank, biquads and envelopes. No samples.
  *
@@ -20,6 +21,16 @@
  *                    the density falling off as the pile finishes settling.
  *   strike_tail      on impact. The long one: sub rumble, a dust wash and a
  *                    slow decay over six seconds.
+ *   strafe_cannon    the fighter's gun, placed ON THE AIRCRAFT. A rip rather
+ *                    than a shot: twenty-odd cracks a second under a broadband
+ *                    roar, which is the only thing that makes an aircraft
+ *                    firing read as different from an aircraft dropping.
+ *   strafe_walk      the same rip arriving on the GROUND, placed at the middle
+ *                    of the impact line and delayed by the shells' flight. Two
+ *                    voices for one event on purpose: a strafing run is the one
+ *                    weapon where the firing and the arriving are in different
+ *                    places at the same time, and hearing both is how you work
+ *                    out that the line is walking toward you.
  *
  * REVERB. There is live work in this directory reducing the send across the
  * board, and a blast is the easiest thing in the game to drown in room. So the
@@ -174,6 +185,67 @@ export function strikeRubble(actx, bank, rng, o = {}) {
   }
 
   return { node: out, end: t0 + dur * 1.25 + 0.2, send: 0.22 };
+}
+
+/**
+ * THE FIGHTER'S GUN.
+ *
+ * A cannon at 20-25 rounds a second is not a sequence of shots, it is one
+ * continuous tone with a pitch — the "brrrt" — and the two ways of getting there
+ * sound completely different. A single sawtooth at the fire rate is a synth
+ * buzzer; a TRAIN of individually struck cracks at that rate is a gun, because
+ * each crack has its own attack, its own decay and its own detune, and the ear
+ * hears both the rate and the grain. So it is the train, with the roar of the
+ * barrel underneath and nothing tonal in it.
+ *
+ * `ground` swaps the resonances from breech-and-barrel to tarmac-and-grit and
+ * drops the top end, which is the same event heard where it lands rather than
+ * where it left.
+ */
+export function strafeCannon(actx, bank, rng, o = {}) {
+  const t0 = o.when ?? actx.currentTime;
+  const dur = Math.max(0.25, o.dur ?? 1.2);
+  const lvl = o.level ?? 1;
+  const ground = !!o.ground;
+  /** Rounds a second. Under 15 reads as a machine gun, over 30 as a saw. */
+  const rate = o.rate ?? 22;
+  const out = gain(actx, ground ? 0.4 : 0.46); // VOICE TRIM
+
+  const n = clamp(Math.round(dur * rate), 4, 40);
+  for (let i = 0; i < n; i++) {
+    // Jittered spacing: a perfectly even train beats against itself and the
+    // beating is audible as a metallic ring that no cannon has.
+    const gt = t0 + (i / rate) * rng.range(0.93, 1.07);
+    struckResonator(
+      actx,
+      bank,
+      rng,
+      gt,
+      ground
+        ? [
+            { f: rng.range(80, 170), q: rng.range(2, 5), g: rng.range(0.05, 0.11) * lvl, decay: rng.range(0.03, 0.08) },
+            { f: rng.range(380, 1400), q: rng.range(4, 11), g: rng.range(0.015, 0.04) * lvl, decay: rng.range(0.01, 0.03) },
+          ]
+        : [
+            { f: rng.range(140, 230), q: rng.range(2, 4), g: rng.range(0.06, 0.12) * lvl, decay: rng.range(0.02, 0.05) },
+            { f: rng.range(900, 2900), q: rng.range(3, 9), g: rng.range(0.02, 0.05) * lvl, decay: rng.range(0.006, 0.018) },
+          ],
+      ground ? 0.004 : 0.0025
+    ).connect(out);
+  }
+
+  /* the barrel's roar under the rip — brown noise, band limited, no pitch */
+  {
+    const src = bank.source('brown', rng, rng.range(0.6, 0.95));
+    const bp = biquad(actx, 'bandpass', ground ? 220 : 340, 0.75);
+    const lp = biquad(actx, 'lowpass', ground ? 1400 : 3000, 0.8);
+    const g = gain(actx, 0);
+    series(src, bp, lp, g).connect(out);
+    ad(g.gain, t0, (ground ? 0.4 : 0.5) * lvl, 0.05, dur * 1.05);
+    src.start(t0, src._offset, dur * 1.25);
+  }
+
+  return { node: out, end: t0 + dur * 1.2 + 0.35, send: ground ? 0.2 : 0.14 };
 }
 
 /**

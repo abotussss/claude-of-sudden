@@ -66,6 +66,7 @@ import { Spectator } from './spectate.js';
 import { SiteMarks } from './sitemark.js';
 import { Airstrike } from './airstrike.js';
 import { Bomber } from './bomber.js';
+import { Strafe } from './strafe.js';
 import { AmmoDrops } from './ammo.js';
 
 const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', MATCH_OVER: 'matchover' };
@@ -198,11 +199,29 @@ export class MatchSystem {
     this.airstrike = new Airstrike(ctx, { rng: this.rng.fork(), routes: navRoutes }).build();
     if (patcher) for (const site of this.airstrike.sites) for (const m of site.materials) patcher.patch(m);
     this.bomber = new Bomber(ctx, { rng: this.rng.fork() }).build();
-    this.airstrike.coBusy = this.bomber;
-    this.bomber.coBusy = this.airstrike;
+    this.strafe = new Strafe(ctx, { rng: this.rng.fork() }).build();
+    this.air = [this.airstrike, this.bomber, this.strafe];
+    // Each stands down while EITHER of the other two has something in the air.
+    this.airstrike.coBusy = [this.bomber, this.strafe];
+    this.bomber.coBusy = [this.airstrike, this.strafe];
+    this.strafe.coBusy = [this.airstrike, this.bomber];
+    /**
+     * THE ANNOUNCEMENT, and the reason it is wired here rather than inside the
+     * three weapons.
+     *
+     * `ui` is `match`'s to drive (see the ownership map in ARCHITECTURE.md), so
+     * every HUD call in this feature lands in one method in one file and the air
+     * systems stay pure gameplay — they hand over a reused record and do not
+     * know a HUD exists. @see `_announceAir`
+     */
+    for (const a of this.air) {
+      a.onAnnounce = (info) => this._announceAir(info);
+      a.onImpact = (info) => this._airLanded(info);
+    }
     if (typeof window !== 'undefined') {
       window.__STRIKE__ = this.airstrike;
       window.__BOMBER__ = this.bomber;
+      window.__STRAFE__ = this.strafe;
     }
 
     /* ---- scratch ------------------------------------------------------- */
@@ -260,6 +279,20 @@ export class MatchSystem {
     this._flankLeg = new Map();
     /** Where each side comes from, so a held position is actually watched. */
     this._approach = [new THREE.Vector3(), new THREE.Vector3()];
+    /** The centre of the fight, handed to the three air systems. @see `_updateAirFocus` */
+    this._airFocus = new THREE.Vector3();
+    this._airFocusTimer = 0;
+    /** Reused `ui.airAlert` argument — the HUD copies out of it synchronously. */
+    this._airHud = {
+      kind: 'STRIKE',
+      title: '',
+      impactTitle: '',
+      name: '',
+      x: 0,
+      y: 0,
+      z: 0,
+      lead: 0,
+    };
 
     /* ---- events -------------------------------------------------------- */
     this._offs = [];
@@ -392,6 +425,7 @@ export class MatchSystem {
     // a crater is a hole and a scatter of grit, so the BVH and `ai.grid` were
     // never touched and there is nothing to put back.
     this.bomber?.reset();
+    this.strafe?.reset();
 
     // ---- the charge ---------------------------------------------------
     // Last round's pouches go with last round's bodies: `_resetPlayer` has
@@ -893,11 +927,9 @@ export class MatchSystem {
     // The airstrike only schedules itself inside a live round, and the first
     // one cannot be called for `RULES.airstrikeFirstDelay` seconds after GO.
     if (phase === PHASE.LIVE) {
-      this.airstrike?.armRound();
-      this.bomber?.armRound();
+      for (const a of this.air) a.armRound();
     } else {
-      this.airstrike?.disarm();
-      this.bomber?.disarm();
+      for (const a of this.air) a.disarm();
     }
   }
 
@@ -1126,8 +1158,14 @@ export class MatchSystem {
     // Both run their own clock in every phase — a mass that is mid-air when a
     // round ends still has to land, and an aeroplane halfway across the map
     // still has to finish crossing it — but they only ARM during LIVE.
-    this.airstrike?.update(dt, this.phase === PHASE.LIVE);
-    this.bomber?.update(dt, this.phase === PHASE.LIVE);
+    const live = this.phase === PHASE.LIVE;
+    // WHERE THE FIGHT IS, refreshed on a slow timer and handed to all three.
+    // A fixed-site weapon on a 114x141 m map lands where nobody is unless
+    // somebody aims it. @see `_updateAirFocus`
+    if (live) this._updateAirFocus(dt);
+    this.airstrike?.update(dt, live);
+    this.bomber?.update(dt, live);
+    this.strafe?.update(dt, live);
 
     // Dead players watch. Written here, in update(), so it lands before `ui`
     // and `render` read the camera this frame.
@@ -1137,6 +1175,134 @@ export class MatchSystem {
     }
 
     this._publishHud();
+  }
+
+  /* ------------------------------------------------------------- the air -- */
+
+  /**
+   * WHERE THE FIGHT IS — the one number that decides whether an air event is
+   * something the player experiences or a line in the console.
+   *
+   * The three air weapons all pick from fixed geography (eight strike sites,
+   * four bomb lines, four gun lines) because their masses, timelines and nav
+   * patches are baked at boot and that is the whole design. On a 114x141 m map an
+   * unbiased draw over fixed points puts the median event most of the map away
+   * with a block in between — measured at 71 m — and from the seat that is
+   * indistinguishable from nothing happening. Which is exactly what was reported.
+   *
+   * So the choice is aimed. This is the centroid of the fight with THE PLAYER'S
+   * OWN EYE WEIGHTED AS FOUR MEN, because the one seat that has to see it is the
+   * one behind the camera; when the player is dead it follows whoever they are
+   * spectating, for the same reason. Bots more than 60 m from that eye are not
+   * part of the fight the player is in and are left out of the average.
+   *
+   * It is only ever a WEIGHT on the draw (see `Airstrike._focusWeight`): the
+   * geography does not move, so the balance argument that every strike site and
+   * every bomb line sits on the attackers' half of every route — which is a
+   * geometric fact about the map, not a tuning opinion — is untouched.
+   *
+   * Refreshed at 1.5 s, which is far quicker than the 28-84 s gaps between air
+   * events and costs one pass over thirty actors.
+   */
+  _updateAirFocus(dt) {
+    this._airFocusTimer -= dt;
+    if (this._airFocusTimer > 0) return;
+    this._airFocusTimer = 1.5;
+    const f = this._airFocus;
+    f.set(0, 0, 0);
+    let w = 0;
+    const eye = this.player.dead
+      ? this.spectator.active
+        ? this.spectator.target?.position ?? null
+        : null
+      : this.player.position;
+    if (eye) {
+      f.addScaledVector(eye, 4);
+      w += 4;
+    }
+    for (const a of this.ai.agents) {
+      if (!a.alive) continue;
+      if (eye && a.position.distanceToSquared(eye) > 60 * 60) continue;
+      f.add(a.position);
+      w++;
+    }
+    if (!w) {
+      for (const a of this.air) a.setFocus(null);
+      return;
+    }
+    f.multiplyScalar(1 / w);
+    for (const a of this.air) a.setFocus(f);
+  }
+
+  /**
+   * TELL THE PLAYER. Called by all three air systems the moment something is
+   * called, with their own reused announce record.
+   *
+   * Three things, because the failure this fixes was that there were none:
+   *   1. the HUD strip, which holds a live bearing and a countdown for the whole
+   *      telegraph (src/ui/airalert.js),
+   *   2. a world marker on EVERY impact point in the event — three for a salvo,
+   *      three along a stick or a gun line — so it reads as an area to leave and
+   *      not as one dot to look at,
+   *   3. the banner, because that is what catches an eye that is down a sight.
+   */
+  _announceAir(info) {
+    if (!info) return;
+    const h = this._airHud;
+    const p = info.position;
+    h.kind = info.kind;
+    h.name = info.name ?? '';
+    h.lead = info.lead ?? 4.4;
+    h.x = p?.x ?? 0;
+    h.y = p?.y ?? 0;
+    h.z = p?.z ?? 0;
+    let label = 'INCOMING';
+    switch (info.kind) {
+      case 'SALVO':
+        h.title = 'HEAVY AIRSTRIKE';
+        h.impactTitle = 'BLOCK LEVELLED';
+        label = 'AIRSTRIKE';
+        break;
+      case 'BOMBER':
+        h.title = 'BOMBER INBOUND';
+        h.impactTitle = 'BOMBS DOWN';
+        label = 'BOMBS';
+        break;
+      case 'STRAFE':
+        h.title = 'STRAFING RUN';
+        h.impactTitle = 'CANNON FIRE';
+        label = 'CANNON';
+        break;
+      default:
+        h.title = 'AIRSTRIKE INBOUND';
+        h.impactTitle = 'IMPACT';
+        label = 'AIRSTRIKE';
+        break;
+    }
+    this.ui.airAlert(h);
+    for (let i = 0; i < info.count; i++) this.ui.airDanger(info.points[i], h.lead, label);
+    this.ui.banner.show(
+      h.title,
+      info.kind === 'SALVO' ? `${h.name} · CLEAR THE AREA` : `${h.name} · GET CLEAR`,
+      info.kind === 'STRAFE' ? 1.3 : 1.9
+    );
+  }
+
+  /** It went off. The strip switches to its impact read; the banner confirms. */
+  _airLanded(info) {
+    if (!info) return;
+    const title =
+      info.kind === 'SALVO'
+        ? 'BLOCK LEVELLED'
+        : info.kind === 'BOMBER'
+          ? 'BOMBS DOWN'
+          : info.kind === 'STRAFE'
+            ? 'CANNON FIRE'
+            : 'AIRSTRIKE';
+    this.ui.airImpact(title);
+    // A salvo is the round's event and gets the full banner; the rest have
+    // already had theirs on the way in and would only be shouting twice.
+    if (info.kind === 'SALVO') this.ui.banner.show(title, `${info.name} · DOWN`, 2.4);
   }
 
   _collectSquad() {
@@ -1547,9 +1713,11 @@ export class MatchSystem {
     this.marks?.dispose();
     this.airstrike?.dispose();
     this.bomber?.dispose();
+    this.strafe?.dispose();
     if (typeof window !== 'undefined') {
       if (window.__STRIKE__ === this.airstrike) delete window.__STRIKE__;
       if (window.__BOMBER__ === this.bomber) delete window.__BOMBER__;
+      if (window.__STRAFE__ === this.strafe) delete window.__STRAFE__;
     }
   }
 }

@@ -40,7 +40,7 @@ import {
   surfaceImpact, footstep, shellCasing, reloadPhase, explosion, bodyFall, uiSound,
   heartbeat, cloth, meleeSwing, meleeHit,
 } from './foley.js';
-import { strikeJet, strikeIncoming, strikeRubble, strikeTail } from './airstrike.js';
+import { strikeJet, strikeIncoming, strikeRubble, strikeTail, strafeCannon } from './airstrike.js';
 import { bark as voxBark, barkFor } from './vox.js';
 import { classifySpace } from './ir.js';
 
@@ -89,6 +89,7 @@ const BUS_FOR = {
   bark: 'voice', ambient: 'ambience',
   strike_jet: 'ambience', strike_incoming: 'weapons',
   strike_rubble: 'weapons', strike_tail: 'weapons',
+  strafe_cannon: 'weapons', strafe_walk: 'weapons',
 };
 
 /** Finite Vector3-ish check — one NaN from any subsystem must not throw. */
@@ -521,6 +522,11 @@ export class AudioSystem {
       case 'strike_incoming': return strikeIncoming(actx, bank, rng, { when, dur: o.dur, level: o.level });
       case 'strike_rubble': return strikeRubble(actx, bank, rng, { when, dur: o.dur, level: o.level, distance: dist });
       case 'strike_tail': return strikeTail(actx, bank, rng, { when, dur: o.dur, level: o.level });
+      /* the fighter's gun: at the aircraft, and again where it lands */
+      case 'strafe_cannon':
+        return strafeCannon(actx, bank, rng, { when, dur: o.dur, level: o.level, rate: o.rate });
+      case 'strafe_walk':
+        return strafeCannon(actx, bank, rng, { when, dur: o.dur, level: o.level, rate: o.rate, ground: true });
       case 'bodyfall': return bodyFall(actx, bank, rng, { when, level: o.level });
       case 'cloth': return cloth(actx, bank, rng, { when, level: o.level });
       case 'heartbeat': return heartbeat(actx, bank, rng, { when, level: o.level });
