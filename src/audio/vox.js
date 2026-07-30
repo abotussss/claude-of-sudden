@@ -119,6 +119,156 @@ export const BARKS = {
   },
 };
 
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE RADIO VOCABULARY — "RogerとかEnemy Spottedとか"
+ * ════════════════════════════════════════════════════════════════════════════
+ * The nine barks above are EXCLAMATIONS: one man shouting one thing at nobody
+ * in particular. A radio net is not that. It is a small number of PHRASES that
+ * carry information — a bearing, a landmark, a zone letter — and an even
+ * smaller number that carry none at all and exist purely so the net sounds like
+ * two people ("ROGER", "COPY", "SET"). You cannot build the first kind by
+ * adding nine more one-word specs, because "CONTACT" times eight bearings times
+ * three zones is thirty-three specs written by hand and thirty-three chances to
+ * get a formant wrong.
+ *
+ * So the unit here is the WORD, and a phrase is words concatenated with a
+ * word gap. `compose()` runs once at module load and writes finished specs into
+ * `BARKS` under names `src/ai/radio.js` asks for directly (`barkFor` passes any
+ * name it recognises straight through). One phrase is still ONE emitter and one
+ * oscillator — a two-word callout costs exactly what "CONTACT!" always cost,
+ * which matters because the voice bus is 12 % of the field.
+ *
+ * The words are not intelligible English and are not trying to be; the note at
+ * the top of this file applies unchanged. What a phrase carries is a SHAPE —
+ * syllable count, stress placement, the pitch fall at the end of a statement
+ * against the flat two-beat of an acknowledgement — and that is what a player
+ * reads at 30 m through gunfire.
+ */
+
+/** A sibilant coda. English "-st"/"-ce" endings; no amplitude of its own. */
+const SIB = { v: 'i', d: 0.035, a: 0.10, p: 0.90, on: 'f' };
+
+/** Words. Each is a syllable run; gaps BETWEEN words are added by `compose`. */
+const WORDS = {
+  /* — bearings ------------------------------------------------------ */
+  north: [{ v: 'o', d: 0.20, a: 1.00, p: 1.10, on: 'n' }],
+  south: [{ v: 'a', d: 0.12, a: 0.95, p: 1.06, on: 'f' }, { v: 'u', d: 0.13, a: 0.85, p: 0.94 }, SIB],
+  east: [{ v: 'i', d: 0.19, a: 1.00, p: 1.05 }, SIB],
+  west: [{ v: 'e', d: 0.18, a: 1.00, p: 1.06, on: 'n' }, SIB],
+
+  /* — landmarks ----------------------------------------------------- */
+  inside: [{ v: 'i', d: 0.09, a: 0.70, p: 0.96, on: 'n' },
+    { v: 'a', d: 0.15, a: 1.00, p: 1.12, on: 'f' }, { v: 'i', d: 0.07, a: 0.50, p: 0.94 }],
+  rooftop: [{ v: 'u', d: 0.14, a: 1.00, p: 1.08 }, { v: 'o', d: 0.12, a: 0.70, p: 0.92, on: 'p' }],
+  /* — zone letters (DOMINATION calls them A / C / B) ----------------- */
+  alpha: [{ v: 'a', d: 0.14, a: 1.00, p: 1.08 }, { v: 'a', d: 0.12, a: 0.70, p: 0.90, on: 'f' }],
+  bravo: [{ v: 'a', d: 0.13, a: 1.00, p: 1.10, on: 'p' }, { v: 'ohh', d: 0.14, a: 0.75, p: 0.90, on: 'f' }],
+  charlie: [{ v: 'a', d: 0.14, a: 1.00, p: 1.08, on: 'f' }, { v: 'i', d: 0.13, a: 0.70, p: 0.90 }],
+
+  /* — acknowledgements ---------------------------------------------- */
+  roger: [{ v: 'ohh', d: 0.14, a: 1.00, p: 1.06 }, { v: 'ehr', d: 0.15, a: 0.72, p: 0.90, on: 'f' }],
+  set: [{ v: 'e', d: 0.17, a: 1.00, p: 1.06, on: 'f' }],
+
+  /* — movement ------------------------------------------------------ */
+  moving: [{ v: 'u', d: 0.13, a: 1.00, p: 1.08, on: 'n' }, { v: 'i', d: 0.12, a: 0.72, p: 0.94, on: 'n' }],
+  up: [{ v: 'a', d: 0.14, a: 0.95, p: 1.04, on: 'p' }],
+  pushing: [{ v: 'u', d: 0.14, a: 1.00, p: 1.10, on: 'p' }, { v: 'i', d: 0.12, a: 0.70, p: 0.92, on: 'f' }],
+  holding: [{ v: 'ohh', d: 0.15, a: 1.00, p: 1.08 }, { v: 'i', d: 0.12, a: 0.70, p: 0.90, on: 'p' }],
+  in: [{ v: 'i', d: 0.09, a: 0.72, p: 0.98, on: 'n' }],
+  position: [{ v: 'o', d: 0.10, a: 0.78, p: 1.00, on: 'p' },
+    { v: 'i', d: 0.13, a: 1.00, p: 1.10, on: 'f' }, { v: 'a', d: 0.11, a: 0.58, p: 0.88, on: 'f' }],
+
+  /* — trouble ------------------------------------------------------- */
+  cover: [{ v: 'a', d: 0.14, a: 1.00, p: 1.08, on: 'p' }, { v: 'ehr', d: 0.13, a: 0.74, p: 0.92, on: 'f' }],
+  me: [{ v: 'i', d: 0.16, a: 0.92, p: 1.00, on: 'n' }],
+  pinned: [{ v: 'i', d: 0.20, a: 1.05, p: 1.14, on: 'p' }, { v: 'e', d: 0.08, a: 0.50, p: 0.88, on: 'n' }],
+  man: [{ v: 'a', d: 0.16, a: 1.00, p: 1.06, on: 'n' }],
+  down: [{ v: 'a', d: 0.16, a: 1.00, p: 1.04, on: 'p' }, { v: 'u', d: 0.10, a: 0.68, p: 0.86, on: 'n' }],
+  enemy: [{ v: 'e', d: 0.10, a: 0.90, p: 1.05 }, { v: 'a', d: 0.08, a: 0.70, p: 1.00, on: 'n' },
+    { v: 'i', d: 0.10, a: 0.80, p: 0.95 }],
+
+  /* — ordnance and stores ------------------------------------------- */
+  frag: [{ v: 'a', d: 0.17, a: 1.05, p: 1.12, on: 'f' }],
+  out: [{ v: 'a', d: 0.13, a: 0.95, p: 1.02 }, { v: 'u', d: 0.09, a: 0.60, p: 0.86, on: 'p' }],
+  ammo: [{ v: 'a', d: 0.13, a: 1.00, p: 1.06 }, { v: 'ohh', d: 0.13, a: 0.74, p: 0.90, on: 'n' }],
+  low: [{ v: 'ohh', d: 0.19, a: 1.00, p: 1.04, on: 'n' }],
+  dry: [{ v: 'a', d: 0.20, a: 1.05, p: 1.14, on: 'p' }, { v: 'i', d: 0.08, a: 0.55, p: 0.92 }],
+
+  /* — objective ----------------------------------------------------- */
+  secured: [{ v: 'i', d: 0.10, a: 0.70, p: 0.98, on: 'f' },
+    { v: 'u', d: 0.17, a: 1.00, p: 1.10, on: 'p' }, { v: 'ehr', d: 0.09, a: 0.50, p: 0.86 }],
+  lost: [{ v: 'o', d: 0.19, a: 1.00, p: 1.06, on: 'n' }, SIB],
+  we: [{ v: 'i', d: 0.10, a: 0.70, p: 0.98, on: 'n' }],
+  contact: BARKS.contact.syl,
+};
+
+/** The gap between two words of one transmission. Shorter than a breath. */
+const WORD_GAP = 0.075;
+
+/**
+ * Write `BARKS[name]` as the concatenation of `words`.
+ *
+ * The last syllable of every word but the last gets `WORD_GAP`; the phrase's
+ * final syllable keeps `g: 0` so `bark()`'s "last syllable decays longer" rule
+ * still fires on the right one. Nothing is mutated: the run is rebuilt with
+ * spread, so `WORDS.down` is safe to use in six phrases.
+ */
+function compose(name, f0, drive, words) {
+  const syl = [];
+  for (let w = 0; w < words.length; w++) {
+    const run = WORDS[words[w]];
+    for (let i = 0; i < run.length; i++) {
+      const last = i === run.length - 1;
+      syl.push({ ...run[i], g: last ? (w === words.length - 1 ? 0 : WORD_GAP) : (run[i].g ?? 0.012) });
+    }
+  }
+  BARKS[name] = { f0, drive, syl };
+}
+
+/**
+ * CONTACT REPORTS. A bearing or a landmark, which is the whole difference
+ * between "there is a man" and "there is a man to the north-east": `src/ai`
+ * knows the direction from the speaker to what he saw and picks the name.
+ * Urgent register — f0 1.16, drive 1.25, same as the bare "CONTACT!".
+ */
+for (const dir of ['north', 'south', 'east', 'west']) {
+  compose(`contact_${dir}`, 1.16, 1.25, ['contact', dir]);
+}
+compose('contact_northeast', 1.16, 1.25, ['contact', 'north', 'east']);
+compose('contact_northwest', 1.16, 1.25, ['contact', 'north', 'west']);
+compose('contact_southeast', 1.16, 1.25, ['contact', 'south', 'east']);
+compose('contact_southwest', 1.16, 1.25, ['contact', 'south', 'west']);
+compose('contact_inside', 1.16, 1.25, ['contact', 'inside']);
+compose('contact_rooftop', 1.16, 1.25, ['contact', 'rooftop']);
+
+/**
+ * ANSWERS. Flat, unhurried, and SHORT — an acknowledgement that sounds as
+ * urgent as the contact report it answers reads as two men panicking rather
+ * than as one man being told something. f0 1.0 and drive 0.9 is the "copy"
+ * register that already existed.
+ */
+compose('roger', 1.00, 0.90, ['roger']);
+compose('setpos', 1.00, 0.95, ['set']);
+compose('inposition', 1.00, 0.95, ['in', 'position']);
+
+/* — status, trouble, ordnance, objective ---------------------------- */
+compose('movingup', 1.08, 1.10, ['moving', 'up']);
+compose('pushing', 1.12, 1.20, ['pushing']);
+compose('holding', 1.02, 1.00, ['holding']);
+compose('coverme', 1.22, 1.35, ['cover', 'me']);
+compose('pinned', 1.26, 1.45, ['pinned', 'down']);
+compose('mandown', 1.18, 1.30, ['man', 'down']);
+compose('enemydown', 1.06, 1.05, ['enemy', 'down']);
+compose('fragout', 1.28, 1.40, ['frag', 'out']);
+compose('ammolow', 1.08, 1.05, ['ammo', 'low']);
+compose('ammodry', 1.24, 1.35, ['ammo', 'dry']);
+compose('ammoup', 1.02, 0.95, ['ammo', 'up']);
+for (const z of ['alpha', 'bravo', 'charlie']) {
+  compose(`secured_${z}`, 1.06, 1.05, [z, 'secured']);
+  compose(`lost_${z}`, 1.16, 1.25, ['we', 'lost', z]);
+}
+
 const WAVE_CACHE = new WeakMap();
 
 /** Glottal-ish pulse: strong fundamental, 1/n^1.15 rolloff, alternating phase. */
@@ -307,6 +457,17 @@ export function bark(actx, bank, rng, o = {}) {
 
 /** Pick a plausible bark for an AI event without the ai agent knowing our list. */
 export function barkFor(kind, rng) {
+  /**
+   * A CALLER MAY NAME A VOICE EXACTLY. `src/ai/radio.js` composes a transmission
+   * from what the man actually knows — a bearing, a zone letter, whether he is
+   * indoors — and there is no way to express that through the nine semantic
+   * kinds below. Anything already in `BARKS` passes through untouched.
+   *
+   * This changes nothing for the existing callers: of their kinds only
+   * `grenade`, `copy` and `death` are `BARKS` keys, and each already mapped to
+   * the spec of the same name.
+   */
+  if (BARKS[kind]) return kind;
   switch (kind) {
     case 'spot': return rng.float() < 0.5 ? 'contact' : 'spotted';
     case 'reload': return 'reloading';
