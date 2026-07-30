@@ -290,6 +290,10 @@ export class Agent {
     /* ---------------- objective (owned by `match`) ---------------- */
     /** { mode, position: Vector3, site, facing: Vector3|null } or null. */
     this.objective = null;
+    /** Has the "IN POSITION" for THIS objective gone out yet. @see `_advance`. */
+    this._saidSet = false;
+    /** `ctx.time.elapsed` of this man's last transmission. @see `radio.js`. */
+    this._radioAt = -1e9;
     this._objPos = new THREE.Vector3();
     this._objFacing = new THREE.Vector3();
     this._hasFacing = false;
@@ -363,6 +367,37 @@ export class Agent {
     this.burstCooldown = this.rng.range(0.4, 1.4);
     this.magSize = 30;
     this.ammo = this.magSize;
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * HOW MUCH AMMUNITION A MAN CAME OUT WITH — and why it did not used to be a
+     * number at all.
+     * ────────────────────────────────────────────────────────────────────────
+     * "ここのメリットもっとAIに覚えさせて" — teach the AI the pickups are worth
+     * something. A cache cannot be worth anything to a man who cannot run out,
+     * and until this line `_shoot` read `this.ammo = this.magSize` on an empty
+     * magazine, unconditionally, for ever. An ammunition crate was therefore a
+     * square of floor with a reward of zero, and every "go and resupply" order
+     * `match` could write was a lie about what the errand was for.
+     *
+     * FOUR MAGAZINES BEHIND THE ONE IN THE GUN, i.e. 150 rounds a life, and the
+     * number is measured rather than picked. `src/ai/behaviour.mjs` over 900 s
+     * of live round at 15v15: 262 deaths against ~26 000 actor-seconds is a
+     * mean life of about 100 s, and the median man fires 24 rounds a minute —
+     * so the median life spends 40 of its 150 rounds and NEVER notices this
+     * exists. The top of the distribution fires 94 a minute, spends ~156, and
+     * runs himself dry. That asymmetry is the design: the men who go looking
+     * for a crate are the men who have actually been fighting, which is both
+     * the plausible thing and the thing that puts them indoors.
+     *
+     * RUNNING DRY IS REAL. `_shoot` will not fire and will not fake a reload —
+     * see the empty-magazine branch. It is recoverable in exactly one way, and
+     * that way is a cache (`ai.resupply`, driven by `src/match/caches.js`).
+     */
+    this.reserve = this.magSize * 4;
+    /** What he started with. `resupply` may not hand over more than this. */
+    this.startReserve = this.reserve;
+    /** Magazine empty AND nothing left to load. Set in `_shoot`. */
+    this.dry = false;
     /**
      * Cone half-angle, radians. 0.030 at the top of the range down to 0.085 at
      * the bottom — a poor shooter is 2.8x wider, which at 25 m is the difference
@@ -522,6 +557,17 @@ export class Agent {
       this.lastKnownAge = 0;
       this.alertness = 1;
       if (this.awareness >= 1) {
+        /**
+         * THE CONTACT REPORT GOES OUT ON ACQUISITION, not on every frame he can
+         * see somebody. This is the exact instant `awareness` crosses 1 — the
+         * reaction delay is already spent, so the callout lands when the man
+         * commits rather than when the ray first connects, and a man tracking
+         * the same target across a street does not re-report him.
+         *
+         * `_contactVoice` turns `chest` into a bearing or a landmark; the net's
+         * per-kind clock stops the whole squad reporting one man. @see radio.js
+         */
+        if (!this.hasTarget) this.ai.radio?.contact(this, chest);
         this.hasTarget = true;
         this.target = chest;
       }
@@ -561,6 +607,23 @@ export class Agent {
     if (changed) this.objectiveBlocked = false;
     // Force a fresh path next time ADVANCE runs rather than finishing the old one.
     if (changed) {
+      /**
+       * A NEW ORDER IS SOMETHING TO ACKNOWLEDGE AND SOMETHING TO ARRIVE AT.
+       * `_saidSet` gates the "IN POSITION" on the far end of the walk; the
+       * "MOVING UP" / "PUSHING" here is the near end, and which one he says is
+       * his own aggression — the same man says the same one every time, so it
+       * reads as a person rather than as a dice roll.
+       *
+       * It is deliberately NOT sent for a `pickup`: an errand to a crate is not
+       * a manoeuvre and putting it on the net would make the resupply traffic
+       * the loudest thing on it. @see `_assignCacheLegs`.
+       */
+      this._saidSet = false;
+      if (mode !== 'pickup' && this.alive && this.ai.combatEnabled !== false) {
+        this.ai.radio?.say(this,
+          this.traits.aggression > 0.55 ? 'pushing' : 'movingup',
+          this.traits.aggression > 0.55 ? 'pushing' : 'movingup', null, true);
+      }
       this.repathTimer = 0;
       // A sector spot belongs to the objective it was rolled around; a new
       // objective has to roll a new one or the man holds the old site's ground.
@@ -584,6 +647,47 @@ export class Agent {
     // hearing alone never grants a target; it turns the head and the body
     this.awareness = Math.min(0.85, this.awareness + strength * 0.5);
     if (this.state === STATE.IDLE || this.state === STATE.PATROL) this._setState(STATE.ALERT);
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * STORES — what this man is short of, and what a crate may give him
+   * ────────────────────────────────────────────────────────────────────────
+   * `match` decides what a cache is worth and `ai` owns what a soldier is
+   * carrying, so the split is the same one `weapons.scavenge` already draws for
+   * the player: `match` says "hand him two magazines", this decides what two
+   * magazines actually are and what the ceiling is.
+   */
+
+  /** Half a magazine of reserve left, or less: worth walking for. */
+  get ammoLow() {
+    return this.dry || this.reserve <= this.magSize * 1.5;
+  }
+
+  /**
+   * Top up. CAPPED AT WHAT HE STARTED WITH, exactly as `weapons.scavenge` is
+   * capped at each weapon's starting `def.reserve` and for the same reason: a
+   * five minute round with respawns and eight crates on it must not become
+   * infinite ammunition. Returns the rounds actually handed over.
+   */
+  resupply(mags) {
+    const want = Math.max(0, Math.min(this.magSize * mags, this.startReserve - this.reserve));
+    if (want <= 0) return 0;
+    this.reserve += want;
+    // A dry man is only dry until somebody gives him something to load; the
+    // magazine itself is filled by the next `_shoot`, which plays the reload.
+    this.dry = false;
+    return want;
+  }
+
+  /** One frag, or nothing if he still has his. Returns true if it went in. */
+  resupplyGrenade() {
+    if (this.hasGrenade) return false;
+    this.hasGrenade = true;
+    // Straight back into the fight: an unthrown grenade with a 30 s cooldown on
+    // it is a crate that gave him nothing for the length of most lives.
+    this.grenadeCooldown = Math.min(this.grenadeCooldown, this.rng.range(2, 6));
+    return true;
   }
 
   /** Rounds cracking past raise suppression, which drives the flinch + duck. */
@@ -741,6 +845,9 @@ export class Agent {
     if (this.state === STATE.COMBAT && this.cover
       && this.suppression > 1.7 - this.traits.exposure * 0.8) {
       this._setState(STATE.SUPPRESSED);
+      // A man who has just been driven behind his cover says so. High priority,
+      // long per-kind cooldown: it is news the first time and noise the fourth.
+      this.ai.radio?.say(this, 'pinned', 'pinned', null, true);
     }
   }
 
@@ -929,6 +1036,22 @@ export class Agent {
     }
 
     // ---- in position ---------------------------------------------------
+    /**
+     * ARRIVING IS A TRANSMISSION, and it is the one that makes the net sound
+     * like a plan rather than like an alarm. It fires on the EDGE — the frame
+     * `dist` first falls inside `arrive` — so a man holding a sector for two
+     * minutes says it once, not once a frame. `_saidSet` is cleared whenever
+     * the objective changes (`setObjective`), which is where "a new objective
+     * is a new thing to arrive at" belongs.
+     *
+     * Which of the two he says is what he was sent to do: a man told to HOLD
+     * says "HOLDING", everybody else says "IN POSITION".
+     */
+    if (!this._saidSet) {
+      this._saidSet = true;
+      if (anchored) this.ai.radio?.say(this, 'holding', 'holding', null, false);
+      else this.ai.radio?.say(this, 'inposition', 'inposition', null, false);
+    }
     this.desiredSpeed = 0;
     this.hasMoveTarget = false;
     // Watch the sector rather than one bearing off it — and if the objective gave
@@ -1115,6 +1238,14 @@ export class Agent {
         .add(this.position);
       if (this._goTo(away)) {
         this._setState(STATE.RETREAT);
+        /**
+         * "COVER ME" IS A REQUEST, and it is the one call here that is aimed at
+         * a specific man rather than at the net. It goes out as a wounded man
+         * breaks contact, which is the moment somebody else has to hold the
+         * angle he is leaving — so it is marked `answer`, and what comes back
+         * is "ROGER" from whoever is nearest him.
+         */
+        this.ai.radio?.say(this, 'coverme', 'coverme', null, true);
         return;
       }
     }
@@ -1287,6 +1418,11 @@ export class Agent {
        */
       if (!this.wantFire && this.hasTarget && this.lastKnownAge < 2.6 && this.peeking) {
         this.wantFire = this.rng.float() < 0.12 + (1 - tr.trigger) * 0.62;
+        // Rounds into a window nobody is holding are only useful if somebody
+        // knows they are covering fire, so this one is on the net too — at the
+        // longest per-kind cooldown in the table, because it is a state and not
+        // an event. @see KIND_GAP in radio.js.
+        if (this.wantFire) this.ai.radio?.say(this, 'suppress', 'suppressing', null, false);
       }
     }
 
@@ -1328,6 +1464,9 @@ export class Agent {
         this.ai.cover?.release(this.id);
         this._setState(STATE.FLANK);
         sq.claimFlank(this);
+        // Going wide is the one manoeuvre that gets a man shot by his own side,
+        // so it is announced and it is answered with "SET".
+        this.ai.radio?.say(this, 'flank', 'flanking', null, true);
         return;
       }
     }
@@ -1535,9 +1674,33 @@ export class Agent {
 
     if (!this.wantFire || this.animator.reloading || this.animator.vaulting) return;
     if (this.ammo <= 0) {
+      /**
+       * THE MAGAZINE COMES OFF THE RESERVE. @see the constructor for the size
+       * of it and for the measurement that chose it.
+       *
+       * A dry man does not play a reload animation he has nothing to feed. He
+       * calls it on the net — "AMMO DRY" is a real radio call and it is also
+       * the cue `match` reads to send him to a crate — and the call is rate
+       * limited per speaker and per net like everything else, so a dry man
+       * standing in a firefight does not repeat it every frame.
+       */
+      const take = Math.min(this.magSize, this.reserve);
+      if (take <= 0) {
+        this.dry = true;
+        this.wantFire = false;
+        this.ai.radio?.say(this, 'ammodry', 'ammodry', null, true);
+        return;
+      }
       this.animator.reload(this.variantName === 'irregular' ? 2.9 : 2.35);
       this.ai.emitReload(this);
-      this.ammo = this.magSize;
+      this.reserve -= take;
+      this.ammo = take;
+      // "RELOADING" is the oldest callout in the genre and it is information:
+      // it is the beat in which a squadmate is meant to take over the angle.
+      this.ai.radio?.say(this, 'reload', 'reloading', null, true);
+      if (this.reserve <= this.magSize) {
+        this.ai.radio?.say(this, 'ammolow', 'ammolow', null, false);
+      }
       return;
     }
     if (this.burstLeft <= 0) {

@@ -55,6 +55,7 @@ import { RIG } from './rig.js';
 import { NavGrid, CoverMap } from './nav.js';
 import { Agent, STATE, drawPersona } from './agent.js';
 import { Squad } from './squad.js';
+import { Radio } from './radio.js';
 import { GroundShadows } from './grounding.js';
 
 export class AiSystem {
@@ -85,6 +86,12 @@ export class AiSystem {
     this._variants = new Map();
     this.agents = [];
     this.squads = [];
+    /**
+     * THE RADIO NET. One object for the whole map, two nets inside it — see
+     * `src/ai/radio.js` for why the rate limit cannot be global. Built here so
+     * it exists before the first `spawn`, bound to the level in `_buildNav`.
+     */
+    this.radio = new Radio(this);
     this.grid = null;
     this.cover = null;
     this.inspect = false;
@@ -490,6 +497,46 @@ export class AiSystem {
       const loud = e.running ? 24 : 11;
       for (const a of this.agents) if (a.alive) a.hear(e.position, loud);
     });
+
+    /**
+     * ─────────────────────────────────────────────────────────────────────
+     * WHAT GOES ON THE NET, PART 1: the things a man learns from an event
+     * ─────────────────────────────────────────────────────────────────────
+     * The rest is in `agent.js`, at the decisions themselves. These two are
+     * here because they are facts about the SIDE, and no single soldier is
+     * the right place to notice them.
+     */
+
+    /**
+     * MAN DOWN, and ENEMY DOWN. Both come off one death, and which one a net
+     * hears depends on which side the dead man was on. The caller is the
+     * nearest live man to the body — not the killer, who has his own line —
+     * so "MAN DOWN" comes from the direction the body is in.
+     *
+     * `by` is kill credit and is already on the payload; a bot that killed
+     * somebody says so on his own net at a much lower priority, because it is
+     * morale rather than information and must never outrank a contact.
+     */
+    on('actor:death', (e) => {
+      const dead = e?.actor;
+      if (!dead || !(dead instanceof Agent)) return;
+      const mate = this.radio._anyLive(dead.team, dead);
+      if (mate) this.radio.say(mate, 'mandown', 'mandown', dead.position, false);
+      const killer = e.by;
+      if (killer instanceof Agent && killer.alive && killer.team !== dead.team) {
+        this.radio.say(killer, 'enemydown', 'enemydown', null, false);
+      }
+    });
+
+    /**
+     * THE OBJECTIVE. `match` owns the capture and emits `match:capture` the
+     * frame the bar fills; both sides have something to say about it and they
+     * are not the same thing. @see `Radio.zone`.
+     */
+    on('match:capture', (e) => {
+      if (!e || !e.zone) return;
+      this.radio.zone(e.zone, e.owner ?? -1, e.previous ?? -1);
+    });
   }
 
   /**
@@ -552,6 +599,52 @@ export class AiSystem {
   targetable(actor) {
     const t = actor?.aiProtectedUntil;
     return !(t !== undefined && this.ctx.time.elapsed < t);
+  }
+
+  /* ================================================================== */
+  /* stores — the hooks `match` drives a resupply through                */
+  /* ================================================================== */
+
+  /**
+   * WHAT A BOT IS SHORT OF. Three getters and one verb, and they mirror the
+   * `weapons` hooks `match` already drives for the player one for one:
+   * `weapons.needsAmmo` / `weapons.scavenge(mags)` / `weapons.needsGrenades` /
+   * `weapons.resupplyGrenades(n)`. `match` must not read `Agent.reserve` any
+   * more than it may read `weapons.reserve` — it asks, and it hands over.
+   *
+   * `ammoState` exists because `_assignCacheLegs` has to RANK men, not just
+   * filter them: with more men wanting a crate than there are crates, the one
+   * who is dry has to beat the one who is merely low.
+   */
+  needsAmmo(actor) {
+    return actor instanceof Agent && actor.alive && actor.ammoLow;
+  }
+
+  needsGrenade(actor) {
+    return actor instanceof Agent && actor.alive && !actor.hasGrenade;
+  }
+
+  /** 0 = dry, 1 = came out of the spawn full. */
+  ammoState(actor) {
+    if (!(actor instanceof Agent) || !actor.startReserve) return 1;
+    return Math.max(0, Math.min(1, (actor.reserve + actor.ammo) / (actor.startReserve + actor.magSize)));
+  }
+
+  /**
+   * Hand a bot what a cache holds. Returns `{ rounds, grenade }` — what he
+   * actually took, which is not what was offered: a man with a full pouch takes
+   * nothing, and `match` uses that to decide whether the crate was consumed.
+   *
+   * The bot ALSO says so on the net. "AMMO UP" is the lowest priority
+   * transmission in the system on purpose — it is the sound of the errand
+   * having worked, and it must never be the thing that delays a contact report.
+   */
+  resupply(actor, mags = 2, grenades = 0) {
+    if (!(actor instanceof Agent) || !actor.alive) return null;
+    const rounds = mags > 0 ? actor.resupply(mags) : 0;
+    const grenade = grenades > 0 ? actor.resupplyGrenade() : false;
+    if (rounds > 0 || grenade) this.radio?.say(actor, 'ammoup', 'ammoup', null, false);
+    return { rounds, grenade };
   }
 
   /** Chest position of any actor — what perception aims at. Writes into `out`. */
@@ -664,6 +757,8 @@ export class AiSystem {
     }
     this.agents.length = 0;
     this.squads.length = 0;
+    // Every queued message names a man who no longer exists.
+    this.radio.reset();
     this._stagedAgents = null;
     this._hostileFrame = -1e9;
     this._hostiles[0].length = 0;
@@ -767,6 +862,10 @@ export class AiSystem {
     this.stats.coverPts = this.cover.points.length;
     this.stats.walkable = this.grid.walkableCount;
     this._navPending = false;
+    // The contact reports need the level's yaw (a bearing on world axes is off
+    // by it against every street) and its ground storeys (a man seen indoors is
+    // "CONTACT INSIDE", not a compass point). Both are read once, here.
+    this.radio.bind();
     console.info(
       `[ai] nav ${this.grid.nx}x${this.grid.nz} cells · ${this.grid.walkableCount} walkable ` +
         `(${this.grid.interiorCells ?? 0} indoor) · ` +
@@ -1104,6 +1203,31 @@ export class AiSystem {
     });
     this._grenades.push({ body, mesh, fuse: 2.35, agent });
     agent.animator.fire(0.35);
+
+    /**
+     * TWO NETS HEAR ONE GRENADE, and they say different things. The thrower
+     * calls "FRAG OUT" on his own so his squad does not walk into it; the
+     * nearest man on the OTHER side who can see where it is going calls
+     * "GRENADE", which is the highest priority message in the system because
+     * it is the only one with a fuse on it.
+     *
+     * The warning is `lineOfSight` gated on purpose: a man warned about a
+     * grenade he cannot see is a man with x-ray hearing, and the whole point of
+     * the perception model in this file is that it is imperfect.
+     */
+    this.radio.say(agent, 'fragout', 'fragout', null, false);
+    let warner = null;
+    let bestD = 14 * 14;
+    for (let i = 0; i < this.agents.length; i++) {
+      const a = this.agents[i];
+      if (!a.alive || a.team === agent.team) continue;
+      const d = a.position.distanceToSquared(target);
+      if (d >= bestD) continue;
+      if (phys.lineOfSight && !phys.lineOfSight(a.eye, target, phys.MASK.SIGHT)) continue;
+      bestD = d;
+      warner = a;
+    }
+    if (warner) this.radio.say(warner, 'grenade', 'grenade', target, false);
   }
 
   _updateGrenades(dt) {
@@ -1196,6 +1320,10 @@ export class AiSystem {
         }
       }
     }
+    // The net drains after everybody has thought: a contact queued this frame
+    // may go out this frame, and the heat that sets the net's gap is measured
+    // from the states the sweep above has just written.
+    this.radio.update(dt, this.agents);
     this._updateGrenades(dt);
     this._reapCorpses();
     this._updateSpotting(ctx);
