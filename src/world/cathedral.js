@@ -744,6 +744,51 @@ export function buildCathedral(A) {
     }
     solid('concrete_dark', 0, SEC.floor + 0.3 + 0.55, HD - 4.4, 2.8, 1.1, 1.2, 'concrete', [0.9, 0.45, 0.3]);
     trim('concrete', 0, SEC.floor + 0.3 + 1.16, HD - 4.4, 3.3, 0.14, 1.6, [0.95, 0.3, 0.2]);
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * THE TOMB CHESTS ROUND THE CROSSING — MASS ON THE CAPTURE POINT
+     * ────────────────────────────────────────────────────────────────────────
+     * `tools/sitecheck.mjs` counts mass standing 0.9-2.8 m over the zone floor
+     * inside the 8 m circle and wants 12 m² of it. Measured on the first build
+     * of this building: 8.5 m², because the only things near the crossing were
+     * the four crossing piers at 9.9 m — OUTSIDE the circle — and the nave
+     * between them was deliberately swept clear. An empty crossing is the
+     * "剥き出し" complaint again, one storey further in.
+     *
+     * Six chest tombs on a 5.2-6.5 m ring, 1.25 m tall: waist-high to a standing
+     * man, full cover to a crouching one, and exactly the furniture a crossing
+     * has. The ring is sized between two hard numbers — `standRing` cuts the
+     * zone's eight standing points (which are also its FORWARD SPAWNS) at 4 m,
+     * so nothing may be inside that, and the capture circle is 8 m, so nothing
+     * outside it counts. Two of the six are on the NORTH arc, which is the side
+     * `sitecheck` samples the attacker's eyes from.
+     */
+    for (const [tu, tv, ry] of [
+      [-4.9, -4.9, 0.78], [4.9, -4.9, -0.78], [-4.9, 4.9, -0.78], [4.9, 4.9, 0.78],
+      [0, 6.1, 0], [0, -6.1, 0],
+    ]) {
+      const cs = Math.cos(ry);
+      const sn = Math.sin(ry);
+      A.add('concrete', box, LL(IDENT, X(tu), SEC.floor + 0.62, Z(tv), ry, 2.5, 1.24, 1.15),
+        { masks: [0.6, 0.6, 0.45] });
+      A.box('concrete', X(tu), SEC.floor + 0.62, Z(tv), 2.5, 1.24, 1.15, ry);
+      // a moulded base and a lid that overhangs it, so the silhouette is not a box
+      trim('concrete_dark', tu, SEC.floor + 0.11, tv, 2.72, 0.22, 1.37, [0.9, 0.85, 0.6], ry);
+      trim('concrete_dark', tu, SEC.floor + 1.29, tv, 2.74, 0.16, 1.39, [0.95, 0.35, 0.18], ry);
+      // an effigy on two of them, and a broken corner on the rest
+      if (Math.abs(tu) > 1) {
+        A.add('plaster_white', soft, LL(IDENT, X(tu), SEC.floor + 1.5, Z(tv), ry, 1.9, 0.28, 0.62),
+          { masks: [0.75, 0.5, 0.4] });
+      } else {
+        for (let i = 0; i < 6; i++) {
+          const g = rockGeometry(rng, rng.range(0.08, 0.2), 1, rng.range(0.5, 0.85));
+          fillMasks(g, 0.9, rng.range(0.4, 0.9), 0.15);
+          A.addOnce('concrete_dark', g,
+            LL(IDENT, X(tu + cs * rng.range(-1.4, 1.4) + sn * 0.9), SEC.floor + rng.range(0.04, 0.16),
+              Z(tv - sn * rng.range(-1.4, 1.4) + cs * 0.9), rng.float() * 6.28));
+        }
+      }
+    }
     // the choir screen: a low pierced wall across the choir, which is cover on
     // the north approach to the point and does not close it
     for (const s of [-1, 1]) {

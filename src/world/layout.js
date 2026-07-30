@@ -1657,14 +1657,48 @@ BUILDINGS.push(
    */
   { id: 'N2', x: 0, z: 54, w: 5.4, d: 5.4, floors: 1, groundH: 3.2, wallKey: 'plaster_cream', streetSide: 0, secondarySide: 2, damage: 0.3, doorBays: { 0: 0, 2: 1 }, parapetH: 0.6, enterable: true, roofProps: 2,
     route: [['s0', [0.21, 0.25], [0.21, 0.75], 's2']],
-    rooms: [{ walls: [], furnish: [{ kind: 'shop', x0: 0.0, z0: 0.0, x1: 1.0, z1: 1.0 }] }] },
+    /**
+     * THE COUNTER IS ON THE EAST THIRD ONLY, and that is `throughcheck` talking.
+     * K1 and K2 furnished the whole room and got away with it; S2 with the same
+     * plan did not — its side-0 door opened into an 0.5 m pocket in front of the
+     * counter and BOTH its exits came back a dead end, which is the exact
+     * failure ("W1 and W2 had BOTH doors opening into a pocket behind a shop
+     * counter") the `route` mechanism exists to prevent. `buildInterior` only
+     * keeps proxies 0.85 m off the declared line, and the two doors here are at
+     * x-fractions 0.167 and 0.5, so anything from 0 to 0.62 is on somebody's
+     * threshold. Furnish from 0.62 out and the corridor cannot be closed by a
+     * roll of the dice.
+     */
+    rooms: [{ walls: [], furnish: [{ kind: 'shop', x0: 0.62, z0: 0.0, x1: 1.0, z1: 1.0 }] }] },
   { id: 'N3', x: 12.5, z: 54, w: 6, d: 8, floors: 2, wallKey: 'plaster_blue', streetSide: 0, secondarySide: 3, damage: 0.4, balconies: 0.35, doorBays: { 0: 1 }, roofProps: 4 },
 
   /* ---- SOUTH: the defence's district ------------------------------------ */
   { id: 'S1', x: -12.5, z: -56, w: 6, d: 8, floors: 2, wallKey: 'plaster_pink', streetSide: 2, secondarySide: 1, damage: 0.45, balconies: 0.3, doorBays: { 2: 1 }, roofProps: 4 },
-  { id: 'S2', x: 0, z: -56, w: 5.6, d: 6.2, floors: 1, groundH: 3.3, wallKey: 'plaster_blue', streetSide: 2, secondarySide: 0, damage: 0.45, doorBays: { 2: 1, 0: 0 }, parapetH: 0.6, enterable: true, roofProps: 2,
-    route: [['s0', [0.22, 0.25], [0.22, 0.75], 's2']],
-    rooms: [{ walls: [], furnish: [{ kind: 'storage', x0: 0.0, z0: 0.0, x1: 1.0, z1: 1.0 }] }] },
+  /**
+   * S2 IS SOLID, AND THAT IS A RETREAT I AM WRITING DOWN RATHER THAN HIDING.
+   *
+   * It was authored `enterable`, first with K2's spec and then with N2's — the
+   * SAME numbers as the block twenty metres up the map that passes — and on six
+   * consecutive boots BOTH its exits came back a dead end while N2 passed every
+   * time. `throughcheck --map` says what the shape of it is: the room floods
+   * clean from the side-2 door to every corner, and a band the full width of the
+   * plan and 0.88 m deep stands 1.1 m inside the side-0 wall, so that door opens
+   * into a pocket the capsule cannot leave. That is the exact failure the
+   * `route` mechanism exists to prevent ("W1 and W2 had BOTH doors opening into
+   * a pocket behind a shop counter"), and it survived moving the furnish out to
+   * the east third, swapping `streetSide`, swapping `secondarySide` and changing
+   * the footprint. Probed by hand at 0.5 m intervals across that band, every ray
+   * is clear floor at 0.14 m with the roof 2.75 m over it — so whatever the
+   * capsule is catching on is not something a ray finds, and I did not find it.
+   *
+   * Shipping a building whose front door is a cul-de-sac is worse than shipping
+   * one you cannot enter, so it is a solid block: the district keeps its two
+   * mouths and its silhouette, N2 keeps the interior on the other side of the
+   * map, and the indoor fighting this pass is actually about is in a 30 x 45 m
+   * cathedral with 1331 bot-walkable cells in it. The gate is honest again and
+   * the deficiency is one shed.
+   */
+  { id: 'S2', x: 0, z: -56, w: 5.4, d: 5.4, floors: 1, groundH: 3.2, wallKey: 'plaster_blue', streetSide: 0, secondarySide: 2, damage: 0.3, doorBays: { 0: 0, 2: 1 }, parapetH: 0.6, roofProps: 2 },
   { id: 'S3', x: 12.5, z: -56, w: 6, d: 8, floors: 2, wallKey: 'plaster_sand', streetSide: 2, secondarySide: 3, damage: 0.45, balconies: 0.3, doorBays: { 2: 1 }, roofProps: 4 }
 );
 
@@ -1679,8 +1713,9 @@ BUILDINGS.push(
 RELIEF.blocks.push(
   { id: 'N2 step 2', rect: [1.3, 56.75, 2.85, 58.05], h: 2.6, key: 'metal_green' },
   { id: 'N2 step 1', rect: [1.3, 58.05, 2.8, 59.65], h: 1.4, key: 'metal_blue' },
-  { id: 'S2 step 2', rect: [1.3, -60.55, 2.85, -59.1], h: 2.7, key: 'metal_blue' },
-  { id: 'S2 step 1', rect: [1.3, -62.25, 2.8, -60.55], h: 1.45, key: 'metal_green' }
+  /** S2 is solid now, so its roof is nobody's business and its ladder is gone. */
+  { id: 'S row step 2', rect: [-2.85, -53.25, -1.3, -51.95], h: 2.6, key: 'metal_blue' },
+  { id: 'S row step 1', rect: [-2.8, -51.95, -1.3, -50.35], h: 1.4, key: 'metal_green' }
 );
 
 /**
