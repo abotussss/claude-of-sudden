@@ -116,8 +116,20 @@ const SPAWNS = [
   [0.4, 28.5, Math.PI, 'north cross'],
   [-2.4, 60.0, Math.PI, 'attack pocket'],
   [0.0, 47.0, Math.PI, 'north plaza'],
-  [-38.0, 51.0, -Math.PI / 2, 'zone A — north-west district'],
+  [-38.0, 51.0, -Math.PI / 2, 'the north-west yard'],
   [-46.0, 34.0, Math.PI, 'north-west throat'],
+  /**
+   * THE TWO NEW CITIES, and they are on this list for the same reason the corner
+   * districts are: `boundcheck` floods from these seeds and nothing else, so an
+   * avenue that is not connected to one of them is 1 500 m² of brand new ground
+   * the boundary gate never looks at. One seed at each capture point and one at
+   * each avenue's far end, so the flood has to cross both cross-street mouths.
+   * @see `THE MAP GROWS — PART 6` in layout.js.
+   */
+  [-76.5, 46.0, Math.PI, 'zone A — the west city'],
+  [-76.5, 18.0, 0, 'the west avenue, south end'],
+  [76.5, -48.0, 0, 'zone B — the east city'],
+  [76.5, -20.0, Math.PI, 'the east avenue, north end'],
   [3.6, 18.0, Math.PI, 'mid street'],
   [0.0, -1.0, Math.PI, 'the cathedral crossing'],
   [-3.4, -12.5, 0, 'mid south'],

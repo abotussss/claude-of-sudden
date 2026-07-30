@@ -423,17 +423,42 @@ export const ZONES = [
      * close.
      */
     /**
-     * x -48, and 48 is the MEASURED ceiling, not a compromise I chose.
+     * ════════════════════════════════════════════════════════════════════════
+     * AND THEN THE CITY WAS BUILT AND THE POINT WENT INTO IT
+     * ════════════════════════════════════════════════════════════════════════
+     * "48 is the MEASURED ceiling" was true of the map that existed when it was
+     * written and it was the wrong measurement to be making. x -48 was the last
+     * authored ground on this side — `NW1`'s east face — so ∓58 hung the boot
+     * for the reason a zone always hangs the boot: `ensureReachable` walks
+     * sixteen rings of twelve probes against thirty spawns when the authored
+     * point cannot be served, and every one of those is a full-component A*.
+     * The answer was never a bigger number here; it was ground out there.
      *
-     * At x -58 / +58 the level never finishes booting — `window.__READY__`
-     * never goes true, so `ensureReachable` is still searching when the
-     * 240 s harness timeout fires. 48 boots and every gate passes. Anything
-     * further needs the city built further out first, not a bigger number here.
+     * `THE MAP GROWS — PART 6` in src/world/layout.js builds it: a WEST CITY on
+     * x -95..-70 and its exact ρ image in the east, each one a 19.5 m avenue
+     * between two continuous rows with two cross streets cut into the inner one.
+     * A stands in the middle of the west avenue and B in the middle of the east.
+     *
+     *                    authored (widened)   from the cathedral   A-B
+     *   before              (-48,  38)             96.6 m          185.7 m
+     *   now                 (-76.5, 46)              —             see below
+     *
+     * The point is NARROWER THAN ITS CIRCLE: `RULES.captureRadius` is 8 and the
+     * avenue is 13 units = 19.5 m of ground, so taking A means holding a street
+     * with three-storey frontage on both sides and a doorway every few metres,
+     * which is what "街中の戦闘を作れ" asks for and what a 45 x 20 unit gravel
+     * yard could never be.
+     *
+     * `KEEPOUT` in src/world/layout.js reserves both centres at r3.0. IF ONE
+     * MOVES, MOVE THE OTHER — and unlike every previous version of this table,
+     * these two ARE on that list. The zones at (-48, 38) / (48, -40) never were,
+     * which is one dressing reroll away from the one-cell-island failure the
+     * note above the ρ table describes.
      */
-    level: L(-48.0, 38.0),
-    /** Three units south, still in the yard and clear of NW2's frontage. */
-    fallback: L(-38.0, 48.0),
-    holdLevel: L(-38.0, 51.0),
+    level: L(-76.5, 46.0),
+    /** Two units north up the avenue, still between the same two rows. */
+    fallback: L(-76.5, 48.0),
+    holdLevel: L(-76.5, 46.0),
     flankLevel: null,
   },
   {
@@ -451,11 +476,10 @@ export const ZONES = [
   {
     id: 'B',
     name: 'SOUTH-EAST DISTRICT',
-    /** ρ(A) exactly: (-x, -2 - z). */
-    /** B is rho(A) about the cathedral — see the note on A. */
-    level: L(48.0, -40.0),
-    fallback: L(38.0, -50.0),
-    holdLevel: L(38.0, -53.0),
+    /** ρ(A) exactly: (-x, -2 - z). Every point of it, including the fallback. */
+    level: L(76.5, -48.0),
+    fallback: L(76.5, -50.0),
+    holdLevel: L(76.5, -48.0),
     flankLevel: null,
   },
 ];

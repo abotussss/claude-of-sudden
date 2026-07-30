@@ -1900,10 +1900,19 @@ SET_PIECES.tyres.push(
  */
 BUILDINGS.push(
   /* ---- the north-west district: zone A ---------------------------------- */
-  /** The outer wall of the whole district, and the map edge on this side. Its
-   *  east face is flush with BW1's west face, so the corner it turns is closed
-   *  rather than a 2-unit slot into the dunes. */
-  { id: 'NW1', x: -65, z: 38.5, w: 10, d: 39, floors: 3, wallKey: 'plaster_blue', streetSide: 1, damage: 0.25, skipSides: [3], roofProps: 3 },
+  /**
+   * NW1 WAS THE MAP EDGE ON THIS SIDE AND IS NOW A CITY BLOCK WITH A STREET
+   * BEHIND IT. @see `THE MAP GROWS — PART 6` at the foot of this file.
+   *
+   * It ran z 19..58 as one 39-unit slab with `skipSides: [3]` — its west face
+   * was never built, because nothing could ever stand there to see it. The WEST
+   * CITY stands there now, so the face is built, the block is cut into two with
+   * a cross street between them (`NW6` carries the north half), and the two
+   * openings that leaves are the district's two mouths. Its south end is pulled
+   * down to z 15 so it seals the strip x -70..-60 against BW2's north face
+   * rather than leaving 14 units of dune behind the row.
+   */
+  { id: 'NW1', x: -65, z: 24.5, w: 10, d: 19, floors: 3, wallKey: 'plaster_blue', streetSide: 1, secondarySide: 3, damage: 0.25, balconies: 0.25, doorBays: { 3: 1 }, roofProps: 3 },
   /** The two blocks that close the district's north side. They meet flush at
    *  x -34 and NW3's east face is inside the compound wall's own thickness, so
    *  the boundary is continuous from the map edge to the spawn's wall. */
@@ -1919,7 +1928,8 @@ BUILDINGS.push(
   { id: 'NW5', x: -28, z: 50, w: 8, d: 7, floors: 1, groundH: 3.3, wallKey: 'plaster_cream', streetSide: 3, damage: 0.45, parapetH: 0.6, roofProps: 2 },
 
   /* ---- the south-east district: zone B, ρ of the above ------------------ */
-  { id: 'SE1', x: 65, z: -40.5, w: 10, d: 39, floors: 3, wallKey: 'plaster_pink', streetSide: 3, damage: 0.25, skipSides: [1], roofProps: 3 },
+  /** ρ(NW1) exactly, and cut in the same two places for the same reason. */
+  { id: 'SE1', x: 65, z: -26.5, w: 10, d: 19, floors: 3, wallKey: 'plaster_pink', streetSide: 3, secondarySide: 1, damage: 0.25, balconies: 0.25, doorBays: { 1: 1 }, roofProps: 3 },
   { id: 'SE2', x: 47, z: -65, w: 26, d: 10, floors: 2, wallKey: 'plaster_sand', streetSide: 2, secondarySide: 3, damage: 0.3, balconies: 0.3, doorBays: { 2: 1 }, roofProps: 3 },
   { id: 'SE3', x: 25, z: -65, w: 18, d: 10, floors: 2, wallKey: 'plaster_blue', streetSide: 2, secondarySide: 1, damage: 0.35, balconies: 0.25, doorBays: { 2: 1 }, roofProps: 3 },
   { id: 'SE4', x: 46, z: -32, w: 7, d: 8, floors: 1, groundH: 3.5, wallKey: 'plaster_cream', streetSide: 3, damage: 0.4, parapetH: 0.7, roofProps: 2 },
@@ -2120,6 +2130,301 @@ SET_PIECES.tyres.push(
   [-36.0, 26.0, 3], [36.2, -28.0, 3],
   [-22.5, 50.0, 4], [22.7, -52.0, 3]
 );
+
+/* ========================================================================== */
+/* THE MAP GROWS — PART 6: A CITY ON THE FAR WEST AND ONE ON THE FAR EAST      */
+/* ========================================================================== */
+/**
+ * "もっともっともっと離せ 壁が原因とかじゃなくてもっと物理的に左右の街の中に投入しろ
+ *  占領地点を … なぜAやBから視認できる距離にあんの？大聖堂が … もっと街中に作れ
+ *  街中の戦闘を作れ"
+ *
+ * ASKED FOUR TIMES, AND THE THREE ANSWERS BEFORE THIS ONE ALL MOVED A NUMBER IN
+ * `src/match/sites.js` INSTEAD OF BUILDING ANYTHING. The zones went (0, 38) ->
+ * (-10, 40) -> (-38, 51) -> (-48, 38) and stopped there, because -48 is where
+ * the map stopped: `NW1`'s east face was the last authored ground on this side
+ * and `SE1`'s west face the last on the other. Pushed to ∓58 the level never
+ * finished booting — `ensureReachable` walks sixteen rings of twelve probes
+ * against thirty spawns when a zone lands on ground A* cannot serve, and out
+ * there there was no ground at all.
+ *
+ * So the ground gets built first and the zones follow it. Two new districts, an
+ * exact ρ pair, each one a STREET rather than a yard:
+ *
+ *   ρ(x, z) = (-x, -2 - z)   the 180° rotation about the cathedral centre (0, -1)
+ *
+ *                      the WEST CITY                    the EAST CITY
+ *   the avenue         x -83..-70, z 15..62             its ρ image
+ *   the west row       WC1/WC2/WC3, x -95..-83          EC1/EC2/EC3
+ *   the inner row      NW1 (z 15..34) + NW6 (z 40..52)  SE1 + SE6
+ *   the two mouths     z 34..40 into the NW throat      z -42..-36 into the SE throat
+ *                      z 52..62 into the NW yard        z -64..-54 into the SE yard
+ *   ZONE A             (-76.5, 46)                      ZONE B (76.5, -48)
+ *
+ * WHY AN AVENUE AND NOT A SECOND YARD. "街中の戦闘" is a street fight, and the
+ * two yards the zones are leaving are 45 x 20 units of open gravel — a field
+ * with a wall round it. The avenue is 13 units (19.5 m) between two continuous
+ * three- and four-storey rows, which is narrower than the capture circle is
+ * wide: the point IS the street, it is fought along its length rather than
+ * across a square, and every approach to it is a doorway or a corner.
+ *
+ * WHY THE ZONE IS AT z 46. The east row is cut in two places and a capture point
+ * must not be able to see the cathedral down either cut. The bearing from the
+ * avenue to the crossing drops 0.61 units of z per unit of x, so the circle at
+ * (-76.5, 46) projects onto the row over z 40..51 — which is exactly `NW6`'s
+ * span, and `NW7` in the throat behind the southern cut catches the diagonal
+ * that slips through it. Measured rather than reasoned: `_cityprobe.mjs` casts
+ * from eye height at the centre and around the circle to five points up the
+ * dome and prints what stopped each one.
+ *
+ * WHERE THE WALKABLE GROUND STOPS. `tools/boundcheck.mjs` floods a 128 m
+ * half-extent in scaled level space, hard-coded, and `tools/` is not ours — so
+ * 85.3 authored units is the furthest ground the gate can still see. The
+ * avenue's far kerb is x ∓83 (124.5 m) and the row behind it is MASS, not
+ * ground, so it may stand at ∓95 without hiding anything from the gate.
+ */
+/** The 180° rotation about the cathedral centre, on the authored plan. */
+const RHO = (x, z) => [-x, -2 - z];
+/** …and what it does to a face index (0 -Z, 1 +X, 2 +Z, 3 -X). */
+const rhoSide = (s) => (s === undefined ? undefined : (s + 2) % 4);
+const rhoKeys = (o) => {
+  if (!o) return o;
+  const out = {};
+  for (const k of Object.keys(o)) out[rhoSide(Number(k))] = o[k];
+  return out;
+};
+
+/**
+ * Push a west block and its east twin in one call.
+ *
+ * THE PAIRING IS CODE AND NOT A SECOND TABLE ON PURPOSE. Domination never swaps
+ * ends, so any asymmetry between A's district and B's is a permanent property of
+ * the map, and the two previous passes that authored both halves by hand both
+ * shipped one — B's flank staging point is still a hand-written exception in
+ * `src/match/sites.js` for exactly that reason. A block whose twin is derived
+ * cannot drift. `east` overrides the derivation where a new district has to meet
+ * OLD geometry that is mirror-symmetric in x rather than ρ-symmetric.
+ */
+function pairBuilding(w, east) {
+  const [ex, ez] = RHO(w.x, w.z);
+  BUILDINGS.push(w, {
+    ...w,
+    id: w.id.replace(/^W/, 'E').replace(/^NW/, 'SE'),
+    x: ex,
+    z: ez,
+    streetSide: rhoSide(w.streetSide),
+    secondarySide: rhoSide(w.secondarySide),
+    doorBays: rhoKeys(w.doorBays),
+    skipSides: w.skipSides ? w.skipSides.map(rhoSide) : undefined,
+    ...east,
+  });
+}
+
+BUILDINGS.push(
+  /**
+   * The north half of the inner row, and the piece of masonry the whole request
+   * turns on: it is what stands between the capture point and the cathedral.
+   * Three storeys, because the ray to the campanile is 4.6 m up where it crosses
+   * this block and a two-storey parapet clears it by 2 m — a margin a roll of
+   * the dressing dice should not be able to spend.
+   */
+  { id: 'NW6', x: -65, z: 46, w: 10, d: 12, floors: 3, wallKey: 'plaster_sand', streetSide: 1, secondarySide: 3, damage: 0.3, balconies: 0.3, doorBays: { 3: 1 }, roofProps: 3 },
+  { id: 'SE6', x: 65, z: -48, w: 10, d: 12, floors: 3, wallKey: 'plaster_cream', streetSide: 3, secondarySide: 1, damage: 0.3, balconies: 0.3, doorBays: { 1: 1 }, roofProps: 3 },
+  /**
+   * …and the block in the throat behind the SOUTHERN cut, which is a dog-leg
+   * rather than cover. The cut is 6 units of open row and the capture circle's
+   * southern arc looks straight down it at the crossing 130 m away; this stands
+   * in the far end of that line, 3 storeys against a ray 7.4 m up. It leaves
+   * 13 units of throat to walk past it, so it costs A* nothing — `navcheck`.
+   */
+  { id: 'NW7', x: -56.5, z: 28.5, w: 7, d: 9, floors: 3, wallKey: 'plaster_cream', streetSide: 1, secondarySide: 0, damage: 0.4, balconies: 0.2, doorBays: { 1: 1 }, roofProps: 2 },
+  { id: 'SE7', x: 56.5, z: -30.5, w: 7, d: 9, floors: 3, wallKey: 'plaster_sand', streetSide: 3, secondarySide: 2, damage: 0.4, balconies: 0.2, doorBays: { 3: 1 }, roofProps: 2 }
+);
+
+/**
+ * THE WEST ROW, and it is the map edge on this side now. Three blocks meeting
+ * FLUSH rather than overlapping — two boxes sharing 2 units of footprint puts
+ * one block's roof plane inside the other's rooms — at three different heights
+ * and three different plasters, because 45 units of one wallKey at one storey
+ * count is the "flat/untextured" failure the quality bar names.
+ */
+pairBuilding({ id: 'WC1', x: -89, z: 22.5, w: 12, d: 15, floors: 3, wallKey: 'plaster_cream', streetSide: 1, damage: 0.35, balconies: 0.3, doorBays: { 1: 1 }, roofProps: 3 });
+pairBuilding({ id: 'WC2', x: -89, z: 39, w: 12, d: 18, floors: 4, wallKey: 'plaster_pink', streetSide: 1, damage: 0.25, balconies: 0.35, doorBays: { 1: 1 }, roofProps: 4 });
+pairBuilding({ id: 'WC3', x: -89, z: 55, w: 12, d: 14, floors: 3, wallKey: 'plaster_blue', streetSide: 1, damage: 0.4, balconies: 0.25, doorBays: { 1: 1 }, roofProps: 3 });
+
+/**
+ * The two caps that close the avenue's ends. Both run from the west row all the
+ * way to the inner row, so the district is a closed box with two doors in it —
+ * `boundcheck` calls every square metre the player can reach and the level has
+ * not authored VOID, and the player has sent a screenshot of exactly that twice.
+ *
+ * THE EAST CAP IS 3 UNITS SHORTER THAN ρ, and it is the one honest asymmetry in
+ * this district. `BW2` and `BE2` are a MIRROR pair about x, not a ρ pair — the
+ * old map predates ρ by three passes — so BE2's east face sticks out to x 63
+ * where BW2's sticks out to x -63 on the other end of the street. Deriving the
+ * cap would drive it 3 units into BE2's mass. The 3 x 4 pocket that leaves at
+ * x 60..63 is sealed on all four sides (SE1 south, BE2 north, BE3 west, EC4
+ * east) and is 60 units from either capture point.
+ */
+pairBuilding(
+  { id: 'WC4', x: -77.5, z: 10, w: 35, d: 10, floors: 2, wallKey: 'plaster_sand', streetSide: 2, secondarySide: 1, damage: 0.35, balconies: 0.3, doorBays: { 2: 1 }, roofProps: 3 },
+  { x: 79, w: 32 }
+);
+pairBuilding({ id: 'WC5', x: -77.5, z: 67, w: 35, d: 10, floors: 2, wallKey: 'plaster_cream', streetSide: 0, secondarySide: 3, damage: 0.3, balconies: 0.3, doorBays: { 0: 1 }, roofProps: 3 });
+
+/**
+ * TWO ISLANDS IN THE AVENUE, both flush to the west row rather than centred.
+ * Same rule the in-lane cover follows: a block down the middle of a 13-unit
+ * street leaves two 3.7-unit slots and seals it for a 0.72 m nav radius, while
+ * a block against one kerb leaves one 7.6-unit mouth, which is a corner to
+ * fight round. Both stand at least 12 units off the capture point, so neither
+ * is inside its circle.
+ */
+pairBuilding({ id: 'WC6', x: -80.25, z: 22, w: 5.5, d: 6, floors: 1, groundH: 3.6, wallKey: 'plaster_blue', streetSide: 1, damage: 0.4, parapetH: 0.7, roofProps: 2 });
+pairBuilding({ id: 'WC7', x: -80.25, z: 57.75, w: 5.5, d: 5.5, floors: 1, groundH: 3.3, wallKey: 'plaster_pink', streetSide: 1, damage: 0.45, parapetH: 0.6, roofProps: 2 });
+
+/**
+ * THE INTERIOR, and it is `N2`'s specification verbatim — footprint, storey
+ * height, door bays, through route, room plan — with a new position and a new
+ * coat of plaster, for the reason that entry already gives: every one of those
+ * numbers is a configuration `indoorcheck` and `throughcheck` already pass on,
+ * and inventing a new one to prove again is inventing a new way to fail. `S2`
+ * is the counter-example this repo already wrote down — the same plan, moved,
+ * came back a cul-de-sac on six consecutive boots and had to be made solid.
+ *
+ * It stands against the inner row with both its doors on the avenue's own axis,
+ * so it is a way THROUGH the street furniture rather than a room off it.
+ *
+ * THE EAST TWIN'S INTERIOR IS ρ'd TOO, element by element, because the plan is
+ * not symmetric and a half-rotated one is a new configuration nothing has
+ * proved. A face carries three bays over 8.1 m of scaled frontage, so ρ sends
+ * bay b to bay 2-b and swaps 's0' with 's2'; the route's polyline reverses and
+ * every normalised coordinate becomes 1-x; the counter that must stand clear of
+ * both thresholds runs 0.62..1.0 on one side of the map and 0.0..0.38 on the
+ * other. `throughcheck` proves both.
+ *
+ * BOTH DOOR FACES MUST BE `streetSide` OR `secondarySide`. A door bay is only
+ * cut on an OPEN face (`buildFacade`), so a shed whose route names 's2' while
+ * side 2 is a blank elevation logs "route references missing opening" and ships
+ * a corridor into a wall — which is what the first version of this pair did.
+ */
+const SHED = { w: 5.4, d: 5.4, floors: 1, groundH: 3.2, damage: 0.3, parapetH: 0.6, enterable: true, roofProps: 2 };
+BUILDINGS.push(
+  { id: 'WC8', x: -72.7, z: 28.7, wallKey: 'plaster_cream', streetSide: 0, secondarySide: 2, ...SHED,
+    doorBays: { 0: 0, 2: 1 },
+    route: [['s0', [0.21, 0.25], [0.21, 0.75], 's2']],
+    rooms: [{ walls: [], furnish: [{ kind: 'shop', x0: 0.62, z0: 0.0, x1: 1.0, z1: 1.0 }] }] },
+  { id: 'EC8', x: 72.7, z: -30.7, wallKey: 'plaster_blue', streetSide: 2, secondarySide: 0, ...SHED,
+    doorBays: { 2: 2, 0: 1 },
+    route: [['s2', [0.79, 0.75], [0.79, 0.25], 's0']],
+    rooms: [{ walls: [], furnish: [{ kind: 'shop', x0: 0.0, z0: 0.0, x1: 0.38, z1: 1.0 }] }] }
+);
+
+/**
+ * The mantle chain onto the two sheds' roofs, `N2`'s verbatim: ground -> 1.4 ->
+ * 2.6 -> the 3.2 m parapet, every rung under `MOVE.mantle.maxHeight` = 1.85.
+ * `tools/floorcheck.mjs` floods the real player capsule and reports an
+ * `enterable` block whose roof it cannot reach as a cul-de-sac. Both ladders
+ * stand on the SOUTH face's east third; both south doors are on its west third.
+ */
+RELIEF.blocks.push(
+  { id: 'WC8 step 2', rect: [-72.6, 24.65, -71.05, 25.95], h: 2.6, key: 'metal_green' },
+  { id: 'WC8 step 1', rect: [-72.6, 23.05, -71.1, 24.65], h: 1.4, key: 'metal_blue' },
+  { id: 'EC8 step 2', rect: [71.05, -27.95, 72.6, -26.65], h: 2.6, key: 'metal_blue' },
+  { id: 'EC8 step 1', rect: [71.1, -26.65, 72.6, -25.05], h: 1.4, key: 'metal_green' }
+);
+
+/**
+ * The district GROUND. The avenue, and the two cross streets that pierce the
+ * inner row — authored as three rects that do not overlap, because `density` is
+ * a count per square metre and two rects over the same tarmac scatter it twice.
+ */
+ALLEYS.push(
+  { rect: [-83, 15, -70, 62], surface: 'dirt', density: 0.4 },     // the WEST AVENUE — ZONE A
+  { rect: [-70, 34, -60, 40], surface: 'gravel', density: 0.55 },  // …its south mouth, into the NW throat
+  { rect: [-70, 52, -60, 62], surface: 'gravel', density: 0.5 },   // …its north mouth, into the NW yard
+  { rect: [70, -64, 83, -17], surface: 'dirt', density: 0.4 },     // the EAST AVENUE — ZONE B
+  { rect: [60, -42, 70, -36], surface: 'gravel', density: 0.55 },
+  { rect: [60, -64, 70, -54], surface: 'gravel', density: 0.5 }
+);
+
+/** …and the dunes under them are flattened, with `buildGround`'s soft shoulder,
+ *  so a capture point does not stand on ±0.55 m of fbm. */
+FLAT.push([-96, 3, -58, 74], [58, -76, 96, -5]);
+
+/**
+ * THE MASS ON THE TWO NEW POINTS — the yard recipe, translated. Two screens on
+ * the arc the enemy arrives up the street from, two plinths of waist-high mass
+ * ON the point, one wall on the far kerb to retake it from behind, and one pier
+ * over the 2.8 m cover line at the southern mouth: a chokepoint, not cover.
+ * Every offset is the one `sitecheck` already scored on the NW yard, re-centred
+ * on (-76.5, 46) — 3.2 to 5.1 units out, outside `standRing`'s 4 m ring of
+ * forward spawns and inside the 8 m capture circle.
+ */
+for (const p of [
+  { id: 'W city screen south-west', kind: 'wall', dx: -2.6, dz: -4.4, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'W city screen south-east', kind: 'wall', dx: 2.6, dz: -4.4, w: 2.6, d: 0.6, h: 1.6, key: 'brick', revet: true },
+  { id: 'W city plinth north', kind: 'plinth', dx: 0, dz: 4.0, w: 2.0, d: 1.6, h: 1.3, key: 'concrete' },
+  { id: 'W city plinth west', kind: 'plinth', dx: -4.4, dz: 0, w: 1.6, d: 2.0, h: 1.3, key: 'concrete' },
+  { id: 'W city kerb wall', kind: 'wall', dx: 4.6, dz: 0, w: 0.6, d: 3.6, h: 1.45, key: 'plaster_blue' },
+  { id: 'W city mouth pier', kind: 'pier', dx: 0, dz: -6.4, w: 2.4, d: 2.4, h: 2.95, key: 'concrete' },
+]) {
+  const { id, dx, dz, ...rest } = p;
+  const wx = -76.5 + dx, wz = 46 + dz;
+  const [ex, ez] = RHO(wx, wz);
+  SITEWORKS.push(
+    { id, x: wx, z: wz, ...rest },
+    { ...{ id: id.replace('W city', 'E city'), x: ex, z: ez, ...rest },
+      key: rest.key === 'plaster_blue' ? 'plaster_pink' : rest.key }
+  );
+}
+
+/**
+ * THE TWO ZONE CIRCLES, as ground no collision-bearing prop may be dressed onto.
+ *
+ * A ZONE CENTRE WITHOUT ONE OF THESE IS A ZONE THAT MOVES. It has already
+ * happened on this map: `BEACON_SPOTS` stood a real crate on zone A's centre,
+ * the nav cell under it sat 0.93 m over its four neighbours against a 0.45 m
+ * `maxStep`, and it was a connected component of ONE CELL — so `ensureReachable`
+ * quietly walked the capture point somewhere else and the boot log said nothing.
+ * Radius 3.0 authored = 4.5 m of ground, sized to `standRing`'s 4 m forward-spawn
+ * ring. Duplicated from `ZONES` in src/match/sites.js because `world` may not
+ * import `match`: IF ONE MOVES, MOVE THE OTHER.
+ */
+KEEPOUT.push(
+  [-76.5, 46, 3.0], // ZONE A — the west city's avenue
+  [76.5, -48, 3.0]  // ZONE B — its 180° image in the east city's
+);
+
+/**
+ * And the two cities are DRESSED, because "もっと作り込み" applies to new ground
+ * more than to old and an avenue with nothing in it is a corridor. All paired
+ * under ρ, all clear of the two capture circles, none of it standing in a
+ * doorway or on the mantle ladder.
+ */
+for (const [key, list] of Object.entries({
+  stalls: [[-81.0, 16.5, 0.1, 2.3], [-72.0, 35.5, 1.55, 2.2], [-79.5, 52.5, 0.1, 2.4]],
+  jerseys: [[-73.0, 20.5, 1.55], [-81.5, 32.5, 0.1], [-73.5, 60.0, 0.1], [-64.5, 37.0, 1.55]],
+  sandbagWalls: [[-72.5, 17.5, 0.0, 3.0], [-82.0, 39.0, 1.57, 2.8], [-63.5, 55.5, 0.0, 3.0]],
+  wrecks: [[-79.5, 33.5, 1.4, 0], [-72.5, 52.5, 0.3, 2], [-64.5, 58.0, 1.5, 0]],
+  palms: [[-81.5, 29.0, 1.05], [-72.0, 57.0, 0.95], [-65.0, 36.5, 1.0]],
+  lamps: [[-82.4, 36.0, -Math.PI / 2], [-82.4, 53.0, -Math.PI / 2], [-70.6, 20.0, Math.PI / 2], [-70.6, 56.0, Math.PI / 2]],
+  rubble: [[-82.0, 34.0, 2.2, 26], [-72.0, 41.0, 2.0, 24], [-66.0, 37.0, 2.2, 26], [-73.0, 61.0, 2.0, 24]],
+  tyres: [[-73.5, 34.5, 4], [-74.5, 21.0, 3]],
+})) {
+  /** A yaw is the third element of everything on this list that carries one, and
+   *  a 180° rotation of the plan turns a prop through 180° as well. `palms`,
+   *  `rubble` and `tyres` carry a scale, a radius and a count there instead. */
+  const spins = key === 'stalls' || key === 'jerseys' || key === 'sandbagWalls' || key === 'wrecks' || key === 'lamps';
+  for (const p of list) {
+    const [ex, ez] = RHO(p[0], p[1]);
+    const twin = p.slice();
+    twin[0] = ex;
+    twin[1] = ez;
+    if (spins) twin[2] = p[2] + Math.PI;
+    SET_PIECES[key].push(p, twin);
+  }
+}
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
