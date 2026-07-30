@@ -69,6 +69,12 @@
  *   b.reset()                round reset: craters gone, debris back under
  *   b.enabled                false stops the scheduler
  *   b.busy                   true while an aircraft is in the air
+ *   b.setFocus(v)            where the fight is; biases which line is flown
+ *   b.onAnnounce = (a) => {} the moment a run is launched, with the reused
+ *                            announce record. `match` turns it into the HUD
+ *                            warning — see src/ui/airalert.js for why a weapon
+ *                            nobody is told about did not happen.
+ *   b.onImpact = (a) => {}   the first bomb of the stick going off
  *
  * Emits `match:bomber { phase, run, position }` with phase
  * 'inbound' | 'impact' | 'settled'.
@@ -188,8 +194,27 @@ export class Bomber {
     this._next = Infinity;
     /** Runs flown this round, against `RULES.bomberMaxPerRound`. */
     this._flown = 0;
-    /** The airstrike, so the two never share the sky. Set by `match`. */
+    /**
+     * The other air systems, so no two ever share the sky. Set by `match`;
+     * accepts one object or an array. @see `_coBusy`
+     */
     this.coBusy = null;
+
+    /**
+     * WHERE THE FIGHT IS. Four fixed lines on a 114x141 m map means three runs
+     * out of four are somewhere the player is not — the same "空爆が全然発生し
+     * ない" problem the airstrike has, for the same reason. `match` writes the
+     * centre of the fight here and the draw is weighted by the distance from it
+     * to the NEAREST POINT ON THE LINE, which is the right measure for a weapon
+     * that is 68 m long.
+     */
+    this.focus = new THREE.Vector3();
+    this.focusValid = false;
+    this.focusScale = 30;
+
+    /** Announce hooks, installed by `match`. */
+    this.onAnnounce = null;
+    this.onImpact = null;
 
     this.group = new THREE.Group();
     this.group.name = 'match-bomber';
@@ -203,6 +228,39 @@ export class Bomber {
     this._sc = new THREE.Vector3();
     this._blast = { position: this._v2, radius: 0, damage: 0, source: 'bomber' };
     this._ev = { phase: '', run: '', position: this._v2 };
+    /** The announce record. REUSED; `points` holds references, never copies. */
+    this._ann = {
+      kind: 'BOMBER',
+      id: '',
+      name: '',
+      lead: 0,
+      position: null,
+      points: [null, null, null, null],
+      count: 0,
+    };
+    this._cand = [];
+    this._wt = [];
+  }
+
+  /** True while any co-system (airstrike, strafe) has something in the air. */
+  get _coBusy() {
+    const c = this.coBusy;
+    if (!c) return false;
+    if (Array.isArray(c)) {
+      for (const o of c) if (o?.busy) return true;
+      return false;
+    }
+    return !!c.busy;
+  }
+
+  /** Where the fight is. Copied; the caller's vector is not retained. */
+  setFocus(v) {
+    if (!v) {
+      this.focusValid = false;
+      return;
+    }
+    this.focus.copy(v);
+    this.focusValid = true;
   }
 
   /* ====================================================================== */
@@ -622,7 +680,28 @@ export class Bomber {
         `+${run.bombs[0].tImpact.toFixed(2)}s, last down +${run.lastImpact.toFixed(2)}s`
     );
     this._emit('inbound', run);
+    // THE STICK IS A LINE, so the warning marks the line: the first crater, the
+    // middle and the last. One marker in the middle of a 68 m run would tell the
+    // player to stand exactly where the fourth bomb lands.
+    this._announce(this.onAnnounce, run, run.bombs[0].tImpact);
     return true;
+  }
+
+  /** Fill the reused announce record and hand it to a hook. No allocation. */
+  _announce(hook, run, lead) {
+    if (!hook) return;
+    const a = this._ann;
+    const n = run.bombs.length;
+    a.kind = 'BOMBER';
+    a.id = run.id;
+    a.name = run.name;
+    a.lead = Math.max(0.3, lead);
+    a.position = run.position;
+    a.count = 0;
+    a.points[a.count++] = run.bombs[0].impact;
+    if (n > 2) a.points[a.count++] = run.bombs[(n / 2) | 0].impact;
+    if (n > 1) a.points[a.count++] = run.bombs[n - 1].impact;
+    hook(a);
   }
 
   flown(which = 0) {
@@ -653,6 +732,9 @@ export class Bomber {
 
       /* ---- the bombs that have arrived ------------------------------- */
       while (run.next < run.bombs.length && run.bombs[run.next].tImpact <= run.t) {
+        // The HUD's warning switches to its impact read on the FIRST crater; the
+        // rest of the stick is the same event still arriving.
+        if (run.next === 0) this._announce(this.onImpact, run, 0.3);
         this._detonate(run, run.bombs[run.next]);
         run.next++;
       }
@@ -792,9 +874,10 @@ export class Bomber {
   /* ====================================================================== */
 
   _scheduleNext() {
-    // Never in the sky at the same time as an airstrike: two telegraphs at once
-    // is noise, and the player has to be able to tell which one is theirs.
-    if (this.busy || this.coBusy?.busy) {
+    // Never in the sky at the same time as an airstrike or a strafing run: two
+    // telegraphs at once is noise, and the player has to be able to tell which
+    // one is theirs.
+    if (this.busy || this._coBusy) {
       this._next = 5;
       return;
     }
@@ -802,16 +885,57 @@ export class Bomber {
       this._next = Infinity;
       return;
     }
-    const free = [];
-    for (const r of this.runs) if (!r.flown) free.push(r);
-    if (!free.length) {
+    /**
+     * Weighted by how close the LINE comes to the fight, not how close its
+     * midpoint does — a run whose far end is on top of the fight is a run the
+     * player sees, and by midpoint it would score the same as one aimed at an
+     * empty lane. Nothing is excluded; the lines do not move.
+     */
+    const cand = this._cand;
+    const wt = this._wt;
+    cand.length = 0;
+    wt.length = 0;
+    let total = 0;
+    for (const r of this.runs) {
+      if (r.flown) continue;
+      total += this._focusWeight(r);
+      cand.push(r);
+      wt.push(total);
+    }
+    if (!cand.length) {
       this._next = Infinity;
       return;
     }
-    this.fire(free[this.rng.u32() % free.length].index);
+    const draw = this.rng.float() * total;
+    let pick = cand.length - 1;
+    for (let i = 0; i < wt.length; i++) {
+      if (draw < wt[i]) {
+        pick = i;
+        break;
+      }
+    }
+    this.fire(cand[pick].index);
     this._flown++;
     const [lo, hi] = RULES.bomberInterval;
     this._next = this.rng.range(lo, hi);
+  }
+
+  /** 1 with no focus, up to 3.4 with the fight standing in the impact line. */
+  _focusWeight(run) {
+    if (!this.focusValid) return 1;
+    const b = run.bombs;
+    const a0 = b[0].impact;
+    const a1 = b[b.length - 1].impact;
+    const dx = a1.x - a0.x;
+    const dz = a1.z - a0.z;
+    const len2 = dx * dx + dz * dz;
+    let t = 0;
+    if (len2 > 1e-6) {
+      t = ((this.focus.x - a0.x) * dx + (this.focus.z - a0.z) * dz) / len2;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+    }
+    const d = Math.hypot(this.focus.x - (a0.x + dx * t), this.focus.z - (a0.z + dz * t));
+    return 1 + 2.4 / (1 + (d / this.focusScale) ** 2);
   }
 
   /** Called by `match` when a round goes live. */

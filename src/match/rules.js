@@ -205,6 +205,25 @@ export const RULES = {
    */
   routeStrikeRadius: 11,
   routeStrikeDamage: 190,
+  /**
+   * THE SALVO — "大規模爆破で街が破壊されるとか起きないね？ちゃんと発生させて
+   * ください。街を破壊するようなイベントです".
+   *
+   * One strike takes the top off one building, and that is a parapet coming off
+   * one roof. A salvo is THREE of the fixed sites on the same city block called
+   * as ONE announced event and fired a fifth of a second apart: two added
+   * storeys and a parapet, ~2100 chunks in the air at once across roughly thirty
+   * metres of street, three mounds, three fireballs, and a dust wall that
+   * occludes the lane for the better part of a quarter of a minute.
+   *
+   * ONE PER ROUND, and never in the first minute. It is the round's event: two
+   * of them would spend the whole town by the halfway mark and there would be
+   * nothing left for the next round to be about. It counts DOUBLE against
+   * `airstrikeMaxPerRound` because it consumes three of the eight sites.
+   */
+  airstrikeSalvoPerRound: 1,
+  /** Seconds into a LIVE round before the salvo may be called. */
+  airstrikeSalvoDelay: 58,
 
   /* ---- the bomber run ---- */
   /**
@@ -224,6 +243,29 @@ export const RULES = {
   bomberInterval: [52, 84],
   /** Ceiling on runs per round. */
   bomberMaxPerRound: 3,
+
+  /* ---- fighter support fire ---- */
+  /**
+   * "戦闘機からの援護射撃とかもイベント起きないね？" — a fast mover coming down a
+   * lane with its gun open, which is a THIRD shape of air and not a smaller
+   * bomb. Where a strike is a point and a stick is five craters over four
+   * seconds, this is a continuous line of cannon impacts that WALKS the length
+   * of a corridor in about a second and a half.
+   *
+   * Per shell it is the weakest thing in the air, and it has to be: the line is
+   * unbroken, so anybody standing in that lane is inside it. The answer is the
+   * same as the stick's — be out of the lane — but you get a second and a half
+   * to act on it instead of four, which is what makes it a distinct threat and
+   * not a re-skin. See `src/match/strafe.js`.
+   */
+  cannonRadius: 5.5,
+  cannonDamage: 74,
+  /** Seconds into a LIVE round before the first strafing run may be called. */
+  strafeFirstDelay: 34,
+  /** Gap between runs, seconds. */
+  strafeInterval: [44, 72],
+  /** Ceiling on runs per round. */
+  strafeMaxPerRound: 3,
 
   /* ---- combat ---- */
   /**
