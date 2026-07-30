@@ -435,9 +435,19 @@ export class MatchSystem {
      * reads them every frame and must never retain them. @see `_publishCaches`
      */
     this._cacheNear = new Array(6).fill(null);
+    /**
+     * The records live HERE and the published array only ever holds references
+     * to them. `_cacheView.length = n` is how the list is shortened, and an
+     * array whose own elements were the records lost them the first time the
+     * count fell — the next frame with more caches in range then wrote through
+     * `undefined` and threw, every frame, killing the rest of the match update
+     * with it. Measured, not reasoned about: the first run of `_capui.mjs`
+     * caught 130 identical `Cannot set properties of undefined` page errors.
+     */
+    this._cacheRecords = [];
     this._cacheView = [];
     for (let i = 0; i < 6; i++) {
-      this._cacheView.push({
+      this._cacheRecords.push({
         id: '',
         kind: 'ammo',
         label: '',
@@ -2518,7 +2528,8 @@ export class MatchSystem {
     view.length = n;
     for (let i = 0; i < n; i++) {
       const c = near[i];
-      const v = view[i];
+      const v = this._cacheRecords[i];
+      view[i] = v;
       v.id = c.id;
       v.kind = c.kind;
       v.label =
