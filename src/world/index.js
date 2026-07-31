@@ -270,7 +270,7 @@ export class WorldSystem {
      * switched off at the end of `init`. It draws from its own fixed-seed stream
      * per building, so it cannot move a prop the dressing has already placed.
      */
-    buildRuins(A, demoPlan);
+    buildRuins(A, demoPlan, infos);
 
     /**
      * WHY YOU WOULD EVER GO IN, AND WHY YOU WOULD EVER GO UP.

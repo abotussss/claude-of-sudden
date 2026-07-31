@@ -125,6 +125,14 @@ const STEP_MAX = 0.38;
 const CELL = 2.2;
 /** How far past the footprint the pile spills into the street. */
 const APRON = 1.6;
+/**
+ * How far from another building's ground-floor doorway the debris must stay low,
+ * and how low. A 1.12 m door plus a capsule plus the stride you take through it;
+ * `DOOR_STEP` is under `STANCE.stand.stepHeight` = 0.42, so the pile is
+ * something you walk over rather than something you mantle. @see `buildRuins`.
+ */
+const DOOR_CLEAR = 2.8;
+const DOOR_STEP = 0.3;
 /** Where the falling mass is cut off and the standing stubs begin. */
 const STUB_BASE = 0.0;
 
@@ -185,12 +193,38 @@ export function planDemolitions(buildings) {
  * somebody adds a rock to a rubble pile — the same rule `cathedral.js`,
  * `features.js` and `links.js` all follow.
  */
-export function buildRuins(A, records) {
+export function buildRuins(A, records, infos) {
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE DEBRIS MAY NOT SPILL INTO SOMEBODY ELSE'S DOORWAY
+   * ────────────────────────────────────────────────────────────────────────
+   * The pile runs `APRON` metres past the footprint on every side, which is
+   * what a collapse does and is most of what makes it read from the street —
+   * and `EC6`'s apron arrives at authored z -28.07 while `EC8`'s north door is
+   * at z -28. Measured by `tools/floorcheck.mjs` on a fixed seed: EC8's ground
+   * floor went from two ways out to ONE, i.e. a shed you can only leave the way
+   * you came in, and the gate called it a cul-de-sac. Nothing about that is
+   * visible in a screenshot.
+   *
+   * So every OTHER building's ground-floor doorway is a keep-clear circle, and
+   * `_debrisField` holds the pile under a step height inside one. It is derived
+   * from `info.doors` — the doorways the facade generator actually cut, not a
+   * table — so it cannot go stale when a building moves or a bay is re-rolled.
+   */
+  const clear = [];
+  const mine = new Set(records.map((r) => r.id));
+  for (const info of infos ?? []) {
+    for (const dr of info.doors ?? []) {
+      // A demolished building's own doors go with it; only the neighbours count.
+      if (mine.has(info.spec.id)) continue;
+      clear.push({ x: dr.wp[0], z: dr.wp[2], r: DOOR_CLEAR });
+    }
+  }
   for (const rec of records) {
     const seed = [...rec.id].reduce((h, c) => (h * 131 + c.charCodeAt(0)) >>> 0, 0x9e37);
     const rng = new Rng(seed);
     rec.ruin = A.beginScope(`ruin:${rec.id}`);
-    _ruin(A, rng, rec);
+    _ruin(A, rng, rec, clear);
     A.endScope();
   }
 }
@@ -200,7 +234,7 @@ export function buildRuins(A, records) {
  * @param {Rng} rng
  * @param {object} rec
  */
-function _ruin(A, rng, rec) {
+function _ruin(A, rng, rec, clear) {
   const spec = rec.spec;
   const info = rec.info;
   const t = spec.t ?? 0.34;
@@ -208,7 +242,7 @@ function _ruin(A, rng, rec) {
   const hw = spec.w / 2;
   const hd = spec.d / 2;
 
-  const field = _debrisField(rng, spec, rec.mound);
+  const field = _debrisField(rng, spec, rec.mound, clear);
   _debris(A, rng, spec, wallKey, field);
   _stubs(A, rng, spec, info, t, wallKey);
   _slabs(A, rng, spec, info, field);
@@ -247,7 +281,7 @@ function _ruin(A, rng, rec) {
  * and an unwalkable cell in the middle of the footprint is the building still
  * standing as far as `A*` is concerned.
  */
-function _debrisField(rng, spec, mound) {
+function _debrisField(rng, spec, mound, clear) {
   const hw = spec.w / 2 + APRON;
   const hd = spec.d / 2 + APRON;
   const nx = Math.max(3, Math.round((hw * 2) / CELL));
@@ -275,6 +309,31 @@ function _debrisField(rng, spec, mound) {
     }
   }
   _relax(h, nx, nz);
+  /**
+   * …and then the doorways, and then relax AGAIN so the drop to them is a slope
+   * rather than the cliff clamping alone would leave. `DOOR_STEP` is under the
+   * 0.42 m the character controller steps over without noticing, so a threshold
+   * inside the pile is a threshold you walk through.
+   */
+  if (clear?.length) {
+    let touched = 0;
+    for (let iz = 0; iz < nz; iz++) {
+      for (let ix = 0; ix < nx; ix++) {
+        const i = iz * nx + ix;
+        if (h[i] <= DOOR_STEP) continue;
+        const cx = spec.x - hw + (ix + 0.5) * dx;
+        const cz = spec.z - hd + (iz + 0.5) * dz;
+        for (let k = 0; k < clear.length; k++) {
+          const c = clear[k];
+          if ((cx - c.x) ** 2 + (cz - c.z) ** 2 > c.r * c.r) continue;
+          h[i] = DOOR_STEP;
+          touched++;
+          break;
+        }
+      }
+    }
+    if (touched) _relax(h, nx, nz);
+  }
   return { h, jx, jz, nx, nz, dx, dz, hw, hd };
 }
 
