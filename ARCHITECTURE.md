@@ -95,6 +95,7 @@ ai.teamOf(actor)            ai.getHudActors()
 ai.protect(actor, seconds)  ai.targetable(actor)      ai.corpseLimit
 ai.needsAmmo(actor)         ai.needsGrenade(actor)    ai.ammoState(actor)
 ai.resupply(actor, mags, grenades)                    ai.radio
+ai.setCoverRazed(down)
 agent.setObjective(mode, position, site, facing)   agent.working
 player.team / player.name / player.alive
 player.respawnAt(position, yaw)     player.health.regenEnabled
@@ -273,6 +274,36 @@ duration), NOT as damage immunity: nobody chooses to shoot at a man in his
 spawn, but a grenade or a burst already down the lane still kills him. `player`
 neither sets nor reads the field. `ai.corpseLimit` caps how many bodies stay on
 the map — with respawns inside a round, a five minute round makes hundreds.
+
+`ai.setCoverRazed(down)` is COVER FOR A TOWN THAT DOES NOT STAY THE SAME SHAPE,
+and it exists because `ai.cover` is A STATEMENT ABOUT COLLISION AT THE MOMENT IT
+WAS BAKED. A cover point is a place to stand plus the DIRECTION of the mass it
+hides behind, found by a chest-height ray in `CoverMap.build`, and the bake runs
+once in `AiSystem._buildNav` at boot. `world.cathedral.setRazed` then takes a
+29 m shell down to 2.76 m of rubble in one frame with capture point D opening
+inside it, and measured on the single table (`_coverstale.mjs`, every point's own
+ray re-fired) **304 of the 634 points inside the footprint describe open air
+afterwards, 27 of the 100 inside D** — men crouching behind nothing at the most
+contested point on the map. 129 were already wrong with the church STANDING:
+`Assembler.beginScope` records a scope as visible AND SOLID, so `cath:ruin` is
+solid until `match`'s first `_setCathedralRazed(false)`, which lands after
+`ai.init` because `match` deps on `ai`.
+
+The fix is the same move every destruction in this project makes — BAKE AT BOOT,
+SWAP AT FIRE TIME. `_bakeCover` primes the cathedral standing and bakes
+`ai.coverIntact`, flips it razed and bakes `ai.coverRuin`, then flips back: three
+synchronous `setRazed` calls inside `ai.init` with no frame drawn between them,
++19 ms at boot, nothing computed on the event frame. `setCoverRazed` is one
+reference assignment plus dropping the agents' held points, and
+`MatchSystem._setCathedralRazed` is the ONE place that calls it, so the boot
+prime, the raze and the between-match reset are all covered. 0 points describe
+air in either state afterwards; the swap costs 0.9 ms on 28-135 ms frames.
+
+THE STALENESS IS GENERAL AND THAT FIX IS NOT. With all six `world.demolitions`
+down, 119 of the 326 cover points standing on those blocks (36.5 %) still
+describe air. They fire independently, so covering them is 64 combinations rather
+than a second table — it is named here because it is the same defect, not because
+it is solved.
 
 If a rule needs a hook that is not on that list, add the hook to the owning
 subsystem and add a line here — do not reach into another subsystem's internals
