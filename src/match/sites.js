@@ -455,10 +455,10 @@ export const ZONES = [
      * which is one dressing reroll away from the one-cell-island failure the
      * note above the ρ table describes.
      */
-    level: L(-76.5, 46.0),
+    level: L(-69.7, 36.0),
     /** Two units north up the avenue, still between the same two rows. */
-    fallback: L(-76.5, 48.0),
-    holdLevel: L(-76.5, 46.0),
+    fallback: L(-69.7, 38.0),
+    holdLevel: L(-69.7, 36.0),
     flankLevel: null,
   },
   {
@@ -497,9 +497,9 @@ export const ZONES = [
     id: 'B',
     name: 'SOUTH-EAST DISTRICT',
     /** ρ(A) exactly: (-x, -2 - z). Every point of it, including the fallback. */
-    level: L(76.5, -48.0),
-    fallback: L(76.5, -50.0),
-    holdLevel: L(76.5, -48.0),
+    level: L(69.7, -36.0),
+    fallback: L(69.7, -38.0),
+    holdLevel: L(69.7, -36.0),
     flankLevel: null,
   },
   /**
