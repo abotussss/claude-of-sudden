@@ -298,15 +298,23 @@ const SALVOS = [
    * second apart, with 1467 chunks in the air and a five-column dust wall
    * standing in the nave for twenty seconds, is an event.
    *
-   * It is also the group `_pickSalvo` will usually choose, and that is not luck.
-   * `match` writes the centre of the fight to `setFocus` every few seconds and
-   * `_pickSalvo` takes the group with the highest `_focusWeight` — and the
-   * middle capture point is inside this building, so the fight is here. The
-   * scheduler is what makes it "定期的に … ランダムで": `RULES.airstrikeSalvoDelay`
-   * holds it off the opening of the round, `airstrikeInterval` is the random
-   * gap, and the draw is weighted, never fixed.
+   * IT USED TO BE THE GROUP `_pickSalvo` CHOSE, AND THAT WAS THE BUG. `match`
+   * writes the centre of the fight to `setFocus` and `_pickSalvo` takes the
+   * group with the highest `_focusWeight` — and the middle capture point is
+   * inside this building, so the fight is always here and the once-a-round salvo
+   * was this one, at a random gap from t = 58 s. That is a first-half event, and
+   * `match` then arrived at `cathedralOpenProgress` to find its own headline
+   * already spent ("salvo declined — already down"). `scheduled` takes it out of
+   * that draw: this group fires from `callCathedralCollapse` and nowhere else,
+   * which is what makes "後半" true of it. @see `_pickSalvo`.
    */
-  { id: 'CATHEDRAL', name: 'THE CATHEDRAL', members: ['CATH-W', 'CATH-X', 'CATH-E'], stagger: [0, 0.23, 0.46] },
+  {
+    id: 'CATHEDRAL',
+    name: 'THE CATHEDRAL',
+    members: ['CATH-W', 'CATH-X', 'CATH-E'],
+    stagger: [0, 0.23, 0.46],
+    scheduled: true,
+  },
 ];
 
 /**
@@ -695,9 +703,15 @@ export class Airstrike {
         centre,
         span,
         chunkCount: chunks,
+        /** Fired by `match` on a progress threshold, not by the draw. @see `_pickSalvo`. */
+        scheduled: !!spec.scheduled,
         /** Where the telegraph and the HUD arrow point: the middle of the block. */
         position: centre,
       });
+      // …and the MEMBERS are out of the single-strike draw with it. @see
+      // `_scheduleNext`: a scheduled group whose sites the scheduler has already
+      // taken one at a time is an event that declines when its moment comes.
+      if (spec.scheduled) for (const m of members) m.scheduled = true;
       console.info(
         `[airstrike] salvo ${spec.id} "${spec.name}": ${members.map((m) => m.id).join('+')} — ` +
           `${chunks} chunks over ${span.toFixed(1)} m of frontage`
@@ -709,13 +723,16 @@ export class Airstrike {
    * THE TWO DISTRICT EVENTS — the city round A and the city round B, each as one
    * telegraphed salvo.
    *
-   * "AとBの周りの街は爆撃で定期的に破壊して". Periodic and telegraphed is what the
-   * scheduler above already is: `_pickSalvo` takes the group nearest the fight
-   * and `match` writes where the fight is every few seconds, so with a capture
-   * point inside each district these are the groups that get picked while the
-   * point is being contested — which is the only time levelling the block round
-   * it means anything. `RULES.airstrikeSalvoDelay` still holds the first one off
-   * the opening of the round and `airstrikeInterval` is still the random gap.
+   * "AとBの周りの街は爆撃で定期的に破壊して". Telegraphed is what every event in
+   * this file is. PERIODIC used to mean the ordinary scheduler: `_pickSalvo`
+   * takes the group nearest the fight, so a district was supposed to come down
+   * while its point was being contested. Measured, that is not what happened —
+   * the cathedral is nearer the fight than either district almost always, the
+   * once-a-round salvo went there, and the districts were left to be picked
+   * apart one building at a time by the single-strike draw or not at all. So
+   * WHEN is `match`'s now (`RULES.districtSalvoProgress`) and WHICH IS FIRST is
+   * still the fight's (`callDistrictSalvo`); `scheduled` is what keeps these two
+   * groups out of the random draw. @see `_pickSalvo`.
    *
    * Built from `world.demolitions` rather than authored, so a building added to
    * or removed from the demolition list needs no second edit here.
@@ -748,13 +765,49 @@ export class Airstrike {
         centre,
         span,
         chunkCount: chunks,
+        /** `match` owns WHEN. @see `callDistrictSalvo` and `_pickSalvo`. */
+        scheduled: true,
+        zone,
         position: centre,
       });
+      for (const m of members) m.scheduled = true;
       console.info(
         `[airstrike] salvo DISTRICT-${zone}: ${members.map((m) => m.id).join('+')} — ` +
           `${chunks} chunks, ${members.length} BUILDINGS over ${span.toFixed(1)} m`
       );
     }
+  }
+
+  /**
+   * FIRE ONE DISTRICT — the hotter one of those still standing.
+   *
+   * The WHEN is `match`'s (`RULES.districtSalvoProgress`); WHICH ONE goes first
+   * is still this file's, and still the fight's: of the districts nobody has
+   * levelled yet, the one with the higher `_focusWeight` is the one being
+   * contested, and levelling the block round a point that nobody is standing
+   * near is the version of this event that means nothing. So the PAIR is
+   * guaranteed and the ORDER is emergent, which is the half of `_pickSalvo` that
+   * was working.
+   *
+   * @returns {string|null} the id fired, or null if there is nothing left to level
+   */
+  callDistrictSalvo() {
+    if (!this.ready || !this.enabled) return null;
+    let best = null;
+    let bestW = -1;
+    for (const g of this.salvos) {
+      if (!g.zone) continue;
+      let up = true;
+      for (const s of g.sites) if (s.struck || s.dropped) up = false;
+      if (!up) continue;
+      const w = this._focusWeight(g.centre);
+      if (w > bestW) {
+        bestW = w;
+        best = g;
+      }
+    }
+    if (!best || !this.callSalvo(best.index)) return null;
+    return best.id;
   }
 
   /**
@@ -2216,9 +2269,35 @@ export class Airstrike {
      * unweighted draw would still spend a third of a round's strikes on the
      * three big ones. On top of that, `focus` pulls the draw toward wherever the
      * living are: a site 20 m from the fight is worth about 2.5x one 90 m away.
-     * Both are weights on a cumulative draw, so nothing is ever excluded and the
-     * balance argument in the STRIKE_SITES comment (every site is on the
-     * attackers' half of every route) is untouched.
+     * Both are weights on a cumulative draw, so the balance argument in the
+     * STRIKE_SITES comment (every site is on the attackers' half of every route)
+     * is untouched.
+     *
+     * WHAT IS EXCLUDED IS EVERY SITE THAT BELONGS TO A `scheduled` GROUP — the
+     * six demolition blocks and the three cathedral bays — and it is the
+     * measurement that put them out rather than a preference.
+     *
+     * A `kind: 'demo'` building is not a parapet, it is one of the six walls of
+     * the two avenues, and dropping it is the "今まで到達できなかった方向" route
+     * change the district event exists to announce. Drawn one at a time by this
+     * scheduler it was neither announced nor symmetric: a measured match took
+     * `SE6` at t = 130 and `SE1` at t = 169 out of the B district by single
+     * draws, left the A district whole, and A therefore did not open until the
+     * final collapse at t = 252 — 35 s before the end, on a map whose two halves
+     * are deliberate mirrors.
+     *
+     * The three `CATH-*` bays are the same failure with a different symptom.
+     * They stand at the middle capture point, so `_focusWeight` favours them all
+     * match, and in EVERY measured run at least one had been struck by a single
+     * draw before `cathedralOpenProgress` came round — at which point `match`
+     * logged "cathedral collapse called (salvo declined — already down)" and the
+     * scheduled 大聖堂大破壊 was a building swapping for its ruin with no salvo
+     * behind it to hide the swap. @see `RULES.cathedralRazeDelay`.
+     *
+     * So the rule is one line and it is the same line for both: a site that is
+     * part of an event `match` schedules is fired by that event and by the final
+     * collapse, and never by this draw. @see `_pickSalvo`, `callDistrictSalvo`,
+     * `RULES.districtSalvoProgress`.
      */
     const cand = this._cand;
     const wt = this._wt;
@@ -2226,7 +2305,7 @@ export class Airstrike {
     wt.length = 0;
     let total = 0;
     for (const s of this.sites) {
-      if (s.struck || s.dropped) continue;
+      if (s.struck || s.dropped || s.scheduled) continue;
       total += (s.kind === 'route' ? 2 : 1) * this._focusWeight(s.position);
       cand.push(s);
       wt.push(total);
@@ -2258,11 +2337,29 @@ export class Airstrike {
     return wt.length - 1;
   }
 
-  /** The whole-block event nearest the fight, of the groups still standing. */
+  /**
+   * The whole-block event nearest the fight, of the groups still standing.
+   *
+   * `scheduled` GROUPS ARE NOT IN THIS DRAW, and that is the second half of the
+   * same measurement. The cathedral is the group nearest the fight almost by
+   * construction — the middle capture point is inside it — so the once-a-round
+   * salvo picked `CATHEDRAL` nearly every time, and it picked it on
+   * `airstrikeInterval`, which is a random gap from t = 58. In the measured
+   * match that fired long before `cathedralOpenProgress` came round, and the
+   * scheduled cathedral event then logged "salvo declined — already down": the
+   * 大聖堂大破壊 was spent in the first half at a time nothing chose, and what
+   * was left for the second half was the shell swap on its own, with no dust to
+   * happen behind it (@see `RULES.cathedralRazeDelay` for why that matters).
+   *
+   * So the three groups `match` schedules — the cathedral and the two districts
+   * — are its to fire, and this draw keeps the two authored block salvos, which
+   * is what `SALVOS` was for. Nothing about the weighting changed; the pool did.
+   */
   _pickSalvo() {
     let best = null;
     let bestW = -1;
     for (const g of this.salvos) {
+      if (g.scheduled) continue;
       let up = true;
       for (const s of g.sites) if (s.struck || s.dropped) up = false;
       if (!up) continue;

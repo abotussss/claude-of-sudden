@@ -546,6 +546,90 @@ export const RULES = {
   tankDeathRadius: 12,
   tankDeathDamage: 240,
 
+  /* ---- the two districts, and the approaches they open ---- */
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * WHEN THE CITY ROUND A AND THE CITY ROUND B COME DOWN — one salvo each, both
+   * early enough that the approaches they open are still worth something.
+   * ──────────────────────────────────────────────────────────────────────────
+   * "いろんな方向から到達可能にすること、今まで到達できなかった方向にある建物を物理的に
+   *  壊し、到達できるようにして、BFのような感じで"
+   *
+   * THE MEASUREMENT THAT PUT THESE HERE — three matches run to their natural
+   * end, each district timed at the first of its blocks that OPENS something
+   * (`NW1`/`NW6`, `SE1`/`SE6`; the two avenue islands deny no route):
+   *
+   *   272.0 s match    A opened t = 248.3  (91 %)    B opened t = 130.2  (48 %)
+   *   296.1 s match    A opened t = 267.7  (90 %)    B opened t = 268.3  (91 %)
+   *   300.0 s match    A opened t = 159.4  (53 %)    B opened t = 263.7  (88 %)
+   *
+   * FIVE OF THOSE SIX OPENINGS WERE THE FINAL COLLAPSE, not an event anybody
+   * scheduled: they land 22-36 s before the end because `finalCollapseProgress`
+   * sweeps up whatever is still standing. A feature whose entire point is new
+   * bearings was handing the players half a minute to use six of them. The one
+   * time a district opened early it was the ordinary one-at-a-time strike draw
+   * eating a single building out of it, which is also why the two halves of a
+   * deliberately mirrored map got 158 s and 35 s of new routes in the same
+   * match. Neither figure was authored; both fell out of the weighting.
+   * @see `Airstrike._pickSalvo` and `Airstrike._scheduleNext`.
+   *
+   * WHAT "EARLY ENOUGH" IS, MEASURED. `tools/navcheck.mjs` on this map:
+   *
+   *   site A   attack spawns 119.0 .. 139.2 m      defend spawns 200.5 .. 219.9 m
+   *   site B   defend spawns 114.2 .. 134.2 m      attack spawns 198.9 .. 219.4 m
+   *
+   * and an advancing bot runs `3.9 + aggression` m/s (`Agent._advance`), so 4.4
+   * m/s for the average trait roll. The far side of a district is therefore 45 s
+   * of walking, the near side 27 s, before `captureTime` (9 s solo, 3.7 s for
+   * four men) and `respawnDelay` (6 s) — and that is unopposed, which the walk
+   * to a contested point is not. ONE traversal-and-contest is ~60 s from the far
+   * spawn. A bearing that opens with less than that left is decoration; a
+   * bearing that is going to be fought over — opened, used, answered, used again
+   * — needs two or three, so ~120-180 s of match after it opens.
+   *
+   * THE NUMBERS ARE PROGRESS, AND PROGRESS IS NOT TIME. `_matchProgress` is
+   * `max(elapsed/matchTime, leader/scoreTarget)` and it is score-dominated after
+   * the first minute, so equal steps in it are not equal steps in seconds — the
+   * old `cathedralOpenProgress: 0.34` landed at 43 % of elapsed time, not 34 %.
+   * These two were therefore chosen by measuring the (t, p) curve rather than by
+   * reading the fraction. Measured over three matches after the change:
+   *
+   *   276.0 s match    A t = 92.4  (33 %)    B t = 117.4  (43 %)
+   *   316.0 s match    A t = 100.4 (32 %)    B t = 125.4  (40 %)
+   *   280.0 s match    A t = 96.4  (34 %)    B t = 121.4  (43 %)
+   *
+   * — both districts inside 32-43 % of every match, with 158-216 s left after
+   * the later of the two, which is two to three traversals. Compare the six
+   * openings above: 48-91 %, five of them with half a minute to go.
+   *
+   * TWO THRESHOLDS, NOT ONE, because the two events must not be one event: 0.08
+   * of progress measures 25-31 s apart at the rate a match that is being won
+   * accumulates it, and `districtSalvoGap` is the floor under that if a runaway
+   * scoreline compresses it. Which district is first is still decided by where
+   * the fighting is — @see `Airstrike.callDistrictSalvo`.
+   */
+  districtSalvoProgress: [0.20, 0.28],
+  /**
+   * The floor under the gap between two big scheduled events, in SECONDS.
+   *
+   * A district salvo is three buildings over 1.1 s of stagger, a 4.4 s telegraph
+   * ahead of it and 6.5 s of settle behind it — about twelve seconds of event.
+   * A side that has taken all three zones prints 1.5 points a second, which is
+   * 0.08 of progress in thirteen; without a floor in real seconds the two
+   * thresholds collide in a runaway match, and three big events inside twenty
+   * seconds is one big event. 25 s puts clear air between them.
+   *
+   * IT IS THE BINDING CONSTRAINT, NOT THE BACKSTOP, AND THAT IS WORTH KNOWING:
+   * in all three measured matches the second district fired exactly 25.0 s after
+   * the first, i.e. `districtSalvoProgress[1]` had already been passed and this
+   * is what set the spacing. Raise it and the pair spreads; the second threshold
+   * only takes over again in a match where the score crawls.
+   *
+   * The same guard holds the cathedral off a district that is still in the air —
+   * @see `MatchSystem._updateMapEvents`.
+   */
+  districtSalvoGap: 25,
+
   /* ---- the cathedral, and what its destruction opens ---- */
   /**
    * ──────────────────────────────────────────────────────────────────────────
@@ -558,6 +642,13 @@ export const RULES = {
    *   match ends at t = 276 .. 288 s        (the clock allows 600)
    *   cathedral collapse   t = 210, 211     (73 % and 76 % of the way in)
    *   FINAL COLLAPSE       NEVER FIRED in any run
+   *
+   * A FRACTION IS NOT A TIME, THOUGH, AND THAT IS THE SECOND HALF OF THE LESSON:
+   * every one of these has to be measured back into seconds after it is chosen,
+   * because `_matchProgress` is score-dominated and the score curve is convex.
+   * `_evwin.mjs` samples (t, p) every five seconds of a live match and prints
+   * each event as a percentage of the match that actually happened; that is the
+   * only evidence any number in this block is calibrated against.
    *
    * A DOMINATION match ends on `scoreTarget`, not on `matchTime`: two zones held
    * is a point a second, so 250 points arrives in under five minutes and the
@@ -575,34 +666,52 @@ export const RULES = {
    *
    * D — "大聖堂をDサイトとして途中で出現させて 大聖堂破壊イベントを通して".
    *
-   * 0.34 IS "後半3〜5分" AS CLOSELY AS A MATCH THIS LENGTH ADMITS, and the honest
-   * version of that sentence is worth writing down. Re-measured after the change
-   * a match runs 296-329 s — five minutes and a bit — so there is no instant in
-   * it that is five minutes from the end, and only one window that is three.
-   * Two distinct events cannot BOTH be 3-5 minutes from the end of a five-minute
-   * match; the other one is the final collapse and it has to be last.
+   * 0.34 WAS NOT THE SECOND HALF, AND THE ONLY WAY TO KNOW THAT IS TO MEASURE
+   * IT. Three matches with the threshold at 0.34 called the collapse at
    *
-   * THE NUMBER IS CALIBRATED AGAINST THE MEASUREMENT, NOT READ OFF THE FRACTION,
-   * because `_matchProgress` is score-dominated and the score curve is convex:
-   * every zone is neutral for the first half-minute, so 0.34 of the POINTS is
-   * about 45 % of the elapsed TIME. 0.45 was tried first and measured firing at
-   * t = 172-188 with only 108-157 s left — 1.8 to 2.6 minutes, short of the band.
+   *   t = 124.0 of 288.0 s   43 %
+   *   t = 140.1 of 296.1 s   47 %
+   *   t = 136.0 of 300.0 s   45 %
    *
-   * MEASURED AT 0.34, three matches: called at t = 117-165 of a 248-337 s match,
-   * so 131-172 s remain — 2.2 to 2.9 minutes. That is the closest a single
-   * fraction gets: the match length itself varies by 90 s, so "three minutes
-   * before the end" is not a fixed point on this clock, and going lower opens D
-   * before halfway in the short matches, which stops it being a second act.
-   * If a literal 3-5 minute window is wanted, the knob is `scoreTarget` — the
-   * match is score-bound, and a longer race is what makes the band exist.
+   * — before halfway in every one of them, which is not "後半" by any reading.
+   * The reason is written two paragraphs down and it is the reason every number
+   * in this block has to be re-measured rather than reasoned about: progress is
+   * score-dominated, the score curve is convex, and 0.34 of the POINTS is
+   * 43-47 % of the elapsed TIME.
    *
-   * It is still a second act rather than a flourish: by then the three original
-   * zones have changed hands and both sides have settled into a shape. The
-   * collapse telegraphs for 4.4 s and the wreckage takes `cathedralOpenDelay`
+   * 0.50 MEASURES AT 59-67 %, over the same three matches:
+   *
+   *   t = 164.0 of 276.0 s   59 %   112 s left
+   *   t = 188.1 of 316.0 s   60 %   128 s left
+   *   t = 188.0 of 280.0 s   67 %    92 s left
+   *
+   * so the cathedral goes at about three fifths of the way in, and D —
+   * `cathedralOpenDelay` later — has 85-120 s to be fought over. That is two
+   * full traversals of the map (`tools/navcheck.mjs`: 112-134 m from either
+   * spawn to the middle, at 4.4 m/s), so the fourth point is a second act and
+   * not a flourish, which is what it was already meant to be. The spread is the
+   * match itself: the 67 % run was the one close game of the three, and progress
+   * reads the LEADER, so a match nobody is running away with reaches 0.50 later
+   * in its own life.
+   *
+   * "後半3〜5分" IS NOT SATISFIABLE AND SAYING SO IS PART OF THE ANSWER. A match
+   * runs 272-316 s, so no instant in it is five minutes from the end and only
+   * the first thirty seconds are three. The knob that would make that window
+   * exist is `scoreTarget` — the match is score-bound — and it is deliberately
+   * NOT touched here, because a five-minute fight is the other thing that was
+   * asked for. What is delivered instead is the SHAPE: the districts open in the
+   * first half, the cathedral is the second half, the city comes down at the end.
+   *
+   * IT ALSO WAITS FOR CLEAR AIR. `_updateMapEvents` holds this off while a
+   * district salvo is still in the air or settling; progress is monotone, so the
+   * guard delays the branch by a few seconds and never skips it.
+   * @see `RULES.districtSalvoGap`.
+   *
+   * The collapse telegraphs for 4.4 s and the wreckage takes `cathedralOpenDelay`
    * more to stop moving, so D goes live about eleven seconds after the first
    * thing the player hears.
    */
-  cathedralOpenProgress: 0.34,
+  cathedralOpenProgress: 0.50,
   /**
    * Seconds after the collapse FIRES before D is contestable. It is the salvo's
    * own settle time (6.5 s) plus a beat — the point opens when the dust has a

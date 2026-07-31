@@ -591,6 +591,10 @@ export class MatchSystem {
     this._cathedralPending = -1;
     /** Countdown to the shell swap, inside the salvo. @see RULES.cathedralRazeDelay */
     this._razeIn = -1;
+    /** How many of `RULES.districtSalvoProgress` have been spent. @see `_updateMapEvents` */
+    this._districtsFired = 0;
+    /** Seconds still owed before the next big event may be called. */
+    this._districtGap = 0;
     this._finalCalled = false;
     this._finalLeft = 0;
     this._bombardIn = RULES.zoneBombardFirst;
@@ -761,6 +765,8 @@ export class MatchSystem {
       this._cathedralCalled = false;
       this._cathedralPending = -1;
       this._razeIn = -1;
+      this._districtsFired = 0;
+      this._districtGap = 0;
       this._finalCalled = false;
       this._finalLeft = 0;
       this._bombardIn = RULES.zoneBombardFirst;
@@ -2404,18 +2410,25 @@ export class MatchSystem {
 
   /**
    * ────────────────────────────────────────────────────────────────────────
-   * THREE SCHEDULED EVENTS, ONE CLOCK, AND NOTHING BUILT WHEN THEY FIRE
+   * FOUR SCHEDULED EVENTS, ONE CLOCK, AND NOTHING BUILT WHEN THEY FIRE
    * ────────────────────────────────────────────────────────────────────────
-   * All three are `Airstrike`'s existing machinery aimed by this file. Nothing
+   * All of them are `Airstrike`'s existing machinery aimed by this file. Nothing
    * below allocates, bakes, fractures or rebuilds anything: the cathedral salvo
    * and every strike site were cut, solved and nav-patched at BOOT, and firing
    * one is two booleans per mesh and a uniform write. What this method owns is
    * WHEN, which is the part that is a ruleset and not an effect.
    *
+   *   `districtSalvoProgress`  the city round A and the city round B, one salvo
+   *                            each, opening the bearings the two avenues denied
    *   `cathedralOpenProgress`  the cathedral comes down and D opens in the wreckage
    *   `zoneBombard*`           A and B are shelled on a random gap, so holding a
    *                            point means moving inside it, not sitting on it
    *   `finalCollapseProgress`  everything still standing, in one rolling event
+   *
+   * THEY ARE IN THAT ORDER ON PURPOSE and the order is the whole schedule: the
+   * districts open routes, the cathedral is the second act on top of the routes,
+   * the last event is the last event. Each is far enough from the next that it
+   * is its own event — @see `RULES.districtSalvoGap`.
    *
    * THE TWO BIG ONES ARE ON `_matchProgress`, NOT ON THE CLOCK, and that is a
    * fix rather than a refactor. The note that used to stand here said "a match
@@ -2428,6 +2441,40 @@ export class MatchSystem {
   _updateMapEvents(dt) {
     const t = RULES.matchTime - this.roundClock;
     const p = this._matchProgress();
+
+    /* ---- the two districts -------------------------------------------- */
+    /**
+     * ONE SALVO EACH, GUARANTEED, AND FAR ENOUGH APART TO BE TWO EVENTS.
+     *
+     * The threshold is `match`'s and the choice of which district goes first is
+     * `airstrike`'s — @see `Airstrike.callDistrictSalvo` for why the order stays
+     * emergent, and `RULES.districtSalvoProgress` for what the two numbers were
+     * measured against. `_districtGap` is the floor under the spacing: two
+     * thresholds that happen to be reached in the same few seconds (a side that
+     * takes three zones scores 1.5 pt/s and covers 0.1 of progress in seventeen)
+     * would otherwise be one long noise instead of two events.
+     */
+    this._districtGap -= dt;
+    if (
+      this._districtsFired < RULES.districtSalvoProgress.length &&
+      p >= RULES.districtSalvoProgress[this._districtsFired] &&
+      this._districtGap <= 0 &&
+      !this.airstrike?.busy
+    ) {
+      const id = this.airstrike?.callDistrictSalvo?.() ?? null;
+      if (id) {
+        this._districtsFired++;
+        this._districtGap = RULES.districtSalvoGap;
+        console.info(
+          `[match] ${id} levelled at t=${t.toFixed(0)}s p=${p.toFixed(2)} — ` +
+            `${this._districtsFired} of ${RULES.districtSalvoProgress.length}`
+        );
+      } else if (this.airstrike?.ready) {
+        // Nothing of either district is left standing (a re-run, or the final
+        // collapse got there first). Stop asking.
+        this._districtsFired = RULES.districtSalvoProgress.length;
+      }
+    }
 
     /* ---- D ------------------------------------------------------------ */
     /**
@@ -2447,7 +2494,17 @@ export class MatchSystem {
     if (this._cathedralPending > 0) {
       this._cathedralPending -= dt;
       if (this._cathedralPending <= 0) this._openCathedral();
-    } else if (!this._cathedralCalled && this.lockedZone && p >= RULES.cathedralOpenProgress) {
+      // NOT ON TOP OF A DISTRICT. `busy` is a salvo in the air or still settling,
+      // so this waits out the ~9 s a district takes rather than firing the two
+      // biggest events of the match into the same ten seconds. It only ever
+      // DELAYS: `p` is monotone, so the branch is still taken on the next frame
+      // the sky is clear. @see `RULES.districtSalvoGap`.
+    } else if (
+      !this._cathedralCalled &&
+      this.lockedZone &&
+      p >= RULES.cathedralOpenProgress &&
+      !this.airstrike?.busy
+    ) {
       this._cathedralCalled = true;
       // `callCathedralCollapse` is the salvo plus a bomber run; it declines if
       // the sites are already struck or the system is disarmed, and D opens on
