@@ -2421,6 +2421,109 @@ for (const p of [
 }
 
 /**
+ * ════════════════════════════════════════════════════════════════════════════
+ * …AND THEN THE TWO POINTS MOVED 12 UNITS DOWN THEIR OWN AVENUES AND THIS MASS
+ * DID NOT GO WITH THEM.
+ * ════════════════════════════════════════════════════════════════════════════
+ * `bdb13e0` pulled A and B in from authored (∓76.5, ±46) to (∓69.7, ±36) —
+ * measured with `tools/zonespot.mjs` rather than guessed, because z 80.4 of
+ * world space is not reachable ground and five hand-picked coordinates had
+ * already failed. `ZONES` in src/match/sites.js moved. The six pieces above did
+ * not, and neither did the two `KEEPOUT` circles below, so the capture points
+ * have been standing on bare gravel with their furniture 18 m up the street.
+ *
+ * MEASURED, `tools/sitecheck.mjs` on the build immediately before this block:
+ *
+ *   zone A    2.5 m² of 0.9-2.8 m mass inside the 8 m circle, of a floor of 12
+ *   zone B    2.5 m²
+ *   zone C   20.8 m²   — the west courtyard, whose mass never moved
+ *
+ * and NOTHING ELSE FAILED on either point: the arrival, both ground reads, the
+ * perch the holder gets to first and both mouths all pass. It is the mass and
+ * only the mass, which is exactly "爆破サイトが剥き出しで、攻撃側有利すぎる" — the
+ * complaint this whole table was written to answer — put back by a coordinate
+ * change nothing gated.
+ *
+ * THE OLD MASS STAYS WHERE IT IS, AND THAT IS A DECISION AND NOT AN OVERSIGHT.
+ * Those six pieces are 12.1 authored units — 18 m — from the new centres, which
+ * is `sitecheck`'s RING and not its circle, so they count for nothing on the
+ * point; but a 48-unit avenue with one screened pinch a third of the way down it
+ * reads better than a 48-unit corridor with all its furniture at one end, and
+ * that pinch is now the APPROACH to the point rather than the point itself.
+ * `src/match/sites.js` already made this call once, for the two mid-street
+ * plazas these zones vacated before ("the plazas the zones vacate keep their
+ * `SITEWORKS` cover"). Ground somebody has fought over does not stop being worth
+ * fighting over because the flag moved off it.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND THIS PAIR IS NOT ρ. THAT IS A FACT ABOUT `ZONES`, NOT A CHOICE HERE.
+ * ────────────────────────────────────────────────────────────────────────────
+ * ρ(x, z) = (-x, -2 - z) sends A's centre (-69.7, 36) to (69.7, -38). `ZONES`
+ * authors B at (69.7, -36), which is FLUSH WITH SE1's SOUTH FACE, and the
+ * consequence is measurable in two ways:
+ *
+ *   - the ground is not the mirror image. A's centre has 2 authored units of
+ *     cross street south of it and 4 north; B's has 6 south and NONE — its north
+ *     arc is inside a building. A ρ'd table would put a third of B's mass in
+ *     SE1's ground floor, so each half is authored against its own ground.
+ *   - B'S CENTRE MOVES BETWEEN BOOTS. Probed over seven boots of one build,
+ *     A resolved to (-69.52, 35.92) every single time; B came back
+ *     (69.51, -36.15) five times and (69.51, -38.08) twice — the boots where
+ *     `ensureReachable` walked it off the wall it is authored on. So everything
+ *     below is inside the 5.33-unit circle for BOTH of B's outcomes (18.2 m²
+ *     against 19.8 m², computed corner by corner), which is why B's mass is
+ *     weighted along X: x is the axis that does not move. THE FIX FOR THE
+ *     WANDER IS TWO UNITS IN `ZONES` AND IT IS NOT THIS FILE'S TO MAKE.
+ *
+ * The recipe is the one the other four points use, read against ground that is a
+ * CITY STREET rather than a gravel pan — each district's dressing (a stall, a
+ * palm, a jersey barrier, a tyre stack and two rubble mounds, ρ-paired per side)
+ * already owns a third of each circle, and every offset below was chosen off a
+ * 0.5-unit sweep of the real collision:
+ *
+ *   two PLINTHS  waist-high mass ON the point, in the 3.2-5.0 authored band —
+ *                outside `standRing`'s 4 m ring of forward spawns, inside the
+ *                8 m capture circle. One in the avenue, one in the cross street.
+ *   one SCREEN   standing along Z on the arc THE ENEMY ARRIVES UP, which is a
+ *                different arc for each: `navcheck` gives A to the north side
+ *                (112.4 m against 200.9), so A's enemy walks the cross street in
+ *                from the EAST and B's — B belongs to the south — from the WEST.
+ *   one KERB WALL along Z against the far kerb on the owner's own side: what a
+ *                side walks up behind to take its own point back.
+ *   one PIER     2.95 m, deliberately OVER the 0.9-2.8 m band `sitecheck`
+ *                counts, standing in the cross street's far mouth flush to one
+ *                kerb. A CHOKEPOINT and not cover: 2.4 units of a 6-unit mouth,
+ *                leaving 3.6 units — 5.4 m — of open street beside it.
+ *
+ * NOTHING RUNS ACROSS EITHER CORRIDOR. The cross street runs along X and not one
+ * piece here spans it; the point itself, both mouths and the whole join between
+ * the avenue and the cross street are open ground end to end, with 4.1 units
+ * (6.2 m) of clear street beside the tightest piece. A capture point A* cannot
+ * enter is a worse bug than one with no cover on it — `navcheck`, `lanecheck`
+ * and `tools/stuckcheck.mjs` are the gates and all three are run on this.
+ *
+ * Kept off WC8/EC8's 6.2-unit `KEEPOUT` circle (each shed's two thresholds and
+ * its three-rung mantle ladder — see the note under it) and out of every
+ * authored prop's footprint. Authored in WIDENED space like everything else at
+ * this end of the file, and the 1.5x at the foot does the rest.
+ */
+SITEWORKS.push(
+  /* ---- ZONE A: the west avenue where the southern cross street meets it -- */
+  { id: 'W avenue plinth north', kind: 'plinth', x: -73.3, z: 38.4, w: 2.0, d: 1.8, h: 1.3, key: 'concrete' },
+  { id: 'W avenue plinth street', kind: 'plinth', x: -66.2, z: 34.7, w: 1.8, d: 1.2, h: 1.2, key: 'concrete' },
+  { id: 'W avenue screen east', kind: 'wall', x: -67.7, z: 38.9, w: 0.6, d: 1.6, h: 1.6, key: 'brick' },
+  { id: 'W avenue kerb wall', kind: 'wall', x: -74.3, z: 35.4, w: 0.6, d: 3.0, h: 1.45, key: 'plaster_blue' },
+  { id: 'W avenue mouth pier', kind: 'pier', x: -63.2, z: 35.2, w: 2.0, d: 2.4, h: 2.95, key: 'concrete' },
+
+  /* ---- ZONE B: the same five, read against the east district's ground ---- */
+  { id: 'E avenue plinth south', kind: 'plinth', x: 72.2, z: -39.8, w: 2.0, d: 1.6, h: 1.3, key: 'concrete' },
+  { id: 'E avenue plinth street', kind: 'plinth', x: 68.9, z: -39.9, w: 2.0, d: 1.6, h: 1.2, key: 'concrete' },
+  { id: 'E avenue screen west', kind: 'wall', x: 65.8, z: -36.9, w: 0.6, d: 1.4, h: 1.6, key: 'brick' },
+  { id: 'E avenue kerb wall', kind: 'wall', x: 74.3, z: -37.4, w: 0.6, d: 2.6, h: 1.45, key: 'plaster_pink' },
+  { id: 'E avenue mouth pier', kind: 'pier', x: 63.2, z: -37.2, w: 2.0, d: 2.4, h: 2.95, key: 'concrete' }
+);
+
+/**
  * THE TWO ZONE CIRCLES, as ground no collision-bearing prop may be dressed onto.
  *
  * A ZONE CENTRE WITHOUT ONE OF THESE IS A ZONE THAT MOVES. It has already
@@ -2432,9 +2535,19 @@ for (const p of [
  * ring. Duplicated from `ZONES` in src/match/sites.js because `world` may not
  * import `match`: IF ONE MOVES, MOVE THE OTHER.
  */
+/**
+ * …AND ONE MOVED AND THE OTHER DID NOT, WHICH IS THE THIRD TIME THAT SENTENCE
+ * HAS HAD TO BE WRITTEN IN THIS FILE. `bdb13e0` took the zones to (∓69.7, ±36)
+ * and left these two at (∓76.5, ±46), so for those commits the reservation was
+ * held over 4.5 m of empty avenue while THE CAPTURE POINTS THEMSELVES were open
+ * to the dressing scatter — the exact configuration the paragraph above says
+ * ends with `ensureReachable` walking a zone off a crate lid and saying nothing.
+ * It is not hypothetical here: probed over seven boots, zone B resolved to
+ * (69.51, -36.15) five times and (69.51, -38.08) twice.
+ */
 KEEPOUT.push(
-  [-76.5, 46, 3.0], // ZONE A — the west city's avenue
-  [76.5, -48, 3.0], // ZONE B — its 180° image in the east city's
+  [-69.7, 36, 3.0], // ZONE A — the west avenue at its southern cross street
+  [69.7, -36, 3.0], // ZONE B — the east avenue at its northern cross street
   /**
    * …AND ONE ON EACH SHED, WHICH IS THE MANTLE LADDER'S CIRCLE AND NOT THE
    * DOOR'S. `setDoorways` already derives a circle on every threshold, so a
