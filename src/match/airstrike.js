@@ -632,14 +632,23 @@ export class Airstrike {
       chunks += s.chunkCount;
       cells += s.nav ? s.nav.cells.length : 0;
     }
+    /**
+     * TWO POPULATIONS, COUNTED SEPARATELY. The authored sites are the ones whose
+     * level coordinates live in this file and can therefore go stale when the
+     * map moves under them — that is what the error below is for. The
+     * demolitions are derived from `world.demolitions` and cannot drift, so
+     * folding them into the same fraction would have printed "17/11".
+     */
+    const authored = this.sites.filter((s) => !s.demo).length;
+    const demos = this.sites.length - authored;
     console.info(
-      `[airstrike] ${this.sites.length}/${STRIKE_SITES.length} sites baked in ` +
-        `${this.buildMs.toFixed(0)}ms — ${chunks} chunks, ${cells} nav cells patched, ` +
+      `[airstrike] ${authored}/${STRIKE_SITES.length} authored sites + ${demos} whole buildings ` +
+        `baked in ${this.buildMs.toFixed(0)}ms — ${chunks} chunks, ${cells} nav cells patched, ` +
         this.sites.map((s) => `${s.id}@${s.roofY.toFixed(1)}m`).join(' ')
     );
-    if (this.sites.length < STRIKE_SITES.length) {
+    if (authored < STRIKE_SITES.length) {
       console.error(
-        `[airstrike] ${STRIKE_SITES.length - this.sites.length} SITE(S) DROPPED — ` +
+        `[airstrike] ${STRIKE_SITES.length - authored} SITE(S) DROPPED — ` +
           'the level coordinates in src/match/airstrike.js no longer match the map.'
       );
     }
