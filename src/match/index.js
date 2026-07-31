@@ -558,6 +558,12 @@ export class MatchSystem {
     /** Plan records the spare men are spread over. @see `_assignDomination` */
     this._spare = [];
     /**
+     * Walks the standing ring for men who have reported they cannot reach the
+     * point they were given. One counter for the whole match: it only has to
+     * produce a DIFFERENT point each refresh, not a fair one. @see `_orderZone`
+     */
+    this._zoneRotate = 0;
+    /**
      * The ONE zone each side is currently trying to take. Sticky across the two
      * second refresh, or a side re-cuts its target every two seconds and arrives
      * nowhere in strength. Cleared with the match.
@@ -975,51 +981,99 @@ export class MatchSystem {
   }
 
   /**
-   * The emptiest spawn point of a side's cluster, as a world position.
+   * ────────────────────────────────────────────────────────────────────────
+   * WHERE A MAN COMES BACK: THREE TIERS IN PREFERENCE ORDER, NOT ONE AUCTION
+   * ────────────────────────────────────────────────────────────────────────
+   * "ビーコン／占領地点からのリスポーンの修正". Both features were plumbed
+   * correctly and neither was ever CHOSEN, and the reason is that this used to
+   * be a single `max` over one number:
    *
-   * "A respawn that puts you in front of an enemy" is the single thing that
-   * makes respawning feel unfair, so this scores every point of the cluster by
-   * the distance to the NEAREST live enemy and takes the largest. With fifteen
-   * points spread over a 13 x 10 m pocket that is a real choice rather than a
-   * formality. `RULES.respawnSafeRadius` is only a report threshold: if every
-   * point is worse than that the best of a bad set is still used, because a
-   * delayed respawn is worse than a contested one.
+   *   base point     nearestFoeDist + rand(0, 6)
+   *   forward point  nearestFoeDist + forwardSpawnBias + rand(0, 6)
+   *   beacon         nearestFoeDist + forwardSpawnBias + rand(0, 6)
+   *
+   * Every term is metres, so the comparison was literally "is the capture point
+   * I am holding further from the enemy than my own back line, plus 34 m of
+   * thumb". A base cluster sits at the back of the map and measures 90-130 m to
+   * the nearest live enemy; a point you hold is where the fighting is and
+   * measures 8-40 m. 34 m does not close a 70-100 m gap. MEASURED (`_spawnprobe.mjs`):
+   *
+   *   BLUE holding C and B, all 14 stand points clear of the block radius,
+   *     best base 107.5 m vs best forward 39.1 m -> 0 of 14 beat the base.
+   *   A beacon planted, active, 23.9 m from the nearest enemy: chosen
+   *     0 times in 200 respawns. `stats.beaconSpawns` 0 across whole matches.
+   *
+   * The one case that DID pick a forward point was an enemy leaking to within
+   * 12 m of the base cluster — i.e. the feature only fired when the base was the
+   * dangerous option, which is backwards. That is why the behaviour read as
+   * random: RED took 30 % of its respawns forward and BLUE 93.8 % in the same
+   * match, decided entirely by where the front happened to sit relative to each
+   * base, and not at all by what either side held.
+   *
+   * So the choice is now an ORDER and the distance is only a veto and a
+   * tie-break inside a tier. This is what the brief has said all along —
+   * "サイトを占領するとそこからリスポーン可能で、奪われたら既定のリスポーン位置からの
+   * スポーンのみ": holding it IS the spawn, losing it IS the fallback.
+   *
+   *   1. THE BEACON. One per side, 30 s, `beaconCooldown` between plants, and a
+   *      deliberate act by the player. If it is live and clear it wins — a
+   *      thing you spend a cooldown on and then never spawn at is not a feature.
+   *   2. A ZONE YOU OWN, safest clear standing point first.
+   *   3. THE BASE CLUSTER, unchanged, and always reachable as the fallback.
+   *
+   * `RULES.forwardSpawnBlockRadius` still vetoes an individual point with a live
+   * enemy on it, and a tier with every point vetoed falls through to the next —
+   * so a zone being overrun stops being a spawn, gradually and per point, which
+   * is the gradient the old code was reaching for. `RULES.respawnSafeRadius`
+   * remains a report threshold only: the best of a bad set is still used,
+   * because a delayed respawn is worse than a contested one.
    */
   _safeSpawn(team, role, outYaw) {
-    const spawns = role === ROLE.ATTACK ? this.spawns.attack : this.spawns.defend;
-    let best = spawns[0];
-    let bestScore = -Infinity;
+    let best = null;
     let forward = null;
-    for (const sp of spawns) {
-      // Break ties randomly so fifteen men do not queue on the same square.
-      const score = this._nearestFoeDist(team, sp.position) + this.rng.range(0, 6);
-      if (score > bestScore) {
-        bestScore = score;
-        best = sp;
+    let beacon = false;
+
+    /**
+     * TIER 1 — THE BEACON. "テンポラリーリスポーン地点としてのビーコンを起動できる（３０秒間）".
+     *
+     * THE EXPIRY IS TESTED HERE, at the moment of the respawn, exactly as
+     * `z.owner === team` is below. `Caches.update` clears the flag on the frame
+     * it runs out, but a respawn that lands in the same frame must not be able
+     * to use a beacon whose thirty seconds are gone — so the clock is read, not
+     * the flag alone. That is the difference between "expires" and "expires,
+     * eventually".
+     */
+    const bc = this.caches?.beacon;
+    if (this.domination && bc && bc.active && bc.team === team && this.ctx.time.elapsed < bc.until) {
+      if (this._nearestFoeDist(team, bc.position) >= RULES.forwardSpawnBlockRadius) {
+        best = bc;
+        beacon = true;
       }
     }
+
     /**
-     * FORWARD SPAWNS — "サイトを占領するとそこからリスポーン可能で、奪われたら既定の
-     * リスポーン位置からのスポーンのみ".
+     * TIER 2 — A ZONE THIS SIDE OWNS.
      *
-     * The ONLY test is `z.owner === team`, evaluated at the moment of the
-     * respawn. That is what makes losing a zone remove the option immediately
-     * and with no bookkeeping: there is no cached spawn list to invalidate, so
-     * there is no window in which somebody can be dropped into a point his side
-     * no longer holds. A neutral zone is not a spawn either — you have to own it.
+     * The ONLY ownership test is `z.owner === team`, evaluated at the moment of
+     * the respawn. That is what makes losing a zone remove the option
+     * immediately and with no bookkeeping: there is no cached spawn list to
+     * invalidate, so there is no window in which somebody can be dropped into a
+     * point his side no longer holds. A neutral zone is not a spawn either.
      *
-     * The base cluster is ALWAYS in the running above, so a side that holds
-     * nothing, or whose every forward point currently has an enemy standing on
-     * it, still respawns.
+     * Inside the tier the score is the old one — furthest from the nearest live
+     * enemy, plus a random tie-break so fifteen men do not queue on one square.
+     * It is only ever compared against OTHER forward points now, which is the
+     * comparison it was always fair for.
      */
-    if (this.domination) {
+    if (!best && this.domination) {
+      let bestScore = -Infinity;
       for (const z of this.sites) {
         if (z.owner !== team) continue;
         for (const sp of z.spawnFor[team]) {
           const d = this._nearestFoeDist(team, sp.position);
           // Owning the zone is not the same as it being safe this second.
           if (d < RULES.forwardSpawnBlockRadius) continue;
-          const score = d + RULES.forwardSpawnBias + this.rng.range(0, 6);
+          const score = d + this.rng.range(0, 6);
           if (score <= bestScore) continue;
           bestScore = score;
           best = sp;
@@ -1027,34 +1081,21 @@ export class MatchSystem {
         }
       }
     }
+
     /**
-     * THE BEACON — "テンポラリーリスポーン地点としてのビーコンを起動できる（３０秒間）".
-     *
-     * A THIRD candidate in the SAME auction, which is the whole reason it is
-     * here rather than in a second respawn path: it is scored by the same
-     * nearest-enemy distance, vetoed by the same `forwardSpawnBlockRadius`, and
-     * given the same `forwardSpawnBias` as a zone's standing point. So the base
-     * cluster is still always in the running, a beacon with an enemy on it is
-     * simply not chosen, and there is no bookkeeping to invalidate when it dies.
-     *
-     * THE EXPIRY IS TESTED HERE, at the moment of the respawn, exactly as
-     * `z.owner === team` is above. `Caches.update` clears the flag on the frame
-     * it runs out, but a respawn that lands in the same frame must not be able
-     * to use a beacon whose thirty seconds are gone — so the clock is read, not
-     * the flag alone. That is the difference between "expires" and "expires,
-     * eventually".
+     * TIER 3 — THE BASE CLUSTER, and the reason nothing above needs a guard.
+     * With fifteen points spread over a 13 x 10 m pocket the emptiest-point
+     * choice is a real one rather than a formality.
      */
-    let beacon = false;
-    const bc = this.caches?.beacon;
-    if (this.domination && bc && bc.active && bc.team === team && this.ctx.time.elapsed < bc.until) {
-      const d = this._nearestFoeDist(team, bc.position);
-      if (d >= RULES.forwardSpawnBlockRadius) {
-        const score = d + RULES.forwardSpawnBias + this.rng.range(0, 6);
+    if (!best) {
+      const spawns = role === ROLE.ATTACK ? this.spawns.attack : this.spawns.defend;
+      best = spawns[0];
+      let bestScore = -Infinity;
+      for (const sp of spawns) {
+        const score = this._nearestFoeDist(team, sp.position) + this.rng.range(0, 6);
         if (score > bestScore) {
           bestScore = score;
-          best = bc;
-          forward = null;
-          beacon = true;
+          best = sp;
         }
       }
     }
@@ -1073,11 +1114,14 @@ export class MatchSystem {
   /**
    * Metres to the nearest LIVE enemy of `team`, including the human.
    *
-   * Linear rather than the squared distance this used to compare, because
-   * `RULES.forwardSpawnBias` is a distance in metres and the two have to be in
-   * the same units to be added. `max` over a monotonic function is the same
-   * `max`, so the choice between base points is unchanged; only the tie-break
-   * jitter is now 6 m instead of 6 m worth of squared distance.
+   * Linear rather than the squared distance this used to compare, because it is
+   * tested against `RULES.forwardSpawnBlockRadius` and added to a metres-wide
+   * tie-break jitter, and all three have to be in the same units. (It was
+   * introduced for a `forwardSpawnBias` that no longer exists — @see `_safeSpawn`
+   * — but the veto and the jitter still need real metres.) `max` over a
+   * monotonic function is the same `max`, so the choice between base points is
+   * unchanged; only the tie-break jitter is 6 m rather than 6 m of squared
+   * distance.
    */
   _nearestFoeDist(team, p) {
     let nearest = Infinity;
@@ -1324,7 +1368,7 @@ export class MatchSystem {
     let assigned = 0;
     for (const e of plan) {
       for (let k = 0; k < e.want && assigned < live.length; k++) {
-        const pick = this._nearestFreeIndex(live, taken, e.zone.position);
+        const pick = this._nearestFreeIndex(live, taken, e.zone.position, e.zone);
         if (pick < 0) break;
         taken[pick] = true;
         assigned++;
@@ -1605,21 +1649,52 @@ export class MatchSystem {
    * ring so a squad taking a point covers it instead of stacking on one cell.
    */
   _orderZone(a, zone, mode, slot, face) {
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * A MAN WHO CANNOT GET THERE IS NOT GIVEN THE SAME PLACE AGAIN
+     * ────────────────────────────────────────────────────────────────────────
+     * `Agent.objectiveBlocked` is `src/ai`'s own word for "I have tried and I
+     * cannot reach the point you gave me" — it is set when A* returns no route
+     * at all, and now also by the top rung of `Agent._unstick`, when four
+     * escalating manoeuvres have failed to get a body onto a route that does
+     * exist. Nothing read it. The order therefore arrived, correctly, every two
+     * seconds for the rest of the match, aimed at the same square of ground,
+     * and the man stood in the street: MEASURED at 9.8 % of all live actor-time
+     * carrying that flag while 22 of 29 bots were going nowhere.
+     *
+     * `match` owns which square of a zone a man is sent to, so this is where the
+     * answer belongs. `_zoneRotate` walks the standing ring so a blocked man is
+     * offered a DIFFERENT mouth of the same courtyard on every refresh — a zone
+     * has several standing points and they are proved reachable independently
+     * (`sites.js`), so the one that failed says nothing about the next.
+     */
     if (mode === 'hold') {
       a.setObjective('hold', zone.position, zone, face);
       return;
     }
     const ring = zone.stand;
-    a.setObjective('defuse', ring[slot % ring.length], zone);
+    const bump = a.objectiveBlocked ? ++this._zoneRotate : 0;
+    a.setObjective('defuse', ring[(slot + bump) % ring.length], zone);
   }
 
-  /** Index into `live` of the nearest man with no job yet, or -1. */
-  _nearestFreeIndex(live, taken, point) {
+  /**
+   * Index into `live` of the nearest man with no job yet, or -1.
+   *
+   * `zone` is optional and does one thing: a man who has just told us he cannot
+   * reach THIS zone is the last man it should be handed to. He is not excluded —
+   * on a thin side he may be all there is — he is put at the back of the queue,
+   * so the slot goes to somebody who can walk to it and he falls through to a
+   * different plan record. Together with the ring rotation in `_orderZone`, a
+   * bot that reports a dead end gets a different way in, then a different zone.
+   */
+  _nearestFreeIndex(live, taken, point, zone = null) {
     let best = -1;
     let bestD = Infinity;
     for (let i = 0; i < live.length; i++) {
       if (taken[i]) continue;
-      const d = live[i].position.distanceToSquared(point);
+      const a = live[i];
+      let d = a.position.distanceToSquared(point);
+      if (zone && a.objectiveBlocked && a.objective && a.objective.site === zone) d += 1e6;
       if (d < bestD) {
         bestD = d;
         best = i;

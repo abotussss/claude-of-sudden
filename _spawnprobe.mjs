@@ -147,14 +147,15 @@ console.log('  RULES.forwardSpawnBias        ', r.rules.forwardSpawnBias);
 console.log('  RULES.forwardSpawnBlockRadius ', r.rules.forwardSpawnBlockRadius);
 console.log('\n  zones');
 for (const z of r.zones) console.log(`    ${z.id}  owner ${z.owner.padEnd(8)} stand ${z.standPoints}  spawnFor red/blue ${z.spawnForRed}/${z.spawnForBlue}`);
-console.log('\n  Q2/Q3 — is a HELD ZONE ever the winner of the auction?');
+console.log('\n  Q2/Q3 — the OLD single-auction formula, audited statically.');
+console.log('  (kept as the before/after: what _safeSpawn now does is the 200-respawn tally below)');
 for (const t of r.teams) {
   console.log(`    ${t.team}  owns ${t.ownedZones}`);
   console.log(`       forward candidates ${t.forwardCandidates}, vetoed by an enemy within block radius: ${t.blockedByEnemyProximity}`);
   console.log(`       best BASE point score    ${t.bestBaseScore} m  (distance to nearest enemy)`);
   console.log(`       best FORWARD point       ${t.bestForwardRawDist} m raw  ->  ${t.bestForwardScore} with the bias`);
   console.log(`       forward points that beat the base at all: ${t.forwardPointsThatBeatBase} / ${t.forwardCandidates}`);
-  console.log(`       CAN a forward point win?  ${t.forwardCanEverWin ? 'yes' : 'NO — the base cluster always outscores it'}`);
+  console.log(`       under the OLD formula, could a forward point win?  ${t.forwardCanEverWin ? 'yes' : 'NO — the base cluster outscored every one of them'}`);
 }
 console.log('\n  Q1 — the beacon');
 console.log('   ', JSON.stringify(r.beacon, null, 0));

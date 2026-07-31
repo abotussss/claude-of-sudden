@@ -161,15 +161,23 @@ export const RULES = {
    * courtyard from the fight stay usable while the contested edge does not, and
    * `RULES.spawnProtect` covers the four seconds after.
    *
-   * `forwardSpawnBias` — metres of "virtual safety" added to a forward point's
-   * score so it beats the base whenever it is not obviously dangerous. Without a
-   * bias the base cluster wins nearly every draw (it is 60 m from the fight, so
-   * its nearest-enemy distance is always larger) and forward spawns would be a
-   * feature that never fires. Measured: see the forward-spawn share reported by
-   * the domination harness.
+   * THERE IS NO LONGER A `forwardSpawnBias`, and its removal is the fix rather
+   * than a tidy-up. It was 34 m of "virtual safety" added to a forward point so
+   * it would out-score the base in a single `max`, and the note that used to
+   * stand here had the diagnosis right — "the base cluster wins nearly every
+   * draw" — and the remedy wrong, because the gap it had to close was never 34 m.
+   * Measured on the running match by `_spawnprobe.mjs`: a base cluster is 90-130 m
+   * from the nearest live enemy and a point you are holding is 8-40 m, so
+   * BLUE holding two zones with all fourteen standing points clear of the block
+   * radius still had 0 of 14 beat its base, and a live beacon 23.9 m clear of any
+   * enemy was chosen 0 times in 200 respawns.
+   *
+   * `MatchSystem._safeSpawn` is three tiers in preference order now — beacon,
+   * then a zone you own, then the base — and the distance is only this veto and
+   * a tie-break WITHIN a tier. Holding the point is what makes it a spawn, which
+   * is what the brief asked for; no number needs to be tuned for that to be true.
    */
   forwardSpawnBlockRadius: 8,
-  forwardSpawnBias: 34,
   /**
    * How many men a QUIET zone we already own keeps. The rest go and take
    * something. Two is enough to contest a capture long enough for the objective
@@ -240,12 +248,17 @@ export const RULES = {
   /**
    * THE BEACON — "テンポラリーリスポーン地点としてのビーコンを起動できる（３０秒間）".
    *
-   * Thirty seconds, as asked. It is a THIRD spawn option, not a second one:
-   * `_safeSpawn` already scores the base cluster against every standing point of
-   * every zone the side owns, and the beacon joins that same auction with the
-   * same `forwardSpawnBias` and the same `forwardSpawnBlockRadius` veto — so a
-   * beacon with an enemy standing on it is simply not chosen, and a beacon that
-   * has run out is not in the list at all. One code path, one set of rules.
+   * Thirty seconds, as asked, and it is the FIRST tier of `_safeSpawn` rather
+   * than a third candidate in one auction. It used to be the latter and it was
+   * measured winning 0 respawns in 200 with a beacon live and clear, because it
+   * is planted at a cache in contested ground and so always has the smallest
+   * distance-to-nearest-enemy of the three options. Something you spend a
+   * `beaconCooldown` on, and then never come back at, is not a feature.
+   *
+   * `forwardSpawnBlockRadius` still vetoes it outright, so a beacon with an enemy
+   * standing on it is not used and the side falls through to a zone it holds and
+   * then to its base; a beacon that has run out is tested on the clock, not the
+   * flag. Winning the tier is not the same as being unconditional.
    *
    * `beaconCooldown` is measured from the moment one is PLANTED, so the feature
    * is up for 30 of every 75 seconds at best. A permanent forward spawn wherever
