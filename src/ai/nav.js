@@ -1224,6 +1224,35 @@ export class CoverMap {
     const byCell = new Map();
     for (const p of this.all) byCell.set(p.cell, p);
 
+    /**
+     * A CELL IN THE MIDDLE OF THE AVENUE CANNOT GAIN COVER FROM A COLLAPSE, and
+     * a block's rect is mostly avenue. Sweeping all of it at eight rays a cell
+     * measured 389 ms per table at boot; this is the same reasoning `build`
+     * already applies with its blocked-neighbour test, widened to `reach`.
+     *
+     * A block's rubble stands where the block does, and the block's footprint
+     * is NOT WALKABLE while it stands — so a cell that could be given cover by
+     * a collapse is within `reach` PLUS THE APRON of a blocked cell today —
+     * `demolition.js` runs its pile 1.6 m past the footprint on every side, so
+     * the reach is 2.9 m and five cells is 4.0 m. Measured: at three cells
+     * (2.4 m) six of the twelve points the rubble makes were being cut.
+     * Cells that are ALREADY cover points are kept whatever their surroundings:
+     * they are the ones whose facing might be about to go away.
+     */
+    const RING = 5;
+    const exposed = (ix, iz) => {
+      for (let dz = -RING; dz <= RING; dz++) {
+        const jz = iz + dz;
+        if (jz < 0 || jz >= g.nz) return true;
+        for (let dx = -RING; dx <= RING; dx++) {
+          const jx = ix + dx;
+          if (jx < 0 || jx >= g.nx) return true;
+          if (!g.walkable(jx, jz)) return true;
+        }
+      }
+      return false;
+    };
+
     for (let k = 0; k < nb; k++) {
       const r = rects[k];
       if (!r) continue;
@@ -1236,6 +1265,7 @@ export class CoverMap {
           if (!g.walkable(ix, iz)) continue;
           const i = g.index(ix, iz);
           let c = cells.get(i);
+          if (!c && !byCell.has(i) && !exposed(ix, iz)) continue;
           if (!c) {
             c = {
               i,
