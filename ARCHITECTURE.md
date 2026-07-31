@@ -95,7 +95,7 @@ ai.teamOf(actor)            ai.getHudActors()
 ai.protect(actor, seconds)  ai.targetable(actor)      ai.corpseLimit
 ai.needsAmmo(actor)         ai.needsGrenade(actor)    ai.ammoState(actor)
 ai.resupply(actor, mags, grenades)                    ai.radio
-ai.setCoverRazed(down)
+ai.setCoverRazed(down)      ai.syncCoverBlocks()
 agent.setObjective(mode, position, site, facing)   agent.working
 player.team / player.name / player.alive
 player.respawnAt(position, yaw)     player.health.regenEnabled
@@ -299,11 +299,41 @@ reference assignment plus dropping the agents' held points, and
 prime, the raze and the between-match reset are all covered. 0 points describe
 air in either state afterwards; the swap costs 0.9 ms on 28-135 ms frames.
 
-THE STALENESS IS GENERAL AND THAT FIX IS NOT. With all six `world.demolitions`
-down, 119 of the 326 cover points standing on those blocks (36.5 %) still
-describe air. They fire independently, so covering them is 64 combinations rather
-than a second table — it is named here because it is the same defect, not because
-it is solved.
+THE STALENESS IS GENERAL AND A SECOND TABLE CANNOT EXPRESS IT. The six
+`world.demolitions` fire INDEPENDENTLY, so they are sixty-four states, not two —
+and measured on the two-table build, 119 of the 324 cover points standing on
+those blocks (36.7 %) described air with all six down, block by block: NW1 20,
+SE1 18, NW6 19, SE6 22, WC6 8, EC6 7, and the damage is exactly additive because
+each stale point is stale for ONE block's sake.
+
+`ai.syncCoverBlocks()` is the answer to that, and it is O(POINTS × BLOCKS) AT
+BOOT AND O(POINTS) AT FIRE TIME — not O(2^blocks) anywhere. A cover point is one
+cell and one 1.3 m ray, so the ray hits ONE piece of mass and the question "is
+this point still true" is per point and per block. `CoverMap.bakeBlockDeps`
+fires all eight directions of every candidate cell in the state the level ships
+in, then again with ONE block's COLLISION swapped for its ruin at a time
+(`setCollision`, never `setVisual` — the same split `Airstrike._bakeNavPatch`
+probes with, and the mask comes back byte-identical), and folds the two into two
+bitmasks per facing: `die`, the blocks whose standing mass this facing is, and
+`need`, the blocks whose RUBBLE it is. A point keeps its facings IN DIRECTION
+ORDER, so with nothing down it uses the one `build` chose, and `applyBlocks`
+takes the first facing that is true in the state the town is actually in — which
+is how a cell whose north wall fell keeps its permanent east wall instead of
+being dropped, and how a cell the debris field fills becomes cover it never was.
+A point whose first facing is permanent gets no variant list at all.
+
+`world.demolitions[].down` is read once per frame rather than hooked, because it
+is written by five paths (the salvo settling, the round reset, `forceDemoNav`,
+`?demo=down`, the probes) and six flags and a compare cannot be wired up wrong.
+`syncCoverBlocks` is public so `match` or a probe can force it inside the frame.
+Measured: 0 points describe air in all-intact, each block alone, three mixed
+combinations, both district salvos and all six down; the pass costs 0.021 ms
+mean / 0.10 ms worst for a change of all six, `setCoverRazed` is unchanged at
+0.016 ms with three blocks down, and the bake is +126 ms per table at boot.
+`_coverblocks.mjs` measures it per block and over mixed states; `_coverstale.mjs`
+still measures the whole map. UPPER LIMIT, HONESTLY: cover ON the ruin — the
+cells inside the footprint that only become walkable when `Airstrike` applies
+its nav patch — is not baked, because the patch does not exist at `ai.init`.
 
 If a rule needs a hook that is not on that list, add the hook to the owning
 subsystem and add a line here — do not reach into another subsystem's internals
