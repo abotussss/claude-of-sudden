@@ -2483,24 +2483,49 @@ for (const p of [
  *
  *   two PLINTHS  waist-high mass ON the point, in the 3.2-5.0 authored band —
  *                outside `standRing`'s 4 m ring of forward spawns, inside the
- *                8 m capture circle. One in the avenue, one in the cross street.
- *   one SCREEN   standing along Z on the arc THE ENEMY ARRIVES UP, which is a
- *                different arc for each: `navcheck` gives A to the north side
- *                (112.4 m against 200.9), so A's enemy walks the cross street in
- *                from the EAST and B's — B belongs to the south — from the WEST.
- *   one KERB WALL along Z against the far kerb on the owner's own side: what a
- *                side walks up behind to take its own point back.
- *   one PIER     2.95 m, deliberately OVER the 0.9-2.8 m band `sitecheck`
- *                counts, standing in the cross street's far mouth flush to one
- *                kerb. A CHOKEPOINT and not cover: 2.4 units of a 6-unit mouth,
- *                leaving 3.6 units — 5.4 m — of open street beside it.
+ *                8 m capture circle. Authored as a STEPPED PAIR sharing an edge
+ *                at 1.2 and 1.3 m rather than two pads with a slot between them.
+ *   one KERB WALL along Z against the far kerb, which is what a side walks up
+ *                behind to take its own point back. B only — see below.
  *
- * NOTHING RUNS ACROSS EITHER CORRIDOR. The cross street runs along X and not one
- * piece here spans it; the point itself, both mouths and the whole join between
- * the avenue and the cross street are open ground end to end, with 4.1 units
- * (6.2 m) of clear street beside the tightest piece. A capture point A* cannot
- * enter is a worse bug than one with no cover on it — `navcheck`, `lanecheck`
- * and `tools/stuckcheck.mjs` are the gates and all three are run on this.
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND NOT ONE PIECE IS IN THE CROSS STREET, WHICH IS A MEASUREMENT AND NOT A
+ * PREFERENCE. IT COST A WHOLE ROUND TRIP TO LEARN.
+ * ────────────────────────────────────────────────────────────────────────────
+ * The first version of this block put a plinth, a screen and a 2.4-unit
+ * chokepoint pier in the cross street, on the recipe's own reasoning — a screen
+ * on the enemy's arc, a pier in the far mouth — and every gate it was measured
+ * against still passed: `sitecheck` PASSED at 22.3 m², `navcheck` PASSED,
+ * `boundcheck` and `solidcheck` PASSED. `navcheck` only asks whether a route
+ * EXISTS, so all four of them passed on a map where the point had been walled
+ * off from its own street. A* from 4 units east of zone A went from 8.0 m to
+ * 72.0 m: out of the cross street, north through the yard, down the whole avenue
+ * and back. That is the CAPTURE POINT BOTS CANNOT ENTER failure, arriving as a
+ * clean bill of health from every tool in the repo.
+ *
+ * WHY THE CROSS STREET CANNOT TAKE MASS. It is 6 authored units wide with a
+ * RUBBLE MOUND standing in the middle of it — `SET_PIECES.rubble` (∓66, ±37),
+ * scaled radius 2.64 m, so 3.5 units of the 6 — and its rocks are a step no nav
+ * cell crosses. Measured on the build before this block, A* through the street
+ * hugged (-65, 35) → (-67, 35) or (-66, 39) → (-67, 39): the mound leaves TWO
+ * LANES OF 1.24 UNITS, 1.86 m each, against a 1.44 m bot capsule. There is no
+ * piece of this table's vocabulary that fits in 1.86 m and leaves a route.
+ * Anything at 3.2 units of the centre in that street is in one of those two
+ * lanes, because the street is only ±3 units deep. So the mass goes in the
+ * AVENUE, which is 13 units wide and where the same 3.2-5.0 band is free
+ * ground — and the cover on these two points is one-sided ON PURPOSE.
+ *
+ * IF YOU ADD ANYTHING HERE, RE-MEASURE THE ROUTE AND NOT JUST THE GATES: A*
+ * from (∓66, ±38) to the zone must come back under 10 m.
+ *
+ * The two halves carry a different number of pieces for the same reason they are
+ * not ρ: the district dressing IS ρ-paired, the two zone centres are not, so the
+ * stall and the tyre stack fall in different places relative to each point. A's
+ * avenue lobe takes one stepped pair and no more without closing the 2.4 m lane
+ * between the stall and the kerb; B's has room for the pair plus a kerb wall
+ * east of its tyres. Neither side's route is pinched below 2.4 m by anything
+ * here, and the avenue is 13 units wide, so both keep a full-width lane past the
+ * mass (8.2 units west of A's pair, 8.4 east of B's).
  *
  * Kept off WC8/EC8's 6.2-unit `KEEPOUT` circle (each shed's two thresholds and
  * its three-rung mantle ladder — see the note under it) and out of every
@@ -2508,19 +2533,14 @@ for (const p of [
  * this end of the file, and the 1.5x at the foot does the rest.
  */
 SITEWORKS.push(
-  /* ---- ZONE A: the west avenue where the southern cross street meets it -- */
-  { id: 'W avenue plinth north', kind: 'plinth', x: -73.3, z: 38.4, w: 2.0, d: 1.8, h: 1.3, key: 'concrete' },
-  { id: 'W avenue plinth street', kind: 'plinth', x: -66.2, z: 34.7, w: 1.8, d: 1.2, h: 1.2, key: 'concrete' },
-  { id: 'W avenue screen east', kind: 'wall', x: -67.7, z: 38.9, w: 0.6, d: 1.6, h: 1.6, key: 'brick' },
-  { id: 'W avenue kerb wall', kind: 'wall', x: -74.3, z: 35.4, w: 0.6, d: 3.0, h: 1.45, key: 'plaster_blue' },
-  { id: 'W avenue mouth pier', kind: 'pier', x: -63.2, z: 35.2, w: 2.0, d: 2.4, h: 2.95, key: 'concrete' },
+  /* ---- ZONE A: the west avenue beside its southern cross street ---------- */
+  { id: 'W avenue plinth south', kind: 'plinth', x: -73.8, z: 36.35, w: 2.0, d: 2.5, h: 1.2, key: 'concrete' },
+  { id: 'W avenue plinth north', kind: 'plinth', x: -73.4, z: 38.4, w: 2.2, d: 1.6, h: 1.3, key: 'concrete' },
 
-  /* ---- ZONE B: the same five, read against the east district's ground ---- */
-  { id: 'E avenue plinth south', kind: 'plinth', x: 72.2, z: -39.8, w: 2.0, d: 1.6, h: 1.3, key: 'concrete' },
-  { id: 'E avenue plinth street', kind: 'plinth', x: 68.9, z: -39.9, w: 2.0, d: 1.6, h: 1.2, key: 'concrete' },
-  { id: 'E avenue screen west', kind: 'wall', x: 65.8, z: -36.9, w: 0.6, d: 1.4, h: 1.6, key: 'brick' },
-  { id: 'E avenue kerb wall', kind: 'wall', x: 74.3, z: -37.4, w: 0.6, d: 2.6, h: 1.45, key: 'plaster_pink' },
-  { id: 'E avenue mouth pier', kind: 'pier', x: 63.2, z: -37.2, w: 2.0, d: 2.4, h: 2.95, key: 'concrete' }
+  /* ---- ZONE B: the east avenue, read against its own ground -------------- */
+  { id: 'E avenue plinth street', kind: 'plinth', x: 73.6, z: -38.9, w: 2.0, d: 2.6, h: 1.2, key: 'concrete' },
+  { id: 'E avenue plinth west', kind: 'plinth', x: 71.8, z: -39.9, w: 1.2, d: 1.8, h: 1.3, key: 'concrete' },
+  { id: 'E avenue kerb wall', kind: 'wall', x: 74.4, z: -37.0, w: 0.6, d: 1.6, h: 1.45, key: 'plaster_pink' }
 );
 
 /**
