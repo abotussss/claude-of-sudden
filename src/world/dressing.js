@@ -2527,6 +2527,56 @@ export function buildPerimeter(A, rng) {
    * line is not the fix — dressing that strip, or bringing the blocks together,
    * would be.
    */
+  /**
+   * ════════════════════════════════════════════════════════════════════════════
+   * …AND THEN THE MAP GREW PAST IT IN X TOO, AND THE X RUNS BECAME THE SAME
+   * BULKHEAD THE Z RUNS WERE. THIS IS THE THIRD TIME.
+   * ════════════════════════════════════════════════════════════════════════════
+   * "だからなんでAの位置を修正しないの？？ 壁の外なんだって それかこの壁を取り払え"
+   * "Bも同様に 壁のせいで到達できない"
+   *
+   * The paragraph above is still true of the ONE thing it was written about —
+   * the outer background row, x scaled 60..94.5, which really does bury these
+   * two runs along its own length. It stopped being true of the whole run the
+   * moment `THE MAP GROWS — PART 4` put a district behind that row and `PART 6`
+   * put a city behind the district. North of BW1 and south of BE3 there is no
+   * background block to be buried in any more: the runs at |x| = 87 stand in the
+   * OPEN, three metres inside the NW throat and the NW yard on one side and the
+   * SE throat and the SE yard on the other, parallel to the inner row and across
+   * every route from the old map into the new one.
+   *
+   * MEASURED on HEAD before this change. Zone A resolves at scaled level
+   * (-104.6, 54.0) with 7-8 standing points and `navcheck` PASSES — A* finds a
+   * route — while 16 of 29 men stood at 0.1 m from `collide_concrete` around
+   * scaled level x -87, z 47..60, eighteen metres short of the point, with a
+   * chest ray to it stopped at x -86.775, which is this wall's east face to the
+   * millimetre. `tools/stuckcheck.mjs`: 21 of 29 stuck five samples or more, 20
+   * of 29 moved under 15 m, eight moved ZERO metres. A* routes through it
+   * because a 0.45 m slab on a 0.8 m lattice is invisible to a height field
+   * built from one downward ray per cell — the same class of failure, and
+   * `src/ai/nav.js:_sealCrossings` is the half of this fix that stops the NEXT
+   * wall doing it.
+   *
+   * WHAT OPENS, AND THE RULE IS DERIVED RATHER THAN TYPED. A boundary panel may
+   * be dropped exactly where the level has AUTHORED GROUND ON BOTH SIDES OF IT
+   * — `isOpen` is the same test `dressStreet` uses for where a prop may stand,
+   * so it is true on a street, an alley or a district yard and false on dune,
+   * inside a building, inside the cathedral, on relief and inside `SITEWORKS`.
+   * A panel with open ground on both faces is not the edge of the map, it is a
+   * wall standing in the middle of somewhere people walk; a panel with dune on
+   * one side is the edge and stays. That is `boundcheck`'s own invariant read
+   * backwards, so this cannot expose a square metre the level has not authored,
+   * and it cannot go stale the next time a district is built past the square.
+   *
+   * WHAT IT ACTUALLY COSTS ON THIS MAP: the west run keeps everything from its
+   * south corner up to BW1's north face and then stops, dying into BW1's mass;
+   * the east run is its ρ image, dying into BE1's. No jamb is authored because
+   * neither end is a free end — the wall runs into a three-storey block at the
+   * point it stops, which is what a compound wall meeting a building looks like.
+   * The district still reads as walled: the inner row (NW1 + NW6 / SE1 + SE6) is
+   * three metres away and is the wall the eye actually reads, with the two
+   * authored mouths in it. @see `THE MAP GROWS — PART 6` in layout.js.
+   */
   const RX = 58 * SCALE;
   const RZ = 58 * SCALE;
   /** The gateway, one panel wider than the cordon's outer face so the innermost
@@ -2560,11 +2610,31 @@ export function buildPerimeter(A, rng) {
     const n = Math.max(1, Math.round(len / 4));
     /** A run along z at |x| < CORRIDOR is the gateway and is the cordon's job. */
     const isSquareZRun = dz === 0 && Math.abs(z0) === RZ;
+    /** …and a run along Z at |x| = RX is the pair the districts grew across. */
+    const isSquareXRun = dx === 0 && Math.abs(x0) === RX;
+    const ux = dx / len, uz = dz / len;
     for (let i = 0; i < n; i++) {
       const t = (i + 0.5) / n;
       const px = x0 + dx * t;
       const pz = z0 + dz * t;
       if (isSquareZRun && Math.abs(px) < CORRIDOR) continue;
+      /**
+       * THE DISTRICT'S OWN GROUND, on both faces of this panel. Five samples
+       * down its length rather than one at the middle, so a panel that only
+       * clips the end of a yard comes out with the rest of the opening instead
+       * of standing four metres proud of it. `across` is the panel's normal —
+       * 0.9 m out, which clears its own 0.45 m thickness and `isOpen`'s 0.3 m
+       * margin. @see the long note over `RX`.
+       */
+      if (isSquareXRun) {
+        let inside = false;
+        for (let k = 0; k <= 4 && !inside; k++) {
+          const s = (k / 4 - 0.5) * (len / n);
+          const sx = px + ux * s, sz = pz + uz * s;
+          inside = isOpen(sx - uz * 0.9, sz + ux * 0.9) && isOpen(sx + uz * 0.9, sz - ux * 0.9);
+        }
+        if (inside) continue;
+      }
       const h = edge.range(3.0, 3.8);
       /**
        * EVERY PANEL SITS ON ITS OWN GROUND. Pinned to y = 0 this was fine while

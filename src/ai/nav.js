@@ -187,6 +187,29 @@ export class NavGrid {
      * fall diagonally across a 0.8 m lattice is a locked door.
      */
     this.diag = new Uint8Array(n);
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * STEPS A WALL STANDS IN THAT THE HEIGHT FIELD CANNOT SEE. Bit d (0..7) set
+     * means "this step was MEASURED blocked". @see `_sealCrossings`.
+     * ────────────────────────────────────────────────────────────────────────
+     * `diag` above is the relaxation; this is its opposite number, and it exists
+     * because this grid is built from ONE DOWNWARD RAY PER CELL and a wall
+     * thinner than a cell is therefore invisible to it. The ray is dropped at
+     * the cell centre on an 0.8 m lattice; a 0.45 m slab standing between two
+     * centres is hit by neither, so the cells under it keep the floor of the
+     * ground beside it, come back walkable, and A* routes straight through the
+     * masonry. Nothing downstream can tell: `Agent._advance` is handed a route
+     * over open cells, walks it, and the capsule stops dead against collision
+     * that no longer exists as far as navigation is concerned.
+     *
+     * IT HAS NOW HAPPENED THREE TIMES ON THIS MAP, always with the same wall and
+     * always reported as the AI being stupid rather than as the level being
+     * wrong — `buildPerimeter` in src/world/dressing.js has the measurements for
+     * all three. Every fix before this one moved that wall. This one measures
+     * the step instead, so the next piece of dressing collision to stand across
+     * a route shuts the cells under itself without anybody having to notice.
+     */
+    this.edge = new Uint8Array(n);
 
     // A* working set
     this.gScore = new Float32Array(n);
@@ -262,6 +285,9 @@ export class NavGrid {
     this.apronCells = 0;
     /** …and how many diagonals the sweep re-opened. @see `_measureDiagonals`. */
     this.diagCells = 0;
+    /** …and how many steps the thin-blocker sweep shut. @see `_sealCrossings`. */
+    this.sealedEdges = 0;
+    this.sealMs = 0;
   }
 
   index(ix, iz) {
@@ -331,8 +357,85 @@ export class NavGrid {
     // …and then the ground storeys, which the sweep above can only see the roof
     // of, and which are the only cells in the grid it does not own.
     this.walkableCount = volumes && volumes.length ? this._carveInteriors(volumes) : walk;
+    // …and then the walls the two rays above are the wrong shape to find.
+    this._sealCrossings();
     this.buildMs = performance.now() - t0;
     return this;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * THE THIN-BLOCKER SWEEP: ask the collision whether a STEP is possible, not
+   * whether a CELL is.
+   * ────────────────────────────────────────────────────────────────────────────
+   * Everything above this samples POINTS — a ray down the cell centre for the
+   * floor, a ray up it for headroom, four short ones for shoulders. A point
+   * sample cannot see a wall that passes BETWEEN two points, and 0.8 m apart on
+   * a lattice there is a lot of room to pass between: measured on this map, a
+   * 0.45 m compound wall 3.0-3.8 m tall ran 174 m across the grid and left the
+   * cells under it walkable on both sides, so A* solved routes through it and
+   * two thirds of the roster walked into it and stayed there. @see the third
+   * note over `RX` in `buildPerimeter` (src/world/dressing.js) for the numbers,
+   * and note that the FIX for that wall does not fix the next one — dressing
+   * carries collision, dressing moves, and nothing else in this file would
+   * notice.
+   *
+   * So every step the grid is willing to take is asked of the physics directly:
+   * one ray from cell centre to cell centre, at `maxStep + 0.12` over the higher
+   * of the two floors. That height is the whole design. Below it is ground a bot
+   * steps onto and the grid has already ruled on it with `maxStep`; above it is
+   * mass the capsule cannot pass, whether it is a 0.9 m jersey barrier, a 1.45 m
+   * revetted sitework wall or a 3.8 m compound wall. It is deliberately NOT a
+   * swept capsule: a capsule sweep between two cells 0.8 m apart with 0.36 m of
+   * radius refuses doorways the level authored to be walked (`_carveInteriors`
+   * has the note on why a 1.12 m door on this lattice is already marginal), and
+   * this pass may only ever remove a step that a straight walk would actually
+   * collide with. It can only take steps away, never add one, so nothing that
+   * was already proved reachable becomes reachable by a different route here.
+   *
+   * COST. Four steps per walkable cell rather than eight — every edge is the
+   * +X, +Z, +X+Z or +X-Z one of exactly one of its two ends — and the two
+   * diagonals are skipped where the corner rule already refuses them, so a
+   * diagonal is only measured next to an interior where `diag` re-opened it or
+   * where both orthogonals are clear. Roughly 0.4 M short `raycastAny` calls
+   * against the ~1.0 M the passes above already spend, once, at boot.
+   */
+  _sealCrossings() {
+    const t0 = performance.now();
+    const phys = this.physics;
+    const MASK = phys.MASK.WORLD;
+    /** Just over the step a bot takes for free, so a kerb is never a wall. */
+    const probeY = this.maxStep + 0.12;
+    let sealed = 0;
+    for (let iz = 0; iz < this.nz; iz++) {
+      for (let ix = 0; ix < this.nx; ix++) {
+        const i = this.index(ix, iz);
+        if (!this.flags[i]) continue;
+        const x = this.worldX(ix), z = this.worldZ(iz);
+        for (let k = 0; k < 4; k++) {
+          const d = FWD[k];
+          const dx = DX[d], dz = DZ[d];
+          const jx = ix + dx, jz = iz + dz;
+          if (!this.walkable(jx, jz)) continue;
+          const j = this.index(jx, jz);
+          const fi = this.floor[i], fj = this.floor[j];
+          if (Math.abs(fi - fj) > this.maxStep) continue;
+          const diagonal = dx !== 0 && dz !== 0;
+          // a diagonal A* would refuse anyway costs nothing to leave unmeasured
+          if (diagonal && !(this.diag[i] & (1 << d))
+            && !(this.walkable(ix + dx, iz) && this.walkable(ix, iz + dz))) continue;
+          const inv = diagonal ? 1 / SQRT2 : 1;
+          const dist = this.cell * (diagonal ? SQRT2 : 1);
+          const y = (fi > fj ? fi : fj) + probeY;
+          if (!phys.raycastAny(x, y, z, dx * inv, 0, dz * inv, dist, MASK)) continue;
+          this.edge[i] |= 1 << d;
+          this.edge[j] |= 1 << OPP[d];
+          sealed++;
+        }
+      }
+    }
+    this.sealedEdges = sealed;
+    this.sealMs = performance.now() - t0;
   }
 
   /**
@@ -539,6 +642,8 @@ export class NavGrid {
    * plus the measured relaxation the interior pass leaves behind.
    */
   _canStep(cur, cxi, czi, d) {
+    // measured collision beats every heuristic below it. @see `_sealCrossings`.
+    if (this.edge[cur] & (1 << d)) return false;
     const dx = DX[d], dz = DZ[d];
     if (!dx || !dz) return true;
     if (this.walkable(cxi + dx, czi) && this.walkable(cxi, czi + dz)) return true;
@@ -678,8 +783,9 @@ export class NavGrid {
         const dx = DX[d], dz = DZ[d];
         const ix = cxi + dx, iz = czi + dz;
         if (!this.walkable(ix, iz)) continue;
-        // no corner cutting, unless the interior pass measured this diagonal
-        if (dx && dz && !this._canStep(cur, cxi, czi, d)) continue;
+        // no corner cutting, unless the interior pass measured this diagonal —
+        // and no step through a wall the thin-blocker sweep measured, either
+        if (!this._canStep(cur, cxi, czi, d)) continue;
         const ni = this.index(ix, iz);
         // Already settled: its g is final and cannot be improved from here.
         if (this.closedStamp[ni] === stamp) continue;
@@ -774,9 +880,22 @@ export class NavGrid {
       const x = a.x + dx * t, z = a.z + dz * t;
       const ix = this.cellX(x), iz = this.cellZ(z);
       if (!this.walkable(ix, iz)) return false;
-      if (ix !== px && iz !== pz) {
+      /**
+       * EVERY transition, not just the diagonal ones. It was diagonals only
+       * while the only thing `_canStep` knew was the corner rule, which is a
+       * statement about diagonals; it now also carries the thin-blocker sweep,
+       * which is a statement about a step of any shape. A string pull that
+       * skipped the orthogonal ones would hand back the shortcut straight
+       * through the wall that A* had just been made to refuse.
+       */
+      if (ix !== px || iz !== pz) {
         const ddx = ix - px, ddz = iz - pz;
-        const d = Math.abs(ddx) === 1 && Math.abs(ddz) === 1 ? 4 + (ddx < 0 ? 2 : 0) + (ddz < 0 ? 1 : 0) : -1;
+        let d = -1;
+        if (Math.abs(ddx) <= 1 && Math.abs(ddz) <= 1) {
+          if (ddx && ddz) d = 4 + (ddx < 0 ? 2 : 0) + (ddz < 0 ? 1 : 0);
+          else if (ddx) d = ddx > 0 ? 0 : 1;
+          else d = ddz > 0 ? 2 : 3;
+        }
         if (d < 0 || !this._canStep(this.index(px, pz), px, pz, d)) return false;
       }
       px = ix;
@@ -793,6 +912,13 @@ const DX = [1, -1, 0, 0, 1, 1, -1, -1];
 const DZ = [0, 0, 1, -1, 1, -1, 1, -1];
 /** The index of the opposite direction, so a measured edge writes both ends. */
 const OPP = [1, 0, 3, 2, 7, 6, 5, 4];
+/**
+ * Half the compass, and it covers the whole of it exactly once per edge: every
+ * step on an 8-connected lattice is the +X, +Z, +X+Z or +X-Z one of exactly one
+ * of its two ends. @see `_sealCrossings`, which writes both ends of what it
+ * measures and therefore only has to walk these four.
+ */
+const FWD = [0, 2, 4, 5];
 
 /* ------------------------------------------------------------------ */
 /* Cover                                                               */
