@@ -9,6 +9,7 @@ import { buildCordon } from './cordon.js';
 import { buildFeatures } from './features.js';
 import { buildLinks } from './links.js';
 import { buildSiteWorks } from './sitework.js';
+import { planDemolitions, buildRuins, publishDemolitions } from './demolition.js';
 import { registerProps } from './props.js';
 import {
   registerDressingProps,
@@ -62,6 +63,16 @@ import {
  *                             pickup, `ai` binds the interest. See features.js.
  *   world.links               the rooftop gangways: [{ id, from, to, a, b,
  *                             width, span, fall }] in world space. See links.js.
+ *   world.demolitions         the buildings that carry a CACHED DESTROYED STATE:
+ *                             [{ id, name, zone, opens, position, radius, top,
+ *                                halfW, halfD, level, navRect, mass, surfaces,
+ *                                tint, down, setVisual(d), setCollision(d),
+ *                                setDown(d) }]. Both forms are built at boot and
+ *                             live in the merged batches; bringing one down is
+ *                             two index-range fills and two mask fills. See
+ *                             `world.demolish` and src/world/demolition.js.
+ *   world.demolish(id, down)  swap one building for its ruin, or back
+ *   world.demolishAll(down)   …all of them. The round reset, and `?demo=down`.
  *   world.interiorVolumes     the GROUND FLOOR of every enterable building, as
  *                             an oriented box the bot height field can re-sample
  *                             itself against: [{ building, cx, cz, c, s, hw, hd,
@@ -174,9 +185,26 @@ export class WorldSystem {
     // 2. ground, then the shells, then what people put in and on them
     buildGround(A, rng);
 
+    /**
+     * THE BUILDINGS THAT CAN COME DOWN, decided before the first wall goes up.
+     * @see src/world/demolition.js. Opening a scope round `buildBuilding` costs
+     * nothing and changes nothing — it only records WHERE in the merged batches
+     * this building's triangles, instances and collision ended up, so that they
+     * can all stop existing together later. No rng is drawn here, so the set
+     * dressing of the whole map is bit-identical with the feature off.
+     */
+    const demoPlan = planDemolitions(BUILDINGS);
+    const demoOf = new Map(demoPlan.map((d) => [d.id, d]));
+
     const infos = [];
     for (const spec of BUILDINGS) {
+      const demo = demoOf.get(spec.id);
+      if (demo) demo.shell = A.beginScope(`shell:${spec.id}`);
       const info = buildBuilding(A, rng, spec);
+      if (demo) {
+        A.endScope();
+        demo.info = info;
+      }
       infos.push(info);
       if (spec.collapse) {
         collapseRoof(A, rng, spec, info, {
@@ -217,8 +245,32 @@ export class WorldSystem {
      */
     this.cathedral = buildCathedral(A);
     dressStreet(A, rng);
+    /**
+     * THE DRESSING GOES DOWN WITH THE BUILDING IT IS BOLTED TO.
+     *
+     * `dressBuildings` is one loop over every building, so there is no lexical
+     * bracket to put round one of them — and without this a demolished block
+     * leaves its satellite dishes, water tanks, AC units, conduit and washing
+     * lines hanging in the air ten metres up. `A.claim` arms a SPATIAL claim
+     * instead: anything the dressing pass writes inside one of these footprints
+     * and above its plinth is filed under that building's shell scope. Disarmed
+     * immediately after, so `scatterDebris` — which scatters onto the STREET —
+     * is untouched. @see `claimZones` in builder.js.
+     */
+    for (const d of demoPlan) {
+      if (!d.shell) continue;
+      A.claim(d.shell, d.spec.x - d.spec.w / 2 - 1.2, d.spec.z - d.spec.d / 2 - 1.2,
+        d.spec.x + d.spec.w / 2 + 1.2, d.spec.z + d.spec.d / 2 + 1.2, 0.45);
+    }
     dressBuildings(A, rng, infos);
+    A.disarmClaims();
     scatterDebris(A, rng);
+    /**
+     * …and the destroyed state itself, built into the same merged batches and
+     * switched off at the end of `init`. It draws from its own fixed-seed stream
+     * per building, so it cannot move a prop the dressing has already placed.
+     */
+    buildRuins(A, demoPlan);
 
     /**
      * WHY YOU WOULD EVER GO IN, AND WHY YOU WOULD EVER GO UP.
@@ -243,6 +295,14 @@ export class WorldSystem {
 
     A.finalize(this.root, physics);
     A.releaseCache();
+
+    /**
+     * THE DESTROYED STATES, PUBLISHED. Every ruin is hidden and intangible from
+     * here; `src/match/airstrike.js` re-probes the nav cells each one covers at
+     * boot and owns the event that brings them down. @see `world.demolitions`.
+     */
+    this.demolitions = publishDemolitions(A, demoPlan, physics, this.root);
+    this._demoDown = false;
 
     // -------------------------------------------------------------- queries --
     this._v = new THREE.Vector3();
@@ -651,6 +711,38 @@ export class WorldSystem {
         /* a driver we cannot pre-warm on; boot must still proceed */
       }
     }
+  }
+
+  // ------------------------------------------------------------ demolition --
+  /**
+   * BRING ONE DOWN, OR PUT IT BACK. `down` swaps a building's two cached forms:
+   * the shell stops being drawn and stops being solid, the ruin starts. Two
+   * index-range fills and two collision-mask fills; nothing is built.
+   *
+   * `match` drives this — see `src/match/airstrike.js`, which owns the event,
+   * the telegraph and the several hundred pieces of masonry in the air between
+   * the two states. Calling it here directly is the round reset and the tools.
+   * @param {string} id     a building id from `world.demolitions`
+   * @param {boolean} down
+   */
+  demolish(id, down = true) {
+    const rec = this.demolitions?.find((d) => d.id === id);
+    if (!rec) return false;
+    if (rec.down === !!down) return false;
+    rec.setDown(!!down);
+    return true;
+  }
+
+  /** Every destructible building at once — the round reset, and `?demo=down`. */
+  demolishAll(down = true) {
+    let n = 0;
+    for (const rec of this.demolitions ?? []) {
+      if (rec.down === !!down) continue;
+      rec.setDown(!!down);
+      n++;
+    }
+    this._demoDown = !!down;
+    return n;
   }
 
   // ---------------------------------------------------------------- queries --

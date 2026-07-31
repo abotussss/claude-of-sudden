@@ -85,6 +85,56 @@ export class Assembler {
      * not on the ground, and a dust ring floating at 60 cm is worse than none.
      */
     this.skirts = true;
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * SCOPES — a named span of everything written between two calls
+     * ────────────────────────────────────────────────────────────────────────
+     * @see `src/world/demolition.js`, the only caller. A building that carries
+     * a destroyed state has to be able to STOP EXISTING at a moment's notice,
+     * and everything above this line is built to make that impossible: the
+     * whole map is merged into ~100 draw calls, so one shop's walls are a few
+     * thousand triangles somewhere in the middle of `world_plaster_sand`.
+     *
+     * Giving each destructible building its own mesh is the obvious answer and
+     * it is the wrong one: fifteen palette keys per building times six
+     * buildings is ninety more draw calls, each of them redrawn by the depth
+     * prepass and four shadow cascades.
+     *
+     * So the geometry stays exactly where it is and we remember WHERE. A scope
+     * records, per palette key, the TRIANGLE RANGES its contents occupy in that
+     * key's accumulator, plus the instanced placements and the collision it
+     * authored. Switching a scope off is then a fill of degenerate indices over
+     * cached ranges and a partial buffer upload, which is the same trick
+     * `src/match/airstrike.js` plays on the collision mask, for the same reason:
+     * nothing may be SOLVED on the frame a building comes down.
+     *
+     * TWO WAYS IN, AND THE SECOND ONE IS WHY A COLLAPSED BUILDING DOES NOT LEAVE
+     * ITS SATELLITE DISHES HANGING IN THE AIR.
+     *
+     *   `beginScope(id)` / `endScope()` — lexical. `buildBuilding` is one call,
+     *     so the shell, the slabs, the plinth and the parapet are all inside it.
+     *
+     *   `claimZones` — SPATIAL, armed for the set-dressing pass only. The
+     *     dressing is a loop over every building inside `dressBuildings`, so
+     *     there is no lexical bracket to put round one of them; instead, while
+     *     the zones are armed, anything whose transform lands inside a claimed
+     *     footprint and above its plinth is filed under that building. The AC
+     *     units bracketed off its windows, the conduit, the washing lines, the
+     *     roof tanks and dishes and the condensate streaks all go down with it.
+     *
+     * Ranges are therefore a LIST per key rather than one span: with the spatial
+     * claim, two buildings' dressing interleaves in the same accumulator.
+     */
+    this._scope = null;
+    /**
+     * Armed spatial claims: [{ scope, x0, z0, x1, z1, y0 }] in LEVEL space.
+     * Empty (the default) costs one array-length test per `add`.
+     */
+    this.claimZones = [];
+    /** Finished scopes, in the order they were opened. */
+    this.scopes = [];
+    /** palette key -> the merged mesh finalize() built for it. */
+    this.staticMeshes = new Map();
     this.stats = { staticTris: 0, instTris: 0, instances: 0, drawCalls: 0, collideTris: 0 };
   }
 
@@ -118,6 +168,97 @@ export class Assembler {
     return _xm.copy(this.xform).multiply(matrix);
   }
 
+  // ---------------------------------------------------------------- scopes --
+  /**
+   * Open a named scope. Everything written until `endScope()` belongs to it.
+   * @param {string} id
+   */
+  beginScope(id) {
+    const s = {
+      id,
+      /** palette key -> [{ start, count }] in TRIANGLES. */
+      ranges: new Map(),
+      collide: new Map(),
+      clip: new Map(),
+      /** [{ proto, index }] — instanced placements, resolved to `slots` below. */
+      instances: [],
+      /** [{ mesh, slot, m }] — filled by finalize(), `m` cached on first hide. */
+      slots: [],
+      /** [{ id, layer, triStart, triEnd }] — this scope's own static objects. */
+      handles: [],
+      tris: 0,
+      visible: true,
+      solid: true,
+      _saved: null,
+    };
+    this._scope = s;
+    this.scopes.push(s);
+    return s;
+  }
+
+  endScope() {
+    const s = this._scope;
+    this._scope = null;
+    return s;
+  }
+
+  /**
+   * Arm a SPATIAL claim: anything written inside this level-space footprint and
+   * at or above `y0` belongs to `scope` even though no lexical scope is open.
+   * @see the `claimZones` note in the constructor — this is what keeps a
+   * demolished building's roof clutter from surviving the building.
+   */
+  claim(scope, x0, z0, x1, z1, y0 = 0.3) {
+    this.claimZones.push({ scope, x0, z0, x1, z1, y0 });
+    return this;
+  }
+
+  disarmClaims() {
+    this.claimZones.length = 0;
+    return this;
+  }
+
+  /** The scope a piece at this LEVEL-space transform falls into, or null. */
+  _claimFor(geo, matrix) {
+    const zones = this.claimZones;
+    if (zones.length === 0) return null;
+    let x;
+    let y;
+    let z;
+    if (matrix) {
+      const e = matrix.elements;
+      x = e[12];
+      y = e[13];
+      z = e[14];
+    } else {
+      // No transform: the geometry is already in level space (a cable, a run of
+      // cloth). Its own centre is the only anchor there is.
+      if (!geo || !geo.getAttribute('position')) return null;
+      if (!geo.boundingBox) geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      if (!bb) return null;
+      x = (bb.min.x + bb.max.x) * 0.5;
+      y = (bb.min.y + bb.max.y) * 0.5;
+      z = (bb.min.z + bb.max.z) * 0.5;
+    }
+    for (let i = 0; i < zones.length; i++) {
+      const c = zones[i];
+      if (y >= c.y0 && x >= c.x0 && x <= c.x1 && z >= c.z0 && z <= c.z1) return c.scope;
+    }
+    return null;
+  }
+
+  /** Record a triangle run, coalescing with the previous one where it can. */
+  _mark(s, key, start, count) {
+    if (count <= 0) return;
+    let list = s.ranges.get(key);
+    if (!list) s.ranges.set(key, (list = []));
+    const last = list[list.length - 1];
+    if (last && last.start + last.count === start) last.count += count;
+    else list.push({ start, count });
+    s.tris += count;
+  }
+
   // ------------------------------------------------------------- materials --
   mat(key) {
     let m = this._mats.get(key);
@@ -143,6 +284,13 @@ export class Assembler {
     if (!a) {
       a = new Accum(`world:${key}`);
       this._static.set(key, a);
+    }
+    const s = this._scope ?? this._claimFor(geo, matrix);
+    if (s) {
+      const start = a.tris;
+      a.add(geo, this._x(matrix), opts);
+      this._mark(s, key, start, a.tris - start);
+      return this;
     }
     a.add(geo, this._x(matrix), opts);
     return this;
@@ -287,9 +435,18 @@ export class Assembler {
     const wm = this._x(matrix).clone();
     p.matrices.push(wm);
     p.masks.push(masks ? [masks[0], masks[1], masks[2]] : null);
+    const s = this._scope ?? this._claimFor(p.geo, matrix);
+    if (s) s.instances.push({ proto: p, index: p.matrices.length - 1 });
     // Solid prototypes get their proxy from the very matrix that draws them —
-    // see the `collide` field on `proto()` for why this is not optional.
-    if (p.collide) this._collideProto(p, wm);
+    // see the `collide` field on `proto()` for why this is not optional. A
+    // claimed instance's proxy has to go into the SAME scope as the instance,
+    // or a demolished building leaves invisible boxes standing in its footprint.
+    if (p.collide) {
+      const prev = this._scope;
+      this._scope = s;
+      this._collideProto(p, wm);
+      this._scope = prev;
+    }
     return this;
   }
 
@@ -336,6 +493,12 @@ export class Assembler {
 
   /** The collision accumulator for a surface, created on demand. */
   _accum(surface) {
+    const s = this._scope;
+    if (s) {
+      let sa = s.collide.get(surface);
+      if (!sa) s.collide.set(surface, (sa = new Accum(`collide:${s.id}:${surface}`)));
+      return sa;
+    }
     let a = this._collide.get(surface);
     if (!a) this._collide.set(surface, (a = new Accum(`collide:${surface}`)));
     return a;
@@ -426,6 +589,12 @@ export class Assembler {
   }
 
   _clipAccum(surface) {
+    const s = this._scope;
+    if (s) {
+      let sa = s.clip.get(surface);
+      if (!sa) s.clip.set(surface, (sa = new Accum(`clip:${s.id}:${surface}`)));
+      return sa;
+    }
     let a = this._clip.get(surface);
     if (!a) this._clip.set(surface, (a = new Accum(`clip:${surface}`)));
     return a;
@@ -469,8 +638,20 @@ export class Assembler {
       mesh.updateMatrix();
       root.add(mesh);
       this.meshes.push(mesh);
+      this.staticMeshes.set(key, mesh);
       this.stats.staticTris += geo.index.count / 3;
       this.stats.drawCalls++;
+    }
+
+    /** prototype -> (matrix index -> owning scope), for the loop below. */
+    const scopeOf = new Map();
+    for (const s of this.scopes) {
+      for (const rec of s.instances) {
+        let m = scopeOf.get(rec.proto);
+        if (!m) scopeOf.set(rec.proto, (m = new Map()));
+        m.set(rec.index, s);
+      }
+      s.instances.length = 0;
     }
 
     // --- instanced props ---
@@ -517,7 +698,12 @@ export class Assembler {
           }
           im.instanceColor = new THREE.InstancedBufferAttribute(arr, 3);
         }
-        for (let j = 0; j < list.length; j++) im.setMatrixAt(j, p.matrices[list[j]]);
+        const owners = scopeOf.get(p);
+        for (let j = 0; j < list.length; j++) {
+          im.setMatrixAt(j, p.matrices[list[j]]);
+          const owner = owners?.get(list[j]);
+          if (owner) owner.slots.push({ mesh: im, slot: j, m: null });
+        }
         im.instanceMatrix.needsUpdate = true;
         im.computeBoundingSphere();
         im.updateMatrix();
@@ -569,7 +755,35 @@ export class Assembler {
         this.handles.push(physics.addStatic(mesh, surface, { layer: physics.LAYER.CLIP }));
       }
     }
+    /**
+     * --- a scope's own collision ---
+     * Its own `physics` object rather than a triangle range inside the level's,
+     * so switching it off is one mask write on a range the BVH cannot repack out
+     * from under us. Never drawn, so this is not a draw call — the whole reason
+     * the VISUAL side of a scope has to live inside the merged batches while its
+     * collision does not.
+     */
+    for (const s of this.scopes) {
+      for (const [map, layer] of [[s.collide, null], [s.clip, physics?.LAYER?.CLIP]]) {
+        for (const [surface, acc] of map) {
+          if (acc.empty) continue;
+          const geo = acc.build();
+          const mesh = new THREE.Mesh(geo, INVISIBLE);
+          mesh.name = `scope_${s.id}_${surface}`;
+          mesh.visible = false;
+          mesh.matrixAutoUpdate = false;
+          mesh.updateMatrix();
+          this.collisionRoot.add(mesh);
+          this.stats.collideTris += geo.index.count / 3;
+          if (!physics) continue;
+          const id = physics.addStatic(mesh, surface, layer == null ? {} : { layer });
+          s.handles.push({ id, layer: layer ?? physics.LAYER.STATIC, triStart: -1, triEnd: -1 });
+        }
+      }
+    }
+
     if (physics) physics.rebuildStatic();
+    for (const s of this.scopes) this._cacheScopeTris(s, physics);
 
     // --- lights ---
     for (const { light, opts } of this.lights) {
@@ -577,6 +791,104 @@ export class Assembler {
       this.render?.addLight?.(light, opts);
     }
     return this;
+  }
+
+  /* ---------------------------------------------------------- scope switch -- */
+  /**
+   * DRAW A SCOPE, OR STOP DRAWING IT. One `fill` per triangle range and one
+   * partial buffer upload; no geometry is rebuilt, no material is touched and no
+   * draw call appears or disappears.
+   *
+   * A triangle whose three indices are the same vertex has zero area and is
+   * discarded before rasterisation, in every pass — the forward draw, the depth
+   * prepass and all four shadow cascades read the same index buffer, so a scope
+   * that is off is off for its shadow too. The indices it replaces are kept
+   * verbatim the first time they are needed, which is what makes `reset()` at
+   * the end of a round exact rather than approximate.
+   */
+  setScopeVisible(scope, visible) {
+    if (!scope || scope.visible === visible) return this;
+    scope.visible = visible;
+    if (!scope._saved) scope._saved = new Map();
+    for (const [key, list] of scope.ranges) {
+      const mesh = this.staticMeshes.get(key);
+      const index = mesh?.geometry?.index;
+      if (!index) continue;
+      const arr = index.array;
+      let saved = scope._saved.get(key);
+      if (!saved) {
+        let n = 0;
+        for (const r of list) n += r.count * 3;
+        saved = new arr.constructor(n);
+        let o = 0;
+        for (const r of list) {
+          saved.set(arr.subarray(r.start * 3, (r.start + r.count) * 3), o);
+          o += r.count * 3;
+        }
+        scope._saved.set(key, saved);
+      }
+      let o = 0;
+      for (const r of list) {
+        const a0 = r.start * 3;
+        const n = r.count * 3;
+        if (visible) arr.set(saved.subarray(o, o + n), a0);
+        else arr.fill(saved[o], a0, a0 + n);
+        index.addUpdateRange(a0, n);
+        o += n;
+      }
+      index.needsUpdate = true;
+    }
+    for (let i = 0; i < scope.slots.length; i++) {
+      const rec = scope.slots[i];
+      const arr = rec.mesh.instanceMatrix.array;
+      const o = rec.slot * 16;
+      if (!rec.m) rec.m = arr.slice(o, o + 16);
+      if (visible) arr.set(rec.m, o);
+      else arr.fill(0, o, o + 16);
+      rec.mesh.instanceMatrix.addUpdateRange(o, 16);
+      rec.mesh.instanceMatrix.needsUpdate = true;
+    }
+    return this;
+  }
+
+  /**
+   * Make a scope's collision solid or invisible to every query. A mask write on
+   * a cached triangle range — the same move, and for the same reason, as
+   * `Airstrike._setProxySolid`: a BVH rebuild is a half-second stall and this
+   * happens in the middle of a round.
+   */
+  setScopeSolid(scope, physics, solid) {
+    if (!scope || !physics || scope.solid === solid) return this;
+    scope.solid = solid;
+    const sw = physics.staticWorld;
+    if (!sw) return this;
+    for (const h of scope.handles) {
+      if (h.triStart < 0 || sw.object?.[h.triStart] !== h.id) this._cacheHandleTris(h, sw);
+      if (h.triStart < 0) continue;
+      const m = solid ? h.layer : 0;
+      sw.mask.fill(m, h.triStart, h.triEnd);
+      const obj = sw.objects[h.id];
+      if (obj) obj.mask = m;
+    }
+    return this;
+  }
+
+  _cacheScopeTris(scope, physics) {
+    const sw = physics?.staticWorld;
+    if (!sw) return;
+    for (const h of scope.handles) this._cacheHandleTris(h, sw);
+  }
+
+  /** Where in the packed triangle array the BVH put this object. */
+  _cacheHandleTris(h, sw) {
+    h.triStart = -1;
+    h.triEnd = -1;
+    if (!sw.object) return;
+    for (let t = 0; t < sw.object.length; t++) {
+      if (sw.object[t] !== h.id) continue;
+      if (h.triStart < 0) h.triStart = t;
+      h.triEnd = t + 1;
+    }
   }
 
   /** Distance LOD for prop clouds: cheap, per-mesh, no per-frame allocation. */

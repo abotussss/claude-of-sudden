@@ -425,9 +425,26 @@ const MASS_VAULT = [
 
 const MASS_FOR = { block: MASS_BLOCK, route: MASS_LEDGE, vault: MASS_VAULT };
 /** Surface library name per material slot, per kind. */
-const SURFACE_FOR = { block: ['plaster', 'concrete'], route: ['concrete'], vault: ['plaster', 'concrete'] };
-/** Mound height per kind — a parapet does not make the pile a storey does. */
-const MOUND_H = { block: 1.55, route: 1.05, vault: 1.45 };
+const SURFACE_FOR = {
+  block: ['plaster', 'concrete'],
+  route: ['concrete'],
+  vault: ['plaster', 'concrete'],
+  /**
+   * THE WHOLE BUILDING. Its mass is not in this file at all — `world` publishes
+   * it per building, because `world` is the only thing that knows how big the
+   * building is and where its floors are. @see `_buildDemoSite`.
+   */
+  demo: ['plaster', 'concrete'],
+};
+/**
+ * Mound height per kind — a parapet does not make the pile a storey does.
+ *
+ * `demo` is almost nothing, and that is not a mistake: for every other kind the
+ * settle probe finds the STREET and the chunks have to be piled onto it, while a
+ * demolition's probe is run with its own debris field already solid and finds
+ * the top of the pile. Add a metre of dome on top of that and the rubble floats.
+ */
+const MOUND_H = { block: 1.55, route: 1.05, vault: 1.45, demo: 0.3 };
 
 /**
  * Parts whose `at[0]` is measured from the REAL facade plane found by the boot
@@ -589,6 +606,7 @@ export class Airstrike {
       const site = this._buildSite(STRIKE_SITES[i], i, world, physics);
       if (site) this.sites.push(site);
     }
+    this._buildDemoSites(world, physics);
 
     ctx.scene.add(this.group);
 
@@ -603,6 +621,8 @@ export class Airstrike {
     this._verifyRoutes(ai);
 
     this._buildSalvos();
+    this._buildDemoSalvos();
+    this._bootFlag();
 
     this.ready = this.sites.length > 0;
     this.buildMs = performance.now() - t0;
@@ -674,6 +694,274 @@ export class Airstrike {
           `${chunks} chunks over ${span.toFixed(1)} m of frontage`
       );
     }
+  }
+
+  /**
+   * THE TWO DISTRICT EVENTS — the city round A and the city round B, each as one
+   * telegraphed salvo.
+   *
+   * "AとBの周りの街は爆撃で定期的に破壊して". Periodic and telegraphed is what the
+   * scheduler above already is: `_pickSalvo` takes the group nearest the fight
+   * and `match` writes where the fight is every few seconds, so with a capture
+   * point inside each district these are the groups that get picked while the
+   * point is being contested — which is the only time levelling the block round
+   * it means anything. `RULES.airstrikeSalvoDelay` still holds the first one off
+   * the opening of the round and `airstrikeInterval` is still the random gap.
+   *
+   * Built from `world.demolitions` rather than authored, so a building added to
+   * or removed from the demolition list needs no second edit here.
+   */
+  _buildDemoSalvos() {
+    const byZone = new Map();
+    for (const s of this.sites) {
+      if (!s.demo || s.dropped) continue;
+      const z = s.demo.zone ?? '?';
+      if (!byZone.has(z)) byZone.set(z, []);
+      byZone.get(z).push(s);
+    }
+    for (const [zone, members] of byZone) {
+      if (members.length < 2) continue;
+      const centre = new THREE.Vector3();
+      for (const m of members) centre.add(m.position);
+      centre.multiplyScalar(1 / members.length);
+      let span = 0;
+      for (const a of members) for (const b of members) span = Math.max(span, a.position.distanceTo(b.position));
+      let chunks = 0;
+      for (const m of members) chunks += m.chunkCount;
+      this.salvos.push({
+        id: `DISTRICT-${zone}`,
+        name: `${zone} DISTRICT`,
+        index: this.salvos.length,
+        sites: members,
+        // Wider than a block salvo's fifth of a second: these are whole
+        // buildings tens of metres apart, and the eye needs to see each one go.
+        stagger: members.map((_, i) => i * 0.55),
+        centre,
+        span,
+        chunkCount: chunks,
+        position: centre,
+      });
+      console.info(
+        `[airstrike] salvo DISTRICT-${zone}: ${members.map((m) => m.id).join('+')} — ` +
+          `${chunks} chunks, ${members.length} BUILDINGS over ${span.toFixed(1)} m`
+      );
+    }
+  }
+
+  /**
+   * `?demo=down` — boot with every destructible building already collapsed.
+   *
+   * Every gate in `tools/` boots the level, measures it and exits, so all of
+   * them only ever see the INTACT map — and a map that is only ever gated intact
+   * is exactly how this project has shipped broken states before. The flag is
+   * read once, here, after the nav patches are baked and the route gate has run,
+   * and it applies precisely what `_bakeSettled` applies: the ruin drawn, the
+   * ruin solid, the nav patch in. `node tools/navcheck.mjs --url=…/?demo=down`
+   * then measures the levelled city with no change to any tool.
+   */
+  _bootFlag() {
+    let flag = null;
+    try {
+      flag = new URLSearchParams(globalThis.location?.search ?? '').get('demo');
+    } catch {
+      flag = null;
+    }
+    if (flag !== 'down') return;
+    const n = this.forceDemoNav(true);
+    console.info(`[airstrike] ?demo=down — ${n} buildings booted COLLAPSED`);
+  }
+
+  /**
+   * Put every demolition into (or out of) its settled state without the event:
+   * the ruin drawn, the ruin solid and the nav patch applied. The boot flag and
+   * `_demoprobe.mjs` are the only callers — a round uses `fire()`.
+   * @returns {number} how many changed
+   */
+  forceDemoNav(down = true) {
+    let n = 0;
+    for (const site of this.sites) {
+      if (!site.demo || site.dropped) continue;
+      if (site.demo.down === !!down) continue;
+      site.demo.setDown(!!down);
+      site.struck = !!down;
+      site.baked = !!down;
+      if (site.blocking && site.nav) this._applyNav(site, !!down);
+      n++;
+    }
+    return n;
+  }
+
+  /* ====================================================================== */
+  /* THE BUILDINGS THEMSELVES                                               */
+  /* ====================================================================== */
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * "破壊というのは原型を留めない感じ。壊れるオブジェを入れてそれを破壊するのではなく、
+   *  建物自体に壊れた時のキャッシュを持たせて、壊し方を派手にして"
+   * "AとBの周りの街は爆撃で定期的に破壊して、その際に周りの建物が完全に崩れ、いろんな
+   *  方向から到達可能にすること"
+   * ────────────────────────────────────────────────────────────────────────────
+   * Every site above this line is a mass ADDED ON TOP OF a building — a parapet,
+   * an extra storey, a bay of aisle roof. They are good hazards and they are not
+   * what was asked for: after one fires the building is still standing, still the
+   * same shape, and still exactly as impassable. The map does not change.
+   *
+   * These sites are the buildings. `src/world/demolition.js` builds a second,
+   * COLLAPSED form of six blocks round the two flank capture points at boot —
+   * corner stubs, pancaked slabs and a debris field graded so `A*` can walk over
+   * it — and publishes both forms as `world.demolitions`. What crosses the
+   * subsystem line is DATA: the boxes the building is made of, in its own frame,
+   * because `match` may not import `world` and `world` may not import the vertex
+   * program below. Everything else here is the machinery that already exists —
+   * the same `fracture`, the same closed-form trajectory in four instanced
+   * attributes, the same settled-pose memcpy, the same nav patch, the same route
+   * gate. A site is a site.
+   *
+   * THREE THINGS ARE DIFFERENT, and all three follow from the mass being the
+   * building rather than an ornament on it:
+   *
+   *   1. The chunks are HIDDEN until it fires. Every other site's rest pose is
+   *      geometry that exists nowhere else; this one's rest pose is the building,
+   *      which `world` is already drawing. Two copies of the same wall is
+   *      z-fighting, so the InstancedMesh is `visible = false` until the frame
+   *      the shell stops being drawn.
+   *   2. There is no mound proxy. `world` owns the ruin's collision, because
+   *      `world` owns level geometry — this file only asks for it to be switched.
+   *   3. The settle probe is run with the ruin already solid, so the chunks come
+   *      to rest ON the debris field rather than on the roof of the building they
+   *      are in the process of being.
+   */
+  _buildDemoSites(world, physics) {
+    const list = world.demolitions;
+    if (!list?.length) return;
+    for (const rec of list) {
+      const site = this._buildDemoSite(rec, this.sites.length, world, physics);
+      if (site) this.sites.push(site);
+    }
+  }
+
+  _buildDemoSite(rec, index, world, physics) {
+    const rng = this.rng.fork();
+    /**
+     * THE FRAME. `_buildMesh` works in (u out, v along, y up) and derives the
+     * chunk orientation from `yaw` alone, so the two have to agree: at
+     * `yaw = levelYaw`, u is the level's +Z axis and v is its +X. `world`
+     * authors the mass on (level X, up, level Z), so `at` swaps its two
+     * horizontal components on the way in and nothing else moves.
+     */
+    const yaw = world.levelYaw ?? 0;
+    const u = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)); // level +Z
+    const v = new THREE.Vector3(u.z, 0, -u.x); // level +X
+    const base = rec.position.clone();
+    base.y = 0; // the ruin is authored on the level's own ground plane
+
+    const chunks = SURFACE_FOR.demo.map(() => []);
+    let holed = 0;
+    for (const part of rec.mass) {
+      /**
+       * A CHUNK IN A WINDOW IS NOT MASONRY. `world` publishes every opening it
+       * cut in this elevation; dropping the chunks inside one is what keeps the
+       * falling wall a facade instead of a beige rectangle. @see `_openings`.
+       */
+      const holes = part.holes ?? null;
+      fracture(
+        {
+          id: part.id,
+          size: [part.size[2], part.size[1], part.size[0]],
+          at: [part.at[2], part.at[1], part.at[0]],
+          cut: [part.cut[2], part.cut[1], part.cut[0]],
+        },
+        0,
+        rng,
+        (c) => {
+          if (holes) {
+            for (let i = 0; i < holes.length; i++) {
+              const h = holes[i];
+              if (
+                Math.abs(c.cx - h.a[2]) < h.r[2] &&
+                Math.abs(c.cy - h.a[1]) < h.r[1] &&
+                Math.abs(c.cz - h.a[0]) < h.r[0]
+              ) {
+                holed++;
+                return;
+              }
+            }
+          }
+          chunks[part.mat].push(c);
+        }
+      );
+    }
+
+    /** Where the bomb goes off: two thirds of the way up the elevation. */
+    const blast = base.clone();
+    blast.y = rec.top * 0.66;
+    const ground = base.clone();
+    ground.y += 1.0;
+
+    const site = {
+      id: rec.id,
+      name: rec.name,
+      index,
+      kind: 'demo',
+      /** The building's own record, so `fire` can swap the two cached forms. */
+      demo: rec,
+      radius: RULES.airstrikeRadius,
+      damage: RULES.airstrikeDamage,
+      position: ground,
+      blast,
+      mound: base.clone(),
+      /**
+       * Deliberately the SHORT half-extent: a 30 m block that scattered debris
+       * over 30 m of radius would put chunks inside the buildings either side of
+       * it. The pile reads across the middle of the plan and the ruin `world`
+       * built covers the whole footprint underneath it.
+       */
+      moundR: Math.min(rec.halfW, rec.halfD) * 0.85,
+      moundH: MOUND_H.demo,
+      u,
+      v,
+      yaw,
+      /** Where a settle probe has to start from to clear the whole building. */
+      roofY: rec.top + 2,
+      meshes: [],
+      chunkCount: chunks.reduce((n, c) => n + c.length, 0),
+      proxyId: -1,
+      triStart: -1,
+      triEnd: -1,
+      nav: null,
+      blocking: true,
+      struck: false,
+      t: -1,
+      baked: false,
+      /**
+       * Two families of tint taken from the BUILDING'S OWN PLASTER, so the
+       * rubble of a pink block is pink. The generic families in `_buildMesh` are
+       * right for an anonymous added storey and wrong for a named building the
+       * player has been looking at all round.
+       */
+      palette: [_tintFamily(rec.tint), [0x9a9691, 0x86837e, 0xa7a29a, 0x6e6a64]],
+      uniforms: { uT: { value: -1 }, uAnim: { value: 1 } },
+    };
+    site.materials = SURFACE_FOR.demo.map((name) => this._makeMaterial(name, site.uniforms));
+
+    /**
+     * The settle probe runs against the RUIN, not against the building. A ray
+     * dropped from over a building that is still standing finds its roof, and
+     * every chunk would come to rest ten metres up in the air on the roof of the
+     * thing it is falling off. Switched for the duration of the bake and back.
+     */
+    rec.setCollision(true);
+    for (let m = 0; m < chunks.length; m++) {
+      if (!chunks[m].length) continue;
+      const mesh = this._buildMesh(site, chunks[m], m, base, u, v, blast, site.mound, rng, physics);
+      // The building is still standing and still being drawn; these are the same
+      // walls. @see point 1 in the note above.
+      mesh.visible = false;
+      site.meshes.push(mesh);
+    }
+    rec.setCollision(false);
+
+    return site;
   }
 
   /**
@@ -960,9 +1248,10 @@ export class Airstrike {
      * and it is the concrete one, so keying off `matIndex === 0` would render
      * every route mound in render plaster.
      */
-    const palette = SURFACE_FOR[site.kind][matIndex] === 'plaster'
-      ? [0xc9b294, 0xb9a184, 0xd6c6ab, 0xa8836a]
-      : [0x9a9691, 0x86837e, 0xa7a29a, 0x6e6a64];
+    const palette = site.palette?.[matIndex]
+      ?? (SURFACE_FOR[site.kind][matIndex] === 'plaster'
+        ? [0xc9b294, 0xb9a184, 0xd6c6ab, 0xa8836a]
+        : [0x9a9691, 0x86837e, 0xa7a29a, 0x6e6a64]);
 
     for (let i = 0; i < n; i++) {
       const c = chunks[i];
@@ -996,7 +1285,12 @@ export class Airstrike {
       const distToBlast = Math.max(0.6, dir.length());
       dir.y = 0;
       if (dir.lengthSq() < 1e-4) dir.copy(u);
-      dir.normalize().addScaledVector(u, 1.35).normalize();
+      // A ROOF MASS IS BLOWN OUT OVER THE LANE; A BUILDING FALLS INTO ITSELF.
+      // The blast of a demolition is at the middle of the plan, so `dir` is
+      // already radial and biasing it along `u` would throw the whole building
+      // sideways into the street behind it.
+      dir.normalize();
+      if (site.kind !== 'demo') dir.addScaledVector(u, 1.35).normalize();
 
       // 72% of the mass piles up; the rest is thrown clear down the lane.
       const scatter = rng.float() < 0.28;
@@ -1020,12 +1314,40 @@ export class Airstrike {
       /* ---- the curve, solved here and never again --------------------- */
       // Shock reaches a chunk at ~340 m/s of *apparent* propagation; slowed to
       // something readable so you can see the break run through the mass.
-      const delay = Math.min(0.42, (distToBlast - 0.6) * 0.045) + rng.range(0, 0.07);
+      const demo = site.kind === 'demo';
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * A BUILDING PANCAKES. IT DOES NOT GET BLOWN UPWARDS.
+       * ────────────────────────────────────────────────────────────────────
+       * The two lines below are right for every other kind — a bomb hits an
+       * added storey, throws it up and out, and it arcs into the lane — and
+       * photographing a demolition with them showed exactly how wrong they are
+       * for a building: a metre into the collapse the whole elevation was
+       * TRAVELLING UPWARDS (`arc` reaches 3.5 m of loft near the detonation) and
+       * the wall read as a slab being lifted off the ground.
+       *
+       * So a demolition gets the other physics. `delay` runs top-down instead of
+       * outward from the blast, which is what a collapse looks like and is the
+       * thing that makes the storeys go in sequence; `flight` is free fall with
+       * almost none of the stretch; and `arc` is nothing at all except for the
+       * quarter that is thrown clear. The whole building is on the ground in
+       * about two seconds instead of drifting for three.
+       */
+      const above = demo ? Math.max(0, pos.y - base.y) / Math.max(4, site.demo.top) : 0;
+      const delay = demo
+        ? (1 - Math.min(1, above)) * 0.5 + rng.range(0, 0.06)
+        : Math.min(0.42, (distToBlast - 0.6) * 0.045) + rng.range(0, 0.07);
       const drop = Math.max(0.5, pos.y - settlePos.y);
       // Free fall for the drop, stretched a little for the ones thrown clear.
-      const flight = clamp(Math.sqrt((2 * drop) / 9.81) * rng.range(1.05, 1.55), 0.55, 3.1);
+      const flight = clamp(
+        Math.sqrt((2 * drop) / 9.81) * (demo ? rng.range(0.9, 1.15) : rng.range(1.05, 1.55)),
+        0.55,
+        3.1
+      );
       // Chunks close to the detonation get lofted; the rest just fall away.
-      const arc = clamp(3.4 / distToBlast, 0.15, 2.6) * rng.range(0.5, 1.35) + (scatter ? 0.9 : 0);
+      const arc = demo
+        ? (scatter ? rng.range(0.6, 1.4) : rng.range(0.0, 0.18))
+        : clamp(3.4 / distToBlast, 0.15, 2.6) * rng.range(0.5, 1.35) + (scatter ? 0.9 : 0);
       const spin = rng.range(1.4, 7.5) * (rng.float() < 0.5 ? -1 : 1);
 
       mot[i * 4] = delay;
@@ -1139,13 +1461,21 @@ export class Airstrike {
    */
   _bakeNavPatch(site, ai, physics) {
     const g = ai?.grid;
-    if (!g || site.triStart < 0) return;
+    if (!g || (!site.demo && site.triStart < 0)) return;
 
+    /**
+     * A DEMOLITION'S RECTANGLE IS THE BUILDING'S, NOT A MOUND'S. It is also the
+     * one case where the patch mostly turns cells ON rather than off: the plan
+     * of a three-storey block is a few hundred cells that have never been
+     * walkable, and after the collapse every one of them is a slope you can
+     * cross. @see `_verifyRoutes`, which measures exactly that.
+     */
+    const r = site.demo ? site.demo.navRect : null;
     const pad = site.moundR * 2.6 + 1.5;
-    const ix0 = Math.max(0, g.cellX(site.mound.x - pad));
-    const ix1 = Math.min(g.nx - 1, g.cellX(site.mound.x + pad));
-    const iz0 = Math.max(0, g.cellZ(site.mound.z - pad));
-    const iz1 = Math.min(g.nz - 1, g.cellZ(site.mound.z + pad));
+    const ix0 = Math.max(0, g.cellX(r ? r.x0 : site.mound.x - pad));
+    const ix1 = Math.min(g.nx - 1, g.cellX(r ? r.x1 : site.mound.x + pad));
+    const iz0 = Math.max(0, g.cellZ(r ? r.z0 : site.mound.z - pad));
+    const iz1 = Math.min(g.nz - 1, g.cellZ(r ? r.z1 : site.mound.z + pad));
     const count = Math.max(0, (ix1 - ix0 + 1) * (iz1 - iz0 + 1));
     if (count <= 0) return;
 
@@ -1170,7 +1500,7 @@ export class Airstrike {
     }
 
     // Make it solid, re-probe, take the answer, put it back.
-    this._setProxySolid(site, true);
+    this._setSiteSolid(site, true);
     k = 0;
     for (let iz = iz0; iz <= iz1; iz++) {
       for (let ix = ix0; ix <= ix1; ix++) {
@@ -1181,7 +1511,7 @@ export class Airstrike {
         k++;
       }
     }
-    this._setProxySolid(site, false);
+    this._setSiteSolid(site, false);
 
     // Only keep the cells the mound actually changed — typically a third of the
     // rectangle, and the apply loop is proportional to what we keep.
@@ -1209,6 +1539,19 @@ export class Airstrike {
       j++;
     }
     site.nav = { grid: g, cells: c, oldFlags: of, oldFloor: oy, oldEnc: oe, newFlags: nf, newFloor: ny, newEnc: ne };
+  }
+
+  /**
+   * Make a site's settled state solid or not, whatever kind of site it is: a
+   * mound proxy this file owns, or a whole building `world` owns. Collision
+   * only — the picture is `_bakeSettled`'s and `fire`'s business.
+   */
+  _setSiteSolid(site, solid) {
+    if (site.demo) {
+      site.demo.setCollision(solid);
+      return;
+    }
+    this._setProxySolid(site, solid);
   }
 
   /** Layer-mask flip on a cached triangle range. No rebuild, no allocation. */
@@ -1281,19 +1624,51 @@ export class Airstrike {
       }
       this._applyNav(site, false);
       site.blocking = false;
+      /**
+       * A DEMOLITION THAT FAILS THE GATE IS DROPPED, NOT DEMOTED.
+       *
+       * For every other site "the rubble still falls, it just cannot be stood
+       * on" is a coherent state: the mass was an ornament and the building under
+       * it is untouched. For a demolition it is not — the shell is GONE the
+       * frame it fires, so a ruin that may not become ground would leave the
+       * building's own collision standing invisibly in the street. There is no
+       * halfway house, so the site never fires at all and the boot says so.
+       */
+      if (site.demo) site.dropped = true;
       console.error(
         `[airstrike] ${site.id}: on top of ${kept.map((s) => s.id).join('+') || 'nothing'}, its ` +
-          `mound costs ${intact - withIt} of ${routes.length} spawn/target routes — COLLISION ` +
-          'AND NAV DISABLED for this site. The rubble still falls; it just cannot be stood on ' +
-          'or walked round. Widen the lane or lower `reach`.'
+          (site.demo
+            ? `ruin costs ${intact - withIt} of ${routes.length} spawn/target routes — THE ` +
+              'BUILDING IS DROPPED FROM THE DEMOLITION LIST and will never come down. Its debris ' +
+              'field must not narrow a lane; see `APRON` in src/world/demolition.js.'
+            : `mound costs ${intact - withIt} of ${routes.length} spawn/target routes — COLLISION ` +
+              'AND NAV DISABLED for this site. The rubble still falls; it just cannot be stood on ' +
+              'or walked round. Widen the lane or lower `reach`.')
       );
     }
     // Back to the intact map — the round has not started.
     for (const site of kept) this._applyNav(site, false);
+    /**
+     * AND THE OTHER DIRECTION, WHICH IS THE WHOLE CLAIM OF THE DEMOLITIONS.
+     * `intact` is what the map can reach standing; `razed` is what it can reach
+     * with every strike settled AND every building down. A collapse that opens
+     * approaches cannot lower it and should raise the walkable cell count by the
+     * plan area of six buildings. Both numbers are printed rather than asserted
+     * because "more routes" is not a failure condition — a DROP is, and that is
+     * what the loop above already refuses.
+     */
+    let razed = intact;
+    let cells = 0;
+    for (const s of kept) {
+      this._applyNav(s, true);
+      cells += s.nav.cells.length;
+    }
+    razed = reach();
+    for (const s of kept) this._applyNav(s, false);
     console.info(
-      `[airstrike] route gate: ${intact}/${routes.length} routes intact, ` +
-        `${kept.length}/${this.sites.length} sites keep their collision with ALL of them down ` +
-        `(${(performance.now() - t0).toFixed(0)}ms)`
+      `[airstrike] route gate: ${intact}/${routes.length} routes intact, ${razed}/${routes.length} ` +
+        `with the town levelled, ${kept.length}/${this.sites.length} sites keep their collision ` +
+        `(${cells} nav cells) (${(performance.now() - t0).toFixed(0)}ms)`
     );
   }
 
@@ -1322,7 +1697,7 @@ export class Airstrike {
    */
   fire(which = 0, group = null) {
     const site = this._siteOf(which);
-    if (!site || site.struck) return false;
+    if (!site || site.struck || site.dropped) return false;
     const ctx = this.ctx;
 
     site.struck = true;
@@ -1330,7 +1705,17 @@ export class Airstrike {
     site.baked = false;
     this._live.push(site);
 
-    // 1. hand the pose over to the baked curve
+    // 1. THE BUILDING STOPS BEING A BUILDING. Two index-range fills in the
+    //    merged batches: the shell stops being drawn and the ruin starts, on
+    //    this frame, under the fireball. Collision does NOT change here — the
+    //    walls are in the air for six and a half seconds and the debris field
+    //    they are becoming is not there to stand on yet. @see `_bakeSettled`.
+    if (site.demo) {
+      site.demo.setVisual(true);
+      for (const mesh of site.meshes) mesh.visible = true;
+    }
+
+    // 2. hand the pose over to the baked curve
     for (const mesh of site.meshes) {
       // The shadow cascades and the depth prepass draw through an override
       // material, which does not carry our vertex code — so while the curve is
@@ -1396,6 +1781,44 @@ export class Airstrike {
     fx.explosion({ position: b, radius: site.radius * 0.62 });
     fx.hazeRing(b.x, b.y, b.z, 3.2, 26, 0.55, 2.9);
 
+    /**
+     * A WHOLE BUILDING MAKES ITS OWN WEATHER, and it has to, for a reason that
+     * is not decoration: the frame it fires on, a three-storey elevation with
+     * balconies and open casements is replaced by the same wall cut into
+     * fourteen hundred pieces, and for the half second before the pieces
+     * separate that is a plainer picture than the building was. The dust is what
+     * covers the swap — it goes up the full height of the plan, on the footprint
+     * itself, on the same frame. Six emitters, which is the same budget a single
+     * strike already spends. @see SALVO_DUST for why the count matters.
+     */
+    if (site.kind === 'demo') {
+      const hw = site.demo.halfW;
+      const hd = site.demo.halfD;
+      fx.hazeRing(site.mound.x, site.mound.y + 0.6, site.mound.z, Math.max(hw, hd) * 0.9, 34, 0.7, 3.6);
+      const ring = [[0, 0], [0.72, 0.72], [-0.72, 0.72], [0.72, -0.72], [-0.72, -0.72]];
+      for (let i = 0; i < ring.length; i++) {
+        const [a, c] = ring[i];
+        const mid = i === 0;
+        fx.addSmokeColumn(
+          site.mound.x + v.x * a * hw + u.x * c * hd,
+          site.mound.y + 0.4,
+          site.mound.z + v.z * a * hw + u.z * c * hd,
+          {
+            radius: mid ? 5.4 : 3.6,
+            duration: mid ? 6.5 : 4.6,
+            rate: mid ? 16 : 12,
+            rise: mid ? 3.4 : 2.6,
+            dark: 0.24,
+            life: mid ? 11 : 8.5,
+            growth: mid ? 8.0 : 6.2,
+          }
+        );
+      }
+      fx.scorch(site.mound.x, site.mound.y + 0.2, site.mound.z, Math.max(hw, hd) * 1.5);
+      if (fx.lights) fx.lights.flash(b.x, b.y, b.z, 1, 0.66, 0.34, 2400, 0.75, 11, 90, 6);
+      return;
+    }
+
     if (inSalvo) {
       // Three columns instead of six, and no mound column: the group's own dust
       // wall covers the frontage and the emitter pool has to be shared.
@@ -1447,7 +1870,7 @@ export class Airstrike {
   /** The telegraphed version: jet, whistle, then `fire()`. */
   call(which = 0) {
     const site = this._siteOf(which);
-    if (!site || site.struck) return false;
+    if (!site || site.struck || site.dropped) return false;
     if (this._pending.some((p) => p.site === site)) return false;
     this._pending.push({ site, group: null, k: 0, t: 0, stage: 0 });
     return true;
@@ -1468,7 +1891,7 @@ export class Airstrike {
     if (!group) return false;
     // Every member has to be standing, or "the block comes down" is a lie the
     // first time one of its three has already been struck on its own.
-    for (const s of group.sites) if (s.struck) return false;
+    for (const s of group.sites) if (s.struck || s.dropped) return false;
     if (this._pending.some((p) => p.group === group)) return false;
     this._pending.push({ site: group.sites[0], group, k: 0, t: 0, stage: 0 });
     return true;
@@ -1530,7 +1953,7 @@ export class Airstrike {
   callEverything(stagger = 0.55) {
     if (!this.ready || this._final) return 0;
     const left = [];
-    for (const s of this.sites) if (!s.struck) left.push(s);
+    for (const s of this.sites) if (!s.struck && !s.dropped) left.push(s);
     if (!left.length) return 0;
     this._final = { list: left, k: 0, t: 0, stagger };
     // One jet for the whole thing, placed over the middle of the town. The
@@ -1779,7 +2202,7 @@ export class Airstrike {
     wt.length = 0;
     let total = 0;
     for (const s of this.sites) {
-      if (s.struck) continue;
+      if (s.struck || s.dropped) continue;
       total += (s.kind === 'route' ? 2 : 1) * this._focusWeight(s.position);
       cand.push(s);
       wt.push(total);
@@ -1817,7 +2240,7 @@ export class Airstrike {
     let bestW = -1;
     for (const g of this.salvos) {
       let up = true;
-      for (const s of g.sites) if (s.struck) up = false;
+      for (const s of g.sites) if (s.struck || s.dropped) up = false;
       if (!up) continue;
       const w = this._focusWeight(g.centre);
       if (w > bestW) {
@@ -1886,9 +2309,10 @@ export class Airstrike {
       mesh.userData.owNoPrepass = false;
     }
     if (site.blocking) {
-      this._setProxySolid(site, true);
+      this._setSiteSolid(site, true);
       this._applyNav(site, true);
     }
+    if (site.demo) site.demo.down = true;
     site.uniforms.uAnim.value = 0;
     this._emit('settled', site);
   }
@@ -1903,8 +2327,16 @@ export class Airstrike {
     this._dust.length = 0;
     for (const site of this.sites) {
       if (site.struck && site.blocking) {
-        this._setProxySolid(site, false);
+        this._setSiteSolid(site, false);
         this._applyNav(site, false);
+      }
+      // The town is whole again, which for a demolition means the building is
+      // back: shell drawn and solid, ruin hidden and intangible, chunks parked.
+      if (site.demo && site.struck) {
+        site.demo.setVisual(false);
+        site.demo.setCollision(false);
+        site.demo.down = false;
+        for (const mesh of site.meshes) mesh.visible = false;
       }
       site.struck = false;
       site.baked = false;
@@ -2125,6 +2557,21 @@ function logLane(id, lane, span) {
 
 function logFacade(id, roofY, facadeU) {
   console.info(`[airstrike] ${id}: roof ${roofY.toFixed(2)} m, facade offset ${facadeU.toFixed(2)} m`);
+}
+
+/**
+ * Four related tints round one base colour, for the per-chunk `instanceColor` of
+ * a building whose plaster the player has been looking at all round. Two shades
+ * down, one up, and one heavily soiled — the same spread as the generic families
+ * in `_buildMesh`, keyed to the building instead of to the kind.
+ */
+function _tintFamily(hex) {
+  const c = new THREE.Color(hex);
+  const hsl = { h: 0, s: 0, l: 0 };
+  c.getHSL(hsl);
+  const at = (dl, ds) =>
+    new THREE.Color().setHSL(hsl.h, clamp(hsl.s * ds, 0, 1), clamp(hsl.l + dl, 0.04, 0.92)).getHex();
+  return [at(0.03, 1.0), at(-0.07, 0.95), at(0.1, 0.8), at(-0.16, 0.7)];
 }
 
 export function clamp(v, lo, hi) {
