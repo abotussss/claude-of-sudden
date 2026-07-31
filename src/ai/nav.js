@@ -210,6 +210,15 @@ export class NavGrid {
      * a route shuts the cells under itself without anybody having to notice.
      */
     this.edge = new Uint8Array(n);
+    /**
+     * Which cells can reach which, as one label per cell. Filled by `_label` at
+     * the end of `build()`; -1 until then and for every blocked cell.
+     */
+    this.comp = new Int32Array(n).fill(-1);
+    /** Cell count per label, indexed by label. */
+    this.compSize = [];
+    this.components = 0;
+    this.biggestComponent = 0;
 
     // A* working set
     this.gScore = new Float32Array(n);
@@ -359,8 +368,89 @@ export class NavGrid {
     this.walkableCount = volumes && volumes.length ? this._carveInteriors(volumes) : walk;
     // …and then the walls the two rays above are the wrong shape to find.
     this._sealCrossings();
+    // …and then which cells can actually reach which, which is a different
+    // question from which cells are walkable and the one A* is really asked.
+    this._label();
     this.buildMs = performance.now() - t0;
     return this;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * WHICH CELLS CAN REACH WHICH: connected components, once, at boot.
+   * ────────────────────────────────────────────────────────────────────────────
+   * "AIがとにかく頭悪い、スタックしているのに移動方法変えないし … 実質６人くらいしか
+   * 動いていない".
+   *
+   * WALKABLE IS NOT REACHABLE — `tools/navcheck.mjs` has said so at the top of
+   * its own file since the first time this map sealed a bomb site — and this
+   * grid has never known the difference. It has 2800 connected components: the
+   * play area, the dune ring outside the boundary, every roof, every parapet
+   * crown, and ~2700 islands of one to a few hundred cells, which are the top of
+   * a market stall, a jersey barrier, a rubble mound, a kerbed traffic island —
+   * anywhere the height field found standable ground with a step round all of it
+   * bigger than `maxStep`.
+   *
+   * That was harmless while nothing ever STOOD on one, and men stand on them all
+   * the time: a squad crowds through a mouth, local avoidance pushes one man up
+   * onto the kerb of a stall, and from that moment `nearest()` snaps him to the
+   * island he is standing on, `findPath` returns 0 waypoints from a component of
+   * six cells, `Agent._goTo` reads that as "no route", clears `hasMoveTarget`,
+   * and he stands there wanting to move at 4.7 m/s for the rest of the round
+   * with a full ADVANCE state and a valid objective. MEASURED with the roster
+   * instrumented: 17 of 29 men reported `sameComp: false` with `route: 0`,
+   * standing on components of 1, 2, 3, 6, 9, 20, 29, 142 and 797 cells — and
+   * every existing gate calls that healthy, because `navcheck` asks A* about
+   * SPAWN POINTS, which are authored on ground that is fine.
+   *
+   * So the labels are computed once, with EXACTLY the rules A* steps by (the
+   * step height, the corner rule, `diag`'s measured relaxation and `edge`'s
+   * measured refusals), and `findPath` uses them to answer a question it could
+   * not ask before: is the cell I am about to search from one that can reach the
+   * goal at all, and if it is not, is there one within a few metres that can?
+   *
+   * It is a label and not a policy — nothing is made walkable or unwalkable
+   * here, no route is invented, and A* still has to find it.
+   */
+  _label() {
+    const n = this.flags.length;
+    if (!this.comp || this.comp.length !== n) this.comp = new Int32Array(n);
+    this.comp.fill(-1);
+    const stack = this._labelStack ?? (this._labelStack = []);
+    const sizes = this.compSize ?? (this.compSize = []);
+    sizes.length = 0;
+    for (let i0 = 0; i0 < n; i0++) {
+      if (!this.flags[i0] || this.comp[i0] >= 0) continue;
+      const id = sizes.length;
+      let count = 0;
+      stack.length = 0;
+      stack.push(i0);
+      this.comp[i0] = id;
+      while (stack.length) {
+        const c = stack.pop();
+        count++;
+        const cx = c % this.nx, cz = (c / this.nx) | 0;
+        for (let d = 0; d < 8; d++) {
+          const ix = cx + DX[d], iz = cz + DZ[d];
+          if (!this.walkable(ix, iz)) continue;
+          const j = this.index(ix, iz);
+          if (this.comp[j] >= 0) continue;
+          if (Math.abs(this.floor[j] - this.floor[c]) > this.maxStep) continue;
+          if (!this._canStep(c, cx, cz, d)) continue;
+          this.comp[j] = id;
+          stack.push(j);
+        }
+      }
+      sizes.push(count);
+    }
+    stack.length = 0;
+    this.components = sizes.length;
+    this.biggestComponent = sizes.length ? Math.max(...sizes) : 0;
+  }
+
+  /** How many cells can reach the cell at index `i`, itself included. */
+  componentSize(i) {
+    return i >= 0 && this.comp && this.comp[i] >= 0 ? this.compSize[this.comp[i]] : 0;
   }
 
   /**
@@ -665,10 +755,13 @@ export class NavGrid {
    * `yTol` to reject cells on a different storey — otherwise a spawn point in a
    * street happily snaps onto a market stall's table top.
    */
-  nearest(x, z, y = null, maxRings = 8, yTol = Infinity) {
+  nearest(x, z, y = null, maxRings = 8, yTol = Infinity, wantComp = -1) {
     const cx = this.cellX(x), cz = this.cellZ(z);
     const okY = (i) => y === null || Math.abs(this.floor[i] - y) <= yTol;
-    if (this.walkable(cx, cz) && okY(this.index(cx, cz))) return this.index(cx, cz);
+    const okC = (i) => wantComp < 0 || this.comp[i] === wantComp;
+    if (this.walkable(cx, cz) && okY(this.index(cx, cz)) && okC(this.index(cx, cz))) {
+      return this.index(cx, cz);
+    }
     for (let ring = 1; ring <= maxRings; ring++) {
       let best = -1, bestD = Infinity;
       for (let dz = -ring; dz <= ring; dz++) {
@@ -677,7 +770,7 @@ export class NavGrid {
           const ix = cx + dx, iz = cz + dz;
           if (!this.walkable(ix, iz)) continue;
           const i = this.index(ix, iz);
-          if (!okY(i)) continue;
+          if (!okY(i) || !okC(i)) continue;
           let d = dx * dx + dz * dz;
           if (y !== null && Number.isFinite(this.floor[i])) d += (this.floor[i] - y) ** 2 * 4;
           if (d < bestD) {
@@ -696,9 +789,44 @@ export class NavGrid {
    * (an array of THREE.Vector3, reused) and returns the count.
    */
   findPath(from, to, out, opts = {}) {
-    const start = this.nearest(from.x, from.z, from.y);
-    const goal = this.nearest(to.x, to.z, to.y);
+    let start = this.nearest(from.x, from.z, from.y);
+    let goal = this.nearest(to.x, to.z, to.y);
     if (start < 0 || goal < 0) return 0;
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * NEITHER END MAY BE AN ISLAND. @see `_label` for what these are and for the
+     * measurement that says two thirds of the roster was standing on one.
+     * ────────────────────────────────────────────────────────────────────────
+     * `nearest` answers "the closest cell", which is the right answer to the
+     * wrong question when the closest cell is the top of the market stall the
+     * man has just been shoved onto: the search then runs inside a component of
+     * six cells and correctly reports that the objective is not in it. What A*
+     * is actually being asked is "get this man to that place", and a man
+     * standing on a stall is one step from ground that can.
+     *
+     * So each end is re-asked with the other end's component required, over
+     * `ISLAND_RINGS` rather than eight — a 142-cell island is 90 m² and its
+     * middle is further than 6.4 m from the kerb. The FIRST answer is kept if
+     * the re-ask finds nothing, so this can only ever turn a route that did not
+     * exist into one that does. The start is re-asked first because it is the
+     * end that gets shoved; the goal is only re-asked if that did not settle it,
+     * which is the case where a destination has been authored or scored onto a
+     * kerbed island (`world.features` on a plinth, a cover point on a berm).
+     *
+     * The waypoint that comes back may be a metre behind or below him, and that
+     * is the point: `Agent._move` steers at it, he walks off the stall, and the
+     * next repath is an ordinary one. This is deliberately NOT a nudge inside
+     * `nearest` — cover scoring, spawn validation and `src/match`'s reachability
+     * proofs all call it and all want the closest cell, honestly.
+     */
+    if (this.comp && this.comp[start] !== this.comp[goal]) {
+      const s2 = this.nearest(from.x, from.z, from.y, ISLAND_RINGS, Infinity, this.comp[goal]);
+      if (s2 >= 0) start = s2;
+      else {
+        const g2 = this.nearest(to.x, to.z, to.y, ISLAND_RINGS, Infinity, this.comp[start]);
+        if (g2 >= 0) goal = g2;
+      }
+    }
     if (start === goal) {
       this._emit(out, 0, to);
       return 1;
@@ -919,6 +1047,14 @@ const OPP = [1, 0, 3, 2, 7, 6, 5, 4];
  * measures and therefore only has to walk these four.
  */
 const FWD = [0, 2, 4, 5];
+/**
+ * How far `findPath` will look for a cell on the other end's component before it
+ * gives up and searches from where the man is standing. 14 rings is 11.2 m — the
+ * biggest island a man was measured stranded on is 797 cells and everything a
+ * squad actually gets shoved onto is a kerb, a stall or a berm a metre wide.
+ * @see `findPath`.
+ */
+const ISLAND_RINGS = 14;
 
 /* ------------------------------------------------------------------ */
 /* Cover                                                               */
