@@ -999,7 +999,6 @@ export class AiSystem {
      */
     const recs = world?.demolitions ?? null;
     this._demoRecs = recs?.length ? recs : null;
-    const demoWas = this._demoRecs ? this._demoRecs.map((r) => r.down === true) : null;
     const rects = this._demoRecs ? this._demoRecs.map((r) => r.navRect) : null;
     /**
      * COLLISION ONLY, NEVER THE PICTURE — the same split `Airstrike._bakeNavPatch`
@@ -1009,30 +1008,33 @@ export class AiSystem {
     const setDown = this._demoRecs
       ? (k, down) => this._demoRecs[k].setCollision?.(down)
       : null;
-    // Every block STANDING for the bake, whatever it happens to be right now.
-    if (this._demoRecs) for (const r of this._demoRecs) r.setCollision?.(false);
+    /**
+     * THE BLOCKS ARE LEFT EXACTLY AS THEY BOOTED, and the bake is expressed
+     * relative to that. `NavGrid` has already dropped its rays through this
+     * level, so the state the grid describes is the only state whose candidate
+     * cells mean anything — and under `?demo=down` that state is six ruins,
+     * decided inside `world` before `ai.init` ever ran. Forcing them upright
+     * here measured 151 of 477 points on those blocks describing air on the
+     * first frame. @see `CoverMap.bakeBlockDeps`.
+     */
+    const bakeMask = this._demoRecs
+      ? this._demoRecs.reduce((m, r, i) => (r.down === true ? m | (1 << i) : m), 0)
+      : 0;
+    const demoOpts = { reach: 1.3, bakeMask };
 
     // The church STANDING and the rubble put away — which is NOT the state a
     // freshly assembled level is in. @see the note above.
     if (canSwap) cath.setRazed(false, phys);
     this.coverIntact = new CoverMap(this.grid, phys).build({ step: 1, reach: 1.3 });
-    if (rects) this.coverIntact.bakeBlockDeps(rects, setDown, { reach: 1.3 });
+    if (rects) this.coverIntact.bakeBlockDeps(rects, setDown, demoOpts);
 
     if (canSwap) {
       cath.setRazed(true, phys);
       this.coverRuin = new CoverMap(this.grid, phys).build({ step: 1, reach: 1.3 });
-      if (rects) this.coverRuin.bakeBlockDeps(rects, setDown, { reach: 1.3 });
+      if (rects) this.coverRuin.bakeBlockDeps(rects, setDown, demoOpts);
       cath.setRazed(was, phys);
     } else {
       this.coverRuin = null;
-    }
-
-    // Put every block back exactly as it was found. `setCollision` does not
-    // touch `rec.down`, so `rec.down` is still the truth about each one.
-    if (this._demoRecs) {
-      for (let i = 0; i < this._demoRecs.length; i++) {
-        this._demoRecs[i].setCollision?.(demoWas[i]);
-      }
     }
 
     this.stats.coverPts = this.coverIntact.points.length;

@@ -28,8 +28,12 @@ import { chromium } from 'playwright';
 
 const args = Object.fromEntries(
   process.argv.slice(2).map((a) => {
-    const [k, v] = a.replace(/^--/, '').split('=');
-    return [k, v ?? true];
+    // FIRST `=` only. `--url=…/?demo=down` has two, and splitting on both threw
+    // the flag away silently — the URL became `…/?demo`, which `src/main.js`
+    // does not act on, so the run measured the intact map and said so.
+    const s = a.replace(/^--/, '');
+    const i = s.indexOf('=');
+    return i < 0 ? [s, true] : [s.slice(0, i), s.slice(i + 1)];
   })
 );
 const URL = args.url ?? 'http://127.0.0.1:4255/';

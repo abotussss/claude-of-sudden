@@ -1098,6 +1098,8 @@ export class CoverMap {
     this.points = this.all;
     /** Which destructible blocks are down, one bit each. @see `applyBlocks`. */
     this.blockMask = 0;
+    /** Which were down WHEN THIS TABLE WAS BAKED. @see `bakeBlockDeps`. */
+    this.bakeMask = 0;
     this._appliedMask = -1;
     /** Does any point in here depend on a block at all? */
     this.dynamic = false;
@@ -1119,6 +1121,7 @@ export class CoverMap {
     this.points = this.all;
     this.dynamic = false;
     this.blockMask = 0;
+    this.bakeMask = 0;
     this._appliedMask = -1;
     for (let iz = 1; iz < g.nz - 1; iz += step) {
       for (let ix = 1; ix < g.nx - 1; ix += step) {
@@ -1202,10 +1205,27 @@ export class CoverMap {
    * cells inside the six rects are probed, and each is asked about the blocks
    * whose rect it is in. Nothing here runs again.
    *
+   * ────────────────────────────────────────────────────────────────────────
+   * IT IS ALL RELATIVE TO THE STATE THE LEVEL BOOTED IN, NOT TO "STANDING".
+   * ────────────────────────────────────────────────────────────────────────
+   * `?demo=down` boots the six blocks AS RUINS inside `world` itself, before
+   * `ai.init` — so `NavGrid` drops its rays on the debris field and the
+   * footprints are walkable ground. Baking the tables in the standing state
+   * there puts the whole candidate set at odds with the grid it came from, and
+   * it was measured doing exactly that: 151 of the 477 points on those blocks
+   * described air on the frame the level finished booting.
+   *
+   * So nothing is forced. `bakeMask` is which blocks were down WHEN THIS TABLE
+   * WAS BAKED, each block is probed by flipping it AWAY from that, and `die` /
+   * `need` are read against `mask ^ bakeMask` — how the town differs from the
+   * one the rays were fired in. With a normal boot `bakeMask` is 0 and this is
+   * the plain reading of it.
+   *
    * @param {Array<{x0:number,x1:number,z0:number,z1:number}>} rects one world
    *        AABB per block; the index in this array IS the bit.
    * @param {(k:number, down:boolean)=>void} setDown flips ONE block's
    *        COLLISION (not its picture) and nothing else.
+   * @param {number} opts.bakeMask which blocks are DOWN right now, one bit each.
    */
   bakeBlockDeps(rects, setDown, opts = {}) {
     const t0 = performance.now();
@@ -1213,6 +1233,7 @@ export class CoverMap {
     const phys = this.physics;
     const MASK = phys.MASK.WORLD;
     const reach = opts.reach ?? 1.25;
+    this.bakeMask = opts.bakeMask ?? 0;
     // A cell this far outside a block's rect cannot have that block's mass
     // inside `reach`, so it cannot depend on it.
     const pad = reach + g.cell;
@@ -1300,19 +1321,21 @@ export class CoverMap {
     // THE TOWN AS IT STANDS. Every candidate cell, every direction.
     for (const c of cells.values()) for (let d = 0; d < 8; d++) c.up[d] = fire(c, d);
 
-    // ONE BLOCK DOWN AT A TIME. Only the cells that block could possibly reach.
+    // ONE BLOCK FLIPPED AT A TIME, away from however it booted. Only the cells
+    // that block could possibly reach.
     for (let k = 0; k < nb; k++) {
       const bit = 1 << k;
+      const baked = (this.bakeMask & bit) !== 0;
       let touched = false;
       for (const c of cells.values()) {
         if (!(c.near & bit)) continue;
         if (!touched) {
-          setDown(k, true);
+          setDown(k, !baked);
           touched = true;
         }
         for (let d = 0; d < 8; d++) c.alt[d * nb + k] = fire(c, d);
       }
-      if (touched) setDown(k, false);
+      if (touched) setDown(k, baked);
     }
 
     // Fold the two states into per-facing bitmasks, and hand each cell the
@@ -1370,7 +1393,10 @@ export class CoverMap {
          * standing facings dropped: with no block down it has nothing usable
          * and the table is exactly what `build` produced.
          */
-        const rubble = variants.filter((v) => v.need !== 0);
+        // …and only where the change ADDS mass to open ground: a block that
+        // booted as a ruin gains a WALL when it is put back, and the cell it
+        // appears on stops being walkable, so there is no point to invent.
+        const rubble = variants.filter((v) => (v.need & ~this.bakeMask) !== 0);
         if (!rubble.length) continue;
         fresh.push({
           x: c.x, y: c.y, z: c.z,
@@ -1395,7 +1421,8 @@ export class CoverMap {
       // by index and moves `length`; it allocates nothing.
       this.points = new Array(this.all.length);
       this._appliedMask = -1;
-      this.applyBlocks(this.blockMask);
+      // The state it was baked in, which is the one every ray in it agrees with.
+      this.applyBlocks(this.bakeMask);
     }
     this.depMs = performance.now() - t0;
     this.depStats = { cells: cells.size, dependent, created };
@@ -1420,6 +1447,9 @@ export class CoverMap {
     if (this._appliedMask === mask) return false;
     this.blockMask = mask;
     this._appliedMask = mask;
+    // HOW THIS TOWN DIFFERS FROM THE ONE THE RAYS WERE FIRED IN. @see
+    // `bakeBlockDeps`: `?demo=down` bakes with the blocks already ruins.
+    const delta = mask ^ this.bakeMask;
     const live = this.points;
     let n = 0;
     for (let i = 0; i < this.all.length; i++) {
@@ -1430,7 +1460,7 @@ export class CoverMap {
         ok = false;
         for (let j = 0; j < vs.length; j++) {
           const v = vs[j];
-          if (v.need !== 0 ? (v.need & mask) !== 0 : (v.die & mask) === 0) {
+          if (v.need !== 0 ? (v.need & delta) !== 0 : (v.die & delta) === 0) {
             p.dx = v.dx;
             p.dz = v.dz;
             p.high = v.high;
