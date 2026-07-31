@@ -211,6 +211,16 @@ export class MatchSystem {
     this.weapons = ctx.get('weapons');
     this.ui = ctx.get('ui');
     this.world = ctx.get('world');
+    /**
+     * PUT THE CATHEDRAL'S RUIN AWAY BEFORE THE FIRST FRAME.
+     *
+     * `world` assembles both states of the building and can hide neither: a
+     * scope is recorded visible and `buildCathedral` returns before
+     * `Assembler.finalize` has made a mesh to hide. `_beginRound` primes it too,
+     * but the first round is several seconds of WARMUP away and the ruin would
+     * be drawn standing inside the intact church for all of them.
+     */
+    this._setCathedralRazed(false);
     /** Which ruleset is running. Read all over this file. @see RULES.mode */
     this.domination = RULES.mode === MODE.DOMINATION;
 
@@ -579,6 +589,8 @@ export class MatchSystem {
     this.lockedZone = this.allZones.find((z) => z.locked) ?? null;
     this._cathedralCalled = false;
     this._cathedralPending = -1;
+    /** Countdown to the shell swap, inside the salvo. @see RULES.cathedralRazeDelay */
+    this._razeIn = -1;
     this._finalCalled = false;
     this._finalLeft = 0;
     this._bombardIn = RULES.zoneBombardFirst;
@@ -742,8 +754,13 @@ export class MatchSystem {
        * — and the three scheduled map events re-arm on the new clock.
        */
       if (this.lockedZone) this._setZoneLive(this.lockedZone, false);
+      // …and the BUILDING goes back up with the zone. This is also the call that
+      // hides the ruin scope for the first time on a fresh boot. @see
+      // `_setCathedralRazed`.
+      this._setCathedralRazed(false);
       this._cathedralCalled = false;
       this._cathedralPending = -1;
+      this._razeIn = -1;
       this._finalCalled = false;
       this._finalLeft = 0;
       this._bombardIn = RULES.zoneBombardFirst;
@@ -2395,33 +2412,57 @@ export class MatchSystem {
    * one is two booleans per mesh and a uniform write. What this method owns is
    * WHEN, which is the part that is a ruleset and not an effect.
    *
-   *   `cathedralOpenAt`   the cathedral comes down and D opens in the wreckage
-   *   `zoneBombard*`      A and B are shelled on a random gap, so holding a
-   *                       point means moving inside it rather than sitting on it
-   *   `finalCollapseAt`   everything still standing, in one rolling event
+   *   `cathedralOpenProgress`  the cathedral comes down and D opens in the wreckage
+   *   `zoneBombard*`           A and B are shelled on a random gap, so holding a
+   *                            point means moving inside it, not sitting on it
+   *   `finalCollapseProgress`  everything still standing, in one rolling event
    *
-   * The whole match clock is `RULES.matchTime` (600 s) and it can end early on
-   * `scoreTarget`, so every one of these is a "if we get there" — a match
-   * decided in four minutes never sees the final collapse, which is correct.
+   * THE TWO BIG ONES ARE ON `_matchProgress`, NOT ON THE CLOCK, and that is a
+   * fix rather than a refactor. The note that used to stand here said "a match
+   * decided in four minutes never sees the final collapse, which is correct" —
+   * it is not correct, it is the whole complaint. `_timeline.mjs` measures every
+   * match ending at t = 276..288 s on `scoreTarget` and `finalCollapseAt: 470`
+   * therefore firing in NONE of them. An event nobody has ever seen is not a
+   * late-game event. @see `RULES.cathedralOpenProgress`.
    */
   _updateMapEvents(dt) {
     const t = RULES.matchTime - this.roundClock;
+    const p = this._matchProgress();
 
     /* ---- D ------------------------------------------------------------ */
+    /**
+     * THREE BEATS ON ONE COUNTDOWN: the salvo, then the building going, then
+     * the point opening. `_razeIn` is inside `_cathedralPending` on purpose —
+     * @see `RULES.cathedralRazeDelay` for why the swap is not on the same frame
+     * as the explosion.
+     */
+    if (this._razeIn > 0) {
+      this._razeIn -= dt;
+      if (this._razeIn <= 0) {
+        this._razeIn = -1;
+        const razed = this._razeCathedral();
+        console.info(`[match] cathedral SHELL DOWN (${razed ? 'levelled' : 'no ruin state available'})`);
+      }
+    }
     if (this._cathedralPending > 0) {
       this._cathedralPending -= dt;
       if (this._cathedralPending <= 0) this._openCathedral();
-    } else if (!this._cathedralCalled && this.lockedZone && t >= RULES.cathedralOpenAt) {
+    } else if (!this._cathedralCalled && this.lockedZone && p >= RULES.cathedralOpenProgress) {
       this._cathedralCalled = true;
       // `callCathedralCollapse` is the salvo plus a bomber run; it declines if
       // the sites are already struck or the system is disarmed, and D opens on
       // the delay either way — a cathedral that is already rubble is still a
       // ruin to fight in.
       const fired = this.airstrike?.callCathedralCollapse?.() ?? false;
+      // …and THE BUILDING ITSELF goes, `cathedralRazeDelay` into the salvo. The
+      // salvo alone is three bays of aisle roof and leaves a church with a hole
+      // in it; "更地にする" is the whole superstructure. @see `_razeCathedral`.
+      this._razeIn = RULES.cathedralRazeDelay;
       this._cathedralPending = RULES.cathedralOpenDelay;
       console.info(
-        `[match] cathedral collapse called at t=${t.toFixed(0)}s (salvo ${fired ? 'fired' : 'declined — already down'}) ` +
-          `— D opens in ${RULES.cathedralOpenDelay}s`
+        `[match] cathedral collapse called at t=${t.toFixed(0)}s p=${p.toFixed(2)} ` +
+          `(salvo ${fired ? 'fired' : 'declined — already down'}) — shell down in ` +
+          `${RULES.cathedralRazeDelay}s, D opens in ${RULES.cathedralOpenDelay}s`
       );
     }
 
@@ -2430,7 +2471,7 @@ export class MatchSystem {
     if (this._bombardIn <= 0) this._callZoneBombard();
 
     /* ---- the last event ----------------------------------------------- */
-    if (!this._finalCalled && t >= RULES.finalCollapseAt) {
+    if (!this._finalCalled && p >= RULES.finalCollapseProgress) {
       this._finalCalled = true;
       this._finalLeft = this.airstrike?.callEverything?.(RULES.finalCollapseStagger) ?? 0;
       if (this._finalLeft > 0) {
@@ -2446,8 +2487,85 @@ export class MatchSystem {
         this._airHud.z = 0;
         this.ui.airAlert(this._airHud);
       }
-      console.info(`[match] FINAL COLLAPSE at t=${t.toFixed(0)}s — ${this._finalLeft} sites still standing`);
+      console.info(
+        `[match] FINAL COLLAPSE at t=${t.toFixed(0)}s p=${p.toFixed(2)} — ${this._finalLeft} sites still standing`
+      );
     }
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * HOW FAR THROUGH THE MATCH WE ARE — 0 at the start, 1 at whichever end
+   * actually arrives.
+   * ────────────────────────────────────────────────────────────────────────
+   * A DOMINATION match has TWO endings and the wrong one was being scheduled
+   * against. `matchTime` is 600 s, but `scoreTarget` is 250 and two zones held
+   * is a point a second, so every measured match ended on points at t = 276..288
+   * — and every absolute second in `RULES` had been authored against the 600.
+   * That is not a mistuned number, it is a schedule whose late half never
+   * happens; @see `RULES.finalCollapseProgress`.
+   *
+   * `max` of the two fractions rather than a blend, because either one reaching
+   * 1 ends the match, so the larger is always the better estimate of how close
+   * the end is. Both terms are monotone, so the result is monotone and an event
+   * latched on a threshold cannot un-fire. It reads the LEADER's score: the
+   * match ends when somebody gets there, not when both do.
+   *
+   * No allocation, no rate estimator and nothing to predict — a match decided in
+   * four minutes and one that runs the clock out in ten both put the cathedral
+   * at the same point in the SHAPE of the match.
+   */
+  _matchProgress() {
+    const byClock = 1 - Math.max(0, this.roundClock) / RULES.matchTime;
+    const lead = this.score[0] > this.score[1] ? this.score[0] : this.score[1];
+    const byScore = RULES.scoreTarget > 0 ? lead / RULES.scoreTarget : 0;
+    return byClock > byScore ? byClock : byScore;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * LEVEL THE BUILDING ITSELF — "大聖堂自体を破壊して更地にする"
+   * ────────────────────────────────────────────────────────────────────────
+   * The `CATHEDRAL` salvo takes three bays of AISLE ROOF off, which reads as a
+   * church with a hole in it and not as the thing the brief asks for: "大爆撃に
+   * よる大聖堂周りを瓦礫の山にして、大聖堂自体を破壊して更地に". Levelling the
+   * arcade, the clerestory, the vault, the dome and the campanile is a
+   * different job from cratering a roof, and it belongs to whoever built them —
+   * so it lives in `src/world/cathedral.js`, baked at BOOT exactly like every
+   * other destruction in this project, and this is the one line that fires it.
+   *
+   * REACHED THROUGH `ctx.get('world')` AND NOTHING ELSE. `world.cathedral` is the
+   * record `buildCathedral` already returns and `WorldSystem` already holds; the
+   * raze is a method on it. `match` may no more import `world/cathedral.js` than
+   * it may import `ai/nav.js`. Optional at every step, because a `world` that
+   * has not been given the hook must leave the match playable rather than throw
+   * in the middle of a scheduled event.
+   *
+   * Idempotent in `world` — calling it twice is the second call returning false.
+   */
+  _razeCathedral() {
+    return this._setCathedralRazed(true);
+  }
+
+  /**
+   * Put the cathedral into one of its two states, or report that it has no
+   * second state to be in.
+   *
+   * `down = false` is ALSO the boot-time prime: the ruin scope is assembled
+   * visible (that is what `beginScope` records) and cannot hide itself, because
+   * `buildCathedral` returns before `Assembler.finalize` has built a mesh to
+   * hide. So the first call of the match is what puts it away — and the same
+   * call is what stands the church back up between matches, which `_beginRound`
+   * already promises: "A new match starts with the cathedral standing".
+   *
+   * `physics` is fetched here and handed over because `Assembler` does not
+   * retain it. `peek`, not `get`, at both steps: this runs inside a scheduled
+   * event and a missing subsystem must leave the match playable.
+   */
+  _setCathedralRazed(down) {
+    const cath = this.ctx.peek?.('world')?.cathedral;
+    if (typeof cath?.setRazed !== 'function') return false;
+    return cath.setRazed(down, this.ctx.peek?.('physics')) === true;
   }
 
   /**

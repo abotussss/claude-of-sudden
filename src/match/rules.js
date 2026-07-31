@@ -548,23 +548,64 @@ export const RULES = {
 
   /* ---- the cathedral, and what its destruction opens ---- */
   /**
-   * D — "大聖堂をDサイトとして途中で出現させて 大聖堂破壊イベントを通して".
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE BIG EVENTS ARE SCHEDULED ON MATCH *PROGRESS*, NOT ON THE WALL CLOCK
+   * ──────────────────────────────────────────────────────────────────────────
+   * "大イベントの発火時刻を実測し、後半3〜5分に寄せる" — and the measurement is the
+   * reason these are fractions now. `_timeline.mjs` runs a match to its natural
+   * end and stamps every event against the live clock. What it found:
    *
-   * Seconds into a LIVE match before the cathedral is brought down. 210 of a 600
-   * second clock is a bit past the first third: late enough that the three
-   * original zones have changed hands and both sides have settled into a shape,
-   * early enough that a fourth point is a whole second act rather than a
-   * flourish. The collapse itself telegraphs for 4.4 s and the wreckage takes
-   * `cathedralOpenDelay` more to stop moving, so D goes live about eleven
+   *   match ends at t = 276 .. 288 s        (the clock allows 600)
+   *   cathedral collapse   t = 210, 211     (73 % and 76 % of the way in)
+   *   FINAL COLLAPSE       NEVER FIRED in any run
+   *
+   * A DOMINATION match ends on `scoreTarget`, not on `matchTime`: two zones held
+   * is a point a second, so 250 points arrives in under five minutes and the
+   * 600 s clock only ever decides a genuine deadlock. Every absolute second in
+   * this block had been authored against that 600 — so `finalCollapseAt: 470`
+   * was 180 s past the end of every match that has ever been played, which is
+   * why the player asked "いつ起きるの？" about an event that is not late, but
+   * unreachable. That is a different bug from bad timing and it is worth naming.
+   *
+   * `MatchSystem._matchProgress()` is `max(elapsed / matchTime, leader /
+   * scoreTarget)` — 0 at the start, 1 at whichever end actually arrives, and
+   * monotone in both terms. Scheduling on it means an event fires at the same
+   * point in the SHAPE of the match whether it is decided on points in four
+   * minutes or runs the clock out in ten, and nothing has to predict the end.
+   *
+   * D — "大聖堂をDサイトとして途中で出現させて 大聖堂破壊イベントを通して".
+   * At 0.52 the three original zones have long since changed hands and both
+   * sides have settled into a shape, and what is left is a whole second act
+   * rather than a flourish. The collapse telegraphs for 4.4 s and the wreckage
+   * takes `cathedralOpenDelay` more to stop moving, so D goes live about eleven
    * seconds after the first thing the player hears.
    */
-  cathedralOpenAt: 210,
+  cathedralOpenProgress: 0.52,
   /**
    * Seconds after the collapse FIRES before D is contestable. It is the salvo's
    * own settle time (6.5 s) plus a beat — the point opens when the dust has a
    * floor under it, not while masonry is still in the air. @see Airstrike.
    */
   cathedralOpenDelay: 7.4,
+  /**
+   * SECONDS AFTER THE SALVO BEFORE THE SHELL STOPS BEING DRAWN, AND WHY IT IS
+   * NOT ZERO.
+   *
+   * Swapping `cath:shell` for `cath:ruin` is one frame by construction — that is
+   * the whole point of baking both states, and it is what makes a 30 x 45 m
+   * building disappear without a hitch. But one frame is a POP, and the brief
+   * asks for "大爆破と崩壊": an explosion and a COLLAPSE.
+   *
+   * So the salvo goes first and the swap happens inside it. At 2.2 s the three
+   * `CATH-*` sites have ~2100 chunks in the air, three fireballs lit and the
+   * dust wall at its densest, and the church going away happens behind all of
+   * it. What the player sees is masonry coming off the building, dust, and then
+   * no building — which is the order those things happen in.
+   *
+   * It is well inside `cathedralOpenDelay`, so the ground is settled and static
+   * long before D is contestable.
+   */
+  cathedralRazeDelay: 2.2,
   /**
    * D is worth the same tick as any other zone, on purpose. A fourth point that
    * printed double would decide the match by itself and the answer to it would
@@ -575,12 +616,18 @@ export const RULES = {
   /**
    * THE FINAL COLLAPSE — "街を破壊するようなイベント", at the end.
    *
-   * Seconds into a LIVE match before the city-wide collapse: every strike site
-   * that is still standing, fired as one rolling event. At 470 of 600 that is
-   * the last two minutes, and what it leaves is a map with no intact frontage,
-   * no roofline to hold and every lane full of rubble — a melee.
+   * Every strike site still standing, fired as one rolling event, leaving a map
+   * with no intact frontage, no roofline to hold and every lane full of rubble.
+   *
+   * This is the event `_timeline.mjs` measured firing ZERO times, because 470 of
+   * a 600 s clock is 180 s after a match that ends on points is already over.
+   * As a fraction it is late in every match instead of unreachable in all of
+   * them. 0.82 leaves the rolling event (4.4 s telegraph, eleven sites at
+   * `finalCollapseStagger`, 6.5 s to settle — about 17 s end to end) enough room
+   * to finish and still be fought over rather than being the last thing anybody
+   * sees. @see `cathedralOpenProgress` for why these are fractions.
    */
-  finalCollapseAt: 470,
+  finalCollapseProgress: 0.82,
   /** Seconds between the members of the final collapse. Eleven sites, rolling. */
   finalCollapseStagger: 0.55,
   /**

@@ -202,6 +202,33 @@ export function buildCathedral(A) {
     }
   }
 
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * EVERYTHING ABOVE THE FLOOR IS ONE SCOPE, BECAUSE IT ALL COMES DOWN
+   * ────────────────────────────────────────────────────────────────────────
+   * "大爆破と崩壊、大聖堂を焼き尽くす大爆撃による大聖堂周りを瓦礫の山にして、大聖堂
+   *  自体を破壊して更地にする感じに爆破して".
+   *
+   * The `CATHEDRAL` airstrike salvo takes three bays of AISLE ROOF off. That is
+   * a church with a hole in it, and the brief asks for a church that is GONE —
+   * so the arcade, the gallery, the clerestory, the vault, the roof, the dome
+   * and the campanile are all inside `cath:shell`, and section 1 (the floor and
+   * the parvis) is deliberately OUTSIDE it. What is left when the scope stops
+   * being drawn is the walking surface, which is what 更地 means: the ground the
+   * building stood on, with nothing on it.
+   *
+   * `Assembler.beginScope` is the only way to address merged geometry after the
+   * fact — `add` merges into one mesh per palette key and returns no handle, so
+   * a scope's triangle ranges are the handle. Hiding it is a `fill` of degenerate
+   * indices per range and a partial buffer upload; no geometry is rebuilt, no
+   * material is touched, no draw call appears or disappears, and it is out of
+   * the depth prepass and all four shadow cascades because they share the index
+   * buffer. The collision goes with it as a mask write on a cached triangle
+   * range. NOTHING IS BUILT, CUT OR SOLVED WHEN IT FIRES — the same discipline
+   * `src/match/airstrike.js` follows, for the same reason.
+   */
+  const shell = A.beginScope('cath:shell');
+
   /* ====================================================================== */
   /* 2. THE OUTER WALLS                                                     */
   /* ====================================================================== */
@@ -899,8 +926,207 @@ export function buildCathedral(A) {
     }
   }
 
+  A.endScope();
+
   /* ====================================================================== */
-  /* 8. WHAT THE ENGINE NEEDS BACK                                          */
+  /* 8. THE RUIN — what stands there once the shell has stopped being drawn */
+  /* ====================================================================== */
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * BUILT AT BOOT, HIDDEN AT BOOT, SHOWN IN ONE FRAME
+   * ────────────────────────────────────────────────────────────────────────
+   * The second scope. It is the mirror of `cath:shell` and the two are never
+   * drawn at once: `setRazed` hides one and shows the other, which is two index
+   * fills and two mask writes. Nothing here is generated, fractured or solved
+   * when the event fires.
+   *
+   * WHAT IT HAS TO READ AS. "大聖堂周りを瓦礫の山にして、大聖堂自体を破壊して更地に" —
+   * mounds of rubble around the outside, and the building itself flattened. So
+   * the mass goes where the mass WAS: a broken heap along each wall line, a
+   * bigger one where the campanile stood, a stump where each arcade pier stood,
+   * and a field of fallen render and shattered slab across the floor between
+   * them. Nothing new stands up; the tallest thing left is a 2.8 m heap where a
+   * 29 m tower was.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * WHY THE RUIN'S COLLISION SITS ON THE SHELL'S FOOTPRINT, AND NOT ANYWHERE
+   * ELSE. THIS IS THE PART THAT WOULD OTHERWISE ORPHAN THE MAP.
+   * ────────────────────────────────────────────────────────────────────────
+   * `src/ai/nav.js` is a height field baked at boot. Changing collision in the
+   * middle of a match does NOT change it, and `MatchSystem._reprobeZoneNav`
+   * re-probes only D's own circle when the point opens. So any new solid I put
+   * on ground the grid currently calls WALKABLE becomes a wall that A* cannot
+   * see, and thirty men walk into it — which is exactly the failure
+   * `tools/stuckcheck.mjs` exists to catch.
+   *
+   * Every collider below therefore stands on ground that was ALREADY blocked by
+   * the shell: on the outer wall lines, and on the arcade piers. The grid's
+   * answer for those cells is "blocked" before the raze and "blocked" after it,
+   * so the raze needs no nav patch outside D at all. Two consequences that are
+   * deliberate rather than tolerated:
+   *
+   *   - THE PORTALS STAY OPEN. Every doorway in the shell — the three south
+   *     portals, both transept portals, the apse door — is a gap in the mound
+   *     runs below, because those cells ARE walkable in the grid and closing one
+   *     would cut the ruin off from the street it opens onto.
+   *   - THE CROSSING STAYS CLEAR. `KEEP` is 9.4 m about the local origin, which
+   *     is D's `captureRadius` of 8 plus a body's width. The nearest pier is
+   *     9.9 m out, so the whole capture circle is bare floor and `standRing`'s
+   *     eight proved standing points are untouched.
+   *
+   * `_postcheck.mjs` re-runs navcheck's own assertion with this scope live, and
+   * `tools/sitecheck.mjs` is run against the razed map rather than the intact
+   * one, because measuring only the intact map is how this ships broken.
+   */
+  const ruin = A.beginScope('cath:ruin');
+  {
+    /** Nothing solid inside this radius of the crossing. @see D's captureRadius. */
+    const KEEP = 9.4;
+    /** Grey rubble, ash and broken render — the palette the shell was built in. */
+    const RUBBLE = ['concrete_dark', 'concrete', 'plaster_white'];
+    const rubbleKey = () => RUBBLE[(rng.float() * RUBBLE.length) | 0];
+
+    /**
+     * One heap: a cluster of faceted lumps with a single box under it. The box
+     * is the only thing physics and the player ever touch, so it is a little
+     * tighter than the silhouette — a heap you can shoot over the top of but
+     * not walk through, which is what a collapsed wall should be.
+     */
+    const mound = (u, v, r, h) => {
+      const lumps = 4 + ((r * 1.6) | 0);
+      for (let i = 0; i < lumps; i++) {
+        const a = rng.float() * 6.283;
+        const rr = rng.range(0, r * 0.66);
+        const g = rockGeometry(rng, rng.range(r * 0.62, r * 1.15), 1, rng.range(0.38, 0.68));
+        fillMasks(g, 0.92, rng.range(0.35, 0.95), 0.3);
+        A.addOnce(rubbleKey(), g,
+          LL(IDENT, X(u + Math.cos(a) * rr), SEC.floor + rng.range(-0.05, h * 0.42),
+            Z(v + Math.sin(a) * rr), rng.float() * 6.283));
+      }
+      A.box('concrete', X(u), SEC.floor + h * 0.5, Z(v), r * 1.45, h, r * 1.45);
+    };
+
+    /**
+     * A run of heaps down one wall line, skipping the openings. `gaps` are
+     * intervals of the along-axis coordinate that MUST stay clear — every one of
+     * them is a portal the grid has walkable cells in.
+     */
+    const wallRun = (axis, fixed, from, to, gaps, r, h) => {
+      const step = r * 1.55;
+      for (let s = from + r; s <= to - r; s += step) {
+        const c = s + rng.range(-0.3, 0.3);
+        let blocked = false;
+        for (const [g0, g1] of gaps) if (c > g0 - r && c < g1 + r) blocked = true;
+        if (blocked) continue;
+        const u = axis === 'u' ? c : fixed;
+        const v = axis === 'u' ? fixed : c;
+        if (Math.hypot(u, v) < KEEP) continue;
+        mound(u, v, rng.range(r * 0.8, r * 1.15), rng.range(h * 0.72, h * 1.12));
+      }
+    };
+
+    /** The wall lines, exactly where `runWall` put the walls. */
+    const WU = HW - T / 2;
+    const WV = HD - T / 2;
+    // South front: the great portal and the two side portals.
+    wallRun('u', -WV, -HW, HW, [[-2.6, 2.6], [-7.1, -4.1], [4.1, 7.1]], 1.7, 2.1);
+    // The apse end, with its door on the axis.
+    wallRun('u', WV, -HW, HW, [[-2.4, 2.4]], 1.7, 2.1);
+    // Both flanks, each with a transept portal dead centre at the crossing.
+    for (const side of [-1, 1]) wallRun('v', side * WU, -HD, HD, [[-2.4, 2.4]], 1.7, 2.2);
+
+    /**
+     * THE CAMPANILE. Twenty-nine metres of tower does not leave the same heap a
+     * nine metre aisle wall does, so its corner gets the biggest mass on the
+     * site — and it lands on the tower's own footprint, which was solid.
+     */
+    for (let i = 0; i < 7; i++) {
+      const u = rng.range(TOW.u0 + 1.4, TOW.u1 - 1.4);
+      const v = rng.range(TOW.v0 + 1.4, TOW.v1 - 1.4);
+      if (Math.hypot(u, v) < KEEP) continue;
+      mound(u, v, rng.range(1.9, 2.9), rng.range(2.1, 2.9));
+    }
+
+    /**
+     * THE ARCADE, AS STUMPS. One per pier, on the pier's own square, so the
+     * colonnade still reads as a plan on the ground and the grid's blocked cells
+     * stay honest. Waist high — cover to fight from, not a building.
+     */
+    for (const side of [-1, 1]) {
+      for (const v of [...NAVE_V, ...CHOIR_V]) {
+        const u = side * ARC;
+        if (Math.hypot(u, v) < KEEP) continue;
+        const h = rng.range(0.85, 1.45);
+        A.add('concrete_dark', box, LL(IDENT, X(u), SEC.floor + h / 2, Z(v),
+          rng.range(-0.05, 0.05), PW, h, PW), { masks: [0.95, rng.range(0.4, 0.9), 0.35] });
+        A.box('concrete', X(u), SEC.floor + h / 2, Z(v), PW, h, PW);
+        // the drum that came off the top of it, lying beside it
+        const g = rockGeometry(rng, rng.range(0.9, 1.4), 1, rng.range(0.5, 0.8));
+        fillMasks(g, 0.9, rng.range(0.4, 0.9), 0.3);
+        A.addOnce('concrete', g, LL(IDENT, X(u + rng.range(-1.6, 1.6)), SEC.floor + 0.35,
+          Z(v + rng.range(-1.9, 1.9)), rng.float() * 6.283));
+      }
+      for (const v of CROSS_V) {
+        const u = side * ARC;
+        if (Math.hypot(u, v) < KEEP) continue;
+        const h = rng.range(1.1, 1.7);
+        A.add('concrete_dark', box, LL(IDENT, X(u), SEC.floor + h / 2, Z(v), 0, CPW, h, CPW),
+          { masks: [0.95, rng.range(0.4, 0.9), 0.35] });
+        A.box('concrete', X(u), SEC.floor + h * 0.5, Z(v), CPW, h, CPW);
+      }
+    }
+
+    /**
+     * THE FLOOR OF THE RUIN — fallen render, shattered slab and ash, and NONE of
+     * it collidable. It is what makes the bare ground read as a building that
+     * was destroyed rather than a car park, and because it is only drawn it can
+     * lie anywhere, including across the capture point.
+     */
+    for (let i = 0; i < 260; i++) {
+      const u = rng.range(-HW + 0.6, HW - 0.6);
+      const v = rng.range(-HD + 0.6, HD - 0.6);
+      const g = rockGeometry(rng, rng.range(0.12, 0.62), 1, rng.range(0.3, 0.6));
+      fillMasks(g, 0.9, rng.range(0.3, 0.95), 0.25);
+      A.addOnce(rubbleKey(), g,
+        LL(IDENT, X(u), SEC.floor + rng.range(0.01, 0.16), Z(v), rng.float() * 6.283));
+    }
+    // broken slabs, lying flat and half buried
+    for (let i = 0; i < 70; i++) {
+      A.add(rng.float() < 0.45 ? 'concrete_dark' : 'concrete', fine,
+        LL(IDENT, X(rng.range(-HW + 1, HW - 1)), SEC.floor + rng.range(0.04, 0.2),
+          Z(rng.range(-HD + 1, HD - 1)), rng.range(-1.2, 1.2),
+          rng.range(0.7, 2.2), rng.range(0.08, 0.22), rng.range(0.9, 2.6)),
+        { masks: [rng.range(0.7, 1.0), rng.range(0.4, 0.95), 0.3] });
+    }
+    // ash and dust, pooled where the mass came down
+    for (let i = 0; i < 90; i++) {
+      const g = patchGeometry(rng, rng.range(0.7, 2.6), { lobes: 10, wobble: 0.55 });
+      A.addOnce(rng.float() < 0.5 ? 'dirt' : 'concrete_dark', g,
+        LL(IDENT, X(rng.range(-HW + 0.5, HW - 0.5)), SEC.floor + 0.022,
+          Z(rng.range(-HD + 0.5, HD - 0.5)), rng.float() * 6.283, 1, 1, rng.range(0.6, 1.0)),
+        { masks: [0.15, rng.range(0.7, 1.0), 0.55] });
+    }
+    /**
+     * AND THE SPILL OUTSIDE THE WALLS — "大聖堂周りを瓦礫の山に". A wall that falls
+     * outward lands on the parvis, so the heaps continue a little way into the
+     * street on all four sides. These are drawn only: the parvis and the street
+     * around it are walkable ground in the height field and a solid here WOULD
+     * be the invisible wall the note above is about.
+     */
+    for (let i = 0; i < 150; i++) {
+      const edge = (rng.float() * 4) | 0;
+      const out = rng.range(0.4, 4.2);
+      const u = edge === 0 ? rng.range(-HW, HW) : edge === 1 ? rng.range(-HW, HW) : (edge === 2 ? -HW - out : HW + out);
+      const v = edge === 0 ? -HD - out : edge === 1 ? HD + out : rng.range(-HD, HD);
+      const g = rockGeometry(rng, rng.range(0.14, 0.68), 1, rng.range(0.32, 0.62));
+      fillMasks(g, 0.92, rng.range(0.3, 0.95), 0.25);
+      A.addOnce(rubbleKey(), g, LL(IDENT, X(u), rng.range(0.02, 0.24), Z(v), rng.float() * 6.283));
+    }
+  }
+  A.endScope();
+
+  /* ====================================================================== */
+  /* 9. WHAT THE ENGINE NEEDS BACK                                          */
   /* ====================================================================== */
   /**
    * `probeY` is where a downward ray must START to find this floor: above every
@@ -916,6 +1142,60 @@ export function buildCathedral(A) {
     hd: HD,
     floorY: SEC.floor,
     probeY: SEC.floor + 1.56,
+
+    /** True once the shell has been taken down. Read by `match` for the HUD. */
+    razed: false,
+    /** Standing height before and after, so a caller can say what changed. */
+    intactTopY: SEC.towerTop,
+    ruinTopY: SEC.floor + 2.9,
+
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * THE SWITCH. `match` owns WHEN; this owns WHAT.
+     * ──────────────────────────────────────────────────────────────────────
+     * Two index-range fills and two mask writes, and it is the whole of the
+     * cathedral's destruction. No geometry is built, cut, fractured or solved
+     * here — both states were assembled at BOOT and one of them has simply not
+     * been drawn since. @see the note on `cath:shell`.
+     *
+     * IT IS ALSO THE BOOT-TIME HIDE. A scope starts visible and solid because
+     * that is what `beginScope` records, and `buildCathedral` returns BEFORE
+     * `Assembler.finalize` has made a mesh to hide — so the first thing `match`
+     * does is call this with `down = false`, which puts the ruin away for the
+     * first time and leaves the church standing. That is also what restores it
+     * between matches: "A new match starts with the cathedral standing".
+     *
+     * Idempotent, and honest about it: it returns true only when the state
+     * actually changed, so a second `raze` in the same match reports false and
+     * `match` can log "already down" rather than claiming an event twice.
+     *
+     * `physics` is passed in rather than captured because `Assembler` does not
+     * retain it — `setScopeSolid` takes it per call. With no `physics` the
+     * VISUAL still switches and only the collision is skipped, which is the
+     * right failure: a cathedral that looks destroyed and still stops a bullet
+     * is a bug worth seeing, and one that throws mid-match is not.
+     */
+    setRazed(down, physics) {
+      const want = !!down;
+      if (this.razed === want && this._primed) return false;
+      this._primed = true;
+      this.razed = want;
+      A.setScopeVisible(shell, !want);
+      A.setScopeVisible(ruin, want);
+      if (physics) {
+        A.setScopeSolid(shell, physics, !want);
+        A.setScopeSolid(ruin, physics, want);
+      }
+      return true;
+    },
+
+    /** What `MatchSystem._razeCathedral` calls. */
+    raze(elapsed, physics) {
+      return this.setRazed(true, physics);
+    },
+
+    /** @private has `setRazed` ever run? The boot state is "never". */
+    _primed: false,
   };
 }
 
