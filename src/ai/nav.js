@@ -818,14 +818,28 @@ export class NavGrid {
      * next repath is an ordinary one. This is deliberately NOT a nudge inside
      * `nearest` — cover scoring, spawn validation and `src/match`'s reachability
      * proofs all call it and all want the closest cell, honestly.
+     *
+     * THE SMALLER END MOVES, and getting that backwards is worse than not doing
+     * it at all: a cache standing on a kerbed plinth is a goal on a ONE-CELL
+     * component, and re-anchoring the START onto it walks the whole search into
+     * the island — `start === goal`, one waypoint, and a man ordered to a pickup
+     * he can see and cannot path to. Measured exactly that way before the sizes
+     * were compared. So whichever end has fewer cells behind it is the end that
+     * gives way, and the other is only tried if that finds nothing.
      */
     if (this.comp && this.comp[start] !== this.comp[goal]) {
-      const s2 = this.nearest(from.x, from.z, from.y, ISLAND_RINGS, Infinity, this.comp[goal]);
-      if (s2 >= 0) start = s2;
-      else {
+      const reStart = () => {
+        const s2 = this.nearest(from.x, from.z, from.y, ISLAND_RINGS, Infinity, this.comp[goal]);
+        if (s2 >= 0) start = s2;
+        return s2 >= 0;
+      };
+      const reGoal = () => {
         const g2 = this.nearest(to.x, to.z, to.y, ISLAND_RINGS, Infinity, this.comp[start]);
         if (g2 >= 0) goal = g2;
-      }
+        return g2 >= 0;
+      };
+      if (this.componentSize(start) <= this.componentSize(goal)) reStart() || reGoal();
+      else reGoal() || reStart();
     }
     if (start === goal) {
       this._emit(out, 0, to);
