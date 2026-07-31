@@ -108,7 +108,33 @@ ui.airDanger(position, life, label)
 ui.setCaches(list)          ui.pickup(title, sub, kind)
 world.levelYaw              world.levelToWorld(x, y, z, out)
 world.features              world.links          world.interiorVolumes
+world.demolitions           world.demolish(id, down)   world.demolishAll(down)
 ```
+
+`world.demolitions` is A BUILDING'S OWN DESTROYED STATE, and it exists because
+"建物自体に壊れた時のキャッシュを持たせて" — every strike site in
+`src/match/airstrike.js` is a mass ADDED ON TOP OF a building, so the bomb lands,
+the rubble falls and the building is still standing and still exactly as
+impassable. Six blocks round the two flank capture points carry a second,
+COLLAPSED form built at boot beside the standing one, both of them inside the
+merged static batches:
+
+```js
+world.demolitions // [{ id, name, zone, opens, position:Vector3, radius, top,
+                  //    halfW, halfD, level, navRect, mass, surfaces, tint, down,
+                  //    setVisual(d), setCollision(d), setDown(d) }]
+```
+
+Bringing one down is a fill of degenerate indices over a cached triangle range
+plus two collision-mask writes — `Assembler.beginScope` / `setScopeVisible` /
+`setScopeSolid`, the same "cache it at boot, flip a range at runtime" move
+`Airstrike._setProxySolid` makes. `mass` is the boxes the building is made of in
+its own frame, plus every opening cut in each elevation, because `match` may not
+import `world` and `world` may not import the chunk vertex program: `match` cuts,
+throws and settles them with the machinery it already has. `setVisual` and
+`setCollision` are separate on purpose — the nav patch is baked at boot with the
+ruin temporarily solid and the building visibly standing the whole time.
+`src/world/demolition.js`; `_demoprobe.mjs` measures what it opens.
 
 `world.features` and `world.links` are PLACES THE LEVEL AUTHORED AND MARKED, and
 they exist because "屋内のエリアを作ってそこにもAIがいく利点やメリットを与えて でないとAIが
@@ -286,6 +312,7 @@ Emit and listen via `ctx.events`. Payloads are plain objects. The canonical set:
 | ↳ | somebody is back on their feet inside the round. Fires for a bot and for the local player on the same path, `RULES.respawnDelay` after the death. A respawned bot is a NEW `Agent`; anything holding the old one has a corpse. | |
 | `match:airstrike` | `{ phase: 'inbound'\|'impact'\|'settled', site, position }` | match |
 | ↳ | an airstrike on one of the eight fixed strike sites (three that take a storey down and change the map, five smaller ones over the attackers' approach). `inbound` is the telegraph (4.4 s of jet and whistle before it lands), `impact` is the frame it goes off, `settled` is when the rubble stops moving and becomes collision. The blast itself is a normal `explosion` event, so nothing has to listen to this to take damage. The payload object is REUSED — copy what you need. See `src/match/airstrike.js`. | |
+| ↳ | a site may also be a WHOLE BUILDING rather than a mass on top of one. Those sites are not authored in `airstrike.js` at all — they are derived from `world.demolitions`, one per block that carries a cached destroyed state, and grouped into one telegraphed salvo per flank district (`DISTRICT-A`, `DISTRICT-B`). `settled` is the frame the ruin becomes ground, and unlike every other site that is a frame on which the map gains walkable cells rather than losing them. | |
 | ↳ | an airstrike may also be a SALVO: three adjacent sites on one city block, called as one telegraphed event and fired a fifth of a second apart (`airstrike.callSalvo`, `RULES.airstrikeSalvoPerRound`). Every member still emits its own `inbound`/`impact`/`settled`, so nothing listening has to know; what changes is that ~2100 chunks come down over 30 m of frontage and a five-column dust wall occludes the lane for ~20 s. | |
 | `match:bomber` | `{ phase: 'inbound'\|'impact'\|'settled', run, position }` | match |
 | ↳ | an aircraft crossing the map and walking a STICK of 5-8 bombs along one of four fixed lines. `inbound` is the launch — the aeroplane itself is the telegraph and is on screen for 2.4 s before the first bomb is even released; `impact` fires once PER BOMB, with `position` at that bomb's crater; `settled` is when the debris stops moving. It changes no collision and no navigation, unlike the airstrike. Each bomb is a normal `explosion` event. The payload object is REUSED — copy what you need. See `src/match/bomber.js`. | |

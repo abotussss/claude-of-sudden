@@ -805,6 +805,18 @@ export function publishDemolitions(A, records, physics, root) {
       };
     }
 
+    /**
+     * THE FIRST HIDE IS THE EXPENSIVE ONE, SO IT HAPPENS HERE.
+     *
+     * `setScopeVisible` keeps the indices it overwrites so the round reset can
+     * put them back exactly, and it takes that copy LAZILY — which would put a
+     * few hundred kilobytes of allocation on the frame the bomb lands, in a
+     * feature whose entire design is that nothing is solved on that frame. One
+     * hide/show cycle at boot fills every `_saved` array and every instanced
+     * slot's cached matrix, and leaves the building standing.
+     */
+    A.setScopeVisible(rec.shell, false);
+    A.setScopeVisible(rec.shell, true);
     // The ruin starts hidden and intangible; the shell starts standing.
     A.setScopeVisible(rec.ruin, false);
     A.setScopeSolid(rec.ruin, physics, false);
