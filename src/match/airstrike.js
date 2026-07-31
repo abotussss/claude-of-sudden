@@ -1714,13 +1714,28 @@ export class Airstrike {
     site.baked = false;
     this._live.push(site);
 
-    // 1. THE BUILDING STOPS BEING A BUILDING. Two index-range fills in the
-    //    merged batches: the shell stops being drawn and the ruin starts, on
-    //    this frame, under the fireball. Collision does NOT change here — the
-    //    walls are in the air for six and a half seconds and the debris field
-    //    they are becoming is not there to stand on yet. @see `_bakeSettled`.
+    /**
+     * 1. THE BUILDING STOPS BEING A BUILDING, and its collision goes WITH the
+     *    picture rather than six and a half seconds after it.
+     *
+     *    Every other site can leave collision to `_bakeSettled`, because nothing
+     *    it owns was ever solid: the mass is an ornament and the mound proxy is
+     *    new ground appearing where there was street. A demolition is the other
+     *    way round — the walls were the building — so deferring the flip leaves
+     *    the shell INVISIBLE AND SOLID for the whole collapse, which is a man
+     *    walking face-first into a building he has just watched fall over.
+     *    Measured on the first build of this: `shellVisible false, shellSolid
+     *    true` for 6.5 s.
+     *
+     *    So the two index-range fills and the two mask fills happen together, on
+     *    this frame, under the fireball. NAVIGATION still waits — the patch is
+     *    ~450 cells and the bots may as well keep walking round the block while
+     *    it is still coming down. @see `_bakeSettled`.
+     */
     if (site.demo) {
       site.demo.setVisual(true);
+      if (site.blocking) site.demo.setCollision(true);
+      site.demo.down = true;
       for (const mesh of site.meshes) mesh.visible = true;
     }
 
@@ -2318,10 +2333,12 @@ export class Airstrike {
       mesh.userData.owNoPrepass = false;
     }
     if (site.blocking) {
+      // A demolition already flipped its collision on the fire frame; this is a
+      // no-op there (`setScopeSolid` is guarded) and the whole job everywhere
+      // else. The NAV patch is this method's alone, for both.
       this._setSiteSolid(site, true);
       this._applyNav(site, true);
     }
-    if (site.demo) site.demo.down = true;
     site.uniforms.uAnim.value = 0;
     this._emit('settled', site);
   }
