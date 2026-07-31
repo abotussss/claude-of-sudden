@@ -1083,7 +1083,25 @@ export class CoverMap {
   constructor(grid, physics) {
     this.grid = grid;
     this.physics = physics;
-    this.points = [];
+    /**
+     * EVERY point this table ever baked, in cell order, including the ones that
+     * only exist while some block is standing and the ones that only exist once
+     * it has fallen. Claims live here. @see `bakeBlockDeps`.
+     */
+    this.all = [];
+    /**
+     * The points that describe REAL MASS RIGHT NOW — what `pick` searches and
+     * what a probe measures. Until `bakeBlockDeps` finds a point whose cover
+     * belongs to a destructible block, this IS `all`, same array, no second
+     * pass and no second allocation anywhere.
+     */
+    this.points = this.all;
+    /** Which destructible blocks are down, one bit each. @see `applyBlocks`. */
+    this.blockMask = 0;
+    this._appliedMask = -1;
+    /** Does any point in here depend on a block at all? */
+    this.dynamic = false;
+    this.depMs = 0;
     this._v = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
     this._v3 = new THREE.Vector3();
@@ -1097,7 +1115,11 @@ export class CoverMap {
     const MASK = phys.MASK.WORLD;
     const step = opts.step ?? 1; // sample every Nth cell
     const reach = opts.reach ?? 1.25;
-    this.points.length = 0;
+    this.all.length = 0;
+    this.points = this.all;
+    this.dynamic = false;
+    this.blockMask = 0;
+    this._appliedMask = -1;
     for (let iz = 1; iz < g.nz - 1; iz += step) {
       for (let ix = 1; ix < g.nx - 1; ix += step) {
         if (!g.walkable(ix, iz)) continue;
@@ -1119,13 +1141,19 @@ export class CoverMap {
           if (!low.hit) continue;
           const high = phys.raycastAny(x, y + 1.32, z, dx, 0, dz, reach, MASK);
           // must be able to shoot over/around: check a peek to both sides
-          this.points.push({
+          this.all.push({
             x, y, z,
             dx, dz, // direction the cover faces (toward the blocker)
             high,
             dist: low.distance,
             claimed: -1,
             score: 0,
+            /** In the live set? Only `applyBlocks` ever clears it. */
+            live: true,
+            /** cell, so `bakeBlockDeps` can find this point again */
+            cell: i,
+            /** per-block facings, or null for a point no block can change */
+            variants: null,
           });
           break;
         }
@@ -1133,6 +1161,247 @@ export class CoverMap {
     }
     this.buildMs = performance.now() - t0;
     return this;
+  }
+
+  /**
+   * ════════════════════════════════════════════════════════════════════════
+   * WHICH BLOCK IS THIS COVER POINT'S MASS PART OF? — asked once per point,
+   * not once per combination.
+   * ════════════════════════════════════════════════════════════════════════
+   * `world.demolitions` are six blocks that fire INDEPENDENTLY, so the
+   * cathedral's answer — bake the whole table twice and move a reference —
+   * would need sixty-four tables here. It does not have to: a cover point is
+   * one cell and one 1.3 m ray, and that ray hits ONE piece of mass. So the
+   * question "is this point still true" is per point and per block, and the
+   * table it needs is O(points × blocks), which is this one.
+   *
+   * For every walkable cell inside a block's rect (plus a margin, so nothing
+   * within `reach` of the block's own mass is missed) this fires all eight
+   * directions in the state the level ships in, then fires them again with ONE
+   * block's collision swapped for its ruin, one block at a time. That gives
+   * each (cell, direction) two bitmasks:
+   *
+   *   die   blocks whose STANDING mass is what this facing describes. The
+   *         facing is real until any one of them comes down, and false after.
+   *   need  blocks whose RUBBLE is what this facing describes. There is
+   *         nothing there while the building stands, and cover once it falls —
+   *         the corner stubs and pancaked slabs `demolition.js` builds are
+   *         mass like any other and a man should be allowed to use them.
+   *
+   * A point keeps its variants IN DIRECTION ORDER, so with no block down the
+   * facing chosen is the first direction that hits, byte for byte what `build`
+   * chose. `applyBlocks` then walks that list and takes the first facing that
+   * is true in the state the town is actually in — which is how a cell whose
+   * north wall fell but whose east wall is a permanent one stays a cover point
+   * instead of being dropped, and how a cell that gains rubble becomes one.
+   *
+   * A point whose FIRST facing is permanent is left alone entirely (no variant
+   * array, never re-examined): nothing that happens to a block can change it.
+   *
+   * COST IS AT BOOT AND IT IS BOUNDED BY THE BLOCKS, NOT BY THE MAP: only
+   * cells inside the six rects are probed, and each is asked about the blocks
+   * whose rect it is in. Nothing here runs again.
+   *
+   * @param {Array<{x0:number,x1:number,z0:number,z1:number}>} rects one world
+   *        AABB per block; the index in this array IS the bit.
+   * @param {(k:number, down:boolean)=>void} setDown flips ONE block's
+   *        COLLISION (not its picture) and nothing else.
+   */
+  bakeBlockDeps(rects, setDown, opts = {}) {
+    const t0 = performance.now();
+    const g = this.grid;
+    const phys = this.physics;
+    const MASK = phys.MASK.WORLD;
+    const reach = opts.reach ?? 1.25;
+    // A cell this far outside a block's rect cannot have that block's mass
+    // inside `reach`, so it cannot depend on it.
+    const pad = reach + g.cell;
+    const nb = Math.min(rects.length, 30); // one bit each, kept inside int32
+    if (nb === 0) return this;
+
+    /** cell index -> { x, y, z, near, up[8], down[8][k] } */
+    const cells = new Map();
+    const byCell = new Map();
+    for (const p of this.all) byCell.set(p.cell, p);
+
+    for (let k = 0; k < nb; k++) {
+      const r = rects[k];
+      if (!r) continue;
+      const ix0 = Math.max(1, g.cellX(r.x0 - pad));
+      const ix1 = Math.min(g.nx - 2, g.cellX(r.x1 + pad));
+      const iz0 = Math.max(1, g.cellZ(r.z0 - pad));
+      const iz1 = Math.min(g.nz - 2, g.cellZ(r.z1 + pad));
+      for (let iz = iz0; iz <= iz1; iz++) {
+        for (let ix = ix0; ix <= ix1; ix++) {
+          if (!g.walkable(ix, iz)) continue;
+          const i = g.index(ix, iz);
+          let c = cells.get(i);
+          if (!c) {
+            c = {
+              i,
+              x: g.worldX(ix),
+              y: g.floor[i],
+              z: g.worldZ(iz),
+              near: 0,
+              up: new Array(8).fill(null),
+              alt: new Array(8 * nb).fill(null),
+            };
+            cells.set(i, c);
+          }
+          c.near |= 1 << k;
+        }
+      }
+    }
+
+    /** One direction's answer in one state, or null for "no mass there". */
+    const fire = (c, d) => {
+      const dx = DX[d] / (d < 4 ? 1 : SQRT2);
+      const dz = DZ[d] / (d < 4 ? 1 : SQRT2);
+      const low = phys.raycast(c.x, c.y + 0.55, c.z, dx, 0, dz, reach, MASK);
+      if (!low.hit) return null;
+      return {
+        dx,
+        dz,
+        high: phys.raycastAny(c.x, c.y + 1.32, c.z, dx, 0, dz, reach, MASK),
+        dist: low.distance,
+      };
+    };
+
+    // THE TOWN AS IT STANDS. Every candidate cell, every direction.
+    for (const c of cells.values()) for (let d = 0; d < 8; d++) c.up[d] = fire(c, d);
+
+    // ONE BLOCK DOWN AT A TIME. Only the cells that block could possibly reach.
+    for (let k = 0; k < nb; k++) {
+      const bit = 1 << k;
+      let touched = false;
+      for (const c of cells.values()) {
+        if (!(c.near & bit)) continue;
+        if (!touched) {
+          setDown(k, true);
+          touched = true;
+        }
+        for (let d = 0; d < 8; d++) c.alt[d * nb + k] = fire(c, d);
+      }
+      if (touched) setDown(k, false);
+    }
+
+    // Fold the two states into per-facing bitmasks, and hand each cell the
+    // facings that are worth keeping.
+    let dependent = 0;
+    let created = 0;
+    const fresh = [];
+    for (const c of cells.values()) {
+      const variants = [];
+      for (let d = 0; d < 8; d++) {
+        const up = c.up[d];
+        let die = 0;
+        let need = 0;
+        for (let k = 0; k < nb; k++) {
+          if (!(c.near & (1 << k))) continue;
+          const alt = c.alt[d * nb + k];
+          if (up && !alt) die |= 1 << k;
+          else if (!up && alt) need |= 1 << k;
+        }
+        if (up) {
+          variants.push({ dx: up.dx, dz: up.dz, high: up.high, dist: up.dist, die, need: 0 });
+        } else if (need) {
+          // The rubble's own facing: measured in the state that has it.
+          let src = null;
+          for (let k = 0; k < nb && !src; k++) if (need & (1 << k)) src = c.alt[d * nb + k];
+          variants.push({ dx: src.dx, dz: src.dz, high: src.high, dist: src.dist, die: 0, need });
+        }
+      }
+      if (!variants.length) continue;
+      const p = byCell.get(c.i);
+      if (p) {
+        // Already a cover point. It only needs a variant list if the facing it
+        // is using can go away.
+        if (variants[0].die === 0) continue;
+        p.variants = variants;
+        dependent++;
+      } else {
+        // Not a cover point today. It is one once the rubble is there — and
+        // only then, so it is baked dead and appended, which leaves the
+        // all-standing table identical to what `build` produced.
+        if (!variants.some((v) => v.need !== 0)) continue;
+        fresh.push({
+          x: c.x, y: c.y, z: c.z,
+          dx: variants[0].dx, dz: variants[0].dz,
+          high: variants[0].high,
+          dist: variants[0].dist,
+          claimed: -1,
+          score: 0,
+          live: false,
+          cell: c.i,
+          variants,
+        });
+        created++;
+      }
+    }
+    for (const p of fresh) this.all.push(p);
+
+    this.dynamic = dependent > 0 || created > 0;
+    if (this.dynamic) {
+      // The live set stops being the whole table, so it needs its own array —
+      // sized once, here, and never grown again. `applyBlocks` writes into it
+      // by index and moves `length`; it allocates nothing.
+      this.points = new Array(this.all.length);
+      this._appliedMask = -1;
+      this.applyBlocks(this.blockMask);
+    }
+    this.depMs = performance.now() - t0;
+    this.depStats = { cells: cells.size, dependent, created };
+    return this;
+  }
+
+  /**
+   * THE SWAP, FOR SIX THINGS THAT MOVE INDEPENDENTLY. One pass over the table,
+   * choosing each dependent point's first facing that describes real mass with
+   * these blocks down, and dropping the points that have none.
+   *
+   * A point that leaves the live set gives up its claim on the way out: a claim
+   * is a man's id, `release(id)` only ever reaches the points it can see, and a
+   * point that came back later still carrying the id of a man who died two
+   * rounds ago would be reserved for ever.
+   *
+   * O(points), allocation-free, and it is not on the per-frame path — see
+   * `AiSystem.syncCoverBlocks`, which only calls it when a bit actually moved.
+   */
+  applyBlocks(mask) {
+    if (!this.dynamic) return false;
+    if (this._appliedMask === mask) return false;
+    this.blockMask = mask;
+    this._appliedMask = mask;
+    const live = this.points;
+    let n = 0;
+    for (let i = 0; i < this.all.length; i++) {
+      const p = this.all[i];
+      let ok = true;
+      const vs = p.variants;
+      if (vs !== null) {
+        ok = false;
+        for (let j = 0; j < vs.length; j++) {
+          const v = vs[j];
+          if (v.need !== 0 ? (v.need & mask) !== 0 : (v.die & mask) === 0) {
+            p.dx = v.dx;
+            p.dz = v.dz;
+            p.high = v.high;
+            p.dist = v.dist;
+            ok = true;
+            break;
+          }
+        }
+      }
+      if (ok) {
+        p.live = true;
+        live[n++] = p;
+      } else if (p.live) {
+        p.live = false;
+        p.claimed = -1;
+      }
+    }
+    live.length = n;
+    return true;
   }
 
   /**
@@ -1212,14 +1481,16 @@ export class CoverMap {
       }
     }
     if (best && claimId >= 0) {
-      for (const p of this.points) if (p.claimed === claimId) p.claimed = -1;
+      for (const p of this.all) if (p.claimed === claimId) p.claimed = -1;
       best.claimed = claimId;
     }
     return best;
   }
 
   release(claimId) {
-    for (const p of this.points) if (p.claimed === claimId) p.claimed = -1;
+    // `all`, not `points`: a man can be holding a point that a block came down
+    // on since he took it, and that claim has to come off too.
+    for (const p of this.all) if (p.claimed === claimId) p.claimed = -1;
   }
 
   /**
@@ -1237,7 +1508,7 @@ export class CoverMap {
    * nothing and it is not on the per-frame path.
    */
   releaseAll() {
-    for (const p of this.points) p.claimed = -1;
+    for (const p of this.all) p.claimed = -1;
     return this;
   }
 

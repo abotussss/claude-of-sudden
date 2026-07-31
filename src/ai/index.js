@@ -106,6 +106,13 @@ export class AiSystem {
     this.coverRuin = null;
     /** Which of the two `this.cover` currently points at. */
     this._coverRazed = false;
+    /**
+     * `world.demolitions`, held so the frame loop can see which blocks are
+     * down without asking `world` for the list again. @see `syncCoverBlocks`.
+     */
+    this._demoRecs = null;
+    /** One bit per demolition block, 1 = down. */
+    this._blockMask = 0;
     this.inspect = false;
     this.debugLog = false;
     /** dev: force the garrison to spawn even in deterministic capture runs */
@@ -117,6 +124,10 @@ export class AiSystem {
       navMs: 0,
       coverPts: 0,
       coverRuinPts: 0,
+      /** cover points whose mass belongs to a destructible block */
+      coverDeps: 0,
+      /** cover points that only exist once a block is rubble */
+      coverRubblePts: 0,
       walkable: 0,
       unstick: 0,
     };
@@ -916,6 +927,11 @@ export class AiSystem {
         `(${this.grid.interiorCells ?? 0} indoor) · ` +
         `${this.stats.coverPts} cover points` +
         (this.coverRuin ? ` (+${this.stats.coverRuinPts} in the cathedral ruin)` : '') +
+        (this._demoRecs
+          ? ` · ${this.stats.coverDeps} of them stand on a destructible block ` +
+            `(+${this.stats.coverRubblePts} the rubble makes, ` +
+            `${this.coverIntact.depMs.toFixed(0)}ms)`
+          : '') +
         ` · ${this.stats.navMs.toFixed(0)}ms`
     );
   }
@@ -975,24 +991,93 @@ export class AiSystem {
     /** The state the level is in now, so the pair of flips lands back on it. */
     const was = canSwap ? cath.razed === true : false;
 
+    /**
+     * THE SIX BLOCKS, WHICH ARE NOT THE CATHEDRAL'S PROBLEM AGAIN.
+     * `world.demolitions` fire independently, so there is no pair of tables
+     * that can describe them — the dependency is baked PER POINT instead.
+     * @see `CoverMap.bakeBlockDeps`, and `_demoState` for the flips.
+     */
+    const recs = world?.demolitions ?? null;
+    this._demoRecs = recs?.length ? recs : null;
+    const demoWas = this._demoRecs ? this._demoRecs.map((r) => r.down === true) : null;
+    const rects = this._demoRecs ? this._demoRecs.map((r) => r.navRect) : null;
+    /**
+     * COLLISION ONLY, NEVER THE PICTURE — the same split `Airstrike._bakeNavPatch`
+     * uses to probe a ruin at boot "with the building visibly standing the whole
+     * time". Nothing here is allowed to be seen.
+     */
+    const setDown = this._demoRecs
+      ? (k, down) => this._demoRecs[k].setCollision?.(down)
+      : null;
+    // Every block STANDING for the bake, whatever it happens to be right now.
+    if (this._demoRecs) for (const r of this._demoRecs) r.setCollision?.(false);
+
     // The church STANDING and the rubble put away — which is NOT the state a
     // freshly assembled level is in. @see the note above.
     if (canSwap) cath.setRazed(false, phys);
     this.coverIntact = new CoverMap(this.grid, phys).build({ step: 1, reach: 1.3 });
+    if (rects) this.coverIntact.bakeBlockDeps(rects, setDown, { reach: 1.3 });
 
     if (canSwap) {
       cath.setRazed(true, phys);
       this.coverRuin = new CoverMap(this.grid, phys).build({ step: 1, reach: 1.3 });
+      if (rects) this.coverRuin.bakeBlockDeps(rects, setDown, { reach: 1.3 });
       cath.setRazed(was, phys);
     } else {
       this.coverRuin = null;
     }
 
+    // Put every block back exactly as it was found. `setCollision` does not
+    // touch `rec.down`, so `rec.down` is still the truth about each one.
+    if (this._demoRecs) {
+      for (let i = 0; i < this._demoRecs.length; i++) {
+        this._demoRecs[i].setCollision?.(demoWas[i]);
+      }
+    }
+
     this.stats.coverPts = this.coverIntact.points.length;
     this.stats.coverRuinPts = this.coverRuin?.points.length ?? 0;
+    this.stats.coverDeps = this.coverIntact.depStats?.dependent ?? 0;
+    this.stats.coverRubblePts = this.coverIntact.depStats?.created ?? 0;
     // `_coverRazed` may already have been set by `match` if the nav build was
     // deferred past the first round — honour it rather than reset it.
     this.cover = this._coverRazed && this.coverRuin ? this.coverRuin : this.coverIntact;
+    // …and whatever the blocks are doing right now, which under `?demo=down` or
+    // a nav build deferred past the first salvo is not "all standing".
+    this._blockMask = -1;
+    this.syncCoverBlocks();
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE BLOCKS, NOTICED. One `if` per frame; a pass over the table only when a
+   * building actually changed state.
+   * ────────────────────────────────────────────────────────────────────────
+   * `world.demolitions[].down` is the public truth about which blocks are down,
+   * and it is written by five different paths — the salvo settling, the round
+   * reset, `Airstrike.forceDemoNav`, the `?demo=down` boot flag and the probes.
+   * Reading the flags is cheaper than hooking all five and cannot be wired up
+   * wrong: six array reads and a compare, allocating nothing.
+   *
+   * The pass itself lands on the frame AFTER the one the building came down on,
+   * which is the frame the rubble becomes collision anyway.
+   *
+   * Public so `match` (or a probe) can force it inside the same frame.
+   * @returns {boolean} did anything change
+   */
+  syncCoverBlocks() {
+    const recs = this._demoRecs;
+    if (!recs) return false;
+    let mask = 0;
+    for (let i = 0; i < recs.length; i++) if (recs[i].down === true) mask |= 1 << i;
+    if (mask === this._blockMask) return false;
+    this._blockMask = mask;
+    if (!this.cover?.applyBlocks(mask)) return false;
+    // A man holding a point the rubble just took away has to let go of it — the
+    // one whose point survived with a different facing has not lost his cover
+    // and is left where he is. @see `setCoverRazed` for the same rule.
+    for (const a of this.agents) if (a.cover && a.cover.live === false) a.cover = null;
+    return true;
   }
 
   /**
@@ -1023,6 +1108,10 @@ export class AiSystem {
     if (next === this.cover) return false;
     this.cover?.releaseAll();
     this.cover = next;
+    // The table coming in was baked with every block standing and has been out
+    // of play for however many salvos: bring it up to the town it is joining
+    // before anybody picks out of it. @see `syncCoverBlocks`.
+    next.applyBlocks(this._blockMask);
     next.releaseAll();
     for (const a of this.agents) a.cover = null;
     return true;
@@ -1424,6 +1513,9 @@ export class AiSystem {
 
     // `match` flips playerTeam at the half; hostile and friendly swap with it.
     if (this._rimTeam !== this.playerTeam) this._applyTeamRims();
+
+    // Six flags and a compare. Only a block that actually moved costs anything.
+    if (this._demoRecs) this.syncCoverBlocks();
 
     // Per-frame A* budget: a millisecond allowance turned into a solve count at
     // whatever a solve costs on THIS level. See `pathMsBudget`.
