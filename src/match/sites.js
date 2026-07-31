@@ -496,10 +496,74 @@ export const ZONES = [
   {
     id: 'B',
     name: 'SOUTH-EAST DISTRICT',
-    /** ρ(A) exactly: (-x, -2 - z). Every point of it, including the fallback. */
-    level: L(69.7, -36.0),
-    fallback: L(69.7, -38.0),
-    holdLevel: L(69.7, -36.0),
+    /**
+     * ρ(A) exactly: (-x, -2 - z). Every point of it, including the fallback.
+     *
+     * ──────────────────────────────────────────────────────────────────────
+     * AND IT SAID THAT FOR SIX COMMITS WHILE BEING TWO UNITS OFF, WHICH IS
+     * WHERE THE ZONE'S WHOLE PROBLEM CAME FROM
+     * ──────────────────────────────────────────────────────────────────────
+     * ρ(-69.7, 36) is (69.7, -38). This entry authored -36 — the ρ of a
+     * DIFFERENT map, the one whose symmetry is taken about the origin instead
+     * of about the cathedral at (0, -1) — and the comment above claimed the
+     * mirror it did not have. Two authored units, three metres of ground, and
+     * it is the difference between standing in a street and standing on a wall:
+     *
+     *   `SE1` is authored x 60..70, z -36..-16 (`src/world/layout.js`), so its
+     *   SOUTH FACE IS z -36 EXACTLY and B's authored centre was flush against
+     *   it. `NW1` is ρ(SE1) at z 14..34 and A's centre at 36 has TWO UNITS of
+     *   cross street between it and that face. The two zones were not the same
+     *   placement measured from their own ground; only one of them was in a
+     *   street at all.
+     *
+     * WHAT THAT COST, all of it measured on the built map rather than argued:
+     *
+     *   1. B'S CENTRE WANDERED BETWEEN BOOTS. `walkable()` asks `grid.nearest`
+     *      for a cell within three rings and 1.2 m of the probe height, and on
+     *      a wall face that is a coin flip: over 13 boots B resolved to
+     *      (69.51, -36.15) nine times — the authored point, snapped — and to
+     *      (69.51, -38.08) four times, the boots where the authored point was
+     *      not walkable and `snap()` fell through to the fallback. A, two units
+     *      off its own wall, resolved to (-69.52, 35.92) every single time.
+     *      A CAPTURE POINT WITH TWO PLACES IT MIGHT BE IS TWO CAPTURE POINTS.
+     *
+     *   2. AND THE -36 ONE WAS BARE. `tools/sitecheck.mjs` wants 12 m² of
+     *      0.9-2.8 m mass inside the circle. Measured over four boots of the
+     *      build before this change, all four of which resolved to -36.15:
+     *      10.5, 15.8, 15.8, 16.3 m² — a gate that fails on the dressing
+     *      scatter's dice. The boots that fell through to -38.08 measured 21.3.
+     *      The mass in `SITEWORKS` for this zone is authored at z -37.0, -38.9
+     *      and -39.9 (it had to be, or a ρ'd table would have put a third of it
+     *      inside SE1's ground floor), so from -36 half of it is hanging off
+     *      the far edge of the circle and from -38 it is ON the point.
+     *
+     *   3. AND ITS NORTH ARC WAS INSIDE A BUILDING THAT COMES DOWN. `SE1` is on
+     *      `DEMOLITION` in src/world/demolition.js — the `DISTRICT-B` salvo
+     *      levels it mid-match — so a third of what B was resolving against was
+     *      a building that does not survive the round. From -38 the circle
+     *      clears SE1's face by two units and the mass it counts is the two
+     *      plinths, the kerb wall and the district's own rubble mound, none of
+     *      which is on a demolishable footprint. @see the measurement in the
+     *      commit message: the counted mass standing on a demo footprint is
+     *      0.0 m² intact, and the salvo ADDS 5.5 m² of walkable rubble to the
+     *      circle rather than taking anything out of it.
+     *
+     * THE FAIRNESS COST IS NEGATIVE, which is the only reason this is the fix
+     * rather than the other one. A and B are a ρ pair and domination never swaps
+     * ends, so any asymmetry between them is permanent — this file has already
+     * rejected one zone move that handed a side 103 m (@see the C entry). This
+     * move does not create an asymmetry, it REMOVES the one that was there:
+     * B was two units from where the mirror puts it, and `navcheck`'s own
+     * attack/defend distances close up rather than open. The numbers are in the
+     * commit message.
+     *
+     * `KEEPOUT` in src/world/layout.js reserves this centre at r3.0 and moved
+     * with it. IF ONE MOVES, MOVE THE OTHER.
+     */
+    level: L(69.7, -38.0),
+    /** ρ(A's fallback) — two units further down the avenue, away from SE1. */
+    fallback: L(69.7, -40.0),
+    holdLevel: L(69.7, -38.0),
     flankLevel: null,
   },
   /**

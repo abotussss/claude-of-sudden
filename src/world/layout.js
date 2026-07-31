@@ -2459,21 +2459,35 @@ for (const p of [
  * AND THIS PAIR IS NOT ρ. THAT IS A FACT ABOUT `ZONES`, NOT A CHOICE HERE.
  * ────────────────────────────────────────────────────────────────────────────
  * ρ(x, z) = (-x, -2 - z) sends A's centre (-69.7, 36) to (69.7, -38). `ZONES`
- * authors B at (69.7, -36), which is FLUSH WITH SE1's SOUTH FACE, and the
- * consequence is measurable in two ways:
+ * USED TO AUTHOR B AT (69.7, -36), which is FLUSH WITH SE1's SOUTH FACE, and the
+ * consequence was measurable in two ways:
  *
  *   - the ground is not the mirror image. A's centre has 2 authored units of
- *     cross street south of it and 4 north; B's has 6 south and NONE — its north
- *     arc is inside a building. A ρ'd table would put a third of B's mass in
- *     SE1's ground floor, so each half is authored against its own ground.
- *   - B'S CENTRE MOVES BETWEEN BOOTS. Probed over seven boots of one build,
+ *     cross street south of it and 4 north; B's had 6 south and NONE — its north
+ *     arc was inside a building. A ρ'd table would have put a third of B's mass
+ *     in SE1's ground floor, so each half is authored against its own ground.
+ *   - B'S CENTRE MOVED BETWEEN BOOTS. Probed over thirteen boots of one build,
  *     A resolved to (-69.52, 35.92) every single time; B came back
- *     (69.51, -36.15) five times and (69.51, -38.08) twice — the boots where
- *     `ensureReachable` walked it off the wall it is authored on. So everything
- *     below is inside the 5.33-unit circle for BOTH of B's outcomes (18.2 m²
- *     against 19.8 m², computed corner by corner), which is why B's mass is
- *     weighted along X: x is the axis that does not move. THE FIX FOR THE
- *     WANDER IS TWO UNITS IN `ZONES` AND IT IS NOT THIS FILE'S TO MAKE.
+ *     (69.51, -36.15) nine times and (69.51, -38.08) four times — the boots
+ *     where `walkable()` could not find a nav cell on the wall it was authored
+ *     on and `snap()` fell through to the fallback. So everything below is
+ *     inside the 5.33-unit circle for BOTH of B's outcomes (18.2 m² against
+ *     19.8 m², computed corner by corner), which is why B's mass is weighted
+ *     along X: x is the axis that did not move.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * …AND THE FIX WAS THE TWO UNITS, AND `ZONES` HAS NOW MADE IT.
+ * ────────────────────────────────────────────────────────────────────────────
+ * B is authored at (69.7, -38) — ρ(A) exactly — so the wander is gone (one
+ * outcome, not two) and the mass below, authored at z -37.0/-38.9/-39.9 for the
+ * old centre, is ON the point rather than hanging off the far edge of its
+ * circle. NOTHING BELOW MOVED WITH IT and that is deliberate twice over: every
+ * piece is still inside the 5.33-unit circle from -38 (4.00, 2.83 and 4.81
+ * units out), and re-centring it would be the third time this file re-authored
+ * mass that was already measured good. What the move buys is measured in
+ * `src/match/sites.js`'s own note — sitecheck's cover mass on B goes from
+ * 10.5-16.3 m² against a bar of 12 to a distribution that clears it on every
+ * seed, and none of the counted mass stands on a demolishable footprint.
  *
  * The recipe is the one the other four points use, read against ground that is a
  * CITY STREET rather than a gravel pan — each district's dressing (a stall, a
@@ -2567,7 +2581,15 @@ SITEWORKS.push(
  */
 KEEPOUT.push(
   [-69.7, 36, 3.0], // ZONE A — the west avenue at its southern cross street
-  [69.7, -36, 3.0], // ZONE B — the east avenue at its northern cross street
+  /**
+   * …AND THE FOURTH TIME, THIS ONE MOVED BECAUSE `ZONES` FINALLY DID. B was
+   * authored at -36 — flush with `SE1`'s south face — and is now at ρ(A) =
+   * (69.7, -38), two units of cross street off the wall exactly as A is off
+   * `NW1`. That is the fix the note under `SITEWORKS` below asked for by name
+   * ("THE FIX FOR THE WANDER IS TWO UNITS IN `ZONES`"); this circle follows it
+   * in the same commit, which is the whole point of the sentence above.
+   */
+  [69.7, -38, 3.0], // ZONE B — the east avenue at its northern cross street
   /**
    * …AND ONE ON EACH SHED, WHICH IS THE MANTLE LADDER'S CIRCLE AND NOT THE
    * DOOR'S. `setDoorways` already derives a circle on every threshold, so a
