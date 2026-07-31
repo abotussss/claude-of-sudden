@@ -189,6 +189,60 @@ const DOLL = [
 
 const DEG = Math.PI / 180;
 
+/**
+ * ──────────────────────────────────────────────────────────────────────────────
+ * GOING NOWHERE — the window, and why it is two seconds and not five
+ * ──────────────────────────────────────────────────────────────────────────────
+ * "AIのスタック回避 — 移動意図があるのに5秒間ほとんど動かない個体に回避行動". Five
+ * seconds is the SYMPTOM the player can see, and `tools/stuckcheck.mjs` scores it
+ * exactly that way: five consecutive one-second samples in which a man wanted to
+ * move and covered under 0.15 m. A recovery that only fires at five seconds has
+ * therefore already lost — the run is five long by the time it does anything.
+ *
+ * So the verdict is taken on a TWO second window, which is still four to eight
+ * metres of travel for anybody actually walking, and the recovery gets the
+ * remaining three seconds to put more than 0.15 m under him. `STUCK_CLEAR` is
+ * deliberately far below any real gait: the slowest thing on this map is a
+ * crouched man crossing a courtyard at 1.8 m/s, and a capsule ground into a wall
+ * covers centimetres.
+ */
+const STUCK_WINDOW = 2.0;
+const STUCK_CLEAR = 0.9;
+
+/**
+ * ──────────────────────────────────────────────────────────────────────────────
+ * OFF THE HEIGHT FIELD — the failure that made half the roster statues
+ * ──────────────────────────────────────────────────────────────────────────────
+ * `src/ai/nav.js` is a 2.5D height field: ONE floor per cell, sampled by dropping
+ * a ray from above. Where a bot is standing under something — a rooftop gangway,
+ * a balcony, the ground storey of a footprint `_carveInteriors` did not re-sample
+ * — the cell he occupies is marked walkable at the height of the thing OVER HIS
+ * HEAD. Measured on a live match, every bot with a zero-metre run was standing at
+ * y = 0.15 m on a cell whose floor reads 3.3, 3.45, 6.5 or 9.55 m.
+ *
+ * That is not a slow route, it is a route to a different storey, and it fails in
+ * the most expensive way there is: `findPath` snaps `from` to the nearest cell
+ * with NO height tolerance, lands on the roof, and then sweeps the entire
+ * `maxNodes` ceiling before returning 0. Every one of those solves is ~1.2 ms
+ * against a 0.3 ms design assumption, and the per-frame ration is derived from
+ * the measured cost (`AiSystem.pathMsBudget`) — so a handful of men in bad cells
+ * collapse the whole map's path budget from 9 solves a frame to 4 and starve the
+ * men who were fine. `pathsDeferred` measured 5930 in forty seconds.
+ *
+ * So a man who is off the height field does not ask A* anything. He WALKS BACK
+ * ONTO IT (`_regainGrid`) — the nearest cell whose floor is within a stride of
+ * his feet, up to eight metres out — and asks again from there. `world` and
+ * `nav` may or may not close the hole; the behaviour must not depend on it.
+ */
+const OFFGRID_TOL = 1.5;
+
+/**
+ * Bearings a side-step tries, in eighths of a turn off the leg being walked:
+ * perpendicular first, then obtuse, then straight back, then the shallow ones.
+ * @see `Agent._sideStep`
+ */
+const SIDE_FAN = [2, -2, 3, -3, 4, 1, -1];
+
 let _nextId = 1;
 
 export class Agent {
@@ -478,6 +532,28 @@ export class Agent {
     this.pathPending = false;
     this._pendingDest = new THREE.Vector3();
 
+    /* ---------------- going nowhere (see `_trackProgress` / `_unstick`) ---- */
+    /** Where he was when the current progress window opened. */
+    this._progFrom = new THREE.Vector3().copy(this.position);
+    /** Seconds of WANTING to move accumulated in the current window. */
+    this._progTime = 0;
+    /** How far up the recovery ladder this man currently is, 0-5. */
+    this.stuckRung = 0;
+    /** Consecutive windows of real progress; two of them retire the ladder. */
+    this._progGood = 0;
+    /** A hand-made destination that owns the steering while it lasts. */
+    this._detour = new THREE.Vector3();
+    this._detourTimer = 0;
+    /** Which way he tries first. Flipped on every side-step so a repeat differs. */
+    this._detourSide = this.rng.float() < 0.5 ? 1 : -1;
+    /** Rotating bearing for the blind step the grid cannot advise. @see `_sideStep` */
+    this._blindK = this.rng.int(0, 6);
+    /** The waypoint he could not get through, and until when it is refused. */
+    this._badWp = new THREE.Vector3();
+    this._badUntil = -1e9;
+    /** Re-entrancy guard for the nudged re-path inside `_goTo`. */
+    this._nudging = false;
+
     /* ---------------- LOD ---------------- */
     /** set by AiSystem._updateRelevance: nothing this actor does reaches a pixel */
     this.lodIrrelevant = false;
@@ -515,6 +591,7 @@ export class Agent {
     this.grenadeCooldown -= dt;
     this.peekTimer -= dt;
     this.repathTimer -= dt;
+    this._detourTimer -= dt;
     this.coverDwell -= dt;
     this.holdTimer -= dt;
     this._scanTimer -= dt;
@@ -527,6 +604,9 @@ export class Agent {
     this._sense(dt);
     this._think(dt);
     this._move(dt);
+    // AFTER the move, because the question it asks is about the move that was
+    // just integrated: did the man who wanted to go somewhere actually go.
+    this._trackProgress(dt);
     this._shoot(dt);
     this._drive(dt);
   }
@@ -1025,7 +1105,18 @@ export class Agent {
       const haste = 0.92 + this.traits.aggression * 0.34;
       this.desiredSpeed = inSector ? 2.4 + this.traits.aggression * 1.6
         : (obj.mode === 'hold' ? 3.4 : 4.3) * haste;
-      if (this.repathTimer <= 0 && !this.pathPending && (!this.hasMoveTarget || this.stuckTimer > 0.6)) {
+      /**
+       * WHEN TO ASK A* AGAIN. `stuckTimer` used to be true for everybody on
+       * almost every frame (see `_move`), so in practice this gate was "the
+       * repath timer expired" and a holder whose sector spot had just been
+       * re-rolled got the new route for free. Now that the timer means something,
+       * the destination-changed test has to be written down rather than ridden
+       * on the back of a broken signal — otherwise a man walks to the spot he was
+       * told to leave and only re-plans once he arrives.
+       */
+      const moved = this.hasMoveTarget && this.moveTarget.distanceToSquared(dest) > 2 * 2;
+      if (this.repathTimer <= 0 && !this.pathPending && this._detourTimer <= 0
+        && (!this.hasMoveTarget || moved || this.stuckTimer > 0.6)) {
         this.repathTimer = this.rng.range(1.1, 2.2);
         if (!this._goTo(dest) && !this.pathPending) {
           if (holdish && this._hasHoldSpot) this._hasHoldSpot = false; // try another spot
@@ -1497,6 +1588,20 @@ export class Agent {
       this.hasMoveTarget = true;
       return true;
     }
+    /**
+     * DO NOT ASK A QUESTION WHOSE ANSWER IS ALREADY KNOWN, AND IS EXPENSIVE.
+     *
+     * A man off the height field (@see `OFFGRID_TOL`) gets a `from` snapped to a
+     * roof and a search that sweeps the whole `maxNodes` ceiling before failing —
+     * ~1.2 ms against the 0.3 ms `pathMsBudget` is calibrated for, which drags
+     * the ration for every OTHER man on the map down with it. The recovery is
+     * `_regainGrid`, not a route.
+     */
+    if (this._offGrid()) {
+      this.pathPending = false;
+      this.hasMoveTarget = false;
+      return false;
+    }
     const n = this.ai.requestPath(this.position, dest, this.path);
     if (n < 0) {
       // The frame's A* budget is spent. Hold the destination and retry on the
@@ -1511,6 +1616,21 @@ export class Agent {
       this.hasMoveTarget = false;
       return false;
     }
+    /**
+     * THE EDGE THAT IS NOT WORKING. `_unstick`'s fourth rung remembers the
+     * waypoint a man could not get through, and this is where the memory is
+     * spent: a fresh route that leaves by the same doorstep is the same route,
+     * and handing it back is how a bot spends a whole match re-deciding to walk
+     * into the same wall. One slot per man and a wall-clock expiry — a blacklist
+     * that never forgets turns a crowd jam into permanent map damage.
+     */
+    if (this._badUntil > this.ctx.time.elapsed && !this._nudging
+      && this.path[0].distanceToSquared(this._badWp) < 1.4 * 1.4) {
+      this._nudging = true;
+      const ok = this._repathFrom(dest, 2.6);
+      this._nudging = false;
+      if (ok) return true;
+    }
     this.pathLen = n;
     this.pathIndex = 0;
     this.moveTarget.copy(this.path[n - 1]);
@@ -1518,8 +1638,337 @@ export class Agent {
     return true;
   }
 
-  _move(dt) {
+  /* ================================================================== */
+  /* going nowhere                                                      */
+  /* ================================================================== */
+
+  /**
+   * DID THE MAN WHO WANTED TO MOVE ACTUALLY MOVE.
+   *
+   * The only two things it needs are INTENT and DISPLACEMENT, and both are
+   * already on the actor — which is the point: it does not care WHY he is not
+   * moving. A wall the nav grid cannot see, a doorway he keeps clipping, four
+   * squadmates in a stairwell and a kerb are all the same failure from here, and
+   * a recovery that only handles the cause it was written for will be wrong the
+   * next time the map changes.
+   *
+   * `desiredSpeed` is intent, and it is the SAME field `tools/stuckcheck.mjs`
+   * reads, deliberately: a man this refuses to judge is a man the gate refuses
+   * to count. Working the charge and the pre-round freeze are both real reasons
+   * to stand still, and both zero `desiredSpeed` themselves, so neither needs a
+   * special case here.
+   */
+  _trackProgress(dt) {
+    if (this.desiredSpeed <= 0.1 || this.working) {
+      this._progTime = 0;
+      this._progFrom.copy(this.position);
+      return;
+    }
+    this._progTime += dt;
+    if (this._progTime < STUCK_WINDOW) return;
+    const dx = this.position.x - this._progFrom.x;
+    const dz = this.position.z - this._progFrom.z;
+    this._progTime = 0;
+    this._progFrom.copy(this.position);
+    if (dx * dx + dz * dz >= STUCK_CLEAR * STUCK_CLEAR) {
+      // Moving again. Two clean windows retire the ladder rather than one, so a
+      // man who is shuffled two metres by the crowd and re-wedged does not get
+      // sent back to rung one and repeat the manoeuvre that just failed.
+      if (this.stuckRung > 0 && ++this._progGood >= 2) {
+        this.stuckRung = 0;
+        this._progGood = 0;
+      }
+      return;
+    }
+    this._progGood = 0;
+    this._unstick();
+  }
+
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE LADDER — and the rule is that it never offers the same thing twice
+   * ──────────────────────────────────────────────────────────────────────────
+   * Everything below `_unstick` was already in this file in one form: `_move`
+   * re-pathed to the destination it had just failed to reach, `_advance` asked
+   * A* the same question every two seconds, and `_advanceFallback` gave up and
+   * stood still. Each of those is a REPEAT, and a repeat is worth nothing
+   * against a capsule that is wedged — the state that produced the answer has
+   * not changed, so neither does the answer.
+   *
+   *   1  SIDE-STEP        leave the wedge by hand. No planner, no route: a real
+   *                       point two and a half metres off his own heading, and
+   *                       the side alternates so rung 3 tries the other one.
+   *   2  NUDGED RE-PATH   same destination, search started from a cell to the
+   *                       side. A* snaps `from` to a grid cell, so a man ground
+   *                       into a corner keeps being handed the corner's route
+   *                       until the question is asked from somewhere else.
+   *   3  ANOTHER WAYPOINT skip the leg that is not working and steer for the one
+   *                       after it, with a side-step to get out first.
+   *   4  BLACKLIST        refuse that waypoint for twelve seconds (@see `_goTo`),
+   *                       drop the hold spot, and re-plan from scratch.
+   *   5  A FRESH JOB      hand the problem to `match`. `objectiveBlocked` is the
+   *                       word `src/ai` already had for "I cannot get there";
+   *                       `_assignDomination` now reads it and gives the man a
+   *                       different standing point or a different zone.
+   *
+   * A man who has already PROVEN there is no route — `_advanceFallback` set
+   * `objectiveBlocked` — skips straight to the top. The first four rungs are all
+   * about a route that exists and cannot be walked; his does not exist.
+   */
+  _unstick() {
+    if (this.objectiveBlocked && this.objective) this.stuckRung = 5;
+    else this.stuckRung = Math.min(5, this.stuckRung + 1);
+    const s = this.ai.stats;
+    if (s) {
+      s.unstick = (s.unstick ?? 0) + 1;
+      if (s.unstickRungs) s.unstickRungs[this.stuckRung]++;
+    }
+    /**
+     * RUNG ZERO, TAKEN BEFORE ANY OF THE OTHERS AND AT WHATEVER RUNG HE IS ON.
+     * A man off the height field cannot be helped by a planner, a waypoint or a
+     * new objective — all four of those are grid queries and all four return
+     * nothing. He has one problem and it is that he is standing somewhere A*
+     * cannot see, so he walks until he is not. The rung still climbs underneath
+     * it, so a man this cannot rescue reaches `match` for a fresh job anyway.
+     */
+    if (this._offGrid() && this._regainGrid()) {
+      if (s) s.unstickRegain = (s.unstickRegain ?? 0) + 1;
+      return;
+    }
+    switch (this.stuckRung) {
+      case 1:
+        this._sideStep(2.6);
+        break;
+      case 2:
+        if (!this._repathFrom(this._unstickDest(), 2.6)) this._sideStep(3.2);
+        break;
+      case 3:
+        this._sideStep(3.4);
+        this._skipWaypoint();
+        break;
+      case 4: {
+        const wp = this.hasMoveTarget && this.pathIndex < this.pathLen
+          ? this.path[this.pathIndex] : null;
+        if (wp) {
+          this._badWp.copy(wp);
+          this._badUntil = this.ctx.time.elapsed + 12;
+        }
+        this._sideStep(3.4);
+        this._hasHoldSpot = false;
+        this.holdTimer = 0;
+        this.hasMoveTarget = false;
+        this.repathTimer = 0;
+        this.cover = null;
+        this.ai.cover?.release(this.id);
+        break;
+      }
+      default:
+        /**
+         * ASK FOR SOMETHING ELSE TO DO — and keep the old job while he waits.
+         *
+         * `objectiveBlocked` is the request, and it survives the write it is
+         * asking for: `setObjective` only clears it when the order that arrives
+         * is a genuinely DIFFERENT one, which is exactly the case where the man
+         * got what he asked for. `match` re-tasks every live bot every two
+         * seconds and `_orderZone` now walks him round the zone's standing ring,
+         * so a blocked man gets a different mouth and then, via
+         * `_nearestFreeIndex`, a different zone.
+         *
+         * The objective is NOT dropped. A man with none falls through `_think`
+         * to IDLE, which is a soldier standing in a street with `desiredSpeed`
+         * at zero — the exact posture this whole change exists to remove — and
+         * it would also hide the site from `_nearestFreeIndex`, which is the
+         * thing that has to know which zone he could not reach.
+         */
+        this.objectiveBlocked = true;
+        this._hasHoldSpot = false;
+        this.holdTimer = 0;
+        this.hasMoveTarget = false;
+        this.repathTimer = 0;
+        this._badUntil = -1e9;
+        this.stuckRung = 0;
+        this._progGood = 0;
+        this._sideStep(3.4);
+        break;
+    }
+  }
+
+  /** Where he is currently trying to get to, for a re-plan. */
+  _unstickDest() {
+    if (this.hasMoveTarget) return this.moveTarget;
+    if (this.objective) return this.objective.position;
+    return null;
+  }
+
+  /**
+   * IS THIS MAN WHERE THE HEIGHT FIELD THINKS HE IS. @see `OFFGRID_TOL`
+   *
+   * A ring search, not a single cell lookup, because the answer that matters is
+   * "is there anywhere within a stride that A* and this capsule agree about" —
+   * a man on a kerb between two sampled heights is fine, a man under a roof is
+   * not. Three rings is 2.4 m at an 0.8 m lattice.
+   */
+  _offGrid() {
+    const g = this.ai.grid;
+    if (!g) return false;
+    return g.nearest(this.position.x, this.position.z, this.position.y, 3, OFFGRID_TOL) < 0;
+  }
+
+  /**
+   * WALK BACK ONTO THE NAVIGABLE WORLD. The nearest cell whose floor is within a
+   * stride of his feet, out to ten rings — eight metres, which is the width of a
+   * street on this map — walked directly, because the planner is exactly the
+   * thing that cannot help here.
+   */
+  _regainGrid() {
+    const g = this.ai.grid;
+    if (!g) return false;
+    const ci = g.nearest(this.position.x, this.position.z, this.position.y, 10, OFFGRID_TOL);
+    if (ci < 0) return false;
+    this._detour.set(g.worldX(ci % g.nx), g.floor[ci], g.worldZ((ci / g.nx) | 0));
+    if (this.position.distanceToSquared(this._detour) < 0.9 * 0.9) return false;
+    this._commitDetour(2.4);
+    return true;
+  }
+
+  /** Hand the steering to `_detour` for `t` seconds and keep the planner off it. */
+  _commitDetour(t) {
+    this._detourTimer = t;
+    // Nothing may overwrite the manoeuvre while it runs: `_advance` re-paths on
+    // `repathTimer` and `_combat` on `coverDwell`, and both would put the man
+    // straight back on the leg he cannot walk.
+    this.repathTimer = Math.max(this.repathTimer, t + 0.2);
+    this.coverDwell = Math.max(this.coverDwell, t + 0.2);
+  }
+
+  /**
+   * A point `dist` metres away on the bearing `k` eighths of a turn off the leg
+   * this man is trying to walk, written to `out`. The heading is the LEG and not
+   * his facing — a man grinding on a wall is usually already looking at it.
+   *
+   * `blind` skips the grid. It is not a shortcut: a man off the height field
+   * (see `OFFGRID_TOL`) gets `false` from every cell test there is, including
+   * the ones that would tell him where to go, so refusing to move without the
+   * grid's blessing is how the roster turns to statues. The character controller
+   * still sweeps the capsule, so the worst a blind step can do is nothing.
+   */
+  _lateralCell(dist, k, out, blind) {
+    const grid = this.ai.grid;
+    let hx = Math.sin(this.yaw);
+    let hz = Math.cos(this.yaw);
     const wp = this.hasMoveTarget && this.pathIndex < this.pathLen ? this.path[this.pathIndex] : null;
+    if (wp) {
+      const dx = wp.x - this.position.x;
+      const dz = wp.z - this.position.z;
+      const l = Math.sqrt(dx * dx + dz * dz);
+      if (l > 0.25) {
+        hx = dx / l;
+        hz = dz / l;
+      }
+    }
+    const th = Math.atan2(hx, hz) + k * (Math.PI / 4) * this._detourSide;
+    const x = this.position.x + Math.sin(th) * dist;
+    const z = this.position.z + Math.cos(th) * dist;
+    if (blind || !grid) {
+      out.set(x, this.position.y, z);
+      return true;
+    }
+    // A tight y tolerance: stepping "sideways" onto a roof or into a stairwell
+    // is not a side-step, it is a new bug.
+    const ci = grid.nearest(x, z, this.position.y, 2, 1.2);
+    if (ci < 0) return false;
+    out.set(grid.worldX(ci % grid.nx), grid.floor[ci], grid.worldZ((ci / grid.nx) | 0));
+    if (this.position.distanceToSquared(out) < 1.1 * 1.1) return false;
+    // The grid's own straight-line test. It knows nothing about the collision
+    // that wedged him — that is the whole problem — but it does stop the man
+    // side-stepping into a wall everybody agrees is there.
+    return grid.lineOfWalk(this.position, out);
+  }
+
+  /**
+   * RUNG 1. A couple of metres to the side, walked directly. It is the cheapest
+   * thing on the ladder and it is the one that works most of the time, because
+   * most wedges are a shoulder on a corner rather than a sealed route.
+   *
+   * The fan is ±90°, then ±135°, then straight back, then ±45°: perpendicular
+   * first because that is what clears a corner without giving up the leg, and
+   * backwards late because it is the one that costs ground. `_detourSide`
+   * mirrors the whole fan and flips on every commit, so the manoeuvre a man
+   * repeats is never the manoeuvre that just failed.
+   */
+  _sideStep(dist) {
+    for (let i = 0; i < SIDE_FAN.length; i++) {
+      if (!this._lateralCell(dist, SIDE_FAN[i], this._detour, false)) continue;
+      this._commitDetour(1.5);
+      this._detourSide = -this._detourSide;
+      return true;
+    }
+    /**
+     * NOTHING THE GRID WILL BLESS. Either he is boxed in, or — far more often on
+     * this map — he is off the height field and every cell query he can make
+     * returns nothing. Step anyway, on a bearing that rotates so consecutive
+     * attempts are genuinely different attempts.
+     */
+    this._blindK = (this._blindK + 3) % SIDE_FAN.length;
+    this._lateralCell(dist, SIDE_FAN[this._blindK], this._detour, true);
+    this._commitDetour(1.5);
+    this._detourSide = -this._detourSide;
+    return true;
+  }
+
+  /**
+   * RUNG 2. The same destination, asked from somewhere else. `NavGrid.findPath`
+   * snaps `from` to the nearest walkable cell, so every re-plan a wedged man
+   * makes starts on the cell he is wedged on and comes back with the leg that is
+   * not working. Starting the search two and a half metres to the side is the
+   * smallest change that can produce a different first leg — and he walks to
+   * that cell first, so the plan and the body agree.
+   */
+  _repathFrom(dest, dist) {
+    if (!dest || !this.ai.grid) return false;
+    for (let i = 0; i < 3; i++) {
+      // Grid-validated only: this rung spends an A* solve, and spending one from
+      // a point the height field does not recognise is the exact waste `_goTo`
+      // now refuses to make.
+      if (!this._lateralCell(dist, SIDE_FAN[i], this._v2, false)) continue;
+      const n = this.ai.requestPath(this._v2, dest, this.path);
+      if (n <= 0) continue; // -1 is the frame's ration, 0 is no route at all
+      this.pathPending = false;
+      this.pathLen = n;
+      this.pathIndex = 0;
+      this.moveTarget.copy(this.path[n - 1]);
+      this.hasMoveTarget = true;
+      this._detour.copy(this._v2);
+      this._commitDetour(1.5);
+      this._detourSide = -this._detourSide;
+      return true;
+    }
+    return false;
+  }
+
+  /** RUNG 3. Give up on this leg and steer for the one after it. */
+  _skipWaypoint() {
+    if (!this.hasMoveTarget || this.pathIndex >= this.pathLen - 1) return false;
+    this.pathIndex++;
+    this.repathTimer = Math.max(this.repathTimer, 1.7);
+    return true;
+  }
+
+  _move(dt) {
+    /**
+     * A DETOUR OUTRANKS THE PATH. `_unstick` hands one down when the route the
+     * planner believes in is not one this capsule can walk, and it is a raw
+     * world point rather than a path precisely because the planner is the thing
+     * that is wrong — asking A* again is rung two, not rung one.
+     *
+     * `want` gets a floor while one is live: the whole point of the manoeuvre is
+     * to move, and the state that produced `desiredSpeed` is the state that has
+     * been failing to.
+     */
+    const onDetour = this._detourTimer > 0;
+    const wp = onDetour
+      ? this._detour
+      : this.hasMoveTarget && this.pathIndex < this.pathLen ? this.path[this.pathIndex] : null;
     this._steer.set(0, 0, 0);
     let want = 0;
 
@@ -1527,13 +1976,16 @@ export class Agent {
       const to = this._v.copy(wp).sub(this.position);
       to.y = 0;
       const d = to.length();
-      if (d < (this.pathIndex === this.pathLen - 1 ? 0.45 : 0.75)) {
-        this.pathIndex++;
-        if (this.pathIndex >= this.pathLen) this.hasMoveTarget = false;
+      if (d < (onDetour ? 0.6 : this.pathIndex === this.pathLen - 1 ? 0.45 : 0.75)) {
+        if (onDetour) this._detourTimer = 0;
+        else {
+          this.pathIndex++;
+          if (this.pathIndex >= this.pathLen) this.hasMoveTarget = false;
+        }
       } else {
         to.multiplyScalar(1 / d);
         this._steer.copy(to);
-        want = this.desiredSpeed;
+        want = onDetour ? Math.max(this.desiredSpeed, 2.4) : this.desiredSpeed;
       }
     }
 
@@ -1588,6 +2040,8 @@ export class Agent {
       const vx = this._steer.x * this.speed;
       const vz = this._steer.z * this.speed;
       c.setHeight?.(this.crouch ? 1.16 * this.scale : this.height);
+      const px = this.position.x;
+      const pz = this.position.z;
       c.move(vx * dt, this.velocity.y * dt, vz * dt);
       this.position.copy(c.position);
       this.grounded = c.grounded;
@@ -1597,12 +2051,36 @@ export class Agent {
       if (c.lastMoveBlocked && this.speed > 1.5 && this.vaultCooldown <= 0 && this.grounded) {
         this._tryVault();
       }
-      if (c.lastMoveBlocked && this.speed > 0.5) {
+      /**
+       * `lastMoveBlocked` CANNOT SAY WHETHER ANYBODY IS STUCK, and this branch
+       * used to be built entirely on it. Measured on a live match, it is true for
+       * every man on almost every frame — gravity presses the capsule into the
+       * FLOOR and the floor is a contact plane like any other — so the old test
+       * reduced to `speed > 0.5`, i.e. "is he walking", and it re-ran A* to THE
+       * SAME DESTINATION every 1.1 s for every moving bot on the map. It burned
+       * the frame's path ration on men who were fine and did nothing whatsoever
+       * for the men who were not.
+       *
+       * Progress is the honest signal. A man travelling under a third of what his
+       * own speed asked for is being held by something; a man who is simply
+       * walking clears it every frame.
+       *
+       * AND IT ONLY GETS ONE SHOT. A stale path is worth re-asking for exactly
+       * once — after that, asking the same question again is the bug this whole
+       * change exists to fix, so the escalation ladder (`_unstick`) takes over
+       * and this stays out of its way for the rest of the episode.
+       */
+      const dx = this.position.x - px;
+      const dz = this.position.z - pz;
+      const asked = this.speed * dt * 0.35;
+      if (this.speed > 0.8 && dx * dx + dz * dz < asked * asked) {
         this.stuckTimer += dt;
         if (this.stuckTimer > 1.1) {
           this.stuckTimer = 0;
-          this.repathTimer = 0;
-          if (this.hasMoveTarget) this._goTo(this.moveTarget);
+          if (this.stuckRung === 0 && this.hasMoveTarget && this._detourTimer <= 0) {
+            this.repathTimer = 0;
+            this._goTo(this.moveTarget);
+          }
         }
       } else this.stuckTimer = 0;
     } else {

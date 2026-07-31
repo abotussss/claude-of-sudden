@@ -27,7 +27,8 @@
  *   ai.getHudActors()                      minimap blips, friend/foe from the
  *                                          local player's point of view
  *   ai.stats                               { agents, alive, navMs, coverPts,
- *                                            pathsDeferred, lodIrrelevant }
+ *                                            pathsDeferred, lodIrrelevant,
+ *                                            unstick, unstickRungs }
  *
  * TEAMS — set by `match`, and the reason this file is not the one the repo
  * shipped with. An actor's `team` decides who it looks for, who it may hit and
@@ -99,7 +100,16 @@ export class AiSystem {
     /** dev: force the garrison to spawn even in deterministic capture runs */
     this.forcePopulate = false;
     this._navPending = true;
-    this.stats = { agents: 0, alive: 0, navMs: 0, coverPts: 0, walkable: 0 };
+    this.stats = { agents: 0, alive: 0, navMs: 0, coverPts: 0, walkable: 0, unstick: 0 };
+    /**
+     * HOW OFTEN THE RECOVERY LADDER FIRED, AND HOW FAR UP IT WENT — one counter
+     * per rung of `Agent._unstick`. It is the only way to tell "nobody gets
+     * stuck any more" apart from "the detector stopped detecting", and the shape
+     * matters as much as the total: a healthy map is nearly all rung one, and
+     * weight at rung five is geometry nobody can walk rather than a wedge.
+     * Preallocated; `_unstick` runs on real frames.
+     */
+    this.stats.unstickRungs = [0, 0, 0, 0, 0, 0];
 
     /* ---- teams (driven by `match`; the defaults are the shipped behaviour) -- */
     this.playerTeam = 0;
