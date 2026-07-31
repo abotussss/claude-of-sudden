@@ -2561,11 +2561,23 @@ export class MatchSystem {
    * `physics` is fetched here and handed over because `Assembler` does not
    * retain it. `peek`, not `get`, at both steps: this runs inside a scheduled
    * event and a missing subsystem must leave the match playable.
+   *
+   * AND IT IS THE ONE PLACE THE AI IS TOLD, which is why the `ai.setCoverRazed`
+   * line is here and not at the three call sites. `ai.cover` is a table of
+   * places worth taking cover at, and every entry in it names the DIRECTION of
+   * the mass it hides behind — so the frame the shell stops being solid, 304 of
+   * the 634 points inside the footprint describe air (`_coverstale.mjs`), 27 of
+   * them inside D, the point that opens in the wreckage. `ai` bakes a second
+   * table at boot against the ruin and this hands it the switch; both states of
+   * the map are covered by all three callers — the boot prime, the raze, and
+   * the round reset that stands the church back up.
    */
   _setCathedralRazed(down) {
     const cath = this.ctx.peek?.('world')?.cathedral;
     if (typeof cath?.setRazed !== 'function') return false;
-    return cath.setRazed(down, this.ctx.peek?.('physics')) === true;
+    const changed = cath.setRazed(down, this.ctx.peek?.('physics')) === true;
+    this.ai?.setCoverRazed?.(down);
+    return changed;
   }
 
   /**

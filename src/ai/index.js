@@ -94,13 +94,32 @@ export class AiSystem {
      */
     this.radio = new Radio(this);
     this.grid = null;
+    /**
+     * THE COVER TABLE IN PLAY. It is one of the two below, never a third thing:
+     * everything that reads cover reads `this.cover`, and the map changing is
+     * this one reference moving. @see `setCoverRazed`.
+     */
     this.cover = null;
+    /** Cover with the cathedral STANDING. @see `_bakeCover`. */
+    this.coverIntact = null;
+    /** Cover with the cathedral LEVELLED, or null if this level has no ruin. */
+    this.coverRuin = null;
+    /** Which of the two `this.cover` currently points at. */
+    this._coverRazed = false;
     this.inspect = false;
     this.debugLog = false;
     /** dev: force the garrison to spawn even in deterministic capture runs */
     this.forcePopulate = false;
     this._navPending = true;
-    this.stats = { agents: 0, alive: 0, navMs: 0, coverPts: 0, walkable: 0, unstick: 0 };
+    this.stats = {
+      agents: 0,
+      alive: 0,
+      navMs: 0,
+      coverPts: 0,
+      coverRuinPts: 0,
+      walkable: 0,
+      unstick: 0,
+    };
     /**
      * HOW OFTEN THE RECOVERY LADDER FIRED, AND HOW FAR UP IT WENT — one counter
      * per rung of `Agent._unstick`. It is the only way to tell "nobody gets
@@ -884,10 +903,8 @@ export class AiSystem {
      * ever be inside one. @see `NavGrid._carveInteriors`.
      */
     this.grid.build(world?.interiorVolumes ?? null);
-    this.cover = new CoverMap(this.grid, phys);
-    this.cover.build({ step: 1, reach: 1.3 });
+    this._bakeCover(phys, world);
     this.stats.navMs = performance.now() - t0;
-    this.stats.coverPts = this.cover.points.length;
     this.stats.walkable = this.grid.walkableCount;
     this._navPending = false;
     // The contact reports need the level's yaw (a bearing on world axes is off
@@ -897,8 +914,118 @@ export class AiSystem {
     console.info(
       `[ai] nav ${this.grid.nx}x${this.grid.nz} cells · ${this.grid.walkableCount} walkable ` +
         `(${this.grid.interiorCells ?? 0} indoor) · ` +
-        `${this.cover.points.length} cover points · ${this.stats.navMs.toFixed(0)}ms`
+        `${this.stats.coverPts} cover points` +
+        (this.coverRuin ? ` (+${this.stats.coverRuinPts} in the cathedral ruin)` : '') +
+        ` · ${this.stats.navMs.toFixed(0)}ms`
     );
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * COVER FOR A TOWN THAT DOES NOT STAY THE SAME SHAPE — baked at boot, both
+   * of it.
+   * ────────────────────────────────────────────────────────────────────────
+   * A cover point is a place to stand PLUS THE DIRECTION THE MASS IS IN
+   * (`p.dx`,`p.dz`), and `CoverMap.build` finds it by firing a ray at chest
+   * height and keeping the first direction that hits something. So a cover
+   * table is a statement about the collision world AT THE MOMENT IT WAS BAKED,
+   * and this level does not keep that promise: `world.cathedral.setRazed` takes
+   * a 29 m church down to a 2.76 m rubble field in one frame, and capture point
+   * D appears in the middle of it.
+   *
+   * Measured with `_coverstale.mjs`, on the single table this used to bake:
+   *
+   *   304 of the 634 points inside the cathedral footprint (47.9 %) fire their
+   *   own ray into open air once the shell is gone, 27 of the 100 inside D.
+   *   That is a man crouching behind nothing at the most contested point on the
+   *   map, and it is worst exactly where it matters most.
+   *
+   * AND THE INTACT TABLE WAS ALREADY WRONG, which is the part nobody was
+   * looking for. `Assembler.beginScope` records a scope as VISIBLE AND SOLID —
+   * `cath:ruin` is built that way and stays that way until `match` makes its
+   * first `_setCathedralRazed(false)` call, which happens after `ai.init` (see
+   * `MatchSystem.static deps`). This bake ran in between, so 129 points were
+   * anchored to rubble that is put away before the first frame, all 129 of them
+   * inside the footprint and 37 of them inside D. The cover table was wrong
+   * about D before anybody had touched the cathedral.
+   *
+   * BOTH ARE THE SAME FIX: probe each state with that state actually loaded.
+   * Two flips of a switch that already exists, three `CoverMap.build`s' worth of
+   * work in total at BOOT (19 ms each), and NOTHING computed on the frame the
+   * event fires — `setCoverRazed` is one reference assignment. It is the same
+   * move `cathedral.js` makes with its own two scopes and the same move
+   * `Airstrike` makes when it bakes a demolition's nav patch at boot "with the
+   * ruin temporarily solid and the building visibly standing the whole time".
+   *
+   * NO FRAME IS DRAWN BETWEEN THE FLIPS. This runs inside `ai.init` →
+   * `_bootNav`, synchronously, and every flip is paired, so the visual state on
+   * exit is the state on entry and the renderer never sees the intermediate.
+   * `world.cathedral.razed` is read rather than assumed, so a level that is
+   * somehow already down is restored to down.
+   *
+   * REACHED THROUGH `ctx.peek('world')` AND NOTHING ELSE, exactly as
+   * `MatchSystem._setCathedralRazed` reaches it. `ai` may no more import
+   * `world/cathedral.js` than `match` may. Every step is optional: a `world`
+   * with no cathedral, or a cathedral with no second state, bakes one table and
+   * behaves precisely as this did before.
+   */
+  _bakeCover(phys, world) {
+    const cath = world?.cathedral ?? null;
+    const canSwap = typeof cath?.setRazed === 'function';
+    /** The state the level is in now, so the pair of flips lands back on it. */
+    const was = canSwap ? cath.razed === true : false;
+
+    // The church STANDING and the rubble put away — which is NOT the state a
+    // freshly assembled level is in. @see the note above.
+    if (canSwap) cath.setRazed(false, phys);
+    this.coverIntact = new CoverMap(this.grid, phys).build({ step: 1, reach: 1.3 });
+
+    if (canSwap) {
+      cath.setRazed(true, phys);
+      this.coverRuin = new CoverMap(this.grid, phys).build({ step: 1, reach: 1.3 });
+      cath.setRazed(was, phys);
+    } else {
+      this.coverRuin = null;
+    }
+
+    this.stats.coverPts = this.coverIntact.points.length;
+    this.stats.coverRuinPts = this.coverRuin?.points.length ?? 0;
+    // `_coverRazed` may already have been set by `match` if the nav build was
+    // deferred past the first round — honour it rather than reset it.
+    this.cover = this._coverRazed && this.coverRuin ? this.coverRuin : this.coverIntact;
+  }
+
+  /**
+   * THE SWAP. `match` owns WHEN the cathedral falls; this owns what the AI
+   * thinks is left standing when it does.
+   *
+   * One reference assignment plus a walk over the agents that were using the
+   * old table, and that is the whole of it — both tables were probed at BOOT
+   * against the geometry each of them describes. @see `_bakeCover`.
+   *
+   * THE AGENTS HAVE TO LET GO. `Agent.cover` holds a POINT OBJECT out of the
+   * live table, and `coverPos` is a copy of its position. Leaving those alone
+   * across a swap would keep every man in combat standing at a spot from the
+   * other map, scored on a normal that no longer describes anything, and
+   * `pick`'s `avoid` test compares by identity so he would never rotate off it
+   * either. Dropping the reference makes the next `_combat` tick re-pick from
+   * the table that is now true — which is the behaviour the event should
+   * produce anyway: the building just came down, everybody move.
+   *
+   * Idempotent, and it allocates nothing.
+   */
+  setCoverRazed(down) {
+    const want = !!down;
+    if (this._coverRazed === want) return false;
+    this._coverRazed = want;
+    if (!this.coverRuin || !this.coverIntact) return false; // nothing baked yet
+    const next = want ? this.coverRuin : this.coverIntact;
+    if (next === this.cover) return false;
+    this.cover?.releaseAll();
+    this.cover = next;
+    next.releaseAll();
+    for (const a of this.agents) a.cover = null;
+    return true;
   }
 
   /** Floor probe used by foot IK and spawning. */

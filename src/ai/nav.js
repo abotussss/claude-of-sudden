@@ -1223,6 +1223,25 @@ export class CoverMap {
   }
 
   /**
+   * Drop EVERY claim on this table.
+   *
+   * A claim is a man's id written into a point, and it is the only thing that
+   * stops two soldiers being sent to the same doorway. When `ai` swaps one
+   * table out for another (@see `AiSystem.setCoverRazed`) the table leaving
+   * play keeps whatever ids were on it, and nothing will ever come back to
+   * clear them — `release(id)` is called on the LIVE table when a man dies or
+   * repaths. So a table swapped back in later would start with a set of points
+   * permanently reserved for men who no longer exist.
+   *
+   * One pass over an array that already exists, on an event frame. It allocates
+   * nothing and it is not on the per-frame path.
+   */
+  releaseAll() {
+    for (const p of this.points) p.claimed = -1;
+    return this;
+  }
+
+  /**
    * Where to lean out from a cover point to shoot: try both sides and pick the
    * one with line of sight from the eye to the threat.
    */
