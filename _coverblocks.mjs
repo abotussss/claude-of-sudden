@@ -20,8 +20,12 @@ import { chromium } from 'playwright';
 
 const args = Object.fromEntries(
   process.argv.slice(2).map((a) => {
-    const [k, v] = a.replace(/^--/, '').split('=');
-    return [k, v ?? true];
+    // Split on the FIRST `=` only: a `--url=…/?capture=1` has two of them, and
+    // eating the second one is how you measure a level with no fixed seed and
+    // never find out. `?capture` is not `?capture=1` — see `src/main.js`.
+    const s = a.replace(/^--/, '');
+    const i = s.indexOf('=');
+    return i < 0 ? [s, true] : [s.slice(0, i), s.slice(i + 1)];
   })
 );
 const URL = args.url ?? 'http://127.0.0.1:4257/';

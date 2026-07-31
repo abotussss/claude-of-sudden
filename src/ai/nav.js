@@ -1314,26 +1314,44 @@ export class CoverMap {
       if (!variants.length) continue;
       const p = byCell.get(c.i);
       if (p) {
-        // Already a cover point. It only needs a variant list if the facing it
-        // is using can go away.
-        if (variants[0].die === 0) continue;
+        /**
+         * Already a cover point, and the facing it is using is the FIRST
+         * standing one — `build` walks the same eight directions in the same
+         * order and stops at the same ray. If the mass behind that facing is
+         * nobody's to take away, nothing that happens to a block can touch this
+         * point and it is left without a variant list at all.
+         */
+        const primary = variants.find((v) => v.need === 0);
+        if (!primary || primary.die === 0) continue;
         p.variants = variants;
         dependent++;
       } else {
-        // Not a cover point today. It is one once the rubble is there — and
-        // only then, so it is baked dead and appended, which leaves the
-        // all-standing table identical to what `build` produced.
-        if (!variants.some((v) => v.need !== 0)) continue;
+        /**
+         * NOT A COVER POINT TODAY, AND `build`'S OWN FILTER IS WHY: this pass
+         * sweeps every walkable cell in the rect, while `build` skips the ones
+         * standing in the open with no blocked neighbour. So the STANDING
+         * facings found here are ones the design already refused, and letting
+         * them in through this door would put cover on the intact map that was
+         * never there — measured at +10 points before this line existed.
+         *
+         * The rubble is the exception, and the only one. A cell in the open
+         * that a collapse fills with corner stub and slab is cover by the same
+         * ray test everything else passes, so it is baked DEAD with its
+         * standing facings dropped: with no block down it has nothing usable
+         * and the table is exactly what `build` produced.
+         */
+        const rubble = variants.filter((v) => v.need !== 0);
+        if (!rubble.length) continue;
         fresh.push({
           x: c.x, y: c.y, z: c.z,
-          dx: variants[0].dx, dz: variants[0].dz,
-          high: variants[0].high,
-          dist: variants[0].dist,
+          dx: rubble[0].dx, dz: rubble[0].dz,
+          high: rubble[0].high,
+          dist: rubble[0].dist,
           claimed: -1,
           score: 0,
           live: false,
           cell: c.i,
-          variants,
+          variants: rubble,
         });
         created++;
       }
