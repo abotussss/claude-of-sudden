@@ -969,10 +969,22 @@ export function buildCathedral(A) {
    *     portals, both transept portals, the apse door — is a gap in the mound
    *     runs below, because those cells ARE walkable in the grid and closing one
    *     would cut the ruin off from the street it opens onto.
-   *   - THE CROSSING STAYS CLEAR. `KEEP` is 9.4 m about the local origin, which
-   *     is D's `captureRadius` of 8 plus a body's width. The nearest pier is
-   *     9.9 m out, so the whole capture circle is bare floor and `standRing`'s
-   *     eight proved standing points are untouched.
+   *   - THE CROSSING IS THE ONE PLACE NEW SOLIDS ARE ALLOWED, and it is allowed
+   *     for the opposite reason: `_reprobeZoneNav` re-probes D's OWN circle when
+   *     the point opens, so mass inside 8 m of the crossing is the only mass on
+   *     this site the grid does learn about. `KEEP` (9.4 m — D's `captureRadius`
+   *     plus a body's width) is the band the WALL AND PIER runs stay out of;
+   *     `KEEP_STAND` (5.0 m) is what the fallen dome stays out of, because
+   *     `standRing` proves its eight points on a 4.0 m ring
+   *     (`zone.radius * 0.5`) at BOOT and never re-proves them. Between the two
+   *     is where the cover goes.
+   *
+   *     THAT COVER IS NOT DECORATION. `tools/sitecheck.mjs` cannot see D at all
+   *     — the zone is authored `locked` and does not exist on the intact map it
+   *     measures — so its assertion is re-run by `_dmass.mjs`, and the first
+   *     answer was 7.8 m² of 0.9-2.8 m mass inside the circle against a
+   *     requirement of 12. A capture point levelled to a bare tiled floor is a
+   *     killing field, not an objective.
    *
    * `_postcheck.mjs` re-runs navcheck's own assertion with this scope live, and
    * `tools/sitecheck.mjs` is run against the razed map rather than the intact
@@ -980,8 +992,10 @@ export function buildCathedral(A) {
    */
   const ruin = A.beginScope('cath:ruin');
   {
-    /** Nothing solid inside this radius of the crossing. @see D's captureRadius. */
+    /** The wall and pier runs stay outside this. @see D's captureRadius. */
     const KEEP = 9.4;
+    /** The fallen dome stays outside this — `standRing`'s ring is at 4.0 m. */
+    const KEEP_STAND = 5.0;
     /** Grey rubble, ash and broken render — the palette the shell was built in. */
     const RUBBLE = ['concrete_dark', 'concrete', 'plaster_white'];
     const rubbleKey = () => RUBBLE[(rng.float() * RUBBLE.length) | 0];
@@ -1074,6 +1088,41 @@ export function buildCathedral(A) {
           { masks: [0.95, rng.range(0.4, 0.9), 0.35] });
         A.box('concrete', X(u), SEC.floor + h * 0.5, Z(v), CPW, h, CPW);
       }
+    }
+
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * THE DOME CAME DOWN ON THE CROSSING, AND THAT IS WHAT YOU FIGHT BEHIND
+     * ────────────────────────────────────────────────────────────────────────
+     * Eight pieces of the drum and the lantern on a ring between `KEEP_STAND`
+     * and 7.4 m — inside D's circle, outside the standing ring, and the only new
+     * solids on this site the nav grid is ever told about (`_reprobeZoneNav`
+     * covers exactly this circle and nothing else).
+     *
+     * It is the one part of the ruin with a gameplay requirement attached: a
+     * capture point has to be worth standing on, and `sitecheck`'s bar is 12 m²
+     * of 0.9-2.8 m mass inside the circle. Heights are chosen to sit in that
+     * band — waist to chest, cover you fight from rather than a wall you hide
+     * behind — and eight pieces on a ~40 m circumference leave three quarters of
+     * the ring open, so the point is coverable without being a fortress.
+     */
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * 6.283 + rng.range(-0.16, 0.16);
+      const rr = rng.range(KEEP_STAND + 0.4, 7.4);
+      const u = Math.cos(a) * rr;
+      const v = Math.sin(a) * rr;
+      const h = rng.range(1.25, 2.3);
+      const w = rng.range(1.35, 1.85);
+      const d = rng.range(1.35, 1.85);
+      const ry = rng.range(-0.5, 0.5);
+      A.add('concrete_dark', box, LL(IDENT, X(u), SEC.floor + h / 2, Z(v), ry, w, h, d),
+        { masks: [0.95, rng.range(0.45, 0.95), 0.4] });
+      A.box('concrete', X(u), SEC.floor + h * 0.5, Z(v), w, h, d, ry);
+      // the lump of vault that broke off it, drawn only
+      const g = rockGeometry(rng, rng.range(0.7, 1.3), 1, rng.range(0.45, 0.75));
+      fillMasks(g, 0.9, rng.range(0.4, 0.95), 0.3);
+      A.addOnce('plaster_white', g,
+        LL(IDENT, X(u + rng.range(-1.3, 1.3)), SEC.floor + 0.3, Z(v + rng.range(-1.3, 1.3)), rng.float() * 6.283));
     }
 
     /**

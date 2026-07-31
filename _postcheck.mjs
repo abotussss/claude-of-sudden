@@ -104,6 +104,11 @@ await page.evaluate(() => {
   m.airstrike.enabled = true;
   m._cathedralCalled = true;
   m.airstrike.callCathedralCollapse();
+  // AND THE SHELL. Forcing `_cathedralCalled` skips the branch that arms
+  // `_razeIn`, so without this the routes below are measured on a map where the
+  // cathedral is still standing — which is the exact class of half-measured
+  // state this file exists to catch. @see MatchSystem._razeCathedral.
+  m._razeCathedral();
   m._cathedralPending = 7.4;
   m.tank.fire();
   e.time.scale = 4;
@@ -122,6 +127,7 @@ await sleep(1500);
 const after = await page.evaluate(() => {
   const m = window.__ENGINE__.ctx.peek('match');
   return {
+    cathedralRazed: window.__ENGINE__.ctx.peek('world').cathedral?.razed ?? null,
     struck: m.airstrike.sites.filter((s) => s.struck).length,
     settled: m.airstrike.sites.filter((s) => s.baked).length,
     total: m.airstrike.sites.length,

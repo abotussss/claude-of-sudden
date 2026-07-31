@@ -574,13 +574,35 @@ export const RULES = {
    * minutes or runs the clock out in ten, and nothing has to predict the end.
    *
    * D — "大聖堂をDサイトとして途中で出現させて 大聖堂破壊イベントを通して".
-   * At 0.52 the three original zones have long since changed hands and both
-   * sides have settled into a shape, and what is left is a whole second act
-   * rather than a flourish. The collapse telegraphs for 4.4 s and the wreckage
-   * takes `cathedralOpenDelay` more to stop moving, so D goes live about eleven
-   * seconds after the first thing the player hears.
+   *
+   * 0.34 IS "後半3〜5分" AS CLOSELY AS A MATCH THIS LENGTH ADMITS, and the honest
+   * version of that sentence is worth writing down. Re-measured after the change
+   * a match runs 296-329 s — five minutes and a bit — so there is no instant in
+   * it that is five minutes from the end, and only one window that is three.
+   * Two distinct events cannot BOTH be 3-5 minutes from the end of a five-minute
+   * match; the other one is the final collapse and it has to be last.
+   *
+   * THE NUMBER IS CALIBRATED AGAINST THE MEASUREMENT, NOT READ OFF THE FRACTION,
+   * because `_matchProgress` is score-dominated and the score curve is convex:
+   * every zone is neutral for the first half-minute, so 0.34 of the POINTS is
+   * about 45 % of the elapsed TIME. 0.45 was tried first and measured firing at
+   * t = 172-188 with only 108-157 s left — 1.8 to 2.6 minutes, short of the band.
+   *
+   * MEASURED AT 0.34, three matches: called at t = 117-165 of a 248-337 s match,
+   * so 131-172 s remain — 2.2 to 2.9 minutes. That is the closest a single
+   * fraction gets: the match length itself varies by 90 s, so "three minutes
+   * before the end" is not a fixed point on this clock, and going lower opens D
+   * before halfway in the short matches, which stops it being a second act.
+   * If a literal 3-5 minute window is wanted, the knob is `scoreTarget` — the
+   * match is score-bound, and a longer race is what makes the band exist.
+   *
+   * It is still a second act rather than a flourish: by then the three original
+   * zones have changed hands and both sides have settled into a shape. The
+   * collapse telegraphs for 4.4 s and the wreckage takes `cathedralOpenDelay`
+   * more to stop moving, so D goes live about eleven seconds after the first
+   * thing the player hears.
    */
-  cathedralOpenProgress: 0.52,
+  cathedralOpenProgress: 0.34,
   /**
    * Seconds after the collapse FIRES before D is contestable. It is the salvo's
    * own settle time (6.5 s) plus a beat — the point opens when the dust has a
