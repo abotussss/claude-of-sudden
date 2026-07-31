@@ -304,35 +304,6 @@ export class WorldSystem {
     this.demolitions = publishDemolitions(A, demoPlan, physics, this.root);
     this._demoDown = false;
 
-    /**
-     * ────────────────────────────────────────────────────────────────────────
-     * `?demo=down` — THE MAP AS IT IS FOR THE SECOND HALF OF EVERY MATCH
-     * ────────────────────────────────────────────────────────────────────────
-     * The doc comment on `demolishAll` has promised this switch since the
-     * feature landed and nothing implemented it, so THE DEMOLISHED MAP HAS
-     * NEVER BEEN GATED. Every tool in `tools/` takes a `--url` and boots the
-     * map once: `sitecheck`, `navcheck`, `lanecheck`, `floorcheck`,
-     * `throughcheck`, `solidcheck`, `boundcheck`, `fightcheck` and `stuckcheck`
-     * therefore all measure the INTACT town exclusively — while `DISTRICT-A`
-     * and `DISTRICT-B` level six of its blocks inside a live round, including
-     * both blocks the two flank capture points stand against. Half the map the
-     * game actually plays on had no gate over it at all.
-     *
-     * One line, and it is the last thing `world.init` does before `ai` builds
-     * the nav grid on top of it, so the WHOLE boot happens on the ruins — the
-     * height field, the cover bake, `resolveLayout`'s walkability probes and
-     * `standRing`'s A* — rather than a state swapped in underneath a map that
-     * was measured standing. That is what makes the gates mean anything here.
-     *
-     * It changes NOTHING without the parameter: no query string, no `demo`,
-     * or `demo` set to anything but `down`, and this is a comparison that
-     * fails. It is a test hook and the match still owns the real transition.
-     */
-    if (/(^|[?&])demo=down(&|$)/.test(globalThis.location?.search ?? '')) {
-      const n = this.demolishAll(true);
-      console.info(`[world] ?demo=down — ${n} blocks booted as ruins`);
-    }
-
     // -------------------------------------------------------------- queries --
     this._v = new THREE.Vector3();
     this._inv = new THREE.Matrix4().copy(A.xform).invert();
