@@ -268,6 +268,7 @@ const VIEW = {
   three: { az: 42, height: 0.92, dist: 4.2, fit: 2.30 },
   front: { az: 0, height: 0.92, dist: 4.2, fit: 2.30 },
   legs: { az: 90, height: 0.60, dist: 3.2, fit: 1.75 },
+  knee: { az: 62, height: 0.56, dist: 2.4, fit: 0.85 },
 };
 
 /**
