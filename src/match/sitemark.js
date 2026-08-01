@@ -17,7 +17,16 @@
  */
 
 import * as THREE from 'three';
-import { TEAM_COLOR } from './rules.js';
+import { RULES } from './rules.js';
+
+/**
+ * The HUD's own `--friend` and `--enemy`, copied rather than imported because
+ * `src/ui` owns that stylesheet and `match` may not reach into it. Keep these
+ * two in step with `src/ui/style.js` — they are the same palette, and the whole
+ * point of this file's paint is that the ground and the zone strip agree.
+ */
+const FRIEND_CSS = '#8fc8ff';
+const ENEMY_CSS = '#ff7a63';
 
 const RING_W = 0.32;
 
@@ -70,7 +79,34 @@ export class SiteMarks {
      * the same hex on a dark overlay — at full value both sides looked like
      * fluorescent plastic, which is exactly what the note above this warns about.
      */
-    this.ownerPaint = [make(tintOf(TEAM_COLOR[0])), make(tintOf(TEAM_COLOR[1]))];
+    /**
+     * RELATIVE TO THE PLAYER, NOT TO TEAM IDENTITY — and this is a bug fix, not
+     * a preference.
+     *
+     * 「占領したエリアが何故か赤になってますけど、色だけ 修正して 青のはずです」
+     *
+     * The paint was `TEAM_COLOR[team]`, and the note above says the tints are
+     * "matched to the HUD's --enemy / --friend so the palette is one system".
+     * They are — but only if the human is team 1. `RULES.playerTeam` is
+     * `TEAM.RED` = 0 = `#ff6a52` = the HUD's ENEMY hex, so the ground painted a
+     * zone the player had just taken in the colour the rest of the interface
+     * reserves for hostiles, while `ui/round.js` painted the same zone's chip
+     * `var(--friend)`. One zone, two palettes, opposite answers.
+     *
+     * Every other readability decision in this game is friend-or-foe relative —
+     * `ui/markers.js` puts brackets on a hostile "so he reads as a TARGET, not
+     * so he is a colour" — so the ground follows the same rule: yours is cold,
+     * theirs is hot, whichever side you happen to be. The alternative fix, moving
+     * `playerTeam` to BLUE, would repaint this correctly and quietly change which
+     * side of a deliberately asymmetric map the human plays.
+     */
+    this.ownerPaint = [make(tintOf(FRIEND_CSS)), make(tintOf(ENEMY_CSS))];
+    /**
+     * Whose eyes the paint is for. `match` assigns this from its own
+     * `playerTeam` before the first capture; the default keeps a standalone
+     * `SiteMarks` (the preview harness) honest.
+     */
+    this.playerTeam = RULES.playerTeam;
     /** Everything `render.patcher` has to see. @see MatchSystem.init */
     this.materials = [this.paint, ...this.ownerPaint];
     this._ownMaterial = !lib?.get;
@@ -86,7 +122,7 @@ export class SiteMarks {
   setOwner(site, team) {
     const list = this._meshes.get(site);
     if (!list) return;
-    const m = team < 0 ? this.paint : this.ownerPaint[team];
+    const m = team < 0 ? this.paint : this.ownerPaint[team === this.playerTeam ? 0 : 1];
     for (const mesh of list) mesh.material = m;
   }
 

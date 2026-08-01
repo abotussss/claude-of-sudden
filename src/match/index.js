@@ -393,6 +393,8 @@ export class MatchSystem {
     // resolved position (that is why it lives here and not in `world`), and a
     // locked zone is then hidden until it opens. @see SiteMarks.setVisible
     this.marks = new SiteMarks(ctx, this.allZones);
+    // The ground paint is friend-or-foe, not team identity. @see SiteMarks.
+    this.marks.playerTeam = this.playerTeam;
     for (const z of this.allZones) if (z.locked) this.marks.setVisible(z, false);
     /**
      * Ammunition on the bodies. The round's budget is still what you walk out
