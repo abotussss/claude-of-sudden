@@ -560,20 +560,42 @@ export class AudioSystem {
       if (dist > (o.maxDist ?? 320)) return false;
       const delay = o.noDelay ? 0 : dist / SPEED_OF_SOUND;
       const when = this.actx.currentTime + delay + (o.extraDelay ?? 0);
-      const voice = this._build(kind, when, dist, o);
+      /**
+       * CLAIM THE SLOT BEFORE BUILDING THE VOICE.
+       *
+       * This used to synthesise first and ask second, and throw the whole voice
+       * away when the field said no — `voice.node.disconnect()` and out. A voice
+       * is not cheap to throw away: a 15 m explosion is around three hundred
+       * Web Audio nodes, sixty of them started buffer sources, and every one of
+       * them is created on the main thread and mutates the graph the render
+       * thread is trying to read. MEASURED in a live match, 550 voices were
+       * built and discarded like that inside two minutes — and they were
+       * discarded precisely BECAUSE the field was full, i.e. the graph paid its
+       * heaviest construction bill exactly when it was already failing to
+       * render what it had. That is the loop that turns a busy moment into
+       * silence.
+       *
+       * Asking first costs nothing: `acquire` needs a provisional `endTime`
+       * (`hold` sets the real one) and the voice's own send character is applied
+       * by `hold` through the same arithmetic as before.
+       */
       const em = field.acquire({
         x, y, z, when, dist, bus, priority,
-        send: o.send ?? voice.send ?? 0.3,
+        send: o.send ?? 0.3,
         gain: o.gain ?? 1,
-        endTime: voice.end,
+        endTime: when + 0.6,
         occlusion: o.occlusion,
         tracked: o.tracked,
       });
-      if (!em) {
-        try { voice.node.disconnect(); } catch { /* noop */ }
-        return false;
+      if (!em) return false;
+      let voice = null;
+      try {
+        voice = this._build(kind, when, dist, o);
+      } catch (err) {
+        em.detach();          // never leak the slot on a voice that failed
+        throw err;
       }
-      field.hold(em, voice.node, voice.end);
+      field.hold(em, voice.node, voice.end, o.send ?? voice.send ?? 0.3);
       this.stats.events++;
       return true;
     } catch (err) {
@@ -1364,6 +1386,11 @@ export class AudioSystem {
       voices: this.field?.stats.active ?? 0,
       dropped: this.field?.stats.dropped ?? 0,
       stolen: this.field?.stats.stolen ?? 0,
+      // How much of real time the audio thread is losing, and how many slots
+      // the field is filling because of it. @see SpatialField._trackRender
+      renderDeficit: this.field?.stats.deficit ?? 0,
+      capacity: this.field?.stats.cap ?? 0,
+      expired: this.field?.stats.expired ?? 0,
       occlusionRays: this.field?.stats.occlusionRays ?? 0,
       space: this.stats.space,
       spaceWeights: this.mixer ? { ...this.mixer.spaceWeights } : null,

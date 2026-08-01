@@ -232,6 +232,8 @@ export class Mixer {
     this._tin = null;
     this.deafness = 0; // 0..1, public: UI/render may read this
 
+    /** Wall clock for the recovery integrators. @see update */
+    this._wallPrev = 0;
   }
 
   /**
@@ -388,14 +390,36 @@ export class Mixer {
   update(dt) {
     const t = this.actx.currentTime;
 
+    /**
+     * RECOVERY RUNS ON THE WALL CLOCK, NOT ON `dt`.
+     *
+     * Every gain in this file that is pushed DOWN — the three ducked buses and
+     * the muffle — is brought back by an integrator, and an integrator whose
+     * step can be zero has no guarantee of ever finishing. `dt` is
+     * `time.dt`, i.e. the SCALED game clock, and it is exactly zero whenever
+     * `time.scale` is (the pause menu sets it, and anything else may). A blast
+     * that ducks the world to 8 % and deafens it 0.4 s before a pause therefore
+     * holds it there for as long as the pause lasts, and if anything ever
+     * leaves the scale at zero it holds it there for good.
+     *
+     * Hearing coming back is physiology and a sidechain releasing is a circuit;
+     * neither of them cares what the simulation's time scale is. So the step is
+     * real seconds, clamped so a stalled tab or a breakpoint releases smoothly
+     * rather than jumping. The rates below are unchanged, and at scale 1 this
+     * is the same number `dt` was.
+     */
+    const wall = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    const rdt = this._wallPrev ? clamp(wall - this._wallPrev, 0, 0.25) : clamp(dt, 0, 0.25);
+    this._wallPrev = wall;
+
     for (const name in this.buses) {
       const b = this.buses[name];
       if (b.duckAmount <= 0) continue;
       if (b.duckHold > 0) {
-        b.duckHold -= dt;
+        b.duckHold -= rdt;
         continue;
       }
-      b.duckAmount = Math.max(0, b.duckAmount - dt * 2.6);
+      b.duckAmount = Math.max(0, b.duckAmount - rdt * 2.6);
       b.duck.gain.setTargetAtTime(1 - b.duckAmount, t, 0.09);
       if (b.duckAmount < 0.01) {
         b.duckAmount = 0;
@@ -408,7 +432,7 @@ export class Mixer {
       // shift actually behaves, and it feels dramatic.
       // 0.32 + 0.35x, up from 0.1 + 0.22x: a full hit clears in ~4 s instead of
       // ~14, which is what stops repeated air events stacking into silence.
-      this.deafness = Math.max(0, this.deafness - dt * (0.32 + this.deafness * 0.35));
+      this.deafness = Math.max(0, this.deafness - rdt * (0.32 + this.deafness * 0.35));
       const cutoff = 20000 * Math.pow(0.024, this.deafness);
       this.muffleLP.frequency.setTargetAtTime(clamp(cutoff, 320, 20000), t, 0.25);
       this.muffleHS.gain.setTargetAtTime(-22 * this.deafness, t, 0.25);

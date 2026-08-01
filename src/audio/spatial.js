@@ -49,8 +49,42 @@ import { airCutoff, clamp, gain, biquad } from './dsp.js';
  */
 const MAX_EMITTERS = 72;
 
+/**
+ * THE FLOOR THE POOL MAY SHRINK TO WHEN THE RENDER THREAD CANNOT KEEP UP.
+ *
+ * 72 is a budget in SLOTS, and a slot is free. What is not free is rendering
+ * what is in it, and that bill is paid on the audio thread, which has a hard
+ * real-time deadline: a render quantum that takes longer than 2.67 ms at 48 kHz
+ * is a quantum the output does not get. MEASURED in a live match (see
+ * `renderDeficit`), the moment the field pinned at 72/72 the context rendered
+ * 0.6 %-30 % of real time for twenty seconds — the audio clock fell 18 s behind
+ * the wall clock — and that is the reported bug: 「色々な音が集中すると音が全て
+ * 消える」. Not one gain reached zero; there simply was no output to gain.
+ *
+ * 24 is the largest pool that measured comfortably inside real time on the
+ * machine this was traced on. It is a FLOOR, not a target: the field runs at 72
+ * and only walks down toward this while the thread is actually behind.
+ */
+const MIN_EMITTERS = 24;
+
+/** How much of real time the renderer may lose before the pool starts shrinking. */
+const DEFICIT_SHRINK = 0.12;
+/** …and how close to even it must be before slots are handed back. */
+const DEFICIT_RELEASE = 0.03;
+/** Window the deficit is integrated over, seconds of WALL time. */
+const DEFICIT_WINDOW = 0.25;
+/**
+ * Grace on the wall-clock backstop, seconds. Normal jitter between the two
+ * clocks is microseconds; this only ever expires a voice that the audio clock
+ * has stopped being able to expire.
+ */
+const WALL_SLACK = 0.3;
+
 /** Reference distance for the attenuation curve, in metres. */
 const REF = 2.0;
+
+const nowWall = () =>
+  (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
 
 class Emitter {
   constructor(actx, mixer) {
@@ -81,6 +115,8 @@ class Emitter {
 
     this.free = true;
     this.endTime = 0;
+    /** Same deadline on the WALL clock. @see SpatialField.update */
+    this.wallEnd = 0;
     this.priority = 0;
     this.busName = 'foley';
     this.attached = null;
@@ -174,8 +210,66 @@ export class SpatialField {
     this._occOrigin = { x: 0, y: 0, z: 0 };
     this._occDir = { x: 0, y: 0, z: 0 };
     this._trackCursor = 0;
-    this.stats = { active: 0, stolen: 0, dropped: 0, occlusionRays: 0 };
+    this.stats = {
+      active: 0, stolen: 0, dropped: 0, occlusionRays: 0,
+      // How far behind real time the audio thread is running, 0..1, and how
+      // many slots the field is willing to fill because of it.
+      deficit: 0, cap: MAX_EMITTERS, expired: 0,
+    };
     this.occlusionEnabled = true;
+
+    /**
+     * RENDER HEADROOM. `actx.currentTime` advances with what the audio thread
+     * has actually rendered; `performance.now()` advances regardless. The gap
+     * between them per unit of wall time IS the fraction of the output that
+     * never got made, and it is the only honest measure of whether the graph
+     * fits — voice counts, gains and error counters all look perfectly healthy
+     * while the player hears nothing.
+     */
+    this.cap = MAX_EMITTERS;
+    this._accWall = 0;
+    this._accAudio = 0;
+    this._wallPrev = 0;
+    this._audioPrev = 0;
+  }
+
+  /** Slots the field will fill right now. Falls with the render deficit. */
+  get capacity() {
+    return this.cap | 0;
+  }
+
+  /** Emitters currently held, i.e. connected to a bus and being rendered. */
+  _load() {
+    let n = 0;
+    for (let i = 0; i < this.emitters.length; i++) if (!this.emitters[i].free) n++;
+    return n;
+  }
+
+  /**
+   * Integrate the render deficit over `DEFICIT_WINDOW` of wall time and move
+   * the cap. Down fast (the thread is already missing deadlines), back up in
+   * steps of six a window — about two seconds from the floor to full — so a
+   * single heavy blast does not cost the rest of the round its density.
+   */
+  _trackRender(audioNow) {
+    const wall = nowWall();
+    if (this._wallPrev) {
+      this._accWall += Math.min(0.5, wall - this._wallPrev);
+      this._accAudio += Math.max(0, audioNow - this._audioPrev);
+    }
+    this._wallPrev = wall;
+    this._audioPrev = audioNow;
+    if (this._accWall < DEFICIT_WINDOW) return;
+    const deficit = clamp(1 - this._accAudio / this._accWall, 0, 1);
+    this._accWall = 0;
+    this._accAudio = 0;
+    this.stats.deficit = deficit;
+    if (deficit > DEFICIT_SHRINK) {
+      this.cap = Math.max(MIN_EMITTERS, Math.floor(this.cap * 0.55));
+    } else if (deficit < DEFICIT_RELEASE && this.cap < MAX_EMITTERS) {
+      this.cap = Math.min(MAX_EMITTERS, this.cap + 6);
+    }
+    this.stats.cap = this.cap;
   }
 
   /** Feed the AudioListener from the render camera. Called once per frame. */
@@ -294,7 +388,10 @@ export class SpatialField {
      * They sum over 100% on purpose: a bus only cannibalises itself once it is
      * over ITS cap, so an idle category's slots stay available to the others.
      */
-    const n = this.emitters.length;
+    // Shares of the CURRENT cap, not of the pool: when the render thread has
+    // taken the field down to its floor, every bus gives up its share of the
+    // slots rather than weapons keeping eighteen of twenty-four.
+    const n = this.capacity;
     switch (bus) {
       case 'weapons': return Math.floor(n * 0.45);
       case 'foley': return Math.floor(n * 0.4);
@@ -323,8 +420,14 @@ export class SpatialField {
      * it can no longer evict the shot that is about to kill you.
      */
     const bus = opts.bus ?? 'foley';
+    /**
+     * OVER THE RENDER CAP, a free emitter is not free — filling it is what put
+     * the thread behind in the first place. Take the steal path instead, so the
+     * field keeps playing the most important `cap` voices and no more.
+     */
+    const overCap = this._load() >= this.capacity;
     const overQuota = this._busLoad(bus) >= this._busCap(bus);
-    if (!overQuota) {
+    if (!overCap && !overQuota) {
       for (let i = 0; i < this.emitters.length; i++) {
         const e = this.emitters[i];
         if (e.free) { em = e; break; }
@@ -362,6 +465,10 @@ export class SpatialField {
     em.busName = opts.bus ?? 'foley';
     em.tracked = !!opts.tracked;
     em.userGain = opts.gain ?? 1;
+    em.occ = occ;
+    em.dist = dist;
+    em.startAt = t;
+    em.wallEnd = nowWall() + (em.endTime - now) + WALL_SLACK;
     em._setPos(opts.x, opts.y, opts.z, t);
 
     // Air absorption + occlusion filtering.
@@ -371,12 +478,21 @@ export class SpatialField {
     em.occHS.gain.setValueAtTime(-26 * occ, t);
     em.distGain.gain.setValueAtTime(clamp(atten * (opts.gain ?? 1), 0, 4), t);
 
-    // Farther and more occluded => proportionally wetter.
-    const send = (opts.send ?? 0.25) * (0.5 + Math.min(dist, 90) * 0.022) * (1 + occ * 0.7);
-    em.sendGain.gain.setValueAtTime(clamp(send, 0, 3), t);
+    this._applySend(em, opts.send ?? 0.25);
 
     em.connectOut(this.mixer.bus(em.busName), this.mixer.reverbSend);
     return em;
+  }
+
+  /**
+   * Farther and more occluded => proportionally wetter. Split out of `acquire`
+   * because the slot is now claimed BEFORE the voice is synthesised (see
+   * `AudioSystem._playAt`), so the voice's own send character arrives one step
+   * later, in `hold`. The arithmetic and the schedule time are unchanged.
+   */
+  _applySend(em, send) {
+    const v = send * (0.5 + Math.min(em.dist ?? 0, 90) * 0.022) * (1 + (em.occ ?? 0) * 0.7);
+    em.sendGain.gain.setValueAtTime(clamp(v, 0, 3), em.startAt ?? this.actx.currentTime);
   }
 
   /** Update an in-flight tracked emitter's occlusion/distance (beds, voices). */
@@ -387,26 +503,54 @@ export class SpatialField {
     const dist = this.distanceTo(p.x, p.y, p.z);
     const occ = this.occlusionAt(p.x, p.y, p.z);
     const atten = this.attenuation(dist) * (1 - 0.62 * occ);
+    em.occ = occ;
+    em.dist = dist;
     em.airLP.frequency.setTargetAtTime(airCutoff(dist), t, 0.12);
     em.occLP.frequency.setTargetAtTime(clamp(20000 * Math.pow(0.021, occ), 300, 20000), t, 0.12);
     em.occHS.gain.setTargetAtTime(-26 * occ, t, 0.12);
     em.distGain.gain.setTargetAtTime(clamp(atten * (em.userGain ?? 1), 0, 4), t, 0.1);
   }
 
-  /** Hand a voice's top node to an emitter and set its teardown time. */
-  hold(em, node, endTime) {
+  /**
+   * Hand a voice's top node to an emitter and set its teardown time. `send` is
+   * the voice's own send character, applied here because the emitter is claimed
+   * before the voice exists.
+   */
+  hold(em, node, endTime, send) {
     node.connect(em.input);
     em.attached = node;
     em.endTime = endTime;
+    em.wallEnd = nowWall() + (endTime - this.actx.currentTime) + WALL_SLACK;
+    if (send !== undefined) this._applySend(em, send);
   }
 
   update(dt) {
     const now = this.actx.currentTime;
+    this._trackRender(now);
+    const wall = nowWall();
     let active = 0;
     for (let i = 0; i < this.emitters.length; i++) {
       const e = this.emitters[i];
       if (e.free) continue;
-      if (!e.tracked && now > e.endTime) {
+      /**
+       * TWO DEADLINES, AND THE WALL ONE IS THE BACKSTOP.
+       *
+       * `endTime` is on the audio clock, which is the correct clock: it is the
+       * clock the voice was scheduled against. But it is also the clock that
+       * STOPS ADVANCING when the render thread cannot keep up, and that turns
+       * an overload into a latch — a 1.2 s voice holds its slot for twelve real
+       * seconds at 10 % render speed, the pool stays pinned, every new event
+       * steals rather than plays, and the graph never gets smaller. That is why
+       * the reported failure never recovered on its own and why going to the
+       * pause menu (where nothing new is emitted) fixed it.
+       *
+       * The wall deadline is the same duration measured on a clock that cannot
+       * stall. It never fires while the thread is healthy — the two clocks
+       * differ by microseconds — and when the thread is not, it is what lets
+       * the field drain and the audio come back.
+       */
+      if (!e.tracked && (now > e.endTime || wall > e.wallEnd)) {
+        if (now <= e.endTime) this.stats.expired++;
         e.detach();
         continue;
       }
