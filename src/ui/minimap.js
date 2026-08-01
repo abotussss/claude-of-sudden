@@ -525,7 +525,18 @@ export class Minimap {
         const o = objs[i];
         const dx = clamp((o.x - cx) * ppm + half, r + 1, S - r - 1);
         const dy = clamp((o.z - cz) * ppm + half, r + 1, S - r - 1);
-        g.fillStyle = 'rgba(121,210,255,.94)';
+        /**
+         * WHO HOLDS IT. The square was hardcoded cyan, so the minimap was the one
+         * surface in the interface that could not answer the question the mode is
+         * about — three identical pips, and the player had to look at the zone
+         * strip to find out which of them was his. `o.color` is the friend-or-foe
+         * colour `match` publishes for every marker (cold = yours, hot = theirs,
+         * amber = neutral) and every other consumer of the same list already
+         * paints with it. Canvas, so this must be a real hex and never a
+         * `var(--friend)` — a fillStyle it cannot parse is silently ignored and
+         * the pip would keep whatever colour was last set.
+         */
+        g.fillStyle = o.color ?? 'rgba(121,210,255,.94)';
         g.strokeStyle = 'rgba(4,14,20,.8)';
         g.lineWidth = 1;
         g.beginPath();

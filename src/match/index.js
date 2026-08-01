@@ -4717,9 +4717,27 @@ export class MatchSystem {
     out.length = 0;
     /**
      * DOMINATION: one marker per zone, coloured by who holds it. Amber is
-     * neutral, your own team tint is yours, theirs is theirs — the same palette
-     * the zone strip and the paint on the ground use, so the compass, the minimap
-     * and the courtyard you are standing in all agree.
+     * neutral, your own side is cold, theirs is hot — the same palette the zone
+     * strip and the paint on the ground use, so the compass, the minimap and the
+     * courtyard you are standing in all agree.
+     *
+     * RELATIVE TO THE PLAYER, NOT TO TEAM IDENTITY — and this is the second half
+     * of the fix `sitemark.js` got in cb4ae95.
+     *
+     * 「占領した地域の距離離れているUIにおいて、占領しているのに赤のまま 占領できる
+     *   地域が青なのも修正して」
+     *
+     * The colour was `TEAM_COLOR[z.owner]`, and `RULES.playerTeam` is `TEAM.RED`
+     * = 0 = `#ff6a52`, which is the hex `ui/style.js` reserves for HOSTILES
+     * (`--enemy`). So a zone the player HELD came out red on the world markers
+     * and the compass, and a zone he could take came out blue — exactly backwards
+     * from `ui/round.js`'s chips (`z.owner === 'mine' ? var(--friend) : ...`) and
+     * from the paint under his feet.
+     *
+     * The hexes are `ui/style.js`'s own `--friend` / `--enemy` / `--amber` rather
+     * than `TEAM_COLOR`: `ui/minimap.js` draws these into a canvas, where a
+     * `var(--friend)` fillStyle is silently transparent. `sitemark.js` carries the
+     * same two constants for the same reason.
      */
     if (this.domination) {
       for (const z of this.sites) {
@@ -4728,7 +4746,7 @@ export class MatchSystem {
             z.id,
             z.id,
             z.position,
-            z.owner < 0 ? '#ffb02a' : TEAM_COLOR[z.owner]
+            z.owner < 0 ? '#ffb02a' : z.owner === this.playerTeam ? '#8fc8ff' : '#ff7a63'
           )
         );
       }

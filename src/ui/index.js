@@ -735,11 +735,13 @@ export class UiSystem {
     this._mmObjs.length = 0;
     for (const o of this._objectives) {
       if (!o.position) continue;
-      this._mmObjs.push(o._mm ?? (o._mm = { x: 0, z: 0, label: o.label }));
+      this._mmObjs.push(o._mm ?? (o._mm = { x: 0, z: 0, label: o.label, color: o.color }));
       const last = this._mmObjs[this._mmObjs.length - 1];
       last.x = o.position.x;
       last.z = o.position.z;
       last.label = o.label;
+      // Who holds it — the minimap pip was hardcoded cyan and could not say.
+      last.color = o.color;
     }
     this.minimap.draw(this._mmState);
   }
