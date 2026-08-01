@@ -43,6 +43,28 @@ const _UP = new THREE.Vector3(0, 1, 0);
 const CHUNK = 64;
 
 export class Assembler {
+  /**
+   * `?boxtag` — EVERY COLLISION PROXY, WITH THE LINE THAT AUTHORED IT.
+   *
+   * The whole map is ~4200 anonymous boxes merged into a hundred batches, so
+   * "the player is standing on concrete at 3.45 m 90 m out" is a fact with no
+   * author attached to it and no way to get one: the BVH knows a triangle and a
+   * surface tag, and nothing else survives the merge. Every question that starts
+   * "WHICH authored thing is this" — a hole in the boundary, a ledge that should
+   * not be standable, a wall that is conditionally missing — dead-ends there.
+   *
+   * Armed, `box()` and `clipBox()` record their arguments plus `new Error().stack`,
+   * and `_boxdump.mjs` prints the boxes inside a level-space window with the
+   * first non-builder frame of each. It named `interiorSlab`, `buildBuilding`
+   * and `kit.js:balcony` — the whole of the seed-12 boundary leak — in four
+   * lines of output.
+   *
+   * OFF BY DEFAULT AND FREE WHEN OFF: `TAG` is null unless the query string asks
+   * for it, so the cost on a real boot is one truthiness test per box and no
+   * allocation. It is a DEV instrument — armed, it holds a stack per box.
+   */
+  static TAG = (typeof location !== 'undefined' && new URLSearchParams(location.search).has('boxtag')) ? [] : null;
+
   constructor({ materials, rng, render }) {
     this.materials = materials;
     this.rng = rng;
@@ -551,6 +573,7 @@ export class Assembler {
   // ------------------------------------------------------------ collision --
   /** Axis-aligned (or Y-rotated) box collision proxy. */
   box(surface, cx, cy, cz, sx, sy, sz, ry = 0) {
+    if (Assembler.TAG) Assembler.TAG.push({ k: 'box', surface, cx, cy, cz, sx, sy, sz, ry, at: new Error().stack });
     this._accum(surface).add(UNIT_BOX, this._x(trs(_m, cx, cy, cz, ry, sx, sy, sz)));
     return this;
   }
@@ -578,6 +601,7 @@ export class Assembler {
    * cover nobody can contest.
    */
   clipBox(surface, cx, cy, cz, sx, sy, sz, ry = 0, rx = 0) {
+    if (Assembler.TAG) Assembler.TAG.push({ k: 'clip', surface, cx, cy, cz, sx, sy, sz, ry, at: new Error().stack });
     this._clipAccum(surface).add(UNIT_BOX, this._x(trs(_m, cx, cy, cz, ry, sx, sy, sz, rx)));
     return this;
   }
