@@ -278,7 +278,43 @@ export function buildBuilding(A, rng, spec) {
       LL(IDENT, top.x, coreH / 2, top.z, 0, cw, coreH, cd),
       { masks: [0.1, 0.95, 0.9] }
     );
-    A.box('concrete', top.x, coreH / 2, top.z, cw, coreH, cd);
+    /**
+     * THE COLLISION IS THE BUILDING, NOT THE DARK CORE — and this line used to
+     * be `A.box(top.x, coreH / 2, top.z, cw, coreH, cd)`, the core's own
+     * dimensions, which made every background block on the map HOLLOW.
+     *
+     * The 2 m inset is a LOOK: the shell has to sit behind the glass or it
+     * z-fights the window, and it is sized off the smallest floor plate so a
+     * setback never pokes it through an upper wall. Neither reason survives
+     * being handed to the collision proxy. What it left was a 1.66 m gallery
+     * running right round the inside of every non-enterable block at EVERY
+     * storey, floored by `interiorSlab` (which spans the full plate less the
+     * wall thickness) and roofed by the slab above — and the three east
+     * background blocks and their three west twins carry `skipSides: [1]`/`[3]`,
+     * so on the outward elevation that gallery has no wall on it at all. It is
+     * a 63 m balcony 3.45 m up, on the far side of the compound wall, open to
+     * the dunes.
+     *
+     * MEASURED: `?seed=12` puts a 1.90 m sandbag wall under BE1's west balcony
+     * (deck 3.61 m), a 1.71 m mantle against a 1.85 m limit. The capsule steps
+     * off the sandbags onto the balcony, through the opening into the gallery,
+     * walks 48 m north and 28 m east inside the block and drops off the end of
+     * the slab at level x 89.7 into open sand: 7519.4 m² of void, which is the
+     * number three agents reported to four significant figures over three
+     * unrelated changes. Nothing about the boundary was missing. The wall was
+     * there; the building behind it was not.
+     *
+     * So the mass is authored per floor at that floor's OWN plate, which is
+     * what the inset was protecting against in the first place: a setback
+     * building gets a wide box under its wide floors and a narrow one over,
+     * and no storey has a ledge. The visual core above is untouched.
+     */
+    for (let f = 0; f < floors; f++) {
+      const fs = floorSpec(spec, f);
+      const y0 = info.floorY[f];
+      const y1 = f + 1 < floors ? info.floorY[f + 1] : y;
+      A.box('concrete', fs.x, (y0 + y1) / 2, fs.z, fs.w, y1 - y0, fs.d);
+    }
     for (let f = 0; f <= floors; f++) {
       const fs = floorSpec(spec, Math.min(f, floors - 1));
       const fy = f === 0 ? 0.1 : info.floorY[f] ?? y;
