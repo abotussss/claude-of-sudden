@@ -59,6 +59,17 @@ const SAMPLE_EVERY = 0.12;
 const STUCK_AFTER = 1.6;
 /** Absolute cap on a sidechain duck, however much gunfire keeps re-arming it. */
 const DUCK_MAX_HOLD = 3.0;
+/**
+ * Seconds a FULL pool may return NO slots to itself before it is called pinned.
+ *
+ * A firefight fills the field and a latch fills the field; occupancy cannot
+ * tell them apart, and reading it as a fault is how a previous pass ended up
+ * cutting things that were working. TURNOVER can tell them apart: a busy pool
+ * frees slots every single frame, a pinned one frees none at all. Five seconds
+ * of a full pool, voices being refused outright, and not one slot handed back is
+ * not a busy game.
+ */
+const PIN_AFTER = 4.0;
 
 const nowWall = () =>
   (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
@@ -85,6 +96,13 @@ export class AudioWatchdog {
     this.queued = 0;
     this.drift = 0;
     this._driftMin = Infinity;
+
+    /* ---- pool turnover ------------------------------------------ */
+    this._freedPrev = -1;
+    this._droppedPrev = -1;
+    this._pinnedSince = 0;
+    this._dropsInPin = 0;
+    this.poolDrains = 0;
 
     /* ---- stuck-gain timers -------------------------------------- */
     this._muffleLowSince = 0;
@@ -316,6 +334,55 @@ export class AudioWatchdog {
       this._duckLowSince = 0;
     }
 
+    /**
+     * GUARD 2b — A POOL THAT IS FULL AND NOT MOVING.
+     *
+     * This is the reported symptom in its purest form: the game is not silent —
+     * the ambience beds are not in the pool and keep playing — but every effect
+     * has gone, because every slot is held and every new voice is refused. It is
+     * the state the pause menu empties by giving the field a few seconds with
+     * nothing arriving.
+     *
+     * Three conditions, all three required, because occupancy ALONE is a normal
+     * firefight and draining that would cut off the very sounds this is meant to
+     * protect: the field is at capacity, voices are being DROPPED (refused
+     * outright, not merely stolen), and `freed` — the count of slots handed back
+     * — has not moved at all for four seconds. A working pool frees slots every
+     * frame, including under the render governor, including with the audio clock
+     * stalled (the wall-clock deadline sees to that). Zero turnover is a latch.
+     */
+    const f = this.audio.field;
+    const st = f.stats;
+    const saturated = st.active >= Math.max(8, f.capacity - 1);
+    const noTurnover = this._freedPrev >= 0 && st.freed === this._freedPrev;
+    if (saturated && noTurnover) {
+      if (!this._pinnedSince) { this._pinnedSince = wall; this._dropsInPin = 0; }
+      /**
+       * THE REFUSALS ARE COUNTED OVER THE WINDOW, NOT REQUIRED IN EVERY SAMPLE.
+       *
+       * The first version of this asked for `dropped` to have increased between
+       * each pair of samples 0.12 s apart, and it never fired: voices do not
+       * arrive on a metronome, so a single quiet sample reset a four second
+       * accumulator and the timer could not finish. MEASURED — the injected pin
+       * healed on one run in three, purely on whether the sampler's phase
+       * happened to line up with the traffic. An accumulator that any gap can
+       * reset is not measuring the thing it names.
+       */
+      if (this._droppedPrev >= 0) this._dropsInPin += Math.max(0, st.dropped - this._droppedPrev);
+      if (wall - this._pinnedSince > PIN_AFTER && this._dropsInPin > 0) {
+        this._pinnedSince = 0;
+        this.poolDrains++;
+        this._say(`pool pinned at ${st.active}/${f.capacity}, no turnover, ${this._dropsInPin} refused — drain`);
+        f.drain();
+        this.audio.drainDry();
+        this.audio.clearRateGates();
+      }
+    } else {
+      this._pinnedSince = 0;
+    }
+    this._freedPrev = st.freed;
+    this._droppedPrev = st.dropped;
+
     // The master and pre gains. Nothing in gameplay writes these at all, so a
     // wrong value here is a bug or a stray write, and either way it is silence.
     const wantMaster = m.masterVolume;
@@ -476,6 +543,8 @@ export class AudioWatchdog {
       events: a.stats.events,
       errors: a.stats.errors,
       resumeTries: this.resumeTries,
+      poolDrains: this.poolDrains,
+      freed: f?.stats.freed ?? 0,
       soft: this.softRecoveries,
       hard: this.hardRecoveries,
       log: this.log.slice(0, 5),
@@ -535,10 +604,11 @@ export class AudioWatchdog {
       `        latency base ${s.baseLatency} out ${s.outputLatency}\n` +
       `voices ${pad(s.voices, 2)}/${s.cap}  ${busLine}  trk ${s.tracked}\n` +
       `stolen ${s.stolen}  dropped ${s.dropped}  expired ${s.expired}\n` +
-      `leased-out ${s.leaked}  drained ${s.drained}  dry ${s.dryHeld}\n` +
+      `leased-out ${s.leaked}  drained ${s.drained}  freed ${s.freed}  dry ${s.dryHeld}\n` +
       `master ${s.master}  pre ${s.pre}  muffle ${s.muffle} @${s.muffleHz}Hz\n` +
       `deaf ${s.deafness}  comp ${s.reduction}dB  duck a${s.duck.ambience} f${s.duck.foley} w${s.duck.weapons}\n` +
-      `events ${s.events}  errors ${s.errors}  resume ${s.resumeTries}  soft ${s.soft}  hard ${s.hard}\n` +
+      `events ${s.events}  errors ${s.errors}  resume ${s.resumeTries}\n` +
+      `soft ${s.soft}  hard ${s.hard}  poolDrain ${s.poolDrains}\n` +
       (s.log.length ? `\n${s.log.join('\n')}` : '');
   }
 

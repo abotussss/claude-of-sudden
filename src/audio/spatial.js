@@ -256,6 +256,13 @@ export class SpatialField {
       leaked: 0,
       /** Emitters freed by a watchdog drain. @see SpatialField.drain */
       drained: 0,
+      /**
+       * SLOTS RETURNED TO THE POOL, EVER. The turnover counter, and the only
+       * number that can tell a pool that is BUSY from a pool that is PINNED —
+       * both sit at 100 % occupancy and only one of them is a bug. A firefight
+       * recycles slots continuously; a latch recycles none. @see AudioWatchdog.
+       */
+      freed: 0,
     };
     this.occlusionEnabled = true;
 
@@ -658,6 +665,7 @@ export class SpatialField {
        */
       if (!e.tracked && (now > e.endTime || wall > e.wallEnd)) {
         if (now <= e.endTime) this.stats.expired++;
+        this.stats.freed++;
         e.detach();
         continue;
       }
@@ -670,6 +678,7 @@ export class SpatialField {
        */
       if (e.tracked && wall > e.lease) {
         this.stats.leaked++;
+        this.stats.freed++;
         e.detach();
         continue;
       }

@@ -353,6 +353,171 @@ async function sampleOrNull(p) {
 }
 
 /* ==================================================================== */
+/* --dropout: BREAK THE GRAPH ON PURPOSE, AND TIME THE RECOVERY         */
+/* ==================================================================== */
+/**
+ * 「音が消えるバグ起きますね 何度でも 音バグは必ず直して」
+ *
+ * The dropout has been diagnosed twice, fixed twice, and reported again. What
+ * has never been done is the thing this mode does: put the graph into each
+ * silent state ON PURPOSE and measure whether it comes back on its own, without
+ * a pause and without a reload.
+ *
+ * Six faults, one per known way the sound can stop. For each: read the output
+ * analyser, inject, wait, and report how long the master bus was actually silent
+ * and which rung of the watchdog's ladder answered it. A guard that cannot be
+ * shown recovering from the condition it was written for is not a guard, it is a
+ * comment.
+ *
+ *   node tools/audiotest.mjs --dropout [--url=…]
+ *
+ * WHAT THIS CANNOT TEST — and it is the important sentence in this file. If the
+ * real fault on the player's machine is the audio thread missing its deadlines
+ * while the graph and the device clock both look healthy, the output analyser
+ * reads NORMAL throughout, none of these guards fire, and this mode passes while
+ * he still cannot hear anything. Headless Chrome renders through a null sink, so
+ * that failure mode cannot be produced here at all. @see src/audio/watchdog.js
+ */
+if (args.dropout) {
+  const probe = () => page.evaluate(() => {
+    const a = window.__ENGINE__.ctx.peek('audio');
+    const w = a?.watchdog;
+    return {
+      ok: !!w,
+      state: a?.actx?.state ?? 'none',
+      outRms: w?.out.rms ?? -1,
+      worldRms: w?.world.rms ?? -1,
+      silentFor: w?.silentFor ?? -1,
+      soft: w?.softRecoveries ?? -1,
+      hard: w?.hardRecoveries ?? -1,
+      resumes: w?.resumeTries ?? -1,
+      restarts: a?.restarts ?? -1,
+      muffle: +(a?.mixer?.muffleGain.gain.value ?? -1).toFixed(4),
+      master: +(a?.mixer?.masterGain.gain.value ?? -1).toFixed(4),
+      duckAmb: +(a?.mixer?.buses.ambience.duck.gain.value ?? -1).toFixed(4),
+      voices: a?.field?.stats.active ?? -1,
+      errors: a?.stats.errors ?? -1,
+      log: w?.log.slice(0, 2) ?? [],
+    };
+  });
+
+  const settle = async (ms) => { await page.waitForTimeout(ms); return probe(); };
+  const before = await settle(2500);
+  console.log('\n[audiotest] DROPOUT — the graph is broken on purpose, six ways');
+  console.log('  healthy baseline:', JSON.stringify(before));
+  if (!before.ok) {
+    console.log('  !! this build has no watchdog — nothing to test');
+    await browser.close();
+    process.exit(1);
+  }
+
+  const faults = [
+    {
+      name: 'context suspended',
+      why: 'device change / audio focus / policy. update() used to return for ever',
+      break: () => page.evaluate(async () => {
+        await window.__ENGINE__.ctx.peek('audio').actx.suspend();
+      }),
+      wait: 3000,
+    },
+    {
+      name: 'muffle gain stuck at 0',
+      why: 'a concussion whose recovery integrator stopped being stepped',
+      break: () => page.evaluate(() => {
+        const m = window.__ENGINE__.ctx.peek('audio').mixer;
+        m.deafness = 0;
+        m.muffleGain.gain.cancelScheduledValues(m.actx.currentTime);
+        m.muffleGain.gain.setValueAtTime(0, m.actx.currentTime);
+      }),
+      wait: 3500,
+    },
+    {
+      name: 'sidechain held open',
+      why: 'continuous gunfire re-arming duck() faster than it releases',
+      break: () => page.evaluate(() => {
+        const m = window.__ENGINE__.ctx.peek('audio').mixer;
+        for (let i = 0; i < 6; i++) m.duck(0.92, 60);
+      }),
+      wait: 5000,
+    },
+    {
+      name: 'master gain at 0',
+      why: 'a stray write, or a ramp that never completed',
+      break: () => page.evaluate(() => {
+        const m = window.__ENGINE__.ctx.peek('audio').mixer;
+        m.masterGain.gain.cancelScheduledValues(m.actx.currentTime);
+        m.masterGain.gain.setValueAtTime(0, m.actx.currentTime);
+      }),
+      wait: 3500,
+    },
+    {
+      name: 'voice pool pinned',
+      why: 'the reported latch: every slot held, nothing can play',
+      break: () => page.evaluate(() => {
+        const f = window.__ENGINE__.ctx.peek('audio').field;
+        const now = f.actx.currentTime;
+        for (const e of f.emitters) {
+          e.free = false;
+          e.tracked = true;          // exempt from the expiry loop, as a bed is
+          e.lease = Infinity;        // …and pretend its owner still wants it
+          e.endTime = now + 1e6;
+          e.wallEnd = Infinity;
+        }
+      }),
+      // Nine seconds against a four second threshold: the clock only starts on
+      // the first sample where all three pin conditions hold together.
+      wait: 9000,
+      // The pool being full is not silence — the beds still play — so this one
+      // is judged on whether the SLOTS came back, not on the analyser. The bar
+      // is "the field is recycling again", not any particular occupancy: a real
+      // match refills it within a frame or two of the drain, and it did (72 ->
+      // 8 -> 26 across three samples on the run this was written against).
+      check: (p) => p.voices < 60,
+    },
+    {
+      name: 'master chain severed',
+      why: 'a poisoned node: NaN through the compressor, or a lost edge',
+      break: () => page.evaluate(() => {
+        const m = window.__ENGINE__.ctx.peek('audio').mixer;
+        m.masterSum.disconnect();
+      }),
+      wait: 9000,
+    },
+  ];
+
+  let failures = 0;
+  for (const f of faults) {
+    await f.break();
+    const during = await settle(400);
+    const after = await settle(f.wait);
+    const healed = f.check ? f.check(after) : after.outRms > 2e-6;
+    if (!healed) failures++;
+    console.log(
+      `\n  ${healed ? 'RECOVERED' : 'STILL BROKEN'}  ${f.name}\n` +
+      `    (${f.why})\n` +
+      `    during  state=${during.state} outRms=${during.outRms.toExponential(2)} voices=${during.voices}\n` +
+      `    after   state=${after.state} outRms=${after.outRms.toExponential(2)} voices=${after.voices} ` +
+      `silentFor=${after.silentFor}\n` +
+      `    ladder  resumes=${after.resumes} soft=${after.soft} hard=${after.hard} restarts=${after.restarts}` +
+      `  master=${after.master} muffle=${after.muffle} duckAmb=${after.duckAmb}\n` +
+      (after.log.length ? `    log     ${after.log.join(' | ')}\n` : '')
+    );
+    // Let the hard-recovery cooldown lapse so the next fault is judged on its
+    // own rung of the ladder rather than on the previous one's cooldown.
+    await page.waitForTimeout(1200);
+  }
+
+  const final = await probe();
+  console.log('\n[audiotest] final', JSON.stringify(final));
+  console.log('[audiotest] page errors', pageErrors.slice(0, 8));
+  console.log(failures === 0
+    ? '[audiotest] DROPOUT: PASS — every injected fault healed itself'
+    : `[audiotest] DROPOUT: FAIL — ${failures} fault(s) did not heal`);
+  await browser.close();
+  process.exit(failures === 0 ? 0 : 1);
+}
+
+/* ==================================================================== */
 /* --battle: emitter pressure through a real 20 v 20, per BUS           */
 /* ==================================================================== */
 /**
@@ -436,6 +601,22 @@ if (args.battle) {
         phase: m?.phase ?? '-',
         // Present only on a build that has the battle layers. @see AudioSystem.battle
         bat: a.battle ? { ...a.battle.stats } : null,
+        /**
+         * THE WATCHDOG'S OWN COUNTERS, sampled through a match that is NOT
+         * broken. Every one of them should stay at zero: a recovery that fires
+         * during ordinary play is a false positive, and a false positive here
+         * means draining the pool or rebuilding the graph in the middle of a
+         * firefight — worse than the fault it is guarding against.
+         */
+        wd: a.watchdog ? {
+          soft: a.watchdog.softRecoveries,
+          hard: a.watchdog.hardRecoveries,
+          pool: a.watchdog.poolDrains,
+          resumes: a.watchdog.resumeTries,
+          outRms: +a.watchdog.out.rms.toExponential(2),
+          silentFor: +a.watchdog.silentFor.toFixed(2),
+          queued: +a.watchdog.queued.toFixed(4),
+        } : null,
         fires: { ...fires },
         dt: +e.time.dt.toFixed(4),
       });
@@ -490,6 +671,7 @@ if (args.battle) {
   console.log(`\n  voices stolen ${num(last.stolen)}   dropped ${num(last.dropped)}   expired-early ${num(last.expired)}   errors ${num(last.errors)}`);
   console.log(`  weapon:fire offered over ${secs.toFixed(0)}s of game — ${JSON.stringify(last.fires)}`);
   if (last.bat) console.log(`  battle layers played — ${JSON.stringify(last.bat)}`);
+  if (last.wd) console.log(`  watchdog (all should be 0 in a healthy match) — ${JSON.stringify(last.wd)}`);
   console.log('\n[audiotest] final', JSON.stringify(await sampleOrNull(page)));
   console.log('[audiotest] page errors', pageErrors.slice(0, 8));
   await browser.close();
