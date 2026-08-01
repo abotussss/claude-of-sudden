@@ -48,9 +48,17 @@ for (const seed of SEEDS) {
     e.ctx.events.on('match:tank', (ev) => {
       window.__TANKLOG__.push({ phase: ev.phase, id: ev.id, t: +e.ctx.time.elapsed.toFixed(1) });
     });
+    /**
+     * DO NOT TOUCH `roundClock`. Holding it open looked like the safe way to
+     * watch a permanent tank for as long as it liked, and it silently removed
+     * the tank: the cathedral beat sheet is a FRACTION OF THE ROUND (the
+     * collapse lands at t≈164-188 of a 276-316 s round), so `roundClock = 1e6`
+     * schedules the collapse — and therefore `armAfter` — at about six hundred
+     * thousand seconds. Measured: 229 s and 238 s of live match, score still
+     * [0,0], zero sorties. The round is what drives the whole event, so let it
+     * run and sample as it goes.
+     */
     if (m.phase !== 'live') m._setPhase?.('live', 0);
-    m.roundClock = 1e6;              // do not let the round end mid-sortie
-    m._checkWinConditions = () => {};
   });
 
   /**
@@ -65,17 +73,34 @@ for (const seed of SEEDS) {
    * permanent tank can be observed accumulating kills for as long as it likes —
    * which is the "invincible object" question.
    */
+  /**
+   * SAMPLE AS IT GOES, and keep the last sample in which the armour had
+   * actually rolled. `armRound` zeroes kills and deaths at the top of every
+   * round, so a snapshot taken after the round turns over reports a tank that
+   * never existed — which is what a single reading at the end would have been.
+   */
   const t0 = Date.now();
+  let best = null;
   while (Date.now() - t0 < WALL_MS) {
-    const done = await page.evaluate(() => {
-      const a = window.__ENGINE__.ctx.peek('match').tank;
-      return a.tanks.every((t) => t.state === 'dead');
+    const snap = await page.evaluate(() => {
+      const e = window.__ENGINE__;
+      const m = e.ctx.peek('match');
+      const a = m.tank;
+      return {
+        elapsed: +e.ctx.time.elapsed.toFixed(0),
+        seed: e.levelSeed, phase: m.phase,
+        score: m.score ? [...m.score] : null,
+        log: (window.__TANKLOG__ ?? []).slice(0, 40),
+        tanks: a.tanks.map((t) => ({ id: t.id, state: t.state, health: Math.round(t.health), s: { ...t.stats } })),
+      };
     });
-    if (done) break;
+    const rolled = snap.tanks.some((t) => t.s.sorties > 0);
+    if (rolled) best = snap;
+    if (snap.tanks.every((t) => t.state === 'dead')) break;
     await page.waitForTimeout(3000);
   }
 
-  const out = await page.evaluate(() => {
+  const live = await page.evaluate(() => {
     const e = window.__ENGINE__;
     const m = e.ctx.peek('match');
     const a = m.tank;
@@ -91,8 +116,11 @@ for (const seed of SEEDS) {
       })),
     };
   });
+  const out = best ?? live;
   out.errs = errs;
+  out.neverRolled = !best;
   rows.push(out);
+  if (!best) console.log(`seed ${seed}: THE ARMOUR NEVER ROLLED in ${(WALL_MS / 1000).toFixed(0)}s of wall clock`);
   console.log(`seed ${out.seed}: t=${out.elapsed}s phase=${out.phase} score=${JSON.stringify(out.score)}`);
   for (const t of out.tanks) {
     const s = t.s;
