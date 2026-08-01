@@ -216,19 +216,34 @@ const COAX_REST = 1.5;
  * rifle fire (0.22), the turret is a little softer (0.4), and the engine deck
  * over the back is the shot that works (1.7).
  *
- * MEASURED AGAINST THE WEAPONS THAT EXIST, not against a number in a comment.
- * `src/weapons/defs.js` is 17 damage for the M4 (30-round magazine, 210
- * reserve = 8 magazines carried) and 21 for the AKM. `physics` already applies
- * `damageScale` per box (index.js:804), so one M4 round is worth:
+ * MEASURED, NOT MULTIPLIED OUT — and the two differ by 2.6x, which is the
+ * point of measuring. `_tankttk.mjs` fires the REAL `physics.fireBullet` at the
+ * REAL boxes and counts rounds until the hull brews up:
  *
- *     deck    17 x 1.70 = 28.9   ->  2600 / 28.9 =  90 rounds = 3.0 magazines
- *     turret  17 x 0.40 =  6.8   ->              = 382 rounds = 12.7 magazines
- *     glacis  17 x 0.22 =  3.7   ->              = 695 rounds = 23.2 magazines
+ *     M4 (17)      into the deck      58 rounds  = 1.9 magazines
+ *     AKM (21)     into the deck      47 rounds  = 1.6 magazines
+ *     bolt (125)   into the deck       8 rounds  = 1.6 magazines
+ *     M4 (17)      into the glacis    447 rounds = 14.9 magazines
+ *     bolt (125)   into the glacis     61 rounds = 12.2 magazines
  *
- * A man carries 240 rounds, so the FRONT IS NOT A ROUTE TO A KILL and is not
- * meant to be — you have to get behind it, and three magazines into the deck
- * is a long time to stand behind a tank that is shooting back. Those are the
- * numbers the header's "not easy" claim rests on.
+ * THE ARITHMETIC SAYS 90 ROUNDS INTO THE DECK AND THE MAP SAYS 58, because
+ * THESE THREE BOXES OVERLAP: `hull` is z -3.2..3.4 / y 0.35..2.15, `deck` is
+ * z -3.3..-0.7 / y 1.45..2.25 and `turret` is z -2.0..1.4 / y 1.45..2.55, so a
+ * round coming in level from behind at deck height passes through all three and
+ * `physics` emits a `damage:dealt` for each. The effective multiplier on that
+ * line is 2.64, not 1.70. That is pre-existing geometry, not a new decision,
+ * and it is written down here because the comment this replaced claimed "~28
+ * rifle rounds into the deck" and no number in it had ever been fired.
+ *
+ * WHAT THAT MAKES THE TANK. A man carries 240 rounds, so the FRONT IS NOT A
+ * ROUTE TO A KILL by rifle at all (447 needed, 240 carried) and is not meant to
+ * be. The deck is, and it is on the tank's OWN side of the street — the hull
+ * drives out of its own spawn towards the cathedral, so an enemy standing
+ * behind it has already got past it. THE HOLE, HONESTLY: a bolt gun with line
+ * of sight down onto the engine deck from a roof kills a full-health tank in
+ * EIGHT rounds, and `world.features` puts a vantage nest on every reachable
+ * roof. If the player says it dies too easily, that is the shot he means, and
+ * the fix is this table rather than `RULES.tankHealth`.
  */
 const PART_MUL = { hull: 0.22, turret: 0.4, deck: 1.7 };
 const EXPLOSION_MUL = 1.35;
