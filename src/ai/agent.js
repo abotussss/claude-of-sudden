@@ -253,6 +253,15 @@ const DEG = Math.PI / 180;
  */
 const STUCK_WINDOW = 2.0;
 const STUCK_CLEAR = 0.9;
+/**
+ * A LANE IS FOR CROSSING GROUND, NOT FOR THE LAST TWENTY METRES. @see
+ * `_laneVia`. Under `LANE_MIN` everybody converges on the point, which is what
+ * taking a point is; `VIA_REACHED` is where a man stops steering at his lane
+ * and turns for the objective, and it is deliberately generous — the lane's job
+ * is to bend the approach, not to be arrived at.
+ */
+const LANE_MIN = 24;
+const VIA_REACHED = 7;
 
 /**
  * ──────────────────────────────────────────────────────────────────────────────
@@ -385,6 +394,21 @@ export class Agent {
     this.name = opts.name ?? `BOT-${this.id}`;
     /** 'attack' | 'defend' — informational; the objective carries the verb. */
     this.role = opts.role ?? null;
+
+    /* ---------------- fireteam (owned by `Squad`) ---------------- */
+    /**
+     * The four-man team this man is currently in, and his seat in it (0-3).
+     * @see `Squad.regroup` for what a fireteam is and why it is cut on the
+     * ORDER rather than on the roster; `_laneVia` is the approach it gives him
+     * and `_pickHoldSpot` is the arc.
+     */
+    this.fireteam = null;
+    this.ftSeat = 0;
+    /** His lane's via-point, snapped to the grid. @see `_laneVia`. */
+    this._via = new THREE.Vector3();
+    this._hasVia = false;
+    this._viaTimer = 0;
+    this._viaFor = new THREE.Vector3();
 
     /* ---------------- objective (owned by `match`) ---------------- */
     /** { mode, position: Vector3, site, facing: Vector3|null } or null. */
@@ -710,6 +734,7 @@ export class Agent {
     this.holdTimer -= dt;
     this._scanTimer -= dt;
     this.vaultCooldown -= dt;
+    this._viaTimer -= dt;
     if (this.lastKnownAge < 1e6) this.lastKnownAge += dt;
 
     // a path the frame budget deferred: ask again before anything else does
@@ -1228,7 +1253,13 @@ export class Agent {
        * on the back of a broken signal — otherwise a man walks to the spot he was
        * told to leave and only re-plans once he arrives.
        */
-      const moved = this.hasMoveTarget && this.moveTarget.distanceToSquared(dest) > 2 * 2;
+      /**
+       * …AND HIS FIRETEAM'S OWN WAY IN. `dest` is where the ORDER points; this
+       * is the route his four men take to it, and it is the difference between
+       * a side and a queue. @see `_laneVia`.
+       */
+      const target = this._laneVia(dest, dist) ?? dest;
+      const moved = this.hasMoveTarget && this.moveTarget.distanceToSquared(target) > 2 * 2;
       /**
        * NOT WHILE HE IS IN THE AIR. A man halfway down a six metre drop is off
        * the height field by definition (@see `OFFGRID_TOL`), so `_goTo` refuses,
@@ -1241,8 +1272,11 @@ export class Agent {
       if (this.repathTimer <= 0 && !this.pathPending && this._detourTimer <= 0 && !airborne
         && (!this.hasMoveTarget || moved || this.stuckTimer > 0.6)) {
         this.repathTimer = this.rng.range(1.1, 2.2);
-        if (!this._goTo(dest) && !this.pathPending) {
-          if (holdish && this._hasHoldSpot) this._hasHoldSpot = false; // try another spot
+        if (!this._goTo(target) && !this.pathPending) {
+          // A lane that will not route is a lane, not a dead objective: drop it
+          // and take the straight line before anything is called blocked.
+          if (this._hasVia) this._hasVia = false;
+          else if (holdish && this._hasHoldSpot) this._hasHoldSpot = false; // try another spot
           else this._advanceFallback(obj);
         }
       }
@@ -1279,6 +1313,78 @@ export class Agent {
      */
     this.crouch = holdish && this.traits.exposure < 0.42;
     this.aimWeight = 0.6;
+  }
+
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * HIS FIRETEAM'S WAY IN — the one point that makes four men a manoeuvre
+   * element and not four men in a queue.
+   * ──────────────────────────────────────────────────────────────────────────
+   * "こういうAI全員が行動経路が一緒で同じ動きだとゲーム性が悪いので ちゃんと４人
+   *  １チームの感じで動くところを考えて BFのシステムみたいに"
+   *
+   * `match` gives thirteen men one capture point and `_advance` walked all
+   * thirteen at it in a straight line, which on a street map means ONE STREET.
+   * Nothing in here was wrong — every man had a sensible order and a sensible
+   * route — and the sum of it is the screenshot: a clump.
+   *
+   * A LANE IS A VIA-POINT AND NOTHING ELSE. His fireteam's signed offset is
+   * measured perpendicular to the line between him and his objective, applied
+   * a little past halfway along it, and SNAPPED TO A CELL OF HIS OWN NAV
+   * COMPONENT — which is the whole safety argument. The doorway epidemic came
+   * from `findPath` returning 0 and `_goTo` reading it as "no route"; a via
+   * that is on his own component cannot do that, because a route to it exists
+   * by construction. If no such cell is within six rings the lane is simply not
+   * taken and he walks the straight line, exactly as before.
+   *
+   * IT IS SPENT AND THEN DROPPED. Within `VIA_REACHED` of it he stops steering
+   * at it and heads for the objective, so a lane bends the approach and never
+   * moves the destination — a man cannot be walked away from his order by this.
+   * The swing also scales with how far he has to go, so nobody detours fifteen
+   * metres sideways to cross a courtyard.
+   */
+  _laneVia(dest, dist) {
+    const ft = this.fireteam;
+    if (!ft || ft.lane === 0 || dist < LANE_MIN) {
+      this._hasVia = false;
+      return null;
+    }
+    const grid = this.ai.grid;
+    if (!grid) return null;
+    if (this._hasVia) {
+      const dx = this._via.x - this.position.x, dz = this._via.z - this.position.z;
+      // still worth walking to, and still aimed at the same objective
+      if (dx * dx + dz * dz > VIA_REACHED * VIA_REACHED
+        && this._viaFor.distanceToSquared(dest) < 8 * 8) return this._via;
+      this._hasVia = false;
+      this._viaTimer = 1.5;
+    }
+    if (this._viaTimer > 0) return null;
+    this._viaTimer = 2.5;
+    const px = this.position.x, pz = this.position.z;
+    let ax = dest.x - px, az = dest.z - pz;
+    const L = Math.hypot(ax, az);
+    if (L < 1e-3) return null;
+    ax /= L;
+    az /= L;
+    // wider the further he has to go, and never wider than the lane asked for
+    const off = ft.lane * Math.min(1, L / 70);
+    const vx = px + ax * L * 0.55 - az * off;
+    const vz = pz + az * L * 0.55 + ax * off;
+    const here = grid.nearest(px, pz, this.position.y, 3, OFFGRID_TOL);
+    if (here < 0) return null;
+    const ci = grid.nearest(vx, vz, null, 6, Infinity, grid.comp[here]);
+    if (ci < 0) return null;
+    const wx = grid.worldX(ci % grid.nx), wz = grid.worldZ((ci / grid.nx) | 0);
+    // A via that snapped back onto the straight line is not a different way in.
+    const lateral = Math.abs(-az * (wx - px) + ax * (wz - pz));
+    if (lateral < 4) return null;
+    // …and one that is further from the objective than he is has turned him round
+    if (Math.hypot(dest.x - wx, dest.z - wz) > L * 1.1) return null;
+    this._via.set(wx, grid.floor[ci], wz);
+    this._viaFor.copy(dest);
+    this._hasVia = true;
+    return this._via;
   }
 
   /**
@@ -1330,6 +1436,19 @@ export class Agent {
       // ±35° of slop, re-rolled every time, so a man who holds the same side of
       // the site does not hold the same square of it twice.
       pref += this.rng.signed() * 0.6;
+    }
+    /**
+     * …AND FOUR MEN COVER FOUR ARCS. His seat in his own fireteam fans the
+     * preference out around the sector, so the team holds the courtyard's
+     * mouths between them instead of four soldiers taking a knee behind the
+     * same sandbag. It is a bias and not a rule: the ±35° slop above is still
+     * on top of it, and the candidate search still fans out from wherever this
+     * lands, so a seat whose arc has no ground in it takes the next one.
+     * @see `Squad.regroup`.
+     */
+    const ft = this.fireteam;
+    if (ft && ft.members.length > 1) {
+      pref += (this.ftSeat - (ft.members.length - 1) * 0.5) * (Math.PI * 0.55);
     }
     // Radius: forward men push out to the mouths, careful men sit deeper.
     const rMin = forward ? 5 : 3;

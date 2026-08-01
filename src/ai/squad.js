@@ -11,6 +11,57 @@
 import * as THREE from 'three';
 
 let _nextSquad = 1;
+let _nextTeam = 1;
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * FIRETEAMS. "こういうAI全員が行動経路が一緒で同じ動きだとゲーム性が悪いので
+ *  ちゃんと４人１チームの感じで動くところを考えて BFのシステムみたいに"
+ * ────────────────────────────────────────────────────────────────────────────
+ * A `Squad` on this map is A WHOLE SIDE — twenty men, one object, one set of
+ * tokens (`match` calls `ai.createSquad()` once per team and adds every bot it
+ * spawns to it). Everything it does is therefore side-wide, and NOTHING in the
+ * engine ever divided the roster below that. MEASURED on a live 20 v 20 before
+ * this existed: the worst sample had 13 of 18 men inside one 8 m circle, mean
+ * nearest-neighbour 10.8 m, and the whole side walking 8.6 distinct routes —
+ * which is the screenshot, ten men shoulder to shoulder facing the same way.
+ *
+ * A fireteam is FOUR MEN WITH THE SAME JOB AND A DIFFERENT WAY IN, and both
+ * halves of that matter:
+ *
+ *   THE SAME JOB. The teams are cut per OBJECTIVE, not per roster slot, and
+ *     that is deliberate: `match` owns who goes where and re-cuts its plan
+ *     every two seconds (@see `_assignDomination`), so a fixed four-man roster
+ *     would be four men with four different orders pretending to be a unit.
+ *     Cutting on the order `match` actually gave means a fireteam is always a
+ *     real thing — the four men going to the same place.
+ *
+ *   A DIFFERENT WAY IN. Each fireteam of the same objective gets a LANE — a
+ *     signed lateral offset from the straight line between it and the point —
+ *     and the lanes are handed out in order, alternating sides and widening.
+ *     Thirteen men on one capture point stop being one file up one street and
+ *     become three or four groups of four coming in off different bearings.
+ *     `Agent._laneVia` is where a lane becomes a route.
+ *
+ * `seat` is the man's index inside his own fireteam, 0-3, and it is what makes
+ * four men cover four arcs instead of stacking on one sandbag.
+ * @see `Agent._pickHoldSpot`.
+ */
+const FIRETEAM_SIZE = 4;
+/**
+ * The lane ladder, in order of issue: the first fireteam to a point comes
+ * straight up the middle, the next two swing either side of it, and so on.
+ * A LANE TAKEN PUSHES THE NEXT TEAM WIDER, which is the whole mechanism.
+ */
+const LANES = [0, -1, 1, -2, 2, -3, 3];
+/** Metres of lateral offset per rung. */
+const LANE_STEP = 15;
+/** How often the roster is re-cut. `match` re-plans at 2 s; this is under it. */
+const REGROUP_EVERY = 1.0;
+
+function byId(a, b) {
+  return a.id - b.id;
+}
 
 export class Squad {
   constructor(rng) {
@@ -30,6 +81,12 @@ export class Squad {
     this.hasContact = false;
     this.contactAge = Infinity;
     this._pending = [];
+    /** The four-man teams this side is currently cut into. @see `regroup`. */
+    this.fireteams = [];
+    this._ftTimer = 0;
+    this._ftPool = [];
+    this._buckets = new Map();
+    this._rowPool = [];
   }
 
   add(agent) {
@@ -54,6 +111,9 @@ export class Squad {
     if (w === this.members.length) return;
     this.members.length = w;
     this._retoken();
+    // A casualty changes the shape of the side, so re-cut on the next tick
+    // rather than leaving a fireteam holding a seat nobody is in.
+    this._ftTimer = 0;
     if (this.flanker && !this.flanker.alive) this.flanker = null;
     for (const id of this.flankers) {
       let found = false;
@@ -93,8 +153,74 @@ export class Squad {
     return n;
   }
 
+  /**
+   * Cut the side into four-man fireteams, one cut per objective. @see the
+   * header note over `FIRETEAM_SIZE` for why this is not a fixed roster.
+   *
+   * Allocates nothing after the first second: the bucket rows and the fireteam
+   * records are both pooled, and it runs at 1 Hz rather than per frame.
+   */
+  regroup(dt) {
+    this._ftTimer -= dt;
+    if (this._ftTimer > 0) return;
+    this._ftTimer = REGROUP_EVERY;
+
+    const buckets = this._buckets;
+    for (const row of buckets.values()) this._rowPool.push(row);
+    buckets.clear();
+    for (const m of this.members) {
+      if (!m.alive) continue;
+      const o = m.objective;
+      /**
+       * WHAT COUNTS AS "THE SAME JOB". The site if the order carries one — that
+       * is the capture point or the bomb site and it is the honest answer — and
+       * otherwise the destination rounded to a 10 m square, which keeps the men
+       * sent to one end of a street together without merging two streets. A man
+       * with no order at all falls in the same bucket as the other spare men,
+       * which is right: they are the ones about to be given the same thing.
+       */
+      const key = o ? (o.site ?? (Math.round(o.position.x / 10) * 8192 + Math.round(o.position.z / 10))) : 0;
+      let row = buckets.get(key);
+      if (!row) {
+        row = this._rowPool.pop() ?? [];
+        row.length = 0;
+        buckets.set(key, row);
+      }
+      row.push(m);
+    }
+
+    for (const ft of this.fireteams) this._ftPool.push(ft);
+    this.fireteams.length = 0;
+    for (const row of buckets.values()) {
+      // Stable membership: a man keeps his seat between refreshes as long as
+      // the men either side of him are alive and on the same job.
+      row.sort(byId);
+      let lane = 0;
+      for (let i = 0; i < row.length; i += FIRETEAM_SIZE) {
+        let ft = this._ftPool.pop();
+        if (!ft) ft = { id: 0, members: [], lane: 0, laneIndex: 0, centre: new THREE.Vector3() };
+        ft.id = _nextTeam++;
+        ft.members.length = 0;
+        ft.laneIndex = lane;
+        ft.lane = LANES[lane < LANES.length ? lane : LANES.length - 1] * LANE_STEP;
+        ft.centre.set(0, 0, 0);
+        for (let k = i; k < i + FIRETEAM_SIZE && k < row.length; k++) {
+          const m = row[k];
+          m.fireteam = ft;
+          m.ftSeat = k - i;
+          ft.members.push(m);
+          ft.centre.add(m.position);
+        }
+        if (ft.members.length) ft.centre.multiplyScalar(1 / ft.members.length);
+        this.fireteams.push(ft);
+        lane++;
+      }
+    }
+  }
+
   /** Called once per frame by the AI system. */
   update(dt) {
+    this.regroup(dt);
     this.grenadeCooldown -= dt;
     this.contactAge += dt;
     if (this.flanker && (!this.flanker.alive || this.flanker.state !== 'flank')) this.flanker = null;

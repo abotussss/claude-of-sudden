@@ -50,10 +50,17 @@ await p.evaluate(() => {
         if (near + 1 > clump) clump = near + 1;
         spread += (m.position.x - cx) ** 2 + (m.position.z - cz) ** 2;
       }
-      const routes = new Set(), objs = new Set();
+      const routes = new Set(), objs = new Set(), fts = new Set();
+      let via = 0, adv = 0;
       for (const m of men) {
         if (m.hasMoveTarget) routes.add(`${Math.round(m.moveTarget.x / 8)},${Math.round(m.moveTarget.z / 8)}`);
         if (m.objective) objs.add(`${Math.round(m.objective.position.x / 4)},${Math.round(m.objective.position.z / 4)}`);
+        if (m.fireteam) fts.add(m.fireteam.id);
+        if (m._hasVia) via++;
+        if (m.state === 'advance') adv++;
+        const c = `${Math.round(m.position.x / 12)},${Math.round(m.position.z / 12)}`;
+        S.lanes = S.lanes || [new Set(), new Set()];
+        S.lanes[team].add(c);
       }
       S.side[team].push({
         men: men.length,
@@ -62,6 +69,9 @@ await p.evaluate(() => {
         spread: Math.sqrt(spread / men.length),
         routes: routes.size,
         objs: objs.size,
+        fts: fts.size,
+        via,
+        adv,
       });
     }
   };
@@ -84,6 +94,10 @@ const r = await p.evaluate(() => {
       spread: +avg(rows, 'spread').toFixed(1),
       routes: +avg(rows, 'routes').toFixed(1),
       objs: +avg(rows, 'objs').toFixed(1),
+      fireteams: +avg(rows, 'fts').toFixed(1),
+      onLane: +avg(rows, 'via').toFixed(1),
+      advancing: +avg(rows, 'adv').toFixed(1),
+      cellsWalked: (window.__B__.lanes && window.__B__.lanes[t] ? window.__B__.lanes[t].size : 0),
     });
   }
   // ---- nav facts -------------------------------------------------------
