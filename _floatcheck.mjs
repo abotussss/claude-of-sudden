@@ -484,6 +484,9 @@ const result = await page.evaluate(
     let groundNodes = 0;
     /** Columns cut outside a window while following a piece off the edge. */
     let grownColumns = 0;
+    /** Pieces the two look-again passes cleared, and by which. */
+    let followed = 0;
+    let refined = 0;
     const t0 = performance.now();
 
     for (let b = 0; b < regions.length; b++) {
@@ -715,7 +718,7 @@ const result = await page.evaluate(
             if (st !== undefined) {
               const lift = st - bot;
               if (lift > c.bestStand) c.bestStand = lift;
-              if (st >= bot - TOL) { c.attached++; c.supported = true; break; }
+              if (st >= bot - TOL) { c.attached++; c.supported = true; followed++; break; }
             }
             if (!sky) continue;
             for (let k = 0; k < sky.length; k += 2) {
@@ -769,7 +772,7 @@ const result = await page.evaluate(
               grownColumns++;
               for (let i = 0; i < iv.length; i += 2) {
                 if (iv[i + 1] > groundY) continue; // not standing on the map
-                if (iv[i] >= n.bot - TOL) { c.supported = true; c.refined = true; break; }
+                if (iv[i] >= n.bot - TOL) { c.supported = true; refined++; break; }
               }
             }
             if (c.supported) break;
@@ -824,6 +827,8 @@ const result = await page.evaluate(
       intervals,
       groundNodes,
       grownColumns,
+      followed,
+      refined,
       skyNodes: nodes.length,
       components: comp.size,
       anomalies,
@@ -948,7 +953,11 @@ if (args.json) {
       `  swept ${result.regions.join(', ')} — ${result.columns} columns with something off the ` +
         `ground, ${result.rays} rays, ${result.intervals} solid intervals ` +
         `(${result.groundNodes} standing on the map, ${result.skyNodes} not) in ${result.ms}ms` +
-        (result.grownColumns ? `  ·  ${result.grownColumns} more cut following pieces off the edge` : '') +
+        (result.grownColumns
+          ? `  ·  ${result.grownColumns} more cut looking again at ` +
+            `${result.followed + result.refined} pieces (${result.followed} carried past the ` +
+            `window edge, ${result.refined} carried inside a cell)`
+          : '') +
         (result.anomalies ? `  ·  ${result.anomalies} single-sided surfaces ignored` : '')
     );
     if (args.audit) {
