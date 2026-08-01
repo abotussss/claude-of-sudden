@@ -110,6 +110,8 @@ ui.setCaches(list)          ui.pickup(title, sub, kind)
 world.levelYaw              world.levelToWorld(x, y, z, out)
 world.features              world.links          world.interiorVolumes
 world.demolitions           world.demolish(id, down)   world.demolishAll(down)
+world.breaches              world.damageAt(position, strength)
+world.breach(id, down)      world.breachAll(down)
 ```
 
 `world.demolitions` is A BUILDING'S OWN DESTROYED STATE, and it exists because
@@ -136,6 +138,52 @@ throws and settles them with the machinery it already has. `setVisual` and
 `setCollision` are separate on purpose — the nav patch is baked at boot with the
 ruin temporarily solid and the building visibly standing the whole time.
 `src/world/demolition.js`; `_demoprobe.mjs` measures what it opens.
+
+`world.breaches` is THE OTHER HALF OF THAT SENTENCE — 「物資やビーコンのある家も破壊
+できるようにして、破壊と言っても家の一部を破壊したり、外壁が破壊されるような破壊にして
+ください」 — and the second clause is the whole specification. A cache house may not
+be levelled: the six houses that hold `world.features` are the reason to go
+indoors, and a ruin deletes it. What comes off is ONE GROUND-STOREY ELEVATION,
+blown open across the middle, with the storeys above still standing on the two
+jambs that are left.
+
+```js
+world.breaches // [{ id, building, side, name, position:Vector3, normal, along,
+               //    halfLen, holeW, holeH, reach, strength, level, navRect,
+               //    mass, surfaces, tint, down,
+               //    setVisual(d), setCollision(d), setDown(d) }]
+world.damageAt(position, strength) // -> the record that opened, or null
+```
+
+It is `demolition.js`'s machinery at the granularity of one elevation: the
+facade panel is bracketed in its own `Assembler` scope as it goes up
+(`buildBuilding`'s `hooks.scopeGroundSide`), the damaged form is built beside it
+at boot, and the swap is two index-range fills and two mask writes. `mass` is
+the same shape `world.demolitions[].mass` publishes — the box the wall is made
+of in the building's frame, plus the openings cut in it — so a caller that
+already throws a district block's walls needs no second code path.
+
+`damageAt` IS THE ENTRY POINT, and it takes what a shell knows about itself: a
+world position and a strength in `match`'s own units. `world` answers with the
+elevation that came off or with null, and null is three real answers — nothing
+breachable within `reach` (most of the map), already open, or under that wall's
+own `strength` bar. The distance is to the opening's RECTANGLE rather than its
+centre, so a round into the jamb beside the hole takes the same wall off.
+
+WHICH WALL IS DERIVED, NEVER AUTHORED: a door-less side with somewhere to stand
+outside it, probed with `dressing.isOpen` at three points along the elevation.
+A table would open a hole into a party wall the first time a building turned.
+
+THE SPILL IS THE ONLY SOLID PART OF THE DAMAGED FORM AND IT IS A RAMP, not
+scenery. `plinthCourse` runs a 0.42 m base course round every footprint and
+0.42 m is `STANCE.stand.stepHeight` EXACTLY, so a hole above an unbroken course
+is a hole you cannot walk through; the rubble crests at 0.32 m on both sides of
+it, under `NavGrid.maxStep` from either direction. Everything else — the teeth,
+the fallen panels, the loose lumps — carries no proxy at all. `world` publishes
+`navRect` and keeps `setVisual`/`setCollision` separate so a nav patch can be
+baked at boot with the wall visibly standing, exactly as the ruins are.
+`src/world/breach.js`; `_breachprobe.mjs` measures what it opens and
+`_floatcheck.mjs --region=breach` proves nothing hangs.
 
 `world.features` and `world.links` are PLACES THE LEVEL AUTHORED AND MARKED, and
 they exist because "屋内のエリアを作ってそこにもAIがいく利点やメリットを与えて でないとAIが
