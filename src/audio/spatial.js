@@ -87,6 +87,22 @@ const WALL_SLACK = 0.3;
 /** Reference distance for the attenuation curve, in metres. */
 const REF = 2.0;
 
+/**
+ * The attenuation curve as a free function, so it can be measured without a
+ * live field. `SpatialField.attenuation` is this and nothing else.
+ *
+ * It exists because "how loud is a remote rifle against your own" is a question
+ * about the curve, not about the graph: `src/audio/selftest.js` renders voices
+ * through the real mixer in an OfflineAudioContext where no field exists, and
+ * without this it could only compare voices at 0 m — which is exactly the
+ * comparison that does not matter.
+ */
+export function attenuationAt(dist) {
+  const near = REF / (REF + 0.85 * Math.max(0, dist - REF));
+  const far = 0.055 * Math.pow(60 / Math.max(dist, 60), 0.55);
+  return clamp(Math.max(near, dist > 45 ? far : 0), 0.0, 1);
+}
+
 const nowWall = () =>
   (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
 
@@ -125,6 +141,8 @@ class Emitter {
     this.busName = 'foley';
     this.attached = null;
     this.tracked = false;
+    /** What KIND of sound is in this slot. @see SpatialField.acquire */
+    this.kindTag = null;
     this.pos = { x: 0, y: 0, z: 0 };
     this._connected = false;
     this._sendConnected = false;
@@ -341,9 +359,7 @@ export class SpatialField {
    * a level feel dead. Below 40 m it is very close to physical.
    */
   attenuation(dist) {
-    const near = REF / (REF + 0.85 * Math.max(0, dist - REF));
-    const far = 0.055 * Math.pow(60 / Math.max(dist, 60), 0.55);
-    return clamp(Math.max(near, dist > 45 ? far : 0), 0.0, 1);
+    return attenuationAt(dist);
   }
 
   /**
@@ -441,6 +457,26 @@ export class SpatialField {
     return n;
   }
 
+  /**
+   * WHAT A BUS IS HOLDING, AND WHAT IT IS ALLOWED TO HOLD.
+   *
+   * Public because a sound that is BACKGROUND has to be able to ask before it
+   * takes a slot. Every quota fight in this file's history came from a layer
+   * that asked for a voice unconditionally and let `acquire` sort it out: the
+   * pool is finite, so "sort it out" always means somebody else's sound stops.
+   * The distant-battle and remote-footstep layers (see `src/audio/battle.js`)
+   * check these two numbers first and simply do not play when their bus is
+   * already carrying its share — they are density, and density is the one thing
+   * that must yield to the fight in front of you.
+   */
+  busLoad(bus) {
+    return this._busLoad(bus);
+  }
+
+  busCap(bus) {
+    return this._busCap(bus);
+  }
+
   acquire(opts) {
     const now = this.actx.currentTime;
     let em = null;
@@ -507,6 +543,14 @@ export class SpatialField {
     em.busName = opts.bus ?? 'foley';
     em.tracked = !!opts.tracked;
     em.userGain = opts.gain ?? 1;
+    /**
+     * A LABEL, PURELY SO THE POOL CAN BE AUDITED. `busName` says which quota a
+     * slot came out of; it cannot say whether the twelve weapons slots are one
+     * man's rifle or the distant-battle layer. Every wrong diagnosis in this
+     * file's history ("it must be the gunfire" when 50 of 72 were foley) came
+     * from not being able to ask that question of a live match.
+     */
+    em.kindTag = opts.tag ?? null;
     em.occ = occ;
     em.dist = dist;
     em.startAt = t;

@@ -493,6 +493,198 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
   return { node, end: end + 0.05, send };
 }
 
+/* ------------------------------------------------------------------ */
+/* The battle you are not standing in                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * WHAT A DISTANT BURST IS PLAYED AT, per metre.
+ *
+ * It is a separate function because it is a MIX DECISION and it had to be
+ * measured rather than picked. `SpatialField.attenuation` is deliberately
+ * gentler than 1/r past 40 m — a real firefight at 150 m is audible and a pure
+ * inverse-distance level makes a level feel dead — but "gentler" out there is
+ * nearly FLAT: 0.0435 at 90 m and 0.0275 at 200 m, four decibels across a
+ * hundred and ten metres. A constant gain on top of that would make the whole
+ * map one loudness.
+ *
+ * MEASURED (`src/audio/selftest.js`, rendered through the real mixer and the
+ * real distance chain), against the reference the mix is staged on — the
+ * player's own rifle in his own hands at peak 0.0831, and the ambience bed at
+ * rms 0.00362:
+ *
+ *   own rifle, first person              peak 0.0831
+ *   THIS, 4 rounds of AK at 90 m         peak 0.0197   -12.5 dB under the rifle
+ *   THIS, 4 rounds of AK at 150 m        peak 0.0172   -13.7 dB
+ *   THIS, 6 rounds of LMG at 200 m       peak 0.0135   -15.8 dB
+ *   `ambience`'s scheduled volley        peak ~0.050   -4.4 dB   (SHIPPED)
+ *
+ * That last line is the calibration that matters: this layer is THREE TIMES
+ * QUIETER than the distant volleys the game already fires off every seven
+ * seconds from `_distantVolley`. What it adds is not loudness, it is presence —
+ * it happens continuously, in the direction the actual fight is in, at the rate
+ * the actual fight is firing.
+ */
+export function farGain(dist) {
+  return clamp(0.85 * Math.pow(90 / Math.max(dist, 40), 0.55), 0.45, 1.0);
+}
+
+/**
+ * A BURST OF FIRE FROM SOMEWHERE ELSE ON THE MAP — several rounds, ONE voice.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHY THIS IS NOT `weaponShot` WITH A SMALLER GAIN
+ * ────────────────────────────────────────────────────────────────────────────
+ * A rifle at 120 m is not a rifle at 12 m turned down. Three things have already
+ * happened to it by the time it reaches you and none of them are level:
+ *
+ *  1. THE AIR HAS EATEN THE TOP. Absorption is strongly frequency dependent, so
+ *     the 6-12 kHz that makes a near shot *snap* is simply gone; what is left is
+ *     a band roughly 300 Hz - 3 kHz. (`SpatialField` already lowpasses per
+ *     distance with `airCutoff`; the bands here are shaped for what survives it,
+ *     rather than synthesising content the filter then has to remove.)
+ *  2. THE TOWN HAS ANSWERED. Between you and the muzzle are facades, and each
+ *     one returns the report tens to hundreds of milliseconds later, darker each
+ *     time. That is *discrete* and *delayed* — the thing a convolution reverb
+ *     cannot produce, and the reason this uses delay taps instead of the send.
+ *     THE SEND IS DELIBERATELY NEAR ZERO: 「リバーブが強いです、まだ」 is a
+ *     standing complaint and four reverb paths were cut for it. Distance is
+ *     solved with time here, not with wetness.
+ *  3. IT ARRIVED AS A GROUP. Nobody fires one round: the ear reads a firefight
+ *     as CADENCE — bursts, gaps, several weapons overlapping. That is what makes
+ *     a battle sound like a battle rather than like a metronome, and it is also
+ *     what makes this affordable.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * ONE VOICE, N ROUNDS — AND THAT IS THE BUDGET ARGUMENT
+ * ────────────────────────────────────────────────────────────────────────────
+ * A spatial emitter is the scarce resource in this subsystem (72 of them, shared
+ * with per-bus quotas, and a governor that walks the pool down to 24 when the
+ * render thread falls behind — see spatial.js). One `weaponShot` is ~40 Web
+ * Audio nodes and holds an emitter for its whole tail. Four rounds of it is four
+ * emitters and ~160 nodes.
+ *
+ * This is ~7 nodes per round on ONE emitter: four rounds cost about 22 nodes and
+ * one slot, i.e. roughly a seventh of the graph and a quarter of the pool
+ * pressure, for the sound the player actually asked for
+ * (「また敵味方の銃声があんまり聞こえないのでそれを追加すること 臨場感出して」).
+ * The rounds are scheduled INSIDE the voice, so the cadence is sample-accurate
+ * and costs no main-thread work at all.
+ *
+ * @param {object} o { when, rounds, spacing, distance, profile, level }
+ */
+export function distantFire(actx, bank, rng, o = {}) {
+  const t0 = o.when ?? actx.currentTime;
+  const dist = clamp(o.distance ?? 90, 20, 400);
+  const rounds = Math.max(1, Math.min(8, (o.rounds ?? 1) | 0));
+  const spacing = clamp(o.spacing ?? 0.09, 0.045, 0.5);
+  const p = o.profile ?? WEAPON_PROFILES.rifle;
+  const lvl = (o.level ?? 1) * (p.level ?? 1);
+
+  // VOICE TRIM. Staged against `weaponShot`, which trims to 0.46 and is the
+  // reference the whole mix is built on; the difference between a near and a far
+  // report is then the distance curve's job, not this number's.
+  const out = gain(actx, 0.62);
+  // Everything past the last round's own decay is the town answering.
+  const sum = gain(actx, 1);
+  out.connect(sum);
+
+  /**
+   * THE REPORT BAND, PER CALIBRE AND PER DISTANCE. `crackF` is the weapon's own
+   * band close up (1.3 kHz on a .338, 3.3 kHz on a 9 mm); at range the whole
+   * thing slides down and narrows, because what survives 150 m of air is the
+   * bottom of it. The floor is the reason an AK and an M4 still differ at 90 m
+   * and stop differing at 250 — which is true, and is why a far firefight reads
+   * as "a firefight" rather than as any particular gun.
+   */
+  const fall = clamp(1 - (dist - 40) / 260, 0.28, 1);
+  const bandF = clamp((p.crackF ?? 2450) * (0.42 + fall * 0.38), 320, 2600);
+  const thumpF = clamp((p.bodyF ?? 148) * (0.8 + fall * 0.3), 70, 210);
+
+  let end = t0 + 0.3;
+  let lastT = t0;
+
+  for (let i = 0; i < rounds; i++) {
+    // Real automatic fire is not a click track: the cyclic rate wanders by a few
+    // percent and the shooter's grip changes the spacing over a burst.
+    const rt = t0 + i * spacing * rng.range(0.86, 1.16);
+    lastT = rt;
+    const jl = rng.range(0.82, 1.18) * lvl;
+
+    /* the crack — what is left of the muzzle blast after the atmosphere */
+    const src = bank.source('white', rng, rng.range(0.75, 1.15));
+    const bp = biquad(actx, 'bandpass', bandF * semis(rng.range(-2, 2)), 1.05);
+    const g = gain(actx, 0);
+    series(src, bp, g).connect(out);
+    // The band falls through the report: the shock front loses its top first.
+    sweep(bp.frequency, rt, bandF * 1.3, bandF * 0.72, 0.07);
+    ad(g.gain, rt, 0.5 * jl, 0.0016, 0.038 + dist * 0.00012);
+    src.start(rt, src._offset, 0.16);
+
+    /* the thump — the low half of the report, which travels much further */
+    const th = osc(actx, 'sine', thumpF);
+    const tg = gain(actx, 0);
+    th.connect(tg); tg.connect(out);
+    sweep(th.frequency, rt, thumpF * 1.5, thumpF * 0.72, 0.06);
+    ad(tg.gain, rt, 0.34 * jl * (0.5 + fall * 0.5), 0.004, 0.055);
+    th.start(rt); th.stop(rt + 0.2);
+
+    end = Math.max(end, rt + 0.2);
+  }
+
+  /**
+   * THE TOWN'S ANSWER — two discrete returns, not a wash.
+   *
+   * Same technique as `weaponShot`'s slap-back (layer 8) and for the same
+   * measured reason: the convolvers arrive immediately and never resolve into
+   * events, so they read as "everything is in a cathedral" rather than as
+   * distance. A facade 40 m off the line of fire answers ~230 ms later and has
+   * lost its top end; the second one is later, quieter and darker again.
+   *
+   * The taps are fed from the WHOLE burst, so a six-round burst comes back as a
+   * six-round burst — which is the part that reads as a street with buildings in
+   * it rather than as one gun in a field.
+   */
+  let dt = clamp(0.055 + dist * 0.0016, 0.06, 0.34) * rng.range(0.8, 1.25);
+  let dl = 0.5;
+  let top = clamp(1500 * fall + 260, 300, 1800);
+  for (let i = 0; i < 2; i++) {
+    const d = actx.createDelay(0.8);
+    d.delayTime.value = Math.min(0.75, dt);
+    const lp = biquad(actx, 'lowpass', top, 0.7);
+    const hp = biquad(actx, 'highpass', 150, 0.7);
+    const g = gain(actx, dl);
+    series(out, d, hp, lp, g).connect(sum);
+    dt += clamp(0.09 + dist * 0.0019, 0.1, 0.42) * rng.range(0.75, 1.35);
+    dl *= 0.45;
+    top *= 0.6;
+  }
+  end += dt + 0.1;
+
+  /**
+   * THE ROLL. Below about 400 Hz the ground and the air stop taking energy out
+   * of the signal, so what a battle a hundred metres away actually sends you is
+   * a low rolling swell with the individual reports riding on it. One source for
+   * the whole burst, envelope scaled by how many rounds were in it.
+   */
+  {
+    const dur = clamp(0.34 + dist * 0.0026, 0.34, 1.3) * (1 + rounds * 0.09);
+    const src = bank.source('brown', rng, rng.range(0.55, 0.95));
+    const lp = biquad(actx, 'lowpass', 300, 0.8);
+    const g = gain(actx, 0);
+    series(src, lp, g).connect(sum);
+    sweep(lp.frequency, t0, 430, 150, dur);
+    ad(g.gain, t0, 0.6 * lvl * Math.min(1.6, 0.6 + rounds * 0.16), 0.02 + dist * 0.0006, dur);
+    src.start(t0, src._offset, dur * 1.3 + 0.05);
+    end = Math.max(end, lastT + dur * 1.3);
+  }
+
+  // Send stays LOW on purpose. See the head of this function: the room a distant
+  // shot lives in is made of the taps above, and the shared convolvers are what
+  // the player has already complained about twice.
+  return { node: sum, end: end + 0.05, send: 0.06 };
+}
+
 /**
  * Supersonic round passing near the listener. Tiny, cheap, and enormously
  * effective at making incoming fire feel dangerous.

@@ -26,9 +26,13 @@
  */
 
 import { Rng } from '../core/rng.js';
-import { NoiseBank } from './dsp.js';
+import { NoiseBank, airCutoff } from './dsp.js';
 import { Mixer } from './mixer.js';
-import { WEAPON_PROFILES, weaponShot, bulletWhizz, dryFire, boltCycle } from './weapons.js';
+import {
+  WEAPON_PROFILES, weaponShot, bulletWhizz, dryFire, boltCycle, distantFire, farGain,
+} from './weapons.js';
+import { tankEngine, tankGun } from './vehicle.js';
+import { attenuationAt } from './spatial.js';
 import {
   surfaceImpact, footstep, shellCasing, reloadPhase, explosion, bodyFall, uiSound,
   heartbeat, cloth, meleeSwing, meleeHit,
@@ -141,6 +145,43 @@ function route(mixer, voice, busName = 'weapons', sendScale = 1) {
   return voice;
 }
 
+/**
+ * ROUTE A VOICE THE WAY THE FIELD WOULD, AT `dist` METRES.
+ *
+ * `route()` above answers "is this voice healthy". It cannot answer the only
+ * question that matters about a BATTLE mix — "how loud is somebody else's rifle
+ * against your own" — because at 0 m everything is loud. The distance chain is
+ * not a volume knob either: it is air absorption (a real lowpass that takes the
+ * top off a far shot) and a curve that is deliberately gentler than 1/r past
+ * 40 m, plus a send that OPENS with distance.
+ *
+ * This reproduces `SpatialField.acquire`'s chain with occlusion 0 and no
+ * panner — `airLP` -> `distGain` -> bus, and `send * (0.5 + min(dist,90)*0.022)`
+ * to the reverb — so the numbers below can be compared directly with the
+ * first-person cases above, which are what the player hears from his own gun.
+ * The HRTF panner is the one stage left out; it is a per-ear filter and would
+ * make the two sides incomparable rather than more honest.
+ */
+function atDist(mixer, voice, busName, dist, userGain = 1) {
+  const actx = mixer.actx;
+  const air = actx.createBiquadFilter();
+  air.type = 'lowpass';
+  air.frequency.value = airCutoff(dist);
+  air.Q.value = 0.5;
+  const g = actx.createGain();
+  g.gain.value = Math.min(4, attenuationAt(dist) * userGain);
+  voice.node.connect(air);
+  air.connect(g);
+  g.connect(mixer.bus(busName));
+  if ((voice.send ?? 0) > 0) {
+    const s = actx.createGain();
+    s.gain.value = voice.send * (0.5 + Math.min(dist, 90) * 0.022);
+    g.connect(s);
+    s.connect(mixer.reverbSend);
+  }
+  return voice;
+}
+
 export async function runAudioSelfTest(opts = {}) {
   const results = [];
   const push = async (name, seconds, fn, o) => {
@@ -195,6 +236,87 @@ export async function runAudioSelfTest(opts = {}) {
       }));
     }
   });
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE BATTLE AROUND YOU — and it is measured AT ITS DISTANCE, not at 0 m.
+   * ────────────────────────────────────────────────────────────────────────
+   * These are the three things the player asked to be able to hear
+   * (「敵味方の銃声」「敵味方の足音」「戦車の動く音とか砲撃の音」), rendered through
+   * the same mixer as everything above and through the distance chain the
+   * spatial field would put them through. The reference they are staged against
+   * is `shot:rifle@2m`, which is the player's own weapon in his own hands.
+   *
+   * Read them as a MIX, not as a list: a remote man's boot has to be under your
+   * own boot, your own boot under your own gun, and a firefight 150 m away has
+   * to be clearly there and clearly not in the room with you.
+   *
+   * The `gain` arguments are the ones `src/audio/index.js` actually passes —
+   * 2.6 for a distant burst, 2.1 for the tank's gun, 2.4 for its engine — so
+   * what is measured is the shipped level and not a hypothetical one.
+   */
+  await push('battle:far:ak@90m:4rd', 4, ({ bank, rng, mixer, t }) => {
+    atDist(mixer, distantFire(mixer.actx, bank, rng, {
+      when: t, distance: 90, rounds: 4, spacing: 0.09, profile: WEAPON_PROFILES.ak,
+    }), 'weapons', 90, farGain(90));
+  });
+  await push('battle:far:ak@150m:4rd', 4.5, ({ bank, rng, mixer, t }) => {
+    atDist(mixer, distantFire(mixer.actx, bank, rng, {
+      when: t, distance: 150, rounds: 4, spacing: 0.09, profile: WEAPON_PROFILES.ak,
+    }), 'weapons', 150, farGain(150));
+  });
+  await push('battle:far:lmg@200m:6rd', 5, ({ bank, rng, mixer, t }) => {
+    atDist(mixer, distantFire(mixer.actx, bank, rng, {
+      when: t, distance: 200, rounds: 6, spacing: 0.075, profile: WEAPON_PROFILES.lmg,
+    }), 'weapons', 200, farGain(200));
+  });
+  /** The same range through the OLD path, for the "is it a different sound" test. */
+  await push('battle:far:ak@150m:asShot', 4.5, ({ bank, rng, mixer, t }) => {
+    atDist(mixer, weaponShot(mixer.actx, bank, rng, WEAPON_PROFILES.ak, {
+      when: t, distance: 150, echoBoost: 0.12,
+    }), 'weapons', 150, 1);
+  });
+  /** The near path at the edge of its range, i.e. what 60 m still buys. */
+  await push('battle:shot:rifle@45m', 4, ({ bank, rng, mixer, t }) => {
+    atDist(mixer, weaponShot(mixer.actx, bank, rng, WEAPON_PROFILES.rifle, {
+      when: t, distance: 45, echoBoost: 0.12,
+    }), 'weapons', 45, 1);
+  });
+  /** Your own boot, and another man's at three ranges. Trims from battle.js. */
+  await push('battle:step:own', 2.2, ({ bank, rng, mixer, t }) => {
+    atDist(mixer, footstep(mixer.actx, bank, rng, {
+      when: t, surface: 'concrete', gait: 'walk', level: 1.05, gear: 0.45,
+    }), 'foley', 1, 1);
+  });
+  for (const d of [8, 20, 40]) {
+    await push(`battle:step:remote@${d}m`, 2.2, ({ bank, rng, mixer, t }) => {
+      atDist(mixer, footstep(mixer.actx, bank, rng, {
+        when: t, surface: 'concrete', gait: 'walk', level: 1, gear: 0.3,
+      }), 'foley', d, 1);
+    });
+  }
+  await push('battle:step:remote@20m:run', 2.2, ({ bank, rng, mixer, t }) => {
+    atDist(mixer, footstep(mixer.actx, bank, rng, {
+      when: t, surface: 'concrete', gait: 'run', level: 1, gear: 0.6,
+    }), 'foley', 20, 1);
+  });
+  /** Armour: the gun at two ranges and the engine idling and rolling. */
+  await push('battle:tank:gun@30m', 4, ({ bank, rng, mixer, t }) => {
+    atDist(mixer, tankGun(mixer.actx, bank, rng, { when: t, distance: 30 }), 'weapons', 30, 3.0);
+  });
+  await push('battle:tank:gun@120m', 4.5, ({ bank, rng, mixer, t }) => {
+    atDist(mixer, tankGun(mixer.actx, bank, rng, { when: t, distance: 120 }), 'weapons', 120, 3.0);
+  });
+  for (const [name, throttle, speed, dist] of [
+    ['idle@25m', 0.05, 0.1, 25], ['roll@25m', 1, 4.6, 25], ['roll@80m', 1, 4.6, 80],
+  ]) {
+    await push(`battle:tank:${name}`, 3, ({ bank, rng, mixer, t }) => {
+      const eng = tankEngine(mixer.actx, bank, rng, { when: t });
+      eng.drive(throttle, speed, t + 0.05);
+      atDist(mixer, { node: eng.node, send: 0.1 }, 'weapons', dist, 0.9);
+      eng.stop(t + 2.2);
+    });
+  }
 
   /* ---- foley ----------------------------------------------------- */
   const surfaces = ['concrete', 'metal', 'wood', 'dirt', 'sand', 'glass', 'water', 'foliage', 'fabric', 'flesh', 'rubber', 'plaster'];

@@ -17,6 +17,9 @@
  *   audio.ui(kind)                     'hitmarker'|'headshot'|'kill'|'damage'
  *   audio.setMasterVolume(v)  audio.setBusVolume(bus, v)
  *   audio.setAmbienceIntensity(v)      scales the distant-battle scheduler
+ *   audio.battle                       the BattleLayer: distant gunfire, other
+ *                                      men's footsteps, armour. `.enabled=false`
+ *                                      turns all three off at runtime (A/B).
  *   audio.report()                     diagnostics snapshot
  *
  * All of it is a no-op — never a throw — before the graph exists, so callers
@@ -35,7 +38,10 @@ import { SpatialField } from './spatial.js';
 import { Ambience, ambientOneShot, ONE_SHOTS } from './ambience.js';
 import {
   WEAPON_PROFILES, resolveProfile, weaponShot, bulletWhizz, dryFire, boltCycle,
+  distantFire, farGain,
 } from './weapons.js';
+import { tankGun } from './vehicle.js';
+import { BattleLayer } from './battle.js';
 import {
   surfaceImpact, footstep, shellCasing, reloadPhase, explosion, bodyFall, uiSound,
   heartbeat, cloth, meleeSwing, meleeHit,
@@ -192,7 +198,20 @@ export class AudioSystem {
     /** Debounce state for `_onAirPhase`. Preallocated: nothing per frame. */
     this._settle = { at: 0, x: 0, y: 0, z: 0 };
     this._lastBomberRun = null;
-    this._rate = { shot: 5, impact: 5, step: 4, shell: 2, whizz: 2, reload: 4, bodyfall: 2 };
+    /**
+     * `shot` 5 -> 10 A SECOND, and it is affordable because of the line above it
+     * in `_onFire`: the rate limit now only ever sees shots INSIDE 60 m, which
+     * over two measured minutes of 20v20 was 14 events rather than 1996. Five a
+     * second was not rationing a wall of near gunfire — there was never a wall
+     * of near gunfire — it was rationing the whole map through one gate.
+     *
+     * MEASURED against the pool it spends: the weapons bus is entitled to 45 %
+     * of the field (32 slots of 72) and was using 5.3 of them on average through
+     * a whole match. Ten shots a second against a ~0.9 s mean voice life is nine
+     * slots, so the near path fits inside its own quota with room left for the
+     * distant layer, the tank and every explosion in the game.
+     */
+    this._rate = { shot: 10, impact: 5, step: 4, shell: 2, whizz: 2, reload: 4, bodyfall: 2 };
     this._rateNext = { shot: 0, impact: 0, step: 0, shell: 0, whizz: 0, reload: 0, bodyfall: 0 };
     this._lastBarkTime = -99;
     this._lastEnemyFire = -99;
@@ -260,6 +279,7 @@ export class AudioSystem {
       this.field = new SpatialField(actx, this.mixer, this.ctx);
       this.ambience = new Ambience(actx, this.bank, this.mixer, this.field, this.rng.fork());
       this.ambience.start();
+      this.battle = new BattleLayer(this);
       this.mixer.setSpace(this._space, 0.001);
 
       if (actx.state === 'suspended') await actx.resume();
@@ -278,6 +298,9 @@ export class AudioSystem {
 
   _teardown() {
     try {
+      // Before the field: it holds tracked emitters (tank engines) and loop
+      // sources that have to be stopped while the context still exists.
+      this.battle?.dispose();
       this.ambience?.dispose();
       this.field?.dispose();
       this.mixer?.dispose();
@@ -285,6 +308,7 @@ export class AudioSystem {
       if (this.actx && this.actx.state !== 'closed') this.actx.close();
     } catch { /* nothing useful to do */ }
     this.ambience = this.field = this.mixer = this.bank = null;
+    this.battle = null;
     this.actx = null;
     this.running = false;
   }
@@ -340,6 +364,12 @@ export class AudioSystem {
         };
       }
       this.ambience.update(dt, this._ambienceApi);
+      /**
+       * The battle layer runs AFTER the field and the ambience, on purpose: it
+       * decides what it may play from `field.busLoad()`, and that number is only
+       * true once this frame's expiries have been processed.
+       */
+      this.battle.update(dt, actx.currentTime);
 
       /* ---- head-locked voice teardown ---------------------------- */
       /**
@@ -520,6 +550,18 @@ export class AudioSystem {
           when, distance: dist, firstPerson: o.firstPerson,
           echoBoost: o.echoBoost ?? this._wetness(this._space),
         });
+      /**
+       * The war being fought somewhere else — several rounds on ONE emitter,
+       * shaped for what survives a hundred metres of air rather than for what
+       * leaves a muzzle. @see distantFire, and `src/audio/battle.js` for who
+       * decides a shot belongs here rather than in `shot`.
+       */
+      case 'far':
+        return distantFire(actx, bank, rng, {
+          when, distance: dist, profile: o.profile, rounds: o.rounds,
+          spacing: o.spacing, level: o.level,
+        });
+      case 'tankgun': return tankGun(actx, bank, rng, { when, distance: dist, level: o.level });
       case 'whizz': return bulletWhizz(actx, bank, rng, { when, miss: o.miss, gain: o.gain });
       case 'dryfire': return dryFire(actx, bank, rng, { when });
       case 'impact': return surfaceImpact(actx, bank, rng, { when, surface: o.surface, energy: o.energy });
@@ -595,6 +637,7 @@ export class AudioSystem {
         endTime: when + 0.6,
         occlusion: o.occlusion,
         tracked: o.tracked,
+        tag: o.tag,
       });
       if (!em) return false;
       let voice = null;
@@ -707,6 +750,30 @@ export class AudioSystem {
     return this._playAt('impact', position.x, position.y, position.z, { surface, energy }, 'foley', 0.55);
   }
 
+  /**
+   * One coalesced burst of distant fire. Called only by `BattleLayer`, which
+   * owns the rate and the budget; this is the plumbing half.
+   *
+   * `occlusion: 0` and a fixed OUTDOOR wetness, both for the same reason
+   * `_distantVolley` uses them: fire from 90 m away comes over the rooftops
+   * rather than through them, and it is outdoors by definition whatever room the
+   * listener is standing in. It also spends no raycast, which matters at five
+   * voices a second.
+   */
+  playFar(x, y, z, o) {
+    return this._playAt('far', x, y, z, {
+      profile: o.profile, rounds: o.rounds, spacing: o.spacing,
+      level: o.level ?? 1,
+      // A far voice is cheap to steal and can steal almost nothing: at 0.3 it
+      // reaches nothing above 0.55, i.e. no near shot, no blast, no bark.
+      maxDist: 260, occlusion: 0, echoBoost: WET_OUTDOOR,
+      // The level is a function of the range, because the attenuation curve is
+      // nearly flat out here and a fixed gain would make 200 m as loud as 70.
+      gain: farGain(this.field.distanceTo(x, y, z)),
+      tag: 'far',
+    }, 'weapons', 0.3);
+  }
+
   /** Enemy vocalisation. `kind` is semantic — see barkFor() in vox.js. */
   bark(kind, position, opts = {}) {
     if (!this.running) return false;
@@ -759,6 +826,22 @@ export class AudioSystem {
     on('match:airstrike', (p) => this._onAirPhase(p, 'airstrike'));
     on('match:bomber', (p) => this._onAirPhase(p, 'bomber'));
     on('match:strafe', (p) => this._onAirPhase(p, 'strafe'));
+    /**
+     * ARMOUR. `src/match/tank.js` publishes `match:tank { phase, id, team,
+     * position }` with phases inbound / rolling / fire / kill / dead / clear,
+     * and plays two sounds of its own at the muzzle: the airstrike's ROLL for
+     * the main gun and the strafe cannon for the coax. What it has never had is
+     * the REPORT — the pressure step that arrives before the roll — and it has
+     * never had an engine at all. Both are ours because `src/match` is not.
+     *
+     * The engine is not driven from here: it is a continuous sound and it is
+     * built off `match.armour.tanks` in the frame loop, so a hull that is
+     * already rolling when the graph starts still gets one. @see battle.js
+     */
+    on('match:tank', (p) => {
+      if (p?.phase !== 'fire' || !isVec(p.position)) return;
+      this.battle?.onTankFire(p.position.x, p.position.y, p.position.z);
+    });
     // Optional: emitted by `ai` if it wants scripted chatter.
     on('ai:bark', (p) => this.bark(p?.kind ?? 'spot', p?.position, { voice: p?.voice ?? 0 }));
   }
@@ -899,15 +982,30 @@ export class AudioSystem {
        *   3. priority falls off with distance, so a firefight at 60 m can no
        *      longer steal the slot from a footstep at 3 m
        */
-      if (!this._allow('shot')) return;
       /**
-       * 60 m, down from 80. Rule 2 above says distant volleys are `ambience`'s
-       * job and a single crack from across the map is not information — that
-       * argument gets STRONGER as the map grows, not weaker: 80 m was 85% of the
-       * old map's length and is 57% of this one, so the same rule now admits far
-       * more shooters. 60 m keeps every shot that is tactically about you.
+       * ───────────────────────────────────────────────────────────────────────
+       * THE CULL COMES FIRST, AND THE ORDER WAS THE BUG.
+       * ───────────────────────────────────────────────────────────────────────
+       * `_allow('shot')` used to run BEFORE the 60 m test, so a shot that was
+       * about to be thrown away still spent the rate token. MEASURED over two
+       * minutes of a live 20v20 (`tools/audiotest.mjs --battle`): 1982 remote
+       * shots were offered from beyond 70 m and 14 from inside it. At five
+       * tokens a second, essentially every token in the match was spent by a
+       * shot that was then discarded, and the fourteen that mattered had to win
+       * a lottery against two thousand that did not. That is a large part of
+       * 「敵味方の銃声があんまり聞こえない」 — not the range, the ORDER.
+       *
+       * 60 m itself is unchanged and stays unchanged: it is where the FULL voice
+       * stops being worth an emitter, not where the war stops being audible.
+       * What is past it is no longer thrown away — it goes to the distant-battle
+       * layer, which coalesces a whole bearing's worth of fire into one voice.
+       * @see src/audio/battle.js
        */
-      if (dist > 60) return;
+      if (dist > 60) {
+        this.battle?.offerFar(x, y, z, dist, profile);
+        return;
+      }
+      if (!this._allow('shot')) return;
       const shotPriority = clamp(0.95 - dist * 0.006, 0.4, 0.95);
       // One upward ray from the muzzle decides whether this shot is a rifle in
       // a room or a rifle in the street. See `_wetnessAt`.
@@ -1384,6 +1482,25 @@ export class AudioSystem {
     for (let i = 0; i < 6; i++) {
       ev.emit('match:bomber', { phase: 'settled', run: { id: 2 }, position: at(-14 - i * 3, 0, 22) });
     }
+    /**
+     * THE BATTLE LAYER, THROUGH ITS OWN FRONT DOORS. The `settled` phase of
+     * every air event was silent for weeks because the storm did not contain it;
+     * the same trap is waiting for anything added here that the storm skips.
+     *
+     * `offerFar` is fed a burst from one bearing so the coalescer has something
+     * to flush on the next frame, and the tank is fired through the real event.
+     * The ENGINE cannot be stormed — it is polled off `match.armour.tanks` — so
+     * it is exercised in a live match instead, and measured by
+     * `tools/audiotest.mjs --battle` rather than here.
+     */
+    for (let i = 0; i < 5; i++) {
+      const p = at(-70 + i, 1, 82);
+      this.battle?.offerFar(p.x, p.y, p.z, this.field.distanceTo(p.x, p.y, p.z), WEAPON_PROFILES.ak);
+    }
+    this.playFar(lp.x + 96, lp.y + 2, lp.z - 74, {
+      profile: WEAPON_PROFILES.lmg, rounds: 5, spacing: 0.09,
+    });
+    ev.emit('match:tank', { phase: 'fire', id: 'T1', team: 0, position: at(26, 0, -34) });
     return { ok: true, voices: this.field.stats.active, errors: this.stats.errors };
   }
 
@@ -1412,6 +1529,9 @@ export class AudioSystem {
       limiterReduction: this.mixer?.reduction ?? 0,
       events: this.stats.events,
       errors: this.stats.errors,
+      // What the three new layers have actually played, and how much of the pool
+      // they are holding right now. @see src/audio/battle.js
+      battle: this.battle ? { ...this.battle.stats, enabled: this.battle.enabled } : null,
     };
   }
 }
