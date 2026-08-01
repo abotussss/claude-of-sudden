@@ -2,6 +2,7 @@ import { Rng } from '../core/rng.js';
 import { BOX, BOX_FINE, BOX_SOFT, BOX_THIN, PANE, IDENT, LL } from './kit.js';
 import { fbm3, fillMasks, patchGeometry, rockGeometry, tubeY } from './util.js';
 import { CATHEDRAL } from './layout.js';
+import { PALETTE } from './palette.js';
 
 /**
  * WORLD — THE CATHEDRAL, and the whole middle of the map.
@@ -1959,6 +1960,208 @@ export function buildCathedral(A) {
   A.endScope();
 
   /* ====================================================================== */
+  /* 8b. THE MASS THAT FALLS BETWEEN THE TWO — the performance's raw material */
+  /* ====================================================================== */
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * "また大聖堂破壊の時は破壊演出がないですね？？？"
+   * ────────────────────────────────────────────────────────────────────────
+   * Sections 2-7 are the church and section 8 is the ruin, and until now the
+   * whole of the destruction between them was `setRazed` — two index fills and
+   * two mask writes, i.e. ONE FRAME in which the largest building on the map
+   * stops being drawn and a rubble field is drawn instead. Photographed, that
+   * is a cut, not a collapse: the banner says THE CATHEDRAL IS GONE and the
+   * player never saw it go.
+   *
+   * The district blocks do have a performance, and it is good — the elevation
+   * breaks into a grid of chunks, blows apart under a flash, throws dust to
+   * roof height and settles into the rubble field. All of that machinery lives
+   * in `src/match/airstrike.js` (`fracture`, `chunkGeometry`, the closed-form
+   * per-chunk trajectory in a vertex shader off one uniform) and it is driven
+   * off ONE THING crossing the subsystem line: `world.demolitions[].mass`, the
+   * boxes a building is made of, in the building's own frame.
+   *
+   * So this is the cathedral's `mass`, published in exactly that shape, and it
+   * is the only new thing `world` gives anybody. `match` may not import this
+   * module and this module knows nothing about vertex programs.
+   *
+   *   size  [along level +X, up, along level +Z]
+   *   at    the box centre in the same axes, measured from (cx, 0, cz)
+   *   cut   the fracture grid — sized for chunks you can watch tumble
+   *   mat   0 = render (this building's plaster), 1 = structure (stone, lead)
+   *   holes boxes in the same frame that carry NO masonry
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * TWO THINGS THE DISTRICT DEMOLITION LEARNED THE HARD WAY, AND BOTH APPLY
+   * ────────────────────────────────────────────────────────────────────────
+   * 1. PUBLISH THE OPENINGS. Without `holes` the falling mass is a set of blank
+   *    slabs, and the frame the strike fires on replaces an elevation with
+   *    windows, portals, a rose and a clerestory by a beige rectangle — a WORSE
+   *    picture than the building it is destroying, on screen for the whole
+   *    second the wall takes to come apart. Every opening `runWall`, the apse
+   *    and the belfry cut is repeated here, from the same numbers.
+   * 2. THE MASS IS THE BUILDING, NOT AN ORNAMENT ON IT. That is what tells
+   *    `Airstrike` to pancake it rather than loft it, and it follows from
+   *    `kind: 'demo'` on the site — see the note over `above`/`arc` in
+   *    `_buildMesh`. Nothing here has to say it; it is recorded so the next
+   *    person to widen this list knows why the church falls straight down.
+   *
+   * The cut grids are deliberately coarser than a shop's: a cathedral comes
+   * down in pieces of masonry a man could not lift, and 45 m of aisle wall cut
+   * at 1.3 m would be 245 chunks of one wall alone.
+   */
+  const mass = [];
+  {
+    /** Boxes per metre, rounded — the fracture grid for a run of `m` metres. */
+    const n = (m, per = 1.6) => Math.max(1, Math.round(Math.abs(m) / per));
+    const put = (id, mat, size, at, cut, holes = null) =>
+      mass.push({ id, mat, size, at, cut, holes });
+    /** An opening, in the mass frame. Generous by 0.25 m — @see `_openings`. */
+    const hole = (u, y, v, hw, hh, hd) => ({ a: [u, y, v], r: [hw + 0.25, hh + 0.25, hd + 0.25] });
+
+    const gableW = 2 * (ARC + PW / 2) + 1.2;
+    const aisleW = HW - T - (ARC + PW / 2);
+    const galleryU = HW - T - aisleW / 2;
+    const triU = ARC + PW / 2 - 0.1;
+
+    /* ---- the two flanks, and every window and portal in them ---------- */
+    for (const side of [-1, 1]) {
+      const u = side * (HW - T / 2);
+      const holes = flankHoles(side).map((h) =>
+        hole(u, h.sill + h.h / 2, h.c, T / 2, h.h / 2, h.w / 2)
+      );
+      put(`flank${side < 0 ? 'W' : 'E'}`, 0, [T, SEC.aisleRoof, S.d], [u, SEC.aisleRoof / 2, 0],
+        [1, n(SEC.aisleRoof, 1.8), n(S.d, 1.9)], holes);
+      // the buttresses and their flyers, one lump per bay
+      for (const v of [...NAVE_V, ...CHOIR_V, -HD + 0.9, HD - 0.9]) {
+        put(`butt${side}${v}`, 1, [BUTT, SEC.aisleRoof - 0.9, 1.3],
+          [side * (HW + BUTT / 2 - 0.1), (SEC.aisleRoof - 0.9) / 2, v + 2], [1, 4, 1]);
+      }
+    }
+
+    /* ---- the south front: three portals, the rose, the gable ---------- */
+    {
+      const v = -(HD - T / 2);
+      put('frontS', 0, [S.w, SEC.aisleRoof, T], [0, SEC.aisleRoof / 2, v],
+        [n(S.w), n(SEC.aisleRoof, 1.8), 1], [
+          hole(0, 3.1, v, 2.0, 3.1, T / 2),
+          hole(-5.6, 2.2, v, 1.1, 2.2, T / 2),
+          hole(5.6, 2.2, v, 1.1, 2.2, T / 2),
+        ]);
+      put('gableS', 0, [gableW, SEC.naveRoof - SEC.aisleRoof, T],
+        [0, (SEC.aisleRoof + SEC.naveRoof) / 2, v], [n(gableW), 4, 1],
+        [hole(0, SEC.aisleRoof + 3.0, v, 3.1, 3.1, T / 2)]);
+    }
+
+    /* ---- the north end: the returns, the gable, the apse -------------- */
+    {
+      const v = HD - T / 2;
+      for (const side of [-1, 1]) {
+        put(`returnN${side}`, 0, [6.0, SEC.aisleRoof, T], [side * (HW - 3.0), SEC.aisleRoof / 2, v],
+          [4, n(SEC.aisleRoof, 1.8), 1]);
+      }
+      put('gableN', 0, [gableW, SEC.naveRoof - SEC.aisleRoof, T],
+        [0, (SEC.aisleRoof + SEC.naveRoof) / 2, v], [n(gableW), 4, 1]);
+      /**
+       * THE APSE IS FIVE FACETS AND THIS IS ONE BOX, and it has to be: a chunk
+       * is cut on the mass's own axes and carries no rotation of its own, so a
+       * canted facet can only be approximated. The box covers the five of them
+       * and the door in the middle facet is cut out of it, which is what reads
+       * from the choir — the alternative is five rotated slabs this machinery
+       * cannot express.
+       */
+      const apseR = ARC + PW / 2;
+      put('apse', 0, [apseR * 2, SEC.aisleRoof, 5.4], [0, SEC.aisleRoof / 2, HD - T - 1.9],
+        [n(apseR * 2), n(SEC.aisleRoof, 1.8), 2],
+        [hole(0, 2.3, HD - T - 1.9, 1.4, 2.3, 2.7)]);
+    }
+
+    /* ---- the arcade, the gallery and the triforium -------------------- */
+    for (const side of [-1, 1]) {
+      for (const v of NAVE_V) put(`pier${side}${v}`, 1, [PW, SEC.pierTop, PW], [side * ARC, SEC.pierTop / 2, v], [1, 3, 1]);
+      for (const v of CHOIR_V) put(`pier${side}${v}`, 1, [PW, SEC.pierTop, PW], [side * ARC, SEC.pierTop / 2, v], [1, 3, 1]);
+      for (const v of CROSS_V) put(`xpier${side}${v}`, 1, [CPW, SEC.pierTop + 0.6, CPW], [side * ARC, (SEC.pierTop + 0.6) / 2, v], [1, 3, 1]);
+      // the spandrel band the gallery sits on
+      put(`spandrel${side}`, 0, [PW * 0.9, SEC.gallery - SEC.archTop + 1.4, S.d - 2 * T],
+        [side * ARC, (SEC.archTop + SEC.gallery) / 2 + 0.1, 0], [1, 1, n(S.d, 1.9)]);
+      // the deck, its parapet, and the triforium arcade over it
+      put(`deck${side}`, 1, [aisleW, 0.36, S.d - 2 * T], [side * galleryU, SEC.gallery - 0.18, 0],
+        [n(aisleW, 1.9), 1, n(S.d, 2.1)]);
+      put(`parapet${side}`, 0, [0.34, 1.0, S.d - 2 * T], [side * triU, SEC.gallery + 0.5, 0], [1, 1, n(S.d, 1.9)]);
+      put(`triforium${side}`, 0, [0.6, SEC.triTop - SEC.gallery - 1.0, S.d - 2 * T],
+        [side * triU, (SEC.gallery + 1.0 + SEC.triTop) / 2, 0], [1, 1, n(S.d, 1.9)]);
+      // the aisle's lean-to roof over the gallery
+      put(`aisleRoof${side}`, 1, [aisleW + 0.9, 0.4, S.d], [side * galleryU, SEC.aisleRoof - 0.2, 0],
+        [n(aisleW, 1.9), 1, n(S.d, 2.1)]);
+      /**
+       * THE CLERESTORY, WITH ITS LIGHTS. Only the band above the aisle roof:
+       * below that the same wall is already carried by the arcade and the
+       * triforium above, and two masses in one place is two chunks in one place.
+       */
+      const cu = side * (ARC + PW / 2 - 0.2);
+      put(`clerestory${side}`, 0, [0.7, SEC.naveRoof - SEC.aisleRoof, S.d - 2 * T],
+        [cu, (SEC.aisleRoof + SEC.naveRoof) / 2, 0], [1, n(SEC.naveRoof - SEC.aisleRoof, 1.6), n(S.d, 1.9)],
+        [...NAVE_V, ...CHOIR_V].map((v) =>
+          hole(cu, (SEC.clearSill + SEC.clearTop) / 2, v, 0.35, (SEC.clearTop - SEC.clearSill) / 2, 1.1)));
+    }
+
+    /* ---- the vault, the roof over it, and its parapets ---------------- */
+    {
+      const naveW = (ARC + PW / 2 - 0.2) * 2;
+      put('vault', 0, [naveW, 0.44, S.d - 2 * T], [0, SEC.naveRoof - 1.9, 0], [n(naveW, 2.1), 1, n(S.d, 2.3)]);
+      put('leadRoof', 1, [naveW + 1.2, 0.4, S.d - 1.2], [0, SEC.naveRoof, 0], [n(naveW, 2.1), 1, n(S.d, 2.3)]);
+      for (const side of [-1, 1]) {
+        put(`roofPar${side}`, 1, [0.42, SEC.parapet - SEC.naveRoof, S.d - 1.2],
+          [side * (naveW / 2 + 0.5), (SEC.naveRoof + SEC.parapet) / 2 + 0.1, 0], [1, 1, n(S.d, 2.1)]);
+      }
+    }
+
+    /* ---- the crossing: the drum, the dome, the lantern ---------------- */
+    {
+      const R = (ARC + PW / 2 - 0.2) * 0.94;
+      const dh = SEC.drumTop - SEC.naveRoof;
+      const dy = (SEC.naveRoof + SEC.drumTop) / 2;
+      // The octagon as a square ring: four runs, for the same reason as the apse.
+      put('drumS', 0, [R * 2, dh, 0.9], [0, dy, -R], [n(R * 2, 1.7), 2, 1]);
+      put('drumN', 0, [R * 2, dh, 0.9], [0, dy, R], [n(R * 2, 1.7), 2, 1]);
+      put('drumW', 0, [0.9, dh, R * 2 - 1.8], [-R, dy, 0], [1, 2, n(R * 2, 1.7)]);
+      put('drumE', 0, [0.9, dh, R * 2 - 1.8], [R, dy, 0], [1, 2, n(R * 2, 1.7)]);
+      /**
+       * THE DOME AS THREE COURSES OF DECREASING SPAN. It is a hemisphere of
+       * thirteen rings on the standing building; as falling mass it is three
+       * stacked plates, because what has to read is a dome BREAKING UP over the
+       * crossing and not thirteen rings of one-chunk-thick shell that vanish
+       * individually.
+       */
+      const domeH = (SEC.domeTop - SEC.drumTop) / 3;
+      for (let i = 0; i < 3; i++) {
+        const w = R * 2 * (0.98 - i * 0.22);
+        put(`dome${i}`, 1, [w, domeH, w], [0, SEC.drumTop + domeH * (i + 0.5), 0],
+          [n(w, 2.2), 1, n(w, 2.2)]);
+      }
+      put('lantern', 0, [2.6, SEC.lanternTop - SEC.domeTop, 2.6],
+        [0, (SEC.domeTop + SEC.lanternTop) / 2, 0], [2, 2, 2]);
+    }
+
+    /* ---- the campanile — the tallest thing on the map ----------------- */
+    {
+      const tu = (TOW.u0 + TOW.u1) / 2;
+      const tv = (TOW.v0 + TOW.v1) / 2;
+      const tw = TOW.u1 - TOW.u0;
+      const td = TOW.v1 - TOW.v0;
+      // Three walls; the fourth is the way in from the aisle and is not there.
+      const belfry = (u, v) => hole(u, 25.9, v, 1.4, 0.9, 1.4);
+      put('towerW', 0, [T, SEC.towerTop, td], [tu - (tw / 2 - T / 2), SEC.towerTop / 2, tv],
+        [1, n(SEC.towerTop, 2.0), n(td, 1.9)], [belfry(tu - (tw / 2 - T / 2), tv)]);
+      put('towerE', 0, [T, SEC.towerTop, td], [tu + (tw / 2 - T / 2), SEC.towerTop / 2, tv],
+        [1, n(SEC.towerTop, 2.0), n(td, 1.9)], [belfry(tu + (tw / 2 - T / 2), tv)]);
+      put('towerS', 0, [tw, SEC.towerTop, T], [tu, SEC.towerTop / 2, tv - (td / 2 - T / 2)],
+        [n(tw, 1.9), n(SEC.towerTop, 2.0), 1], [belfry(tu, tv - (td / 2 - T / 2))]);
+      put('towerCap', 1, [tw + 0.8, 3.9, td + 0.8], [tu, SEC.towerTop + 2.2, tv], [4, 2, 4]);
+    }
+  }
+
+  /* ====================================================================== */
   /* 9. WHAT THE ENGINE NEEDS BACK                                          */
   /* ====================================================================== */
   /**
@@ -2016,6 +2219,73 @@ export function buildCathedral(A) {
     intactTopY: SEC.towerTop,
     ruinTopY: SEC.floor + 14.0,
 
+    /* ------------------------------------------------------------------ */
+    /* WHAT THE COLLAPSE IS MADE OF. @see section 8b.                      */
+    /* ------------------------------------------------------------------ */
+    /**
+     * The boxes the shell is made of, in the cathedral's own frame — the same
+     * contract `world.demolitions[].mass` publishes and the only thing
+     * `src/match/airstrike.js` needs in order to fracture this building and
+     * throw it. `level`, not world space: `world` owns the level's rotation and
+     * `match` already turns level coordinates into world ones with
+     * `levelToWorld`, so nothing here has to know where north is.
+     */
+    mass,
+    level: { x: cx, z: cz },
+    halfW: HW,
+    halfD: HD,
+    /** The campanile cap: the top of the tallest thing that falls. */
+    top: SEC.towerTop + 3.7,
+    /** The building's own render, so its rubble is its own colour. */
+    tint: PALETTE.plaster_cream?.opts?.tint ?? 0xcfc0a4,
+
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * THE PICTURE AND THE COLLISION, SEPARATELY — and why they had to split
+     * ──────────────────────────────────────────────────────────────────────
+     * `setRazed` does both at once and every caller in the match wants both at
+     * once, so it stays exactly as it was. The one caller that does not is the
+     * BOOT-TIME SETTLE PROBE: `Airstrike._buildDemoSite` drops a ray per chunk
+     * to find what the rubble comes to rest on, and a ray dropped over a church
+     * that is still standing finds its own aisle roof — so the probe has to run
+     * with the ruin solid and the church still DRAWN, at boot, with no frame
+     * between. `src/world/demolition.js` split the same pair for the same
+     * reason; this is that split, on this building.
+     *
+     * Neither of these touches `razed` or the `?cath=down` latch: they are the
+     * mechanism, `setRazed` is the state.
+     */
+    setVisual(down) {
+      A.setScopeVisible(shell, !down);
+      A.setScopeVisible(ruin, !!down);
+    },
+    setCollision(down, physics) {
+      if (!physics) return;
+      A.setScopeSolid(shell, physics, !down);
+      A.setScopeSolid(ruin, physics, !!down);
+    },
+
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * THE ONE CALLBACK, AND WHY IT IS NOT AN EVENT
+     * ──────────────────────────────────────────────────────────────────────
+     * `Airstrike` owns the falling mass and has to start it ON THE FRAME the
+     * shell stops being drawn — one frame late is one frame of bare rubble
+     * where a cathedral was, which is the cut this whole feature exists to
+     * remove. `ctx.events` would do, and `Airstrike.update` polling `razed`
+     * would also do, but both are ordered by the system registry rather than by
+     * this line, and `match` calls `airstrike.update` BEFORE it plays the
+     * cathedral beat sheet — so a poll is always exactly one frame behind.
+     *
+     * Installed by `Airstrike.build()` and by nobody else. Optional at every
+     * step: a `world` whose hook was never set must leave the match playable.
+     * It is called ONLY on a genuine, state-changing raze — never on the boot
+     * prime, never on the round reset that stands the church back up, and never
+     * on `?cath=down`'s coerced re-assertion, all three of which would otherwise
+     * drop two thousand chunks on a map nobody is looking at.
+     */
+    onRaze: null,
+
     /**
      * ──────────────────────────────────────────────────────────────────────
      * THE SWITCH. `match` owns WHEN; this owns WHAT.
@@ -2063,6 +2333,14 @@ export function buildCathedral(A) {
         A.setScopeSolid(shell, physics, !want);
         A.setScopeSolid(ruin, physics, want);
       }
+      /**
+       * …AND THE PERFORMANCE, ON THIS FRAME. Last, so the mass that starts
+       * falling starts over a shell that has already stopped being drawn and a
+       * ruin that has already started. `down` rather than `want`: under
+       * `?cath=down` the coerced re-assertion is not somebody destroying the
+       * building. @see `onRaze`.
+       */
+      if (want && down === true) this.onRaze?.();
       return true;
     },
 

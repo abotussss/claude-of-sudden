@@ -548,6 +548,9 @@ export const JET_LEAD = 4.4;
 const WHISTLE_LEAD = 2.6;
 /** When the pile has stopped moving and the settled pose is baked in. */
 const SETTLE_AT = 6.5;
+/** How much of the mass is thrown clear, and how far, as [chance, min, max]
+ *  multiples of the site's own mound radius. @see `site.scatter`. */
+const SCATTER = [0.28, 1.15, 2.45];
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -649,6 +652,15 @@ export class Airstrike {
       points: [null, null, null, null],
       count: 0,
     };
+    /**
+     * The cathedral's own demolition site and the `world` record that fires it.
+     * @see `_buildCathedralSite`. Bound once here so installing the hook
+     * allocates nothing and `dispose` can take it back off again.
+     */
+    this._cathSite = null;
+    this._cathRec = null;
+    this._onCathRaze = this._onCathedralRazed.bind(this);
+
     /** Live salvo dust: { tag, at } — removed by `update` when it expires. */
     this._dust = [];
     /** Candidate + cumulative-weight scratch for the weighted draw. */
@@ -699,6 +711,7 @@ export class Airstrike {
       if (site) this.sites.push(site);
     }
     this._buildDemoSites(world, physics);
+    this._buildCathedralSite(world, physics);
 
     ctx.scene.add(this.group);
 
@@ -990,7 +1003,125 @@ export class Airstrike {
     }
   }
 
-  _buildDemoSite(rec, index, world, physics) {
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * THE CATHEDRAL COMES DOWN LIKE A BUILDING, BECAUSE IT IS ONE
+   * ────────────────────────────────────────────────────────────────────────────
+   * "また大聖堂破壊の時は破壊演出がないですね？？？"
+   *
+   * The three `CATH-*` sites above are three bays of AISLE ROOF, and the
+   * BUILDING going has never been anything but `world.cathedral.setRazed(true)`
+   * — two index fills and two mask writes, i.e. a CUT. Photographed from the
+   * parvis across the whole beat: the church is intact, the banner says THE
+   * CATHEDRAL IS GONE, and in the next frame it is a rubble field. The map's
+   * headline event announced itself and the player never saw it happen.
+   *
+   * `world.cathedral` now publishes a `mass` in exactly the shape
+   * `world.demolitions` publishes one (@see section 8b of `src/world/cathedral.js`),
+   * so the answer is the machinery that already exists — the same `fracture`,
+   * the same closed-form trajectory in four instanced attributes, the same
+   * settled-pose memcpy, and above all the same `kind: 'demo'` PHYSICS, which is
+   * what makes a building pancake instead of being lifted off the ground.
+   *
+   * FOUR THINGS ARE THE CATHEDRAL'S OWN:
+   *
+   *   1. `blocking: false`. Every other site owns its own collision and its own
+   *      nav patch. This one does not and MUST not: `MatchSystem._razeCathedral`
+   *      flips the shell and the ruin together and `_openCathedral` re-probes
+   *      the nav under site D against the state the town is actually in. Two
+   *      owners of one building's collision is a race with the capture point in
+   *      the middle of it, so this site is the PICTURE and nothing else.
+   *   2. An ELONGATED settle. The plan is 30 x 45 m — an isotropic mound would
+   *      drag the ends of a 45 m nave ten metres towards the crossing.
+   *      @see `moundRU` in `_buildMesh`.
+   *   3. `grand`. The biggest building on the map gets the biggest show; three
+   *      smoke columns down the middle of a district block do not read across a
+   *      45 m frontage. @see `_spectacle`.
+   *   4. It is fired by `world.cathedral.onRaze`, not by the scheduler, because
+   *      `match` owns WHEN the cathedral falls and always has.
+   */
+  _buildCathedralSite(world, physics) {
+    const k = world?.cathedral;
+    if (!k?.mass?.length || typeof k.setVisual !== 'function') return;
+    /**
+     * The adapter. `world.demolitions` entries carry world-space positions
+     * because `publishDemolitions` runs after `A.finalize`; `buildCathedral`
+     * returns before it, so the cathedral publishes LEVEL space and the one
+     * `levelToWorld` that turns it into a position happens here — the same call
+     * `_buildSite` makes for every authored anchor.
+     */
+    const rec = {
+      id: 'CATHEDRAL',
+      name: 'THE CATHEDRAL',
+      mass: k.mass,
+      tint: k.tint,
+      top: k.top,
+      halfW: k.halfW,
+      halfD: k.halfD,
+      position: world.levelToWorld(k.level.x, 0, k.level.z, new THREE.Vector3()),
+      /** `blocking: false`, so nothing ever asks for one. @see `_bakeNavPatch`. */
+      navRect: null,
+      down: false,
+      setVisual: (down) => k.setVisual(down),
+      setCollision: (down) => k.setCollision(down, physics),
+    };
+    const site = this._buildDemoSite(rec, this.sites.length, world, physics, {
+      /**
+       * Across the nave and along it. `_buildMesh` interpolates between the two
+       * by the direction each chunk is thrown, so the pile is the shape of the
+       * plan rather than a disc drawn round its middle.
+       */
+      moundR: k.halfW * 0.82,
+      moundRU: k.halfD * 0.80,
+      /**
+       * Into the two flank streets and the parvis, and no further. 1.35 of an
+       * 18 m radius is 24 m from the crossing, which is the far kerb; the
+       * default 2.45 would be forty and would land on the roofs opposite.
+       */
+      scatter: [0.16, 1.02, 1.35],
+      /** The picture only. @see point 1 above. */
+      blocking: false,
+      grand: true,
+      radius: RULES.airstrikeRadius * 1.35,
+      damage: RULES.airstrikeDamage,
+    });
+    if (!site) return null;
+    this.sites.push(site);
+    this._cathSite = site;
+    /**
+     * AND THE ONE LINE THAT FIRES IT. `match` owns WHEN — this is only the
+     * answer to "and then what does it look like". @see `_onCathedralRazed`.
+     */
+    this._cathRec = k;
+    k.onRaze = this._onCathRaze;
+    return site;
+  }
+
+  /**
+   * The cathedral has just stopped being drawn. Drop it.
+   *
+   * Bound once in the constructor so installing it allocates nothing and
+   * `dispose` can take it back off. Everything it can decline, it declines
+   * silently: a raze before the sites are built (the boot prime, `ai`'s two
+   * cover-table swaps) and a second raze in one match both leave the match
+   * playable, which is the whole reason `setRazed` is idempotent.
+   */
+  _onCathedralRazed() {
+    const site = this._cathSite;
+    if (!this.ready || !site || site.struck) return;
+    this.fire(site.index);
+  }
+
+  /**
+   * @param {object} rec    the building's own record — `world.demolitions[i]`,
+   *                        or the adapter `_buildCathedralSite` wraps the
+   *                        cathedral in. `mass`, `top`, `halfW/halfD`, `tint`,
+   *                        `position`, `setVisual`, `setCollision`.
+   * @param {object} opts   fields written over the site BEFORE its meshes are
+   *                        built, so a caller can change the settle without a
+   *                        second copy of this method. @see `_buildCathedralSite`.
+   */
+  _buildDemoSite(rec, index, world, physics, opts = null) {
     const rng = this.rng.fork();
     /**
      * THE FRAME. `_buildMesh` works in (u out, v along, y up) and derives the
@@ -1094,6 +1225,10 @@ export class Airstrike {
       palette: [_tintFamily(rec.tint), [0x9a9691, 0x86837e, 0xa7a29a, 0x6e6a64]],
       uniforms: { uT: { value: -1 }, uAnim: { value: 1 } },
     };
+    // Everything the caller wants different has to be in place BEFORE the
+    // meshes: `_buildMesh` reads `moundR`, `moundRU`, `moundH`, `roofY` and the
+    // palette while it is solving the trajectories, and they are solved once.
+    if (opts) Object.assign(site, opts);
     site.materials = SURFACE_FOR.demo.map((name) => this._makeMaterial(name, site.uniforms));
 
     /**
@@ -1534,11 +1669,36 @@ export class Airstrike {
       dir.normalize();
       if (site.kind !== 'demo') dir.addScaledVector(u, 1.35).normalize();
 
-      // 72% of the mass piles up; the rest is thrown clear down the lane.
-      const scatter = rng.float() < 0.28;
+      /**
+       * AN ELONGATED PLAN SETTLES INTO AN ELONGATED PILE.
+       *
+       * `moundR` alone is a DISC, which is right for a block and wrong for a
+       * 30 x 45 m basilica: the ends of the nave would be dragged ten metres
+       * towards the crossing and the pile would stand proud of a ruin that is
+       * already the right shape underneath it. `moundRU` is the radius along
+       * `u` — the site's long axis — and the radius a chunk actually gets is
+       * interpolated between the two by the direction it is thrown, i.e. the
+       * pile is an ellipse on the plan. Defaults to `moundR`, so every site
+       * that does not set it is bit-for-bit what it was.
+       */
+      const long = site.moundRU ?? site.moundR;
+      const along = Math.abs(dir.x * u.x + dir.z * u.z);
+      const moundR = site.moundR + (long - site.moundR) * along;
+
+      /**
+       * 72% of the mass piles up; the rest is thrown clear down the lane —
+       * unless the site says otherwise. A shop's mound is five metres across
+       * and 2.45x of it is still its own plot; the cathedral's is eighteen, and
+       * the same multiplier would put several hundred chunks forty metres out,
+       * through the buildings either side and on to their roofs. So the throw
+       * is the SITE's, expressed as [chance, min, max] of its own radius, and
+       * the cathedral's stops in the two flank streets. @see `_buildCathedralSite`.
+       */
+      const thrown = site.scatter ?? SCATTER;
+      const scatter = rng.float() < thrown[0];
       const r = scatter
-        ? site.moundR * rng.range(1.15, 2.45)
-        : site.moundR * Math.sqrt(rng.float()) * 0.96;
+        ? moundR * rng.range(thrown[1], thrown[2])
+        : moundR * Math.sqrt(rng.float()) * 0.96;
       const spread = rng.range(-0.85, 0.85);
       settlePos
         .copy(moundC)
@@ -1547,7 +1707,7 @@ export class Airstrike {
 
       // The pile: a squashed dome, so chunks near the middle end up on top of
       // the ones underneath instead of all sitting on the tarmac.
-      const rr = Math.min(1, settlePos.distanceTo(moundC) / site.moundR);
+      const rr = Math.min(1, settlePos.distanceTo(moundC) / moundR);
       const floor = physics.groundHeight(settlePos.x, settlePos.z, site.roofY + 1);
       const groundY = Number.isFinite(floor) ? floor : moundC.y;
       const pile = scatter ? 0 : site.moundH * (1 - rr * rr);
@@ -1704,6 +1864,17 @@ export class Airstrike {
   _bakeNavPatch(site, ai, physics) {
     const g = ai?.grid;
     if (!g || (!site.demo && site.triStart < 0)) return;
+    /**
+     * A SITE THAT OWNS NO COLLISION OWNS NO NAV EITHER. Every site is
+     * `blocking: true` at this point in the boot except the cathedral, whose
+     * collision AND whose nav under site D belong to `match` — `_razeCathedral`
+     * flips the one and `_openCathedral` re-probes the other. Baking a second
+     * patch over the same 30 x 45 m footprint would be a second owner of the
+     * same cells with the capture point in the middle of them. `_verifyRoutes`
+     * clears `blocking` on other sites LATER, so this changes nothing for them.
+     * @see `_buildCathedralSite`.
+     */
+    if (!site.blocking) return;
 
     /**
      * A DEMOLITION'S RECTANGLE IS THE BUILDING'S, NOT A MOUND'S. It is also the
@@ -2016,10 +2187,50 @@ export class Airstrike {
     // 4. the sound the blast event does not cover
     const audio = this._audio ?? (this._audio = ctx.peek('audio'));
     if (audio?.play) {
-      audio.play('strike_tail', site.position, {
-        level: group ? 1.55 : 1.25, maxDist: 400, gain: group ? 2.6 : 2.2, occlusion: 0,
-      });
-      audio.play('strike_rubble', site.mound, { level: 1.1, dur: 3.4, extraDelay: 0.34, maxDist: 220 });
+      if (site.grand) {
+        /**
+         * ────────────────────────────────────────────────────────────────────
+         * "大聖堂破壊はもっと音大きく激しくして"
+         * ────────────────────────────────────────────────────────────────────
+         * THREE DETONATIONS AND A ROLL, NOT ONE CRUMP. The cathedral used to
+         * make exactly the noise a corner shop makes, because it went through
+         * this same line — one `strike_tail` at 1.25 and one `strike_rubble` at
+         * 1.1, both of which stop being audible at 400 and 220 m on a map that
+         * is 141 m across, i.e. at the same loudness from anywhere.
+         *
+         * So: the detonation at full level and reaching the whole map, TWO more
+         * walked down the nave a fifth of a second apart (which is what turns a
+         * bang into something with a length to it), and a rubble roll that runs
+         * for nine seconds under the settling — the whole `SETTLE_AT` window
+         * rather than a third of it. `occlusion: 0` on all of them for the same
+         * reason the group salvo uses it: there is no "sheltered from" the
+         * middle of the map ceasing to exist.
+         *
+         * Every one of these is a cue `src/audio` already publishes, played
+         * through the interface this file already uses — no new sound was
+         * added and none is asked for. If this event ever wants a bell, a
+         * masonry-tear or a sub-bass thump of its own, that is `src/audio`'s to
+         * author and this is where it would be played.
+         */
+        audio.play('strike_tail', site.position, {
+          level: 2.0, dur: 5.0, maxDist: 640, gain: 4.2, occlusion: 0,
+        });
+        for (const [k, d] of [[-0.6, 0.18], [0.6, 0.36]]) {
+          this._v.copy(site.mound).addScaledVector(site.u, k * site.demo.halfD);
+          this._v.y += 6;
+          audio.play('strike_tail', this._v, {
+            level: 1.7, dur: 4.4, extraDelay: d, maxDist: 620, gain: 3.6, occlusion: 0,
+          });
+        }
+        audio.play('strike_rubble', site.mound, {
+          level: 1.9, dur: 9.0, extraDelay: 0.3, maxDist: 480, gain: 3.2, occlusion: 0,
+        });
+      } else {
+        audio.play('strike_tail', site.position, {
+          level: group ? 1.55 : 1.25, maxDist: 400, gain: group ? 2.6 : 2.2, occlusion: 0,
+        });
+        audio.play('strike_rubble', site.mound, { level: 1.1, dur: 3.4, extraDelay: 0.34, maxDist: 220 });
+      }
     }
 
     // 5. one line per strike, so "it never happens" is answerable from a log
@@ -2065,6 +2276,75 @@ export class Airstrike {
      * itself, on the same frame. Six emitters, which is the same budget a single
      * strike already spends. @see SALVO_DUST for why the count matters.
      */
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * THE CATHEDRAL — "大聖堂破壊はもっと音大きく激しくして"
+     * ────────────────────────────────────────────────────────────────────────
+     * A district block is 24 m of frontage and five smoke columns cover it. The
+     * cathedral is 30 x 45 m with a dome 23 m up and a campanile at 29, and the
+     * same five columns round its middle read as a bonfire in a car park —
+     * photographed, the ends of the nave and the whole tower came down in clear
+     * air. So the show is laid out ON THE PLAN rather than on a point: a burst
+     * at the crossing, one at each end of the nave and one on the tower, dust
+     * walked the full 45 m down the mid-line and out to both flank streets, and
+     * a flash big enough to light the two districts either side of it.
+     *
+     * Every one of these writes into a preallocated ring in `fx` and the
+     * emitter budget is the same 24-slot pool a salvo already shares — twelve
+     * columns is the most this may ever ask for. @see `SALVO_DUST`.
+     */
+    if (site.grand) {
+      const hw = site.demo.halfW;
+      const hd = site.demo.halfD;
+      const top = site.demo.top;
+      // Three fireballs up the section: the crossing, the vault, the tower cap.
+      fx.explosion({ position: b, radius: site.radius * 0.72 });
+      for (const [a, c, f] of [[0.62, 0, 0.5], [-0.62, 0, 0.5], [0, -0.55, 0.42]]) {
+        this._v
+          .copy(site.mound)
+          .addScaledVector(u, a * hd)
+          .addScaledVector(v, c * hw);
+        this._v.y = top * f;
+        fx.explosion({ position: this._v, radius: site.radius * 0.46 });
+        fx.hazeRing(this._v.x, this._v.y, this._v.z, 4.0, 30, 0.6, 3.2);
+      }
+      // The pressure wave off the footprint, at the height it leaves the doors.
+      fx.hazeRing(site.mound.x, site.mound.y + 1.0, site.mound.z, Math.max(hw, hd) * 1.05, 46, 0.9, 4.4);
+      fx.hazeRing(site.mound.x, site.mound.y + 6.0, site.mound.z, Math.max(hw, hd) * 0.7, 40, 0.8, 3.6);
+      /**
+       * Dust down the whole nave and out to both pavements. `a` is along the
+       * building, `c` across it; the crossing column is taller and lasts longer
+       * because it is the one the player is standing next to.
+       */
+      const plan = [
+        [0, 0, 1], [-0.55, 0, 0], [0.55, 0, 0], [-0.9, 0, 0], [0.9, 0, 0],
+        [-0.3, -0.92, 0], [0.3, -0.92, 0], [-0.3, 0.92, 0], [0.3, 0.92, 0],
+        [-0.72, -0.72, 0],
+      ];
+      for (let i = 0; i < plan.length; i++) {
+        const [a, c, mid] = plan[i];
+        fx.addSmokeColumn(
+          site.mound.x + u.x * a * hd + v.x * c * hw,
+          site.mound.y + 0.5,
+          site.mound.z + u.z * a * hd + v.z * c * hw,
+          {
+            radius: mid ? 7.4 : 4.6,
+            duration: mid ? 9.0 : 6.2,
+            rate: mid ? 20 : 14,
+            rise: mid ? 4.6 : 3.2,
+            dark: 0.28,
+            life: mid ? 14 : 10.5,
+            growth: mid ? 10.5 : 7.6,
+          }
+        );
+      }
+      fx.scorch(site.mound.x, site.mound.y + 0.2, site.mound.z, Math.max(hw, hd) * 1.7);
+      // Twice a district's peak over four times the distance: the middle of the
+      // map going up has to be readable from both bases.
+      if (fx.lights) fx.lights.flash(b.x, b.y, b.z, 1, 0.62, 0.3, 5200, 1.05, 9, 150, 8);
+      return;
+    }
+
     if (site.kind === 'demo') {
       const hw = site.demo.halfW;
       const hd = site.demo.halfD;
@@ -2717,6 +2997,11 @@ export class Airstrike {
   }
 
   dispose() {
+    // The hook is a reference to this instance held by `world`, which outlives
+    // it on a match restart. Hand it back before anything else is torn down.
+    if (this._cathRec?.onRaze === this._onCathRaze) this._cathRec.onRaze = null;
+    this._cathRec = null;
+    this._cathSite = null;
     for (const site of this.sites) {
       if (site.proxyId >= 0) this.physics?.removeStatic(site.proxyId);
       for (const mesh of site.meshes) mesh.geometry?.dispose();
