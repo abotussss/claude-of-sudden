@@ -55,7 +55,16 @@ await page.evaluate((MODE) => {
   ctx.peek('ui')?.setHudVisible?.(false);
   ctx.viewScene.visible = false;
   // The camera is not a combatant. Renewed every frame below.
-  window.__PROT__ = () => ai.protect(player, 30);
+  /**
+   * IN `kill` MODE THE CAMERA IS NOT PROTECTED EITHER, and that turned out to
+   * matter: `ai.protect` takes the player out of `hostilesOf`, which is forty
+   * men's target list, and seed 7 went from "RED destroyed by LANTERN, twelve
+   * frags" to "RED flattened by the final salvo" purely because of it. A
+   * picture of a fight has to be a picture of the fight that was measured, so
+   * `kill` mode leaves the sim exactly as `_tankfight.mjs` runs it and only
+   * moves the camera once the wreck exists.
+   */
+  window.__PROT__ = MODE === 'kill' ? () => {} : () => ai.protect(player, 30);
   window.__PROT__();
   e.time.scale = window.__MODE__ === 'kill' ? 8 : 6;
   /**

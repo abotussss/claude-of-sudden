@@ -97,9 +97,10 @@ const DECK_PLUNGE = 0.37 / 1.1;
  * 0.5 makes it the other way round: a hull at 40 m beats a rifleman at 21 m,
  * and a rifleman at 19 m still wins. That is not a licence to mob it, because
  * `armourWorth` is what decides whether the hull is a candidate at all and it
- * says no to 93 % of the men inside `RULES.tankRange` — the priority only ever
- * applies to a man who is astern of it, above it, or holding a grenade inside
- * throwing range.
+ * says no to roughly NINE IN TEN of the men inside `RULES.tankRange` —
+ * measured at 88-90 % across four matches — so the priority only ever applies
+ * to a man who is astern of it, above it, or holding a grenade inside throwing
+ * range.
  */
 const ARMOUR_BIAS = 0.5;
 /**
