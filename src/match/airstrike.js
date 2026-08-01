@@ -1058,6 +1058,8 @@ export class Airstrike {
       radius: RULES.airstrikeRadius,
       damage: RULES.airstrikeDamage,
       position: ground,
+      /** @see the `damageAt` note on the authored sites below. */
+      damageAt: ground.clone().setY(ground.y + RULES.blastBurstHeight),
       blast,
       mound: base.clone(),
       /**
@@ -1357,6 +1359,12 @@ export class Airstrike {
       damage: spec.damage ?? (kind === 'route' ? RULES.routeStrikeDamage : RULES.airstrikeDamage),
       /** Where the HUD/markers should point: the impact, not the roof. */
       position: ground.clone(),
+      /**
+       * …and where the DAMAGE is centred, which is not the same point.
+       * `RULES.blastBurstHeight` above the impact, because every occlusion ray
+       * in the game starts here. @see `_detonate` step 2.
+       */
+      damageAt: ground.clone().setY(ground.y + RULES.blastBurstHeight),
       blast: blast.clone(),
       mound: moundC.clone(),
       moundR,
@@ -1975,10 +1983,27 @@ export class Airstrike {
     site.uniforms.uT.value = 0;
     site.uniforms.uAnim.value = 1;
 
-    // 2. the blast: the canonical event, so `physics`, `player`, `ai`, `fx` and
-    //    `audio` all do what they already do for the C4.
+    /**
+     * 2. the blast: the canonical event, so `physics`, `player`, `ai`, `fx` and
+     *    `audio` all do what they already do for the C4.
+     *
+     *    IT GOES OFF FROM `damageAt`, NOT FROM `position`, AND THAT IS THE FIX
+     *    RATHER THAN A DETAIL. `position` is the impact — street level plus
+     *    0.6 m, which is where the marker points and where the crater is. Every
+     *    listener that CARES ABOUT OCCLUSION casts a ray from this point:
+     *    `src/ai` to each man's eye, `src/player` to the camera, `src/physics`
+     *    to each rigid body. Measured over a whole match (`_blastwhy.mjs`),
+     *    twenty-two of the twenty-four men who were inside a strike's radius
+     *    had that ray BLOCKED, at a mean detonation height of 0.46-1.61 m above
+     *    them — the ray was clipping the kerb, the mound and the ground plane
+     *    the charge had just landed on. A bomb inside its own crater sees
+     *    nothing. @see `RULES.blastBurstHeight`.
+     *
+     *    `damageAt` is built once per site at boot, so this is a reference
+     *    assignment on the frame the bomb lands, exactly as it was.
+     */
     const b = this._blast;
-    b.position = site.position;
+    b.position = site.damageAt ?? site.position;
     b.radius = site.radius;
     b.damage = site.damage;
     ctx.events.emit('explosion', b);

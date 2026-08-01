@@ -441,6 +441,48 @@ export const RULES = {
 
   /* ---- airstrike ---- */
   /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * BLAST BURST HEIGHT — metres the DAMAGE point sits above the impact point.
+   * ══════════════════════════════════════════════════════════════════════════
+   * "空からの爆撃の爆撃範囲をもっと広げて、つまり爆撃の当たり判定が小さいので広くして
+   *  もっと戦争のように爆撃によってダメージをおいやすくして"
+   *
+   * THE HITBOX WAS NOT SMALL BECAUSE THE RADIUS WAS SMALL. Measured over one
+   * whole match, seed 11 (`_blastcount.mjs`, `_blastwhy.mjs`): 166 blasts of
+   * every kind, TWO kills, and a mean of 0.0-3.0 damage handed out per blast.
+   * Raising `airstrikeRadius` on its own would not have moved either number, and
+   * that is the trap this constant exists to name.
+   *
+   * `src/ai`'s explosion handler is three gates — `d > radius` skip, then
+   * `lineOfSight(blast, a.eye, MASK.EXPLOSION)` skip, then `damage * f²` with
+   * `f = 1 - d/r`. Both of the first two were eating everything:
+   *
+   *   source        blasts   men in radius   LOS BLOCKED   LOS clear   lethal
+   *   airstrike r15    12          9              7             2         0
+   *   airstrike r11     5         15             15             0         0
+   *   bomber    r9     15          4              4             0         0
+   *   strafe    r5.5   14          2              2             0         0
+   *
+   * — 0.75 men inside a 15 m storey strike, and SEVEN OF NINE of them behind
+   * something. The occluder is not a building: the mean height of the detonation
+   * point above the men it was measured against was 0.46-1.61 m, i.e. the charge
+   * goes off at ANKLE HEIGHT and the kerb, the mound it just made and the ground
+   * plane itself are what the ray to a man's eye hits. A bomb that detonates
+   * inside its own crater cannot see anybody.
+   *
+   * 1.7 m is head height. It is not a fudge factor — a bomb's fireball centre is
+   * above its crater, which is why every one of the `fx` calls in these files
+   * already lifts its own flash and haze by 0.2-1.0 m. What changes is that the
+   * DAMAGE now starts from the same place the fire does.
+   *
+   * IT IS APPLIED WHERE `match` OWNS THE EMIT — `Airstrike._detonate` (every
+   * strike, route strike, salvo and district), `_cathShell` and `_bombardPoint`.
+   * `src/match/bomber.js` and `src/match/strafe.js` emit from their own files and
+   * are widened through their radii below instead; said here rather than left to
+   * be discovered.
+   */
+  blastBurstHeight: 1.7,
+  /**
    * THE AIRSTRIKE IS NOT A SECOND C4, and these are deliberately not
    * `blastRadius` / `blastDamage`.
    *
@@ -450,13 +492,32 @@ export const RULES = {
    * single strike would routinely take four men off the board for standing in
    * the wrong street — which is not a hazard, it is a coin flip.
    *
-   * 15 m / 260 keeps the same falloff `src/player/index.js` and `src/ai` already
-   * apply to the C4 (linear in distance) and makes the strike lethal inside
-   * about 6 m, badly hurtful to 10 m, and survivable at the edge. You die if you
-   * ignored the whistle; you limp if you were slow.
+   * 15 m / 260 kept the same falloff `src/player/index.js` and `src/ai` already
+   * apply to the C4 and was meant to be lethal inside about 6 m, badly hurtful
+   * to 10 m, and survivable at the edge.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * 15 -> 24 AND 260 -> 300, AND THE RADIUS IS DOING MOST OF THE WORK
+   * ──────────────────────────────────────────────────────────────────────────
+   * The paragraph above describes a weapon that never happened: twelve of these
+   * in a whole match found NINE men inside the circle between them. A 15 m
+   * circle on a 114x141 m map with forty men on it contains nobody most of the
+   * time, and that — not the falloff — is "当たり判定が小さい".
+   *
+   * 24 m quadruples the ground the circle covers, and because `f = 1 - d/r` is
+   * relative to the radius it also roughly doubles what a man at a FIXED
+   * distance takes: at 8 m, `260·f²` was 57 and `300·f²` is 116. Read as lethal
+   * radii against a 100 HP man — the honest way to read a quadratic falloff —
+   * a bot dies inside 5.7 m before and inside 10.1 m after, and the player
+   * (whose falloff is `^1.6`, not `²`) inside 6.8 m before and 12.0 m after.
+   *
+   * WHY IT IS NOT A WIPE: the LOS gate is untouched and it is severe. A man
+   * round a corner from a 24 m blast still takes exactly nothing, so the answer
+   * to a strike is still "be behind something", which is what a town is for.
+   * @see `blastBurstHeight` for the measurement, and the commit for the after.
    */
-  airstrikeRadius: 15,
-  airstrikeDamage: 260,
+  airstrikeRadius: 24,
+  airstrikeDamage: 300,
   /**
    * Seconds into a LIVE round before the first strike may be called, on top of
    * which the whole telegraph (jet at -4.4 s, whistle at -2.6 s) still runs. The
@@ -480,12 +541,18 @@ export const RULES = {
    *
    * "C4設置場所に行くまでのところに空爆ポイントを作ること … 守る側有利にして".
    * It drops a parapet and the wall under it into a lane the attack has to walk,
-   * so it is cover-generating and lethal, but at 11 m / 190 it is survivable
-   * from about 4 m out where the 15 m / 260 storey is not. A push through it
-   * costs health and tempo rather than the round.
+   * so it is cover-generating and lethal, but at 11 m / 190 it was survivable
+   * from about 4 m out where the storey strike is not. A push through it costs
+   * health and tempo rather than the round.
+   *
+   * 17 / 230, widened with the storey strike and by the same ratio, so the two
+   * keep the RELATIONSHIP the paragraph above describes rather than each being
+   * re-tuned on its own. It was the worst offender in the measurement: five of
+   * them found fifteen men inside the circle and every single one of the fifteen
+   * was behind something (`_blastwhy.mjs`). @see `blastBurstHeight`.
    */
-  routeStrikeRadius: 11,
-  routeStrikeDamage: 190,
+  routeStrikeRadius: 17,
+  routeStrikeDamage: 230,
   /**
    * THE SALVO — "大規模爆破で街が破壊されるとか起きないね？ちゃんと発生させて
    * ください。街を破壊するようなイベントです".
@@ -515,9 +582,22 @@ export const RULES = {
    * dangerous is that there are eight of them 11 m apart across a lane, so
    * there is no single safe metre inside the run and the answer is to not be in
    * the lane rather than to find cover in it.
+   *
+   * 9 -> 15 AND 165 -> 210, AND THIS IS THE ONE THE PLAYER MEANT MOST LITERALLY:
+   * "爆撃" is the aeroplane walking bombs down a street. Measured, fifteen bombs
+   * across a whole match found FOUR men inside a 9 m circle between them and all
+   * four were occluded — a stick with "no safe metre inside the run" that hit
+   * nobody at all. At 15 m the craters are 11 m apart and the circles now
+   * OVERLAP, which is the first time the sentence above has been true of the
+   * geometry.
+   *
+   * THIS IS RADIUS ONLY, NOT BURST HEIGHT. `src/match/bomber.js` writes its own
+   * `explosion` payload and is not this pass's file, so its bombs still detonate
+   * at crater level and the LOS gate still eats more of them than it eats of a
+   * strike. Named rather than hidden. @see `blastBurstHeight`.
    */
-  bombRadius: 9,
-  bombDamage: 165,
+  bombRadius: 15,
+  bombDamage: 210,
   /** Seconds into a LIVE round before the first run may be called. */
   bomberFirstDelay: 44,
   /** Gap between runs, seconds. */
@@ -538,8 +618,17 @@ export const RULES = {
    * same as the stick's — be out of the lane — but you get a second and a half
    * to act on it instead of four, which is what makes it a distinct threat and
    * not a re-skin. See `src/match/strafe.js`.
+   *
+   * 5.5 -> 8.0, DAMAGE UNTOUCHED. It is a GUN and the brief is about 爆撃, so
+   * the per-shell figure stays where it is; what it gets is the same widening
+   * every other air weapon got, because the measurement caught it too (fourteen
+   * blast rounds, two men in radius, both occluded). A cannon shell that lands
+   * three metres away should be felt. Damage is left at 74 on purpose: eleven to
+   * thirty-one impacts walk a lane in a second and a half, and raising the per
+   * shell figure as well would turn a strafing run into a guaranteed kill on
+   * everybody in it.
    */
-  cannonRadius: 5.5,
+  cannonRadius: 8.0,
   cannonDamage: 74,
   /** Seconds into a LIVE round before the first strafing run may be called. */
   strafeFirstDelay: 34,
@@ -998,9 +1087,14 @@ export const RULES = {
    * are twenty of them rather than five, they are aimed at a BUILDING rather
    * than at a circle men are standing in, and ten seconds of warning is the
    * bargain. Lethal inside ~4 m, survivable at the rim.
+   *
+   * 9 -> 14 / 175 -> 205, widened with everything else. Twenty shells over
+   * eleven seconds across a 30 x 45 m footprint at 14 m each is a beaten zone
+   * with no gaps in it, which is what a bombardment is; ten seconds of siren
+   * before the first one is what makes that fair.
    */
-  cathedralBarrageRadius: 9,
-  cathedralBarrageDamage: 175,
+  cathedralBarrageRadius: 14,
+  cathedralBarrageDamage: 205,
   /**
    * Half-extents of the beaten zone, in metres, on the cathedral's own axes —
    * across the nave and along it. The building measures 30 x 45 m, so this walks
@@ -1076,9 +1170,20 @@ export const RULES = {
   zoneBombardInterval: [70, 105],
   /** How long the strip counts down before it lands. Ten seconds to walk out. */
   zoneBombardLead: 10,
-  /** Blast at the zone centre. Survivable at the rim of an r8 circle. */
-  zoneBombardRadius: 10,
-  zoneBombardDamage: 210,
+  /**
+   * Blast at the zone centre.
+   *
+   * 10 -> 16 / 210 -> 250. This is the ONE air event that was already working —
+   * measured at 25 shells, 25 men in radius, 10 of them killed — because it is
+   * the only one AIMED AT A CIRCLE MEN ARE STANDING IN rather than at fixed
+   * geography. It is widened with the rest so a capture point under artillery is
+   * a point you leave rather than a point you crouch on: a zone is `captureRadius`
+   * 8, so 16 m is the whole circle plus the lip of cover round it, and the
+   * `zoneBombardLead` of 10 s is unchanged — you are still told, and you can
+   * still walk out.
+   */
+  zoneBombardRadius: 16,
+  zoneBombardDamage: 250,
   /** How many impacts walk across the circle, and how far apart. */
   zoneBombardShells: 5,
   zoneBombardSpread: 5.5,

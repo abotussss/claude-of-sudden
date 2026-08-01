@@ -486,6 +486,15 @@ export class MatchSystem {
     this._v = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
     this._bombPos = new THREE.Vector3();
+    /**
+     * THE POINT A SHELL DOES ITS DAMAGE FROM, which is not the point it craters.
+     *
+     * `RULES.blastBurstHeight` above `_bombPos`, and it is a SECOND vector on
+     * purpose: the scorch, the haze and the flash want the impact and every
+     * occlusion ray wants head height, and one vector cannot be both. @see
+     * `RULES.blastBurstHeight` for the measurement that made this necessary.
+     */
+    this._blastPos = new THREE.Vector3();
     this._prompt = { key: 'F', text: '', sub: '', progress: 0 };
     this._objectives = [];
     this._squad = [];
@@ -2959,7 +2968,8 @@ export class MatchSystem {
   _cathShell(i) {
     const at = this._cathAim(i);
     const p = this._blast;
-    p.position = at;
+    // Head height, not crater floor. @see `RULES.blastBurstHeight`.
+    p.position = this._blastPos.copy(at).setY(at.y + RULES.blastBurstHeight);
     p.radius = RULES.cathedralBarrageRadius;
     p.damage = RULES.cathedralBarrageDamage;
     p.source = null;
@@ -3260,7 +3270,8 @@ export class MatchSystem {
     while (b.shot < due) {
       const at = this._bombardPoint(b.zone, b.shot);
       const p = this._blast;
-      p.position = at;
+      // Head height, not crater floor. @see `RULES.blastBurstHeight`.
+      p.position = this._blastPos.copy(at).setY(at.y + RULES.blastBurstHeight);
       p.radius = RULES.zoneBombardRadius;
       p.damage = RULES.zoneBombardDamage;
       p.source = null;
