@@ -625,6 +625,21 @@ if (args.battle) {
   }, BSCALE);
 
   console.log(`[audiotest] battle: ${BSEC}s wall at ${BSCALE}x …`);
+  /**
+   * `--tank` FORCES THE SORTIE. Armour arrives late by design — `match` sends it
+   * when the cathedral comes down — so a three minute probe never sees one, and
+   * the engine and the main gun would go unmeasured in every run that matters.
+   * `armour.fire()` is the published hook for exactly this.
+   */
+  if (args.tank) {
+    await page.waitForTimeout(Math.min(20000, BSEC * 300));
+    const rolled = await page.evaluate(() => {
+      const m = window.__ENGINE__.ctx.peek('match');
+      const a = m?.tank ?? m?.armour;
+      return a ? { fired: a.fire(), tanks: a.tanks.map((t) => ({ id: t.id, alive: t.alive })) } : null;
+    });
+    console.log('[audiotest] tank sortie forced:', JSON.stringify(rolled));
+  }
   await page.waitForTimeout(BSEC * 1000);
 
   const rec = await page.evaluate(() => {

@@ -386,7 +386,17 @@ export class BattleLayer {
    */
   _updateTanks(dt, now) {
     const audio = this.audio;
-    const armour = audio.ctx.peek('match')?.armour;
+    /**
+     * `tank` AND `armour`, BECAUSE THE PUBLISHED NAME AND THE FIELD DISAGREE.
+     * `src/match/tank.js` documents its own handle as `ctx.get('match').armour`
+     * and `src/match/index.js` assigns it to `this.tank`. Reading only the
+     * documented one found `undefined` on every frame of every match and the
+     * engine never started — measured, silently, with no error: a null-safe
+     * chain on a name that does not exist is indistinguishable from "no tanks in
+     * this match". Both names are read, and whichever `match` actually has wins.
+     */
+    const m = audio.ctx.peek('match');
+    const armour = m?.tank ?? m?.armour;
     const list = armour?.tanks;
     if (!list) { if (this._tanks.length) this._stopAllEngines(now); return; }
 
