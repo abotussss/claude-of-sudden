@@ -159,8 +159,19 @@ for (let i = 0; i < SAMPLES; i++) {
       if (hitIn) { strict++; insideNames.push(a.name); r.in++; }
     }
     ys.sort((p, q) => p - q);
+    /**
+     * A LIVE MAN BELOW THE MAP IS A BUG, NOT A STATISTIC. The per-archetype mean
+     * rise blew up to -16690 m on one run, which is one sample at about -24 Mm;
+     * reported explicitly so it can never hide inside an average again.
+     */
+    let worst = null;
+    for (const a of ai.agents) {
+      if (a.alive && a.position.y < -30 && (!worst || a.position.y < worst.y)) {
+        worst = { y: +a.position.y.toFixed(1), name: a.name, arch: a.archetype, state: a.state };
+      }
+    }
     return {
-      bots, foot, strict, onLeg, per, insideNames, names, arch,
+      bots, foot, strict, onLeg, per, insideNames, names, arch, worst,
       medianY: ys.length ? ys[ys.length >> 1] : 0,
     };
   });
@@ -174,6 +185,7 @@ for (let i = 0; i < SAMPLES; i++) {
     r.n += s.arch[k].n; r.in += s.arch[k].in;
     r.rise += s.arch[k].y - s.arch[k].n * s.medianY;
   }
+  if (s.worst) (acc.belowMap ??= []).push(s.worst);
   await page.waitForTimeout(EVERY);
 }
 
@@ -231,6 +243,7 @@ console.log(JSON.stringify({
       .sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, pct(v, acc.bots)])),
     meanBotsOnCacheLeg: +(acc.onLeg / acc.ticks).toFixed(2),
   },
+  liveActorsBelowTheMap: (acc.belowMap ?? []).slice(0, 6),
   perArchetype: Object.fromEntries(Object.entries(acc.archIn).map(([k, r]) => [k, {
     samples: r.n, indoorPct: pct(r.in, r.n), meanYaboveMedian: +(r.rise / (r.n || 1)).toFixed(2),
   }])),
