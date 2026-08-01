@@ -1967,10 +1967,29 @@ function dressBuilding(A, rng, info) {
       );
     }
   }
+  /**
+   * …AND THE RUBBLE MOUND IS ON THE SAME KEEP-OUT AS EVERYTHING ELSE UP HERE.
+   *
+   * It was not, and it is the one piece of roof dressing whose position was
+   * written straight into the call: three quarters of the roofs get one, it is
+   * up to 1.3 m across, and `rubbleMound` lays a real collision box under it
+   * (@see kit.js). Dropped on the stairwell hatch it is a lid — measured on
+   * seed 6, W3's top flight had 0.75 m of headroom over tread 11 and no
+   * standing room on seven treads, and the whole roof came back UNREACHABLE.
+   * Nothing about that was new; it was where the dice fell, and it moves to a
+   * different roof on any edit that shifts them.
+   *
+   * The draws stay in the same order — position, radius, count — so the stream
+   * is unchanged; only the arithmetic between them is new.
+   */
   if (rng.float() < 0.6) {
-    rubbleMound(A, rng, rng.range(rx0, rx1), roofY, rng.range(rz0, rz1), rng.range(0.7, 1.3), rng.int(8, 16), {
-      key: 'concrete_dark',
-    });
+    _rs[0] = rng.range(rx0, rx1);
+    _rs[1] = rng.range(rz0, rz1);
+    const mr = rng.range(0.7, 1.3);
+    const mn = rng.int(8, 16);
+    // the half-diagonal of the box `rubbleMound` lays: 1.5 r on each plan axis
+    nudge(_rs, mr * 1.5 * Math.SQRT1_2);
+    rubbleMound(A, rng, _rs[0], roofY, _rs[1], mr, mn, { key: 'concrete_dark' });
   }
   // aerials: thin, tall, and they do a lot for a skyline
   for (let i = 0; i < rng.int(1, 3); i++) {
