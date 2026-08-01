@@ -477,6 +477,36 @@ const EXPLOSION_MUL = 1.35;
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
+ * THE SHOT THAT WORKS, AS A POINT — what `ai` aims the infantry at
+ * ────────────────────────────────────────────────────────────────────────────
+ * Read straight off `_buildColliders`, in the hull's own frame:
+ *
+ *     hull    |x| < 1.65   y 0.35 .. 2.15   z -3.20 .. 3.40   x0.22
+ *     deck    |x| < 1.45   y 1.45 .. 2.25   z -3.30 .. -0.70  x1.70
+ *     turret  |x| < 1.20   y 1.45 .. 2.55   z -2.00 .. 1.40   x0.40
+ *
+ * The deck is the only box worth a rifle round, and the deck's CENTRE is not
+ * the place to aim at it: (0, 1.85, -2.0) sits exactly on the turret's rear
+ * face and under the hull's roof, so a line to it from anywhere but dead astern
+ * passes through 0.4 or 0.22 armour first. The rear-top corner does not —
+ * z -3.05 is a quarter of a metre inside the deck box and a metre astern of the
+ * turret; y 2.18 is above the hull roof (2.15) and inside the deck (2.25).
+ *
+ * `AiSystem.armourWorth` is derived from this point and from those three boxes;
+ * if this moves, that moves. @see `DECK_ASTERN` / `DECK_PLUNGE` in src/ai/index.js.
+ */
+const DECK_AIM = [0, 2.18, -3.05];
+
+/** `stats` key that counts rounds into a part, beside the one that sums them. */
+const PART_COUNT = { hull: 'nHull', turret: 'nTurret', deck: 'nDeck' };
+
+/** How long a man who hit the hull stays the crew's problem. @see `_acquire`. */
+const RETALIATE = 6.0;
+/** …and how much nearer he counts than he is while he does. */
+const RETALIATE_BIAS = 0.5;
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
  * 「戦車は空爆で破壊される仕様にして」 — A BOMB KILLS ARMOUR
  * ────────────────────────────────────────────────────────────────────────────
  * `_takeBlast` has always taken airstrike damage, and it has always been
@@ -572,6 +602,15 @@ export class Armour {
     this.onImpact = null;
     /** The air systems, so a sortie does not open under an inbound salvo. */
     this.coBusy = null;
+    /**
+     * COUNT ONE PENETRATING ROUND ONCE. Diagnosed, implemented, and OFF —
+     * flipping it moves every time-to-kill in the file, so it waits for the
+     * player's answer. `?onewound=1` for a probe run, or one assignment from a
+     * console. @see the long note in `_takeRound`.
+     */
+    this.oneWoundPerRound =
+      typeof location !== 'undefined' &&
+      new URLSearchParams(location.search).get('onewound') === '1';
 
     this._next = Infinity;
     this._sorties = 0;
@@ -1041,6 +1080,37 @@ export class Armour {
       /** So `ai.teamOf()` and `ui.isFriendlyTarget` answer correctly when a
        *  round lands on us — see the `damage:dealt` note in `_takeRound`. */
       isTank: true,
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * AND SO THE INFANTRY CAN SEE IT AT ALL
+       * ────────────────────────────────────────────────────────────────────
+       * `AiSystem.hostilesOf` built its list from `ai.agents` plus the player,
+       * and `Agent.target` only ever comes from that list — so measured, over
+       * three matches with a hull on the field: a tank appeared in a hostile
+       * list 0 times, a bot aimed at one 0 times, and the `deck` damage column
+       * was 0 in every row. `match` hands `ai` this array (`ai.vehicles`) and
+       * these three fields are the contract it reads:
+       *
+       *   isVehicle  it is not an `Agent`; the armour rules apply to it
+       *   aimPoint   WHERE to shoot it, because a tank has no chest
+       *   yaw        its heading, so "is the deck presented" is answerable
+       *
+       * `team`, `alive` and `position` were already here and already mean the
+       * right thing — `alive` is exactly "out of its pocket and shootable".
+       */
+      isVehicle: true,
+      /**
+       * THE ENGINE DECK'S REAR-TOP, in world space, rewritten once a frame by
+       * `_pose` off matrices it has already updated.
+       *
+       * It is `DECK_AIM` and not the hull centre because of the collider
+       * layout: `hull` is 0.22, `turret` 0.4 and `deck` 1.7, so the deck is the
+       * only box a rifle can do arithmetic with — and the deck's own rear-top
+       * corner is the only PART of it that is astern of the turret (z -2.0) and
+       * clear of the hull roof (y 2.15). Aim a metre further forward and every
+       * shot from behind buries itself in the turret at 0.4.
+       */
+      aimPoint: new THREE.Vector3(),
       /** THE WHEEL. `legs[0]` is the approach and its end is the hub; every
        *  other leg is a spoke off it, carrying the `zone` it stands off. */
       legs,
@@ -1085,6 +1155,14 @@ export class Armour {
       coax: 0,
       coaxLeft: 0,
       lastHitBy: null,
+      /** When, so the crew can turn on somebody who is still shooting at it. */
+      lastHitAt: -1e9,
+      /**
+       * ONE WOUND PER ROUND, remembered across the events of a single frame.
+       * @see the `_takeRound` note on `oneWoundPerRound`.
+       */
+      _woundFrame: -1,
+      _woundSource: null,
       chunkCount: 0,
       wheelSpin: 0,
       /** Piles the hull will meet, baked by `_bakePlough`. */
@@ -1102,11 +1180,22 @@ export class Armour {
       stats: {
         rounds: 0, roundDmg: 0,
         hull: 0, turret: 0, deck: 0,
+        /**
+         * …AND HOW MANY ROUNDS EACH BOX ATE, not just what they were worth.
+         * "447 into the glacis, 58 into the deck" is a statement about COUNTS,
+         * so a report that only carries damage cannot say whether the men are
+         * shooting the right part of the tank. @see `_takeRound`.
+         */
+        nHull: 0, nTurret: 0, nDeck: 0,
+        /** Damage events discarded by `oneWoundPerRound`, when it is on. */
+        dupes: 0,
         blasts: 0, blastDmg: 0,
         frags: 0, fragDmg: 0,
         liveT: 0, kills: 0, sorties: 0, deaths: 0,
         /** Prop instances this hull's GUN took off the map. */
         razed: 0,
+        /** …and cache-house elevations it blew open. @see `_mainGun`. */
+        breaches: 0,
         /** Capture points it has stood off, in order. */
         legs: 0,
       },
@@ -2304,9 +2393,13 @@ export class Armour {
     st.sorties++;
     st.rounds = 0; st.roundDmg = 0;
     st.hull = 0; st.turret = 0; st.deck = 0;
+    st.nHull = 0; st.nTurret = 0; st.nDeck = 0; st.dupes = 0;
     st.blasts = 0; st.blastDmg = 0;
     st.frags = 0; st.fragDmg = 0;
-    st.liveT = 0; st.razed = 0; st.legs = 0;
+    st.liveT = 0; st.razed = 0; st.breaches = 0; st.legs = 0;
+    tank.lastHitAt = -1e9;
+    tank._woundFrame = -1;
+    tank._woundSource = null;
     tank.root.visible = true;
     tank.wreck.visible = false;
     tank.uniforms.uT.value = -1;
@@ -2685,6 +2778,15 @@ export class Armour {
     tank.gun.updateMatrix();
     tank.turret.updateMatrixWorld(true);
 
+    /**
+     * WHERE THE INFANTRY SHOULD BE AIMING, in world space, off the matrix that
+     * was just written. `set` then `applyMatrix4` on a vector the tank has
+     * owned since boot — no allocation, no second matrix, and it is done here
+     * rather than in `ai` because `ai` may not know a hull's local frame.
+     * @see the `aimPoint` note in `_buildTank`.
+     */
+    tank.aimPoint.set(DECK_AIM[0], DECK_AIM[1], DECK_AIM[2]).applyMatrix4(tank.root.matrixWorld);
+
     if (tank.state !== 'dead') this._poseWheels(tank);
 
     // Colliders follow. Three `Matrix4.copy` + an invert each, once a frame.
@@ -2775,14 +2877,30 @@ export class Armour {
     }
     const phys = this.physics;
     const muzzle = this._muzzle(tank, this._v2);
+    /**
+     * IT NOTICES BEING SHOT. Now that the infantry engages at all, "nearest man
+     * with a line" is the wrong rule: the whole anti-armour policy in
+     * `AiSystem.armourWorth` is about getting men ASTERN of the hull, and a
+     * crew that keeps shelling the street in front of it while a section takes
+     * its engine deck apart is the turkey shoot the brief warns about. A man
+     * who has put a round on it inside `RETALIATE` seconds counts as
+     * `RETALIATE_BIAS` of his real distance, so he beats anybody less than
+     * twice as close — a preference, not a homing beacon: he still has to be
+     * inside `tankRange`, still has to be visible, and the crew still has to
+     * traverse onto him through `TRAVERSE`.
+     */
+    const avenge = tank.lastHitBy;
+    const avengeOk = !!avenge && this.ctx.time.elapsed - tank.lastHitAt < RETALIATE;
     let best = null;
-    let bestD = RULES.tankRange;
+    let bestScore = RULES.tankRange;
     for (let i = 0; i < out.length; i++) {
       const e = out[i];
       const p = e.position;
       if (!p) continue;
       const d = Math.hypot(p.x - tank.position.x, p.z - tank.position.z);
-      if (d >= bestD) continue;
+      if (d >= RULES.tankRange) continue;
+      const score = avengeOk && e === avenge ? d * RETALIATE_BIAS : d;
+      if (score >= bestScore) continue;
       // one ray, and only for a candidate that is already the closest so far
       this._v.set(p.x - muzzle.x, p.y + 1.0 - muzzle.y, p.z - muzzle.z);
       const len = this._v.length();
@@ -2792,7 +2910,7 @@ export class Armour {
         continue;
       }
       best = e;
-      bestD = d;
+      bestScore = score;
     }
     tank.target = best;
   }
@@ -2845,6 +2963,40 @@ export class Armour {
      */
     const razed = this._razeAt(at.x, at.y, at.z, RAZE_R);
     tank.stats.razed += razed;
+
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * …AND A HOUSE LOSES A WALL — 「物資やビーコンのある家も破壊できるようにして」
+     * ──────────────────────────────────────────────────────────────────────
+     * `world.damageAt(position, strength)` has existed, been documented in
+     * ARCHITECTURE and been proved by `_breachprobe.mjs` since the cache houses
+     * were built, and NOTHING HAS EVER CALLED IT. `_razeAt` above takes the
+     * street furniture off the map and stops at the masonry; this is the other
+     * half, and the tank's main gun is the weapon the entry point was specified
+     * for — `world`'s own signature says so in as many words: "strength in
+     * `match`'s own units; 1 is a tank main-gun round". Six houses carry a
+     * breachable elevation, the reach is 3.4 m, the hole is 7.2 x 2.55 m, and a
+     * tank route passes 2.3 m from one of those walls.
+     *
+     * It is one call because `world` owns everything else: which elevation is
+     * breachable, whether this one is already open, whether the strength clears
+     * that wall's own bar, the visual swap, the collision masks and the rubble
+     * ramp. Null is the answer almost every time (nothing breachable within
+     * reach) and costs six vector subtractions.
+     *
+     * `peek`, not `get`, and cached: `match` must stay playable on a `world`
+     * that has no cache houses in it, and this runs inside a shell impact.
+     */
+    const world = this._world ?? (this._world = this.ctx.peek('world'));
+    const breach = world?.damageAt?.(at, 1) ?? null;
+    if (breach) {
+      tank.stats.breaches++;
+      console.info(
+        `[tank] ${tank.name} BREACHED ${breach.name ?? breach.id} — ` +
+          `${breach.holeW?.toFixed?.(1) ?? '?'}x${breach.holeH?.toFixed?.(1) ?? '?'} m ` +
+          `at ${at.x.toFixed(1)}, ${at.z.toFixed(1)}`
+      );
+    }
 
     // Muzzle blast, the tracer down range and the dust it kicks off the street.
     const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
@@ -2946,14 +3098,57 @@ export class Armour {
     const tank = e?.target;
     if (!tank?.isTank || !tank.alive) return;
     if (e.source && e.source.team === tank.team && !RULES.friendlyFire) return;
-    tank.lastHitBy = e.source ?? tank.lastHitBy;
+
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * ONE PENETRATING ROUND, THREE WOUNDS — DIAGNOSED, IMPLEMENTED, AND OFF
+     * ────────────────────────────────────────────────────────────────────────
+     * `physics.emitImpact` fires a `damage:dealt` for every face the solver
+     * crosses, and a box has two of them, so one round through the deck lands
+     * as three events on THE SAME part with the residual energy stepping down:
+     * 167.6 -> 119.6 -> 61.5. (The earlier "hull/deck/turret overlap" reading
+     * of the same numbers was wrong — every event carries `part: 'deck'`.)
+     * Effective multipliers, measured rather than multiplied out:
+     *
+     *     astern deck   x3.49   against the documented 1.70
+     *     glacis        x0.45   against 0.22
+     *     flank         x0.29   against 0.22
+     *
+     * The fix is one wound per round per hull, keeping the LARGEST event, which
+     * is the entry face — and it moves every TTK line in the file, so it is
+     * built and left OFF until the player has said which numbers he wants. It
+     * is one boolean: `ctx.peek('match').tank.oneWoundPerRound = true`, or
+     * `?onewound=1`. Everything the lethality work is tuned against is reported
+     * both ways by `_tankfight.mjs`.
+     *
+     * A ROUND IS (FRAME, SHOOTER) and that is exact rather than approximate:
+     * the three events are emitted synchronously from inside one `fireBullet`,
+     * and no shooter in this engine fires twice in one frame — `Agent._shoot`
+     * fires at most one round per `update`, and the player's `fireCooldown` is
+     * longer than a frame at every fire rate in `weapons/defs.js`.
+     */
     const amount = e.amount ?? 0;
+    if (this.oneWoundPerRound) {
+      const f = this.ctx.time.frame;
+      const src = e.source ?? null;
+      if (tank._woundFrame === f && tank._woundSource === src) {
+        tank.stats.dupes++;
+        return;
+      }
+      tank._woundFrame = f;
+      tank._woundSource = src;
+    }
+
+    tank.lastHitBy = e.source ?? tank.lastHitBy;
     tank.stats.rounds++;
     tank.stats.roundDmg += amount;
     // `part` is the collider's own, set in `_buildColliders` and carried
     // through by `physics` — which box a shooter is actually finding is the
     // whole content of the armour table, so it is counted rather than assumed.
-    if (e.part && tank.stats[e.part] !== undefined) tank.stats[e.part] += amount;
+    if (e.part && tank.stats[e.part] !== undefined) {
+      tank.stats[e.part] += amount;
+      tank.stats[PART_COUNT[e.part]]++;
+    }
     this._wound(tank, amount, e.source ?? null);
   }
 
@@ -2981,7 +3176,18 @@ export class Armour {
   _takeBlast(e) {
     if (!e?.position) return;
     const air = typeof e.source === 'string' && AIR_ORDNANCE.has(e.source);
-    const frag = typeof e.source === 'string' && FRAG_ORDNANCE.has(e.source);
+    /**
+     * A BOT'S FRAG IS A FRAG. `src/weapons/grenades.js` names itself in
+     * `source` because the PLAYER's grenade cannot carry an actor on this event
+     * without killing his own side; `AiSystem._updateGrenades` CAN and does,
+     * because that is how a bot gets the kill — so its payload named no
+     * ordnance at all and fell through to `EXPLOSION_MUL`. Measured: 162
+     * against the hull where the player's identical frag was worth 433.
+     * `kind` is the field that says what it is without taking the attacker off
+     * the payload, and either channel is accepted here.
+     */
+    const frag = e.kind === 'grenade' ||
+      (typeof e.source === 'string' && FRAG_ORDNANCE.has(e.source));
     for (const tank of this.tanks) {
       if (!tank.alive) continue;
       if (e.source === tank) continue; // our own shell going off down the street
@@ -3030,7 +3236,12 @@ export class Armour {
   _wound(tank, amount, by) {
     if (!(amount > 0)) return;
     tank.health -= amount;
-    if (by) tank.lastHitBy = by;
+    if (by) {
+      tank.lastHitBy = by;
+      // WHEN, so the crew can turn on a man who is still shooting at it rather
+      // than on whoever happens to be nearest. @see `_acquire`.
+      tank.lastHitAt = this.ctx.time.elapsed;
+    }
     if (tank.health > 0) return;
     this._destroy(tank, tank.lastHitBy);
   }
@@ -3086,9 +3297,11 @@ export class Armour {
       `[tank] DESTROYED ${tank.id} at t=${this.ctx.time.elapsed.toFixed(1)}s — ` +
         `${tank.chunkCount} chunks, killed by ${by?.name ?? (by === undefined ? 'unknown' : 'the environment')} · ` +
         `alive ${st.liveT.toFixed(0)}s, ${st.rounds} rounds for ${st.roundDmg.toFixed(0)} ` +
-        `(hull ${st.hull.toFixed(0)} / turret ${st.turret.toFixed(0)} / deck ${st.deck.toFixed(0)}), ` +
+        `(hull ${st.nHull}r/${st.hull.toFixed(0)} · turret ${st.nTurret}r/${st.turret.toFixed(0)} · ` +
+        `deck ${st.nDeck}r/${st.deck.toFixed(0)}${st.dupes ? ` · ${st.dupes} dupes dropped` : ''}), ` +
         `${st.frags} frags for ${st.fragDmg.toFixed(0)}, ${st.blasts} blasts for ${st.blastDmg.toFixed(0)}, ` +
         `${st.kills} kills, ${st.legs} legs driven, ${st.razed} props shelled off the map, ` +
+        `${st.breaches} walls breached, ` +
         `last standing off ${tank.targetZone ?? 'the cathedral'}`
     );
     this._announce(this.onImpact, tank);

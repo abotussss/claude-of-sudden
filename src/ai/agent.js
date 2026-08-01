@@ -52,6 +52,25 @@ const STATE = {
 export { STATE };
 
 /**
+ * HOW CLOSE A MAN HAS TO BE TO PUT A FRAG ON A HULL, and it is a narrower
+ * window than the one he throws at a man through.
+ *
+ * The floor is a metre and a half further out than the anti-personnel one
+ * because the tank is 6.9 m long and the throw is aimed at the ENGINE DECK
+ * (`aimPoint`), which is at the far end of it — a man at 6 m from the hull
+ * centre is standing on the thing he is lobbing at. The ceiling is 26 rather
+ * than the 20-34 an archetype's `range` buys, because a 3.3 m wide target does
+ * not need the arc solved as finely as a man does and six frags have to come
+ * from six DIFFERENT men (one grenade each, 16-34 s before the next).
+ *
+ * Lives here rather than in `index.js` so `AiSystem.armourWorth` and
+ * `Agent._combat` cannot disagree about it; `index.js` imports it from this
+ * file, which it already imports.
+ */
+export const ARMOUR_FRAG_MIN = 7.5;
+export const ARMOUR_FRAG_MAX = 26;
+
+/**
  * PERSONALITY — and why one `skill` scalar was not enough.
  *
  * `skill` says how well a man SHOOTS: cone, tracking rate, reaction, settle. It
@@ -392,8 +411,19 @@ export class Agent {
     this.hasTarget = false;
     this.targetVisible = false;
     this.target = null;
-    /** The actual hostile being engaged: another Agent, or the player system. */
+    /**
+     * The actual hostile being engaged: another Agent, the player system — or,
+     * since the armour stopped being scenery, a vehicle (`isVehicle === true`),
+     * which is neither and has no head, no chest and no hit zones.
+     */
     this.targetActor = null;
+    /**
+     * WHAT HE MAY DO ABOUT A HULL, written by `AiSystem.pickVisibleHostile` on
+     * every selection: 0 nothing (and then it is never his target), 1 the deck
+     * is presented so a rifle is worth firing, 2 only a frag is. It is 0 for
+     * every man on a map with no armour on it. @see `AiSystem.armourWorth`.
+     */
+    this.armourWorth = 0;
     /** Rotating start index for the line-of-sight budget in pickVisibleHostile. */
     this._scanCursor = this.id % 7;
     this.lastKnown = new THREE.Vector3();
@@ -1391,6 +1421,32 @@ export class Agent {
     const sq = this.squad;
     const tr = this.traits;
     const dist = this.position.distanceTo(target);
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * THE THING HE IS FIGHTING IS A TANK — three gates, and two of them are
+     * "hold your fire"
+     * ══════════════════════════════════════════════════════════════════════
+     * `AiSystem.armourWorth` has already decided he has a shot worth taking or
+     * this hull would not be his target at all. What it cannot decide is what
+     * he does with the trigger, and the bench says the wrong answer is loud:
+     * 447 rounds into the glacis against the 150 he carries. So
+     *
+     *   • he fires only on `armourWorth === 1`, which is "the engine deck is
+     *     presented" and nothing else;
+     *   • he does not put SUPPRESSING fire on a last known position — the whole
+     *     point of covering fire is that the man behind the wall might be hit
+     *     and might flinch, and a tank does neither;
+     *   • his frag is thrown through the armour window rather than the
+     *     anti-personnel one, and it is NOT rationed by the squad.
+     *
+     * That last one is the deliberate opening. `Squad.requestGrenade` exists so
+     * a fire team does not put four frags through one window, and it is exactly
+     * right for that; against a hull that takes SIX at contact it would be the
+     * difference between a squad killing a tank and a squad watching one. A man
+     * still throws one grenade every 16-34 s and still has to be handed the
+     * next by a cache, so the ration that matters is still there.
+     */
+    const armour = this.targetActor?.isVehicle === true;
 
     /**
      * WOUNDED: fall back — at a threshold that is his own. 18 HP for the boldest
@@ -1621,7 +1677,7 @@ export class Agent {
        * rather than a free kill, and he moves slower while he does it.
        */
       const shootMoving = tr.exposure > 0.5 && this.targetVisible && this.hasTarget
-        && dist < this.weaponRange;
+        && dist < this.weaponRange && (!armour || this.armourWorth === 1);
       this.desiredSpeed = shootMoving ? 2.6 + tr.aggression * 1.2 : 4.3;
       this.crouch = false;
       this.wantFire = shootMoving;
@@ -1666,7 +1722,8 @@ export class Agent {
       }
       this.crouch = this.cover ? !this.cover.high || !this.peeking : false;
       this.aimWeight = this.peeking ? 1 : 0.55;
-      this.wantFire = this.peeking && this.targetVisible && this.hasTarget && dist < this.weaponRange;
+      this.wantFire = this.peeking && this.targetVisible && this.hasTarget && dist < this.weaponRange
+        && (!armour || this.armourWorth === 1);
       /**
        * SUPPRESSING FIRE at the last known spot without a clean shot: a flat 35 %
        * coin flip for everybody became trigger discipline. A sprayer hoses the
@@ -1675,7 +1732,7 @@ export class Agent {
        * "もっと戦争らしく撃ち合いまくって" asks for and it costs the player nothing,
        * because rounds into a wall are rounds not into him.
        */
-      if (!this.wantFire && this.hasTarget && this.lastKnownAge < 2.6 && this.peeking) {
+      if (!this.wantFire && !armour && this.hasTarget && this.lastKnownAge < 2.6 && this.peeking) {
         this.wantFire = this.rng.float() < 0.12 + (1 - tr.trigger) * 0.62;
         // Rounds into a window nobody is holding are only useful if somebody
         // knows they are covering fire, so this one is on the net too — at the
@@ -1731,15 +1788,20 @@ export class Agent {
     }
 
     // grenade when the player is pinned and we have line of fire
+    //
+    // …or when the thing in front of him is armour, on the window above and
+    // out of the squad's ration. @see the `armour` note at the top of `_combat`.
+    const fragLo = armour ? ARMOUR_FRAG_MIN : 6 + (1 - tr.aggression) * 5;
+    const fragHi = armour ? ARMOUR_FRAG_MAX : 20 + tr.range * 0.4;
     if (
       this.hasGrenade &&
       this.grenadeCooldown <= 0 &&
       // A man who fights at 10 m will throw at 7; one who fights at 35 will not
       // throw at all until you are inside his window.
-      dist > 6 + (1 - tr.aggression) * 5 &&
-      dist < 20 + tr.range * 0.4 &&
+      dist > fragLo &&
+      dist < fragHi &&
       this.lastKnownAge < 1.5 &&
-      (!sq || sq.requestGrenade(this))
+      (armour || !sq || sq.requestGrenade(this))
     ) {
       this._throwGrenade(target);
     }
@@ -2496,6 +2558,7 @@ export class Agent {
     this.working = null;
     this.objective = null;
     this.targetActor = null;
+    this.armourWorth = 0;
     this.wantFire = false;
     this.animator.enabled = false;
     this.ai.cover?.release(this.id);

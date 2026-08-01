@@ -54,10 +54,33 @@ import { SoldierMaterials, TEAM_RIM, TEAM_DRESS } from './textures.js';
 import { buildSoldier, resolveMaterials, MATERIAL_SLOTS, VARIANTS } from './soldier.js';
 import { RIG } from './rig.js';
 import { NavGrid, CoverMap } from './nav.js';
-import { Agent, STATE, drawPersona } from './agent.js';
+import { Agent, STATE, drawPersona, ARMOUR_FRAG_MIN, ARMOUR_FRAG_MAX } from './agent.js';
 import { Squad } from './squad.js';
 import { Radio } from './radio.js';
 import { GroundShadows } from './grounding.js';
+
+/**
+ * THE ARMOUR CONSTANTS, all in the hull's own frame and all read off the
+ * collider boxes `Armour._buildColliders` registers. @see `AiSystem.armourWorth`
+ * for what each one is doing and for the derivation of `DECK_PLUNGE`.
+ */
+/** Aim point height above the tank's ground origin — the deck's rear-top. */
+const DECK_AIM_Y = 2.18;
+/** …and how far astern of the origin it sits. */
+const DECK_REAR = 3.05;
+/** Metres astern of the origin the clear rear cone begins (hull tail is 3.2). */
+const DECK_ASTERN = 3.4;
+/** Half-width of that cone where it begins. It widens at ~39 degrees. */
+const DECK_HALF_W = 1.9;
+/** Slope a plunging shot needs to clear the turret roof. 0.37 m over 1.1 m. */
+const DECK_PLUNGE = 0.37 / 1.1;
+/**
+ * A MAN IN YOUR FACE BEATS A TANK DOWN THE STREET. `pickVisibleHostile` takes
+ * the nearest thing it can see; scaling a hull's distance up by this makes the
+ * armour lose every tie and win only when it is genuinely the nearer problem —
+ * a hull at 20 m beats a rifleman at 27 m, and does not beat one at 25 m.
+ */
+const ARMOUR_BIAS = 1.35;
 
 export class AiSystem {
   static id = 'ai';
@@ -172,6 +195,31 @@ export class AiSystem {
     /** Actors hostile to team i, rebuilt at most once per frame. */
     this._hostiles = [[], []];
     this._hostileFrame = -1e9;
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * NON-`Agent` HOSTILES — the armour, and the reason it was scenery
+     * ──────────────────────────────────────────────────────────────────────
+     * `hostilesOf` built its list from `this.agents` plus the local player, and
+     * `Agent.target` only ever comes from that list. A tank is not an `Agent`,
+     * so MEASURED while a hull was on the field: a tank appeared in a hostile
+     * list 0 times and a bot aimed at one 0 times, across 273-321 man-samples
+     * inside `RULES.tankRange`. Every round any hull ever absorbed was a stray
+     * fired at a man standing beyond it — the `deck` damage column was 0 in
+     * every row of every match.
+     *
+     * The contract is deliberately the smallest thing that can be shot at:
+     *
+     *     { position:Vector3, alive:boolean, team:0|1,
+     *       isVehicle:true,            // opts in to the armour rules below
+     *       aimPoint:Vector3,          // WHERE to shoot it — @see `actorChest`
+     *       yaw:number }               // its heading — @see `armourWorth`
+     *
+     * `match` owns the roster, so it hands the LIVE ARRAY over once
+     * (`this.ai.vehicles = this.tank.tanks`) and every entry's `alive` flag does
+     * the rest: a parked hull is `alive:false` and is simply not in the list.
+     * Nothing here is allocated per frame and nothing here reaches into `match`.
+     */
+    this.vehicles = null;
     /**
      * Which side wears each appearance, so the team rim can be resolved (see
      * TEAM_RIM in textures.js). A variant's materials are shared by every actor
@@ -687,9 +735,27 @@ export class AiSystem {
     return { rounds, grenade };
   }
 
-  /** Chest position of any actor — what perception aims at. Writes into `out`. */
+  /**
+   * Chest position of any actor — what perception aims at. Writes into `out`.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * A TANK HAS NO HEAD, SO IT CANNOT HAVE A CHEST EITHER
+   * ──────────────────────────────────────────────────────────────────────────
+   * Every aiming path in this subsystem funnels through here — the line of
+   * sight test in `_sightTo`, the `lastKnown` a man walks to and suppresses,
+   * and the point `Agent._shoot` lerps the muzzle onto. All three assumed a
+   * humanoid: `position.y + eyeHeight - 0.22`.
+   *
+   * `aimPoint` is the BODY-SHOT SOLUTION and the owner keeps it: `Armour._pose`
+   * writes the world position of the hull's ENGINE DECK into it once a frame,
+   * on the matrices it has already updated. That is not a decoration — it is
+   * the only part of the tank a rifle can do anything to (`PART_MUL` 1.7
+   * against the glacis's 0.22), and it is why `armourWorth` can then be a
+   * question about geometry rather than about hit points.
+   */
   actorChest(actor, out) {
     if (!actor) return null;
+    if (actor.aimPoint) return out.copy(actor.aimPoint);
     if (actor.isPlayer === true) {
       const p = actor.position;
       return out.set(p.x, p.y + 1.35, p.z);
@@ -716,8 +782,106 @@ export class AiSystem {
         const t = this.teamOf(p) === 1 ? 1 : 0;
         this._hostiles[1 - t].push(p);
       }
+      /**
+       * …AND THE ARMOUR, ON EXACTLY THE SAME TERMS. `alive` is the whole gate:
+       * `Armour._roll` sets it true as the hull comes out of its pocket and
+       * `_park`/`_destroy` set it false, so a hull that is not on the field is
+       * not in anybody's list and this loop is over an empty-or-two array.
+       * `targetable` costs one undefined compare and is honoured so a future
+       * spawn-protected vehicle behaves like a spawn-protected man.
+       */
+      const veh = this.vehicles;
+      if (veh) {
+        for (let i = 0; i < veh.length; i++) {
+          const v = veh[i];
+          if (!v || v.alive !== true || !this.targetable(v)) continue;
+          const t = v.team === 1 ? 1 : 0;
+          this._hostiles[1 - t].push(v);
+        }
+      }
     }
     return this._hostiles[team === 1 ? 1 : 0];
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * IS THIS SHOT WORTH TAKING? — the whole anti-armour policy, in geometry
+   * ══════════════════════════════════════════════════════════════════════════
+   * 「グレネードや銃弾である程度ダメージ入れたら壊す（ただし簡単に壊れたら面白くない）」
+   *
+   * Putting a hull in the hostile list is not the same as telling thirty men to
+   * shoot it, and the difference is the difference between a fight and a farce.
+   * The bench (`_tankttk.mjs`, real `fireBullet` at the real boxes) is:
+   *
+   *     M4 (17) into the GLACIS   447 rounds  — a man carries 150
+   *     M4 (17) into the DECK      58 rounds  — a magazine and a half
+   *     bolt (125) into the DECK    8 rounds
+   *     one frag ON the hull        1/6 of full health  (`FRAG_SHARE`)
+   *
+   * A RIFLEMAN EMPTYING MAGAZINES INTO A GLACIS HE CANNOT HURT IS WORSE
+   * BEHAVIOUR THAN IGNORING IT. He is not fighting, he is not taking the point,
+   * and he is announcing his position to a coaxial machine gun for nothing. So
+   * a bot may only make the hull its target when one of exactly three things is
+   * true, and every one of them is a real shot:
+   *
+   *   1 — THE DECK IS PRESENTED. Not "is behind it" in the loose sense: the
+   *       three colliders are `hull` (z -3.2..3.4, top 2.15), `turret`
+   *       (z -2.0..1.4, top 2.55) and `deck` (z -3.3..-0.7, y 1.45..2.25), and
+   *       `Armour`'s `aimPoint` sits at the deck's REAR-TOP, local (0, 2.18,
+   *       -3.05) — the one spot on it that is astern of the turret and above
+   *       the hull roof. From there the two ways to have a line are ASTERN
+   *       (behind the tail, inside a cone that starts at the hull's rear
+   *       corners) and PLUNGING (high enough that the ray clears the turret's
+   *       2.55 m roof on its way down). The plunge threshold is derived, not
+   *       tuned: the ray must be above 2.55 where it crosses the turret's rear
+   *       face 1.1 m short of the aim point, which is
+   *       `h > 2.18 + (0.37/1.1) * (forward + 3.05)`.
+   *   2 — HE HAS A FRAG AND IS INSIDE THROWING RANGE. Six frags at contact kill
+   *       it and a man carries one at a time, so this is a SQUAD deciding to
+   *       deal with the tank, which is the 「簡単に壊れたら面白くない」 half.
+   *   3 — nothing. He goes on fighting men, exactly as he did before.
+   *
+   * NO MANOEUVRE IS ORDERED, and that is a decision rather than an omission.
+   * Sending men round the back of a hull whose coax already scores 12-27 kills
+   * a match is feeding it: the walk is across the open, in front of the gun,
+   * and the reward at the end of it is a 58-round burst. What arrives at the
+   * deck instead is the men who were ALREADY there — the hull drives out of its
+   * own spawn towards the cathedral, so everyone it has driven past is astern
+   * of it — plus the roof nests `world.features` puts on every reachable roof,
+   * which clause 1's plunge term is written for. `Agent`'s own FLANK is
+   * untouched and still goes wide of its own accord.
+   *
+   * Called once per candidate per selection (twice a second-ish per man, on
+   * `pickVisibleHostile`'s rotating cursor), and it is arithmetic — no ray, no
+   * allocation.
+   *
+   * @returns 0 ignore it · 1 shoot it (the deck is there) · 2 frag it
+   */
+  armourWorth(agent, v) {
+    if (!agent || !v || v.alive !== true) return 0;
+    const p = v.position;
+    const dx = agent.position.x - p.x;
+    const dz = agent.position.z - p.z;
+    const d = Math.hypot(dx, dz);
+
+    /* ---- 1. the deck ------------------------------------------------- */
+    if (d < agent.weaponRange) {
+      const yaw = v.yaw ?? 0;
+      const s = Math.sin(yaw);
+      const c = Math.cos(yaw);
+      // The shooter, in the hull's own frame: +z ahead of it, +x to its right.
+      const fz = dx * s + dz * c;
+      const fx = dx * c - dz * s;
+      if (fz < -DECK_ASTERN && Math.abs(fx) < DECK_HALF_W + (-fz - DECK_ASTERN) * 0.8) return 1;
+      const h = agent.position.y + agent.eyeHeight - p.y;
+      if (h > DECK_AIM_Y + DECK_PLUNGE * Math.max(0, fz + DECK_REAR)) return 1;
+    }
+
+    /* ---- 2. the frag ------------------------------------------------- */
+    if (agent.hasGrenade && agent.grenadeCooldown <= 0 &&
+        d > ARMOUR_FRAG_MIN && d < ARMOUR_FRAG_MAX) return 2;
+
+    return 0;
   }
 
   /**
@@ -747,14 +911,21 @@ export class AiSystem {
     const cone = agent.hasTarget ? -0.2 : agent.viewCos - agent.alertness * 0.25;
 
     let best = null;
-    let bestD = Infinity;
+    /**
+     * SCORE, NOT DISTANCE, because a hull is not chosen on the same terms as a
+     * man: `ARMOUR_BIAS` pushes it down the list and `armourWorth` can keep it
+     * off the list altogether. Everything else is unchanged — for a map with no
+     * armour on it every score IS the distance and this picks what it always
+     * picked.
+     */
+    let bestScore = Infinity;
     const cur = agent.targetActor;
     if (cur && cur.alive !== false && cur.dead !== true && this.targetable(cur) &&
         this.isHostile(agent, cur)) {
       const d = this._sightTo(agent, cur, eye, fx, fz, cone);
-      if (d >= 0) {
+      if (d >= 0 && (cur.isVehicle !== true || this.armourWorth(agent, cur) > 0)) {
         best = cur;
-        bestD = d;
+        bestScore = cur.isVehicle === true ? d * ARMOUR_BIAS : d;
       }
     }
     let checks = 0;
@@ -762,13 +933,26 @@ export class AiSystem {
       const t = list[(agent._scanCursor + k) % n];
       if (t === cur) continue;
       checks++;
+      // The armour test is arithmetic and the sight test is a ray, so the cheap
+      // one goes first: a hull nobody has a shot on costs no line of sight.
+      if (t.isVehicle === true && this.armourWorth(agent, t) <= 0) continue;
       const d = this._sightTo(agent, t, eye, fx, fz, cone);
-      if (d >= 0 && d < bestD) {
+      if (d < 0) continue;
+      const score = t.isVehicle === true ? d * ARMOUR_BIAS : d;
+      if (score < bestScore) {
         best = t;
-        bestD = d;
+        bestScore = score;
       }
     }
     agent._scanCursor = (agent._scanCursor + 2) % n;
+    /**
+     * WHAT HE MAY DO ABOUT IT, cached on the man for `Agent._combat` — which is
+     * the half of the policy this file cannot enforce, because "shoot" and
+     * "throw" are decisions about a trigger and a pouch rather than about a
+     * target list. 0 for everything that is not armour, so no other code path
+     * has to know the field exists.
+     */
+    agent.armourWorth = best?.isVehicle === true ? this.armourWorth(agent, best) : 0;
     return best;
   }
 
@@ -1491,6 +1675,22 @@ export class AiSystem {
         radius: 6.5,
         damage: 120,
         source: g.agent,
+        /**
+         * WHAT IT IS, said out loud — and it is not cosmetic. `Armour._takeBlast`
+         * recognised a frag by `source === 'grenade'`, which is the string
+         * `src/weapons/grenades.js` publishes because the PLAYER's grenade
+         * cannot carry an actor on this event without killing his own side. A
+         * BOT's grenade can and does carry one (that is how it gets kill
+         * credit), so it matched none of the ordnance sets and fell through to
+         * the generic `EXPLOSION_MUL` of 1.35: 120 x 1.35 = 162 against the
+         * hull, where the player's identical frag was worth 433 through
+         * `fragMul`. Sixteen bot frags to kill a tank against the player's six,
+         * for the same weapon, measured — and this is the field that closes it
+         * WITHOUT taking `source` (and therefore the kill) off the payload.
+         *
+         * Additive. Nothing else in the engine reads `kind` on an explosion.
+         */
+        kind: 'grenade',
       });
       this.phys?.removeRigidBody(g.body);
       this.root.remove(g.mesh);

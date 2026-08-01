@@ -571,6 +571,28 @@ export class MatchSystem {
     this.tank.enemies = (team, out) => this._tankEnemies(team, out);
     this.tank.onKill = (t, by) => this._onTankKill(t, by);
     /**
+     * ──────────────────────────────────────────────────────────────────────
+     * …AND THE OTHER DIRECTION, WHICH IS THE ONE NOBODY HAD WIRED
+     * ──────────────────────────────────────────────────────────────────────
+     * `tank.enemies` above tells the CREW who to shoot. Nothing told the
+     * infantry, and `AiSystem.hostilesOf` builds its list from `ai.agents` plus
+     * the local player — a tank is not an `Agent`, so it was in nobody's list
+     * and `Agent.target` only ever comes from that list. Measured over three
+     * matches: a tank appeared in a hostile list 0 times, a bot aimed at one 0
+     * times across 273-321 man-samples inside `RULES.tankRange`, the `deck`
+     * damage column was 0 in every row, and in 3 of 4 matches NEITHER HULL WAS
+     * EVER DESTROYED while scoring 12-27 kills apiece. Bots treated a tank as
+     * scenery because nothing had ever shown them one.
+     *
+     * The LIVE ARRAY is handed over rather than copied per round: every hull's
+     * own `alive` flag is exactly "out of its pocket and shootable", and
+     * `hostilesOf` reads it. So there is nothing to keep in step — `_roll`,
+     * `_park`, `_destroy` and `reset` already move the only bit that matters.
+     * `ai` owns what it does with them (`AiSystem.armourWorth`); `match` owns
+     * only the fact that these two objects are on the map.
+     */
+    this.ai.vehicles = this.tank.tanks;
+    /**
      * THE ANNOUNCEMENT, and the reason it is wired here rather than inside the
      * three weapons.
      *
@@ -989,6 +1011,25 @@ export class MatchSystem {
     this.strafe?.reset();
     // Both hulls back in their pockets, invisible, colliders off, wreck hidden.
     this.tank?.reset();
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * AND THE CACHE HOUSES GET THEIR WALLS BACK
+     * ──────────────────────────────────────────────────────────────────────
+     * `world.breachAll(down)` is documented as "the round reset, and
+     * `?breach=down`" and NOTHING IN `match` HAS EVER CALLED IT — so the first
+     * shell that took an elevation off a cache house took it off for the rest
+     * of the SESSION, through every subsequent round and match. It is the exact
+     * counterpart of the three lines above it and of `_setCathedralRazed(false)`
+     * at the top of this method: the town is whole again, and that has to
+     * include the six houses that hold `world.features`, because a breached
+     * house is a house with one fewer reason to go indoors.
+     *
+     * `breachAll` is idempotent and returns how many it actually put back, so
+     * the ordinary round — where nobody breached anything — is six boolean
+     * compares and no log line.
+     */
+    const restored = this.world?.breachAll?.(false) ?? 0;
+    if (restored) console.info(`[match] ${restored} breached wall(s) rebuilt for the new round`);
     /**
      * THE DROP GOES BACK IN ITS BOX WITH EVERYTHING ELSE. A new match is a new
      * scoreline, so both sides get their one sortie back — and any canopy still
@@ -4781,6 +4822,9 @@ export class MatchSystem {
     }
     if (this.weapons) this.weapons.locked = false;
     if (this.ai) this.ai.combatEnabled = true;
+    // The hulls are about to stop existing; a stale array in `ai.hostilesOf`
+    // would be a list of things nobody may shoot at and nothing may move.
+    if (this.ai && this.ai.vehicles === this.tank?.tanks) this.ai.vehicles = null;
     this.bomb?.dispose();
     this.ammoDrops?.dispose();
     this.marks?.dispose();
