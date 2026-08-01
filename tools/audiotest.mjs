@@ -353,6 +353,159 @@ async function sampleOrNull(p) {
 }
 
 /* ==================================================================== */
+/* --collapse: THE CATHEDRAL, AND WHAT IT DOES TO THE POOL              */
+/* ==================================================================== */
+/**
+ * 「大聖堂破壊はもっと音大きく激しくして」
+ *
+ * The collapse is the one moment in a match where the emitter pool is already
+ * spoken for: measured, the salvo holds sixteen of the field's slots when it
+ * fires, and the render governor may have the field down to twenty-four. Adding
+ * three long voices to that is exactly the kind of change that has silenced this
+ * game before, so it gets its own probe rather than being inferred from a
+ * firefight average.
+ *
+ * It forces the event through `match._beginCathedralEvent` — the same door the
+ * visual probes use — and samples the pool at 20 Hz across the whole 22 second
+ * beat sheet, printing the salvo, the collapse and the settle as one trace with
+ * the three new voices marked. What has to be true afterwards: the collapse
+ * voices played, nothing was dropped, and the governor came back to full.
+ *
+ *   node tools/audiotest.mjs --collapse [--url=…] [--scale=1]
+ */
+if (args.collapse) {
+  const CSCALE = Number(args.scale ?? 1);
+  await page.evaluate(({ scale, bare }) => {
+    const e = window.__ENGINE__;
+    const a = e.ctx.peek('audio');
+    const rec = [];
+    // `--bare` is the CONTROL: the same event, the same match, without the three
+    // new voices, so what they cost the pool is a difference rather than a claim.
+    window.__CBARE__ = !!bare;
+    window.__CT__ = rec;
+    const played = { tear: 0, sub: 0, bell: 0, tail: 0, rubble: 0, settle: 0 };
+    window.__CPLAY__ = played;
+    // Count what `match` actually asks for, at the moment it asks — the only way
+    // to tell "the voice was refused" from "the event never called for it".
+    const orig = a.play.bind(a);
+    /**
+     * INJECT THE THREE NEW VOICES WHERE THE COLLAPSE WILL PLAY THEM.
+     *
+     * `src/match` does not call them yet — it asked for them to exist and is
+     * wiring its side separately — so measuring the pool without them would
+     * measure the old event and prove nothing about the new one. The first
+     * `strike_tail` of the raze is the collapse frame (the caller sends it at
+     * level 1.8, far above the 1.25 an ordinary site uses), so the three are
+     * fired at that instant, at that position, exactly as the caller intends:
+     * the bed and the sub together, the bell a beat later as the tower goes.
+     */
+    let injected = false;
+    a.play = (kind, pos, opts) => {
+      if (kind === 'collapse_tear') played.tear++;
+      else if (kind === 'collapse_sub') played.sub++;
+      else if (kind === 'collapse_bell') played.bell++;
+      else if (kind === 'strike_tail') played.tail++;
+      else if (kind === 'strike_rubble') played.rubble++;
+      else if (kind === 'strike_settle') played.settle++;
+      const r = orig(kind, pos, opts);
+      if (!window.__CBARE__ && !injected && kind === 'strike_tail' && (opts?.level ?? 0) >= 1.5 && pos) {
+        injected = true;
+        const at = { x: pos.x, y: pos.y, z: pos.z };
+        orig('collapse_tear', at, { dur: 7, size: 1 });
+        orig('collapse_sub', at, { dur: 2.0 });
+        orig('collapse_bell', at, { strikes: 3, extraDelay: 0.9 });
+      }
+      return r;
+    };
+    window.__CSAMP__ = setInterval(() => {
+      const f = a.field;
+      if (!f) return;
+      const bus = { weapons: 0, foley: 0, voice: 0, ambience: 0 };
+      let coll = 0;
+      for (const em of f.emitters) {
+        if (em.free) continue;
+        bus[em.busName] = (bus[em.busName] ?? 0) + 1;
+        if (em.kindTag === 'collapse') coll++;
+      }
+      const w = a.watchdog;
+      rec.push({
+        t: +e.time.elapsed.toFixed(2),
+        act: f.stats.active, cap: f.stats.cap, coll,
+        wpn: bus.weapons, fol: bus.foley, voi: bus.voice, amb: bus.ambience,
+        dropped: f.stats.dropped, stolen: f.stats.stolen,
+        behind: +f.stats.behind.toFixed(2), deficit: +f.stats.deficit.toFixed(2),
+        outRms: +(w?.out.rms ?? 0).toFixed(6), outPeak: +(w?.out.peak ?? 0).toFixed(4),
+        deaf: +(a.mixer?.deafness ?? 0).toFixed(3),
+        duckA: +(a.mixer?.buses.ambience.duck.gain.value ?? 1).toFixed(3),
+        red: +(a.mixer?.reduction ?? 0).toFixed(1),
+        soft: w?.softRecoveries ?? -1, hard: w?.hardRecoveries ?? -1, pool: w?.poolDrains ?? -1,
+        errors: a.stats.errors,
+      });
+    }, 50);
+    e.time.scale = scale;
+  }, { scale: CSCALE, bare: !!args.bare });
+
+  // Let the match settle into `live` before dropping a cathedral on it, so the
+  // pool is carrying a real firefight rather than a freeze-time idle.
+  console.log('[audiotest] collapse: warming the match up …');
+  await page.waitForTimeout(45000);
+  const pre = await page.evaluate(() => {
+    const a = window.__ENGINE__.ctx.peek('audio');
+    return { voices: a.field.stats.active, cap: a.field.stats.cap, stolen: a.field.stats.stolen };
+  });
+  console.log('[audiotest] pool before the event:', JSON.stringify(pre));
+
+  const fired = await page.evaluate(() => {
+    const m = window.__ENGINE__.ctx.peek('match');
+    if (!m?._beginCathedralEvent) return false;
+    m._beginCathedralEvent(m.ctx.time.elapsed, 0.99);
+    return true;
+  });
+  console.log(`[audiotest] cathedral event opened: ${fired}`);
+  const t0 = await page.evaluate(() => window.__ENGINE__.time.elapsed);
+  await page.waitForTimeout(40000);
+
+  const rec = await page.evaluate(() => {
+    clearInterval(window.__CSAMP__);
+    return { rows: window.__CT__, played: window.__CPLAY__ };
+  });
+  const rows = rec.rows.filter((r) => r.t >= t0 - 3);
+  console.log('\n[audiotest] THE COLLAPSE — pool at 20 Hz, event-relative seconds');
+  console.log('    t   act  cap coll  wpn  fol  voi  amb   drop  stol  behind  outRms   outPk   deaf duckA  comp');
+  let prev = null;
+  for (const r of rows) {
+    const et = r.t - t0;
+    // Print every 0.5 s, and EVERY row where something changed in the pool —
+    // the whole event is four seconds wide and a fixed stride would miss it.
+    const interesting = !prev || r.coll !== prev.coll || r.dropped !== prev.dropped ||
+      Math.abs(r.act - prev.act) > 6 || r.cap !== prev.cap;
+    if (!interesting && prev && r.t - prev.t < 0.5) continue;
+    prev = r;
+    console.log(
+      `${String(et.toFixed(2)).padStart(6)} ${String(r.act).padStart(4)} ${String(r.cap).padStart(4)} ` +
+      `${String(r.coll).padStart(4)} ${String(r.wpn).padStart(4)} ${String(r.fol).padStart(4)} ` +
+      `${String(r.voi).padStart(4)} ${String(r.amb).padStart(4)} ${String(r.dropped).padStart(6)} ` +
+      `${String(r.stolen).padStart(5)} ${String(r.behind).padStart(7)} ${r.outRms.toExponential(2)} ` +
+      `${r.outPeak.toFixed(4)} ${r.deaf.toFixed(2)} ${r.duckA.toFixed(3)} ${String(r.red).padStart(6)}`
+    );
+  }
+  const peak = rows.reduce((m, r) => Math.max(m, r.outPeak), 0);
+  const maxColl = rows.reduce((m, r) => Math.max(m, r.coll), 0);
+  const maxAct = rows.reduce((m, r) => Math.max(m, r.act), 0);
+  const minCap = rows.reduce((m, r) => Math.min(m, r.cap), 999);
+  const endCap = rows[rows.length - 1]?.cap ?? 0;
+  const dropped = (rows[rows.length - 1]?.dropped ?? 0) - (rows[0]?.dropped ?? 0);
+  console.log(`\n  voices `+ JSON.stringify(rec.played));
+  console.log(`  collapse emitters held, peak ${maxColl}   field peak ${maxAct}   pool floor ${minCap}   pool at end ${endCap}`);
+  console.log(`  voices dropped across the event ${dropped}   output peak ${peak.toFixed(4)}`);
+  console.log(`  watchdog soft/hard/pool ${rows[rows.length - 1]?.soft}/${rows[rows.length - 1]?.hard}/${rows[rows.length - 1]?.pool}`);
+  console.log('\n[audiotest] final', JSON.stringify(await sampleOrNull(page)));
+  console.log('[audiotest] page errors', pageErrors.slice(0, 8));
+  await browser.close();
+  process.exit(0);
+}
+
+/* ==================================================================== */
 /* --dropout: BREAK THE GRAPH ON PURPOSE, AND TIME THE RECOVERY         */
 /* ==================================================================== */
 /**

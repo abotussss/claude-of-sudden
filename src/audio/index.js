@@ -45,6 +45,7 @@ import {
   distantFire, farGain,
 } from './weapons.js';
 import { tankGun } from './vehicle.js';
+import { collapseTear, collapseSub, collapseBell } from './collapse.js';
 import { BattleLayer } from './battle.js';
 import { AudioWatchdog } from './watchdog.js';
 import {
@@ -104,7 +105,40 @@ const BUS_FOR = {
   strike_rubble: 'weapons', strike_tail: 'weapons',
   strike_settle: 'weapons',
   strafe_cannon: 'weapons', strafe_walk: 'weapons',
+  /** A building failing. @see src/audio/collapse.js */
+  collapse_tear: 'weapons', collapse_sub: 'weapons', collapse_bell: 'weapons',
 };
+
+/**
+ * VOICES THAT MAY NOT BE EVICTED, and what they are worth against each other.
+ *
+ * `SpatialField.acquire` will only steal a voice whose priority is at most
+ * `pri + 0.25`, so a number here is a statement about what this sound is allowed
+ * to interrupt AND about what may interrupt it. The cathedral is the loudest
+ * event in a match and it plays into a field that the salvo has already filled —
+ * measured, sixteen of twenty-four emitters — so all three of its voices sit
+ * above everything, including a first-person gunshot. There are three of them,
+ * once a match, and if they lose their slots the event is silent.
+ */
+const COLLAPSE_PRIORITY = 0.995;
+
+/**
+ * Kinds that go through `_playCollapse`, and what each is worth when the caller
+ * does not say — MEASURED, not chosen.
+ *
+ * The first cut of these shipped at a flat 3.4 and was wrong in the one way that
+ * matters for 「大聖堂破壊はもっと音大きく激しくして」: rendered through the real mixer
+ * at 40 m, all three together peaked at 0.0666 against 0.1075 for the SINGLE
+ * `strike_tail` the event was already playing at level 1.8 / gain 4.2. Three new
+ * voices that between them are 4 dB under the voice they are supposed to be
+ * adding weight to is a quieter collapse, not a bigger one.
+ *
+ * At these gains, same render: tear 0.061, sub 0.121, bell 0.044, all three
+ * together 0.14 — against the player's own rifle at 0.0831 and the tank's main
+ * gun at 0.0502. The SUB is deliberately the largest of the three, because the
+ * missing thing was never loudness, it was the bottom two octaves.
+ */
+const COLLAPSE_KINDS = { collapse_tear: 6.2, collapse_sub: 6.6, collapse_bell: 4.6 };
 
 /** Finite Vector3-ish check — one NaN from any subsystem must not throw. */
 function isVec(p) {
@@ -233,6 +267,12 @@ export class AudioSystem {
 
     this.battle = null;
     this.watchdog = null;
+    /** Preallocated option bag for the collapse voices. @see _playCollapse */
+    this._collapseBag = {
+      dur: undefined, size: undefined, f0: undefined, strikes: undefined,
+      level: 1, gain: 5, maxDist: 640, occlusion: 0.12, send: undefined,
+      extraDelay: undefined, tag: 'collapse',
+    };
     /** How many times the graph has been rebuilt under it. @see _restartGraph */
     this.restarts = 0;
     this._offs = [];
@@ -688,6 +728,23 @@ export class AudioSystem {
           spacing: o.spacing, level: o.level,
         });
       case 'tankgun': return tankGun(actx, bank, rng, { when, distance: dist, level: o.level });
+      /**
+       * THE CATHEDRAL — three voices `src/match` asked for by name and could not
+       * make out of anything that existed. @see src/audio/collapse.js
+       *   collapse_tear  { dur, level, size }   the structure failing
+       *   collapse_sub   { dur, level }         the floor under the event
+       *   collapse_bell  { f0, level, strikes } the campanile's bell
+       */
+      case 'collapse_tear':
+        return collapseTear(actx, bank, rng, {
+          when, dur: o.dur, level: o.level, distance: dist, size: o.size,
+        });
+      case 'collapse_sub':
+        return collapseSub(actx, bank, rng, { when, dur: o.dur, level: o.level, distance: dist });
+      case 'collapse_bell':
+        return collapseBell(actx, bank, rng, {
+          when, f0: o.f0, level: o.level, distance: dist, strikes: o.strikes,
+        });
       case 'whizz': return bulletWhizz(actx, bank, rng, { when, miss: o.miss, gain: o.gain });
       case 'dryfire': return dryFire(actx, bank, rng, { when });
       case 'impact': return surfaceImpact(actx, bank, rng, { when, surface: o.surface, energy: o.energy });
@@ -846,6 +903,7 @@ export class AudioSystem {
     }
     opts = opts ?? {};
     const k = UI_ALIAS[kind] ?? kind;
+    if (COLLAPSE_KINDS[k] && position) return this._playCollapse(k, position, opts);
     if (position) {
       return this._playAt(k, position.x, position.y, position.z, opts,
         opts.bus ?? BUS_FOR[k] ?? 'foley', opts.priority ?? 0.5);
@@ -874,6 +932,52 @@ export class AudioSystem {
   playImpact(position, surface = 'concrete', energy = 1) {
     if (!isVec(position)) return false;
     return this._playAt('impact', position.x, position.y, position.z, { surface, energy }, 'foley', 0.55);
+  }
+
+  /**
+   * THE CATHEDRAL, WITH ITS OWN DEFAULTS — because getting them wrong is silent.
+   *
+   * `src/match` calls `audio.play('collapse_sub', pos, …)` and should not have to
+   * know that this pool has a priority order, that the attenuation curve is flat
+   * past 60 m so a distant event needs a gain of three rather than of one, or
+   * that a collapse must not be occluded by the building it IS. Those are mix
+   * facts and they live here; a caller that passes nothing gets the event the
+   * player asked for, and anything it does pass still wins.
+   *
+   * THE DUCK AND THE CONCUSSION ARE THE OTHER HALF OF 「もっと音大きく激しくして」.
+   * Loudness alone cannot make an event dominate a mix that is already at the
+   * limiter — a firefight, a salvo and seven dust columns are all playing. What
+   * makes it enormous is everything ELSE getting out of its way for a moment,
+   * which is what `_onExplosion` already does for a grenade and what nothing was
+   * doing for the biggest event in the match. It is applied on the SUB only, so
+   * it fires once, on the impact, and not three times across the walk down the
+   * nave.
+   *
+   * The concussion is deliberately modest and distance-scaled: the muffle is
+   * capped at 0.62 in the mixer and clears in ~4 s, and a player who has just
+   * had a cathedral land on him being briefly deafened is the effect working —
+   * but 「音が消える」 is a live complaint, so this asks for 0.34 at the very most
+   * and the watchdog is now watching the muffle anyway.
+   */
+  _playCollapse(kind, position, o) {
+    const dist = this.field.distanceTo(position.x, position.y, position.z);
+    const near = clamp(1 - dist / 140, 0, 1);
+    const bag = this._collapseBag;
+    bag.dur = o.dur; bag.size = o.size; bag.f0 = o.f0; bag.strikes = o.strikes;
+    bag.level = o.level ?? 1;
+    bag.gain = o.gain ?? COLLAPSE_KINDS[kind] ?? 5;
+    bag.maxDist = o.maxDist ?? 640;
+    bag.occlusion = o.occlusion ?? 0.12;
+    bag.send = o.send;
+    bag.extraDelay = o.extraDelay;
+    bag.tag = 'collapse';
+    const ok = this._playAt(kind, position.x, position.y, position.z, bag,
+      o.bus ?? BUS_FOR[kind] ?? 'weapons', o.priority ?? COLLAPSE_PRIORITY);
+    if (ok && kind === 'collapse_sub') {
+      this.mixer.duck(clamp(0.55 + near * 0.35, 0.55, 0.9), 0.5);
+      if (near > 0.08) this.mixer.concuss(Math.pow(near, 1.3) * 0.34);
+    }
+    return ok;
   }
 
   /**
@@ -1627,6 +1731,16 @@ export class AudioSystem {
       profile: WEAPON_PROFILES.lmg, rounds: 5, spacing: 0.09,
     });
     ev.emit('match:tank', { phase: 'fire', id: 'T1', team: 0, position: at(26, 0, -34) });
+    /**
+     * THE CATHEDRAL. In the storm because the `settled` phase of every air event
+     * was silent for weeks precisely because it was NOT in the storm: this gate
+     * fires one of everything through the real front door, and anything left out
+     * of it is a voice nobody proves runs until a player reports it missing.
+     */
+    const cath = at(-38, 2, 44);
+    this.play('collapse_tear', cath, { dur: 6, size: 1 });
+    this.play('collapse_sub', cath, { dur: 1.8 });
+    this.play('collapse_bell', cath, { strikes: 3 });
     return { ok: true, voices: this.field.stats.active, errors: this.stats.errors };
   }
 

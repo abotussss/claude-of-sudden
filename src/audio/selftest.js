@@ -32,6 +32,7 @@ import {
   WEAPON_PROFILES, weaponShot, bulletWhizz, dryFire, boltCycle, distantFire, farGain,
 } from './weapons.js';
 import { tankEngine, tankGun } from './vehicle.js';
+import { collapseTear, collapseSub, collapseBell } from './collapse.js';
 import { attenuationAt } from './spatial.js';
 import { remoteStepLevel } from './battle.js';
 import {
@@ -318,6 +319,37 @@ export async function runAudioSelfTest(opts = {}) {
       eng.stop(t + 2.2);
     });
   }
+
+  /**
+   * THE CATHEDRAL — 「大聖堂破壊はもっと音大きく激しくして」. Measured at the gain the
+   * shipped call actually uses (3.4, from `_playCollapse`) and through the real
+   * distance chain, so these can be read directly against the reference above:
+   * the player's own rifle at peak 0.0831 and the tank's main gun at 0.0502.
+   * The collapse of the map's centre has to be the biggest number on the page.
+   */
+  for (const d of [40, 120]) {
+    await push(`collapse:tear@${d}m`, 9, ({ bank, rng, mixer, t }) => {
+      atDist(mixer, collapseTear(mixer.actx, bank, rng, {
+        when: t, dur: 6, size: 1, distance: d,
+      }), 'weapons', d, 6.2);
+    });
+    await push(`collapse:sub@${d}m`, 5, ({ bank, rng, mixer, t }) => {
+      atDist(mixer, collapseSub(mixer.actx, bank, rng, { when: t, dur: 1.8, distance: d }), 'weapons', d, 6.6);
+    });
+    await push(`collapse:bell@${d}m`, 12, ({ bank, rng, mixer, t }) => {
+      atDist(mixer, collapseBell(mixer.actx, bank, rng, { when: t, strikes: 3, distance: d }), 'weapons', d, 4.6);
+    });
+  }
+  /** All three together, which is how it is actually played. */
+  await push('collapse:all@40m', 12, ({ bank, rng, mixer, t }) => {
+    atDist(mixer, collapseTear(mixer.actx, bank, rng, { when: t, dur: 6, size: 1, distance: 40 }), 'weapons', 40, 6.2);
+    atDist(mixer, collapseSub(mixer.actx, bank, rng, { when: t + 0.05, dur: 1.8, distance: 40 }), 'weapons', 40, 6.6);
+    atDist(mixer, collapseBell(mixer.actx, bank, rng, { when: t + 0.9, strikes: 3, distance: 40 }), 'weapons', 40, 4.6);
+  });
+  /** …against the voice it is replacing, at the level `match` had pushed it to. */
+  await push('collapse:was:strikeTail', 9, ({ bank, rng, mixer, t }) => {
+    atDist(mixer, strikeTail(mixer.actx, bank, rng, { when: t, level: 1.8 }), 'weapons', 40, 4.2);
+  });
 
   /* ---- foley ----------------------------------------------------- */
   const surfaces = ['concrete', 'metal', 'wood', 'dirt', 'sand', 'glass', 'water', 'foliage', 'fabric', 'flesh', 'rubber', 'plaster'];
