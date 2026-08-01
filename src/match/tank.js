@@ -7,7 +7,10 @@
  * A sortie is: a telegraph, an armoured vehicle that drives out of its own
  * side's end of the mid street under its own crew, acquires men on the other
  * side, shells them with a main gun and rakes them with a coaxial machine gun,
- * holds the ground it reached for `HOLD_TIME`, and reverses back out. It can be
+ * and holds the ground it reached FOR THE REST OF THE MATCH — 「戦車は登場したら
+ * 帰さないで 試合終了まで滞在させること」. There is no withdrawal and no despawn; the
+ * only way a hull leaves the field is destroyed. @see `_drive`'s `hold` branch
+ * for the measurement that killed the old sortie. It can be
  * killed the whole time, and killing it is worth `RULES.tankKillScore` to the
  * side that did it — which is 12 % of a domination win, so it is a play rather
  * than a trophy.
@@ -244,8 +247,15 @@ const PLOUGH_SLOW = 0.45;
 const SPEED_ADVANCE = 4.6;
 /** It slows down to shoot — a hull-down halt is what makes the gun readable. */
 const SPEED_FIGHT = 1.5;
+/** UNUSED since the hull stopped withdrawing. Kept so the shape of the drive
+ *  state machine still reads, and because a future "pull back when crippled"
+ *  would want exactly this number. @see `_drive`. */
 const SPEED_REVERSE = 3.4;
-/** Seconds it sits at the end of its run before reversing out. */
+/**
+ * Seconds on the clock when it reaches the end of its run. NOTHING ACTS ON IT
+ * any more — the hull holds until it is destroyed or the round resets — but it
+ * is still counted down so anything reading `tank.hold` sees a sane value.
+ */
 const HOLD_TIME = 30;
 /** Seconds of telegraph before the engine note becomes a tank in the street. */
 const TANK_LEAD = 6.0;
@@ -1814,15 +1824,38 @@ export class Armour {
         tank.state = 'hold';
       }
     } else if (tank.state === 'hold') {
+      /**
+       * ──────────────────────────────────────────────────────────────────────
+       * 「戦車は登場したら帰さないで 試合終了まで滞在させること」
+       * IT ARRIVES AND IT DOES NOT LEAVE
+       * ──────────────────────────────────────────────────────────────────────
+       * THIS IS WHY NOBODY HAD SEEN ONE, AND IT WAS MEASURED RATHER THAN
+       * ASSUMED. `_tanklife.mjs` over three matches, with the sortie fired by
+       * hand so it certainly happened:
+       *
+       *     seed 7    RED rolling@28.4  clear@93.5   BLUE rolling@28.4 clear@101
+       *     seed 12   RED rolling@29.7  DEAD@62.3    BLUE rolling@29.7 clear@100
+       *     seed 106  RED rolling@29.9  DEAD@50.1    BLUE rolling@29.9 clear@102
+       *
+       * Every hull that was not killed REVERSED OUT AND VANISHED about seventy
+       * seconds after it rolled, and `_park` hides the mesh and disables the
+       * colliders — so a player who happened to be on the far flank for that
+       * window had no way of ever knowing a tank had been on the map. Four of
+       * six hulls took 0 rounds and dealt 0 kills across 333 seconds: the
+       * armour was driving an empty street and then tidying itself away.
+       *
+       * So `hold` is now terminal. The ONLY exits from a live hull are
+       * `_destroy` and the round reset — there is no withdrawal, no despawn and
+       * no lifetime. `tank.hold` is left counting for anything that reads it,
+       * but nothing acts on it.
+       *
+       * IT STILL CANNOT BLOCK A CAPTURE POINT, which is the guarantee that had
+       * to survive this change: the hull is three `LAYER.SHOOT_ONLY` boxes, so
+       * A* never sees it however long it sits there, and the route ends 24 m
+       * off D (printed at boot). A permanent wreck is in neither a lane nor a
+       * circle. @see the header.
+       */
       tank.hold -= dt;
-      if (tank.hold <= 0) tank.state = 'withdraw';
-    } else if (tank.state === 'withdraw') {
-      tank.s -= SPEED_REVERSE * dt;
-      tank.wheelSpin += (SPEED_REVERSE * dt) / 0.44;
-      if (tank.s <= 0) {
-        tank.s = 0;
-        this._park(tank);
-      }
     }
   }
 
