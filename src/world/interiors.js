@@ -162,8 +162,16 @@ function nearestLegal(r, x, z, x0, z0, x1, z1, rad) {
   return null;
 }
 
-/** Tally of what the furnishing pass had to do to keep a room legal. */
+/**
+ * Tally of what the furnishing pass had to do to keep a room legal.
+ *
+ * `quiet` is for a caller that ASKS MORE THAN ONCE — the ruin's rubble mound
+ * tries three radii before it settles — so that one piece of furniture counts
+ * once and the "homeless" figure means what it says.
+ */
+let quiet = false;
 function tally(A, key) {
+  if (quiet) return;
   const s = A.furnishStats ?? (A.furnishStats = { kept: 0, nudged: 0, moved: 0, homeless: 0 });
   s[key]++;
 }
@@ -974,13 +982,17 @@ function furnishRuin(A, rng, r, cx, cz, w, d, m) {
   const mjx = rng.range(-1, 1);
   const mjz = rng.range(-1, 1);
   const mr0 = rng.range(1.4, 2.2);
-  let mr = mr0, mp = null;
-  for (const f of [1, 0.75, 0.55]) {
-    mr = mr0 * f;
+  const FS = [1, 0.75, 0.55];
+  let mr = mr0, mp = null, tried = 0;
+  quiet = true;                  // the heap is one piece however often it asks
+  for (; tried < FS.length; tried++) {
+    mr = mr0 * FS[tried];
     mp = shiftClear(A, r, cx + mjx, cz + mjz, x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5,
       mr * 1.5 * Math.SQRT1_2);
     if (mp) break;
   }
+  quiet = false;
+  tally(A, !mp ? 'homeless' : tried === 0 ? 'kept' : 'moved');
   if (mp) rubbleMound(A, rng, mp[0], y, mp[1], mr, 22);
   for (let i = 0; i < rng.int(3, 6); i++) {
     A.put('slab_shard', rng.range(x0 + 0.5, x1 - 0.5), y + 0.05, rng.range(z0 + 0.5, z1 - 0.5), rng.float() * 6.28, 1, [
