@@ -260,8 +260,46 @@ const STUCK_CLEAR = 0.9;
  * and turns for the objective, and it is deliberately generous — the lane's job
  * is to bend the approach, not to be arrived at.
  */
-const LANE_MIN = 24;
+/**
+ * 24 -> 14. MEASURED (`_clump.mjs`, three pinned seeds, 6.6 k man-samples), the
+ * pack is not at the point: 93 % of every man sitting in a seven-or-more circle
+ * was on the approach and only 7 % was inside twelve metres of a capture zone.
+ * What 24 bought was a hard collapse to one file for the last stretch of every
+ * route — and the offset already decays with the distance left (@see
+ * `_laneVia`), so at 14 m a fireteam is still four men across four metres of
+ * frontage rather than four men on one cell. Nothing under this is steered at
+ * all: taking a point is converging on it.
+ */
+const LANE_MIN = 14;
 const VIA_REACHED = 7;
+/**
+ * ──────────────────────────────────────────────────────────────────────────────
+ * A FIRETEAM IS A FRONTAGE, NOT A FILE.
+ * ──────────────────────────────────────────────────────────────────────────────
+ * The lane (`Squad.regroup`) gives each FIRETEAM its own way in. It said nothing
+ * about the four men inside one, and measured on the shipped build that is where
+ * the pack still came from: the worst circle of a run held 14 men and FOUR
+ * fireteams, so the unit of clumping had simply become the fireteam — four men
+ * on one via, one A* route and four adjacent standing cells.
+ *
+ * A seat is therefore worth its own lateral offset, on the same axis and by the
+ * same mechanism as the lane: seats 0-3 of a four-man team ride at -9, -3, +3,
+ * +9 m of the team's centre line. Four tracks six metres apart is a fireteam
+ * moving; it is also, deliberately, wider than the 8 m circle everybody is
+ * measured in only at its edges — this is spacing, not scattering, and the team
+ * is still one group arriving on one place.
+ */
+const SEAT_STEP = 6;
+/**
+ * The candidate ladder `_laneVia` walks, furthest along and widest first.
+ * `VIA_AHEAD` is METRES FURTHER ALONG HIS OWN LINE, not a fraction of what is
+ * left: the whole point is that the first via out of a spawn is sideways and
+ * close, so the side fans out in the first thirty metres instead of the last
+ * sixty. Module constants because a fireteam's way in may not allocate.
+ * @see `_laneVia`.
+ */
+const VIA_AHEAD = [30, 20, 44];
+const VIA_SCALE = [1, 0.7, 0.45];
 
 /**
  * ──────────────────────────────────────────────────────────────────────────────
@@ -408,6 +446,17 @@ export class Agent {
     this._via = new THREE.Vector3();
     this._hasVia = false;
     this._viaTimer = 0;
+    /**
+     * THE LANE'S OWN LINE, latched when the lane is taken and not re-aimed at
+     * every pick. @see `_laneVia` — without it the offset is measured from
+     * wherever the man is standing, which is a bearing and not a lane: it
+     * cannot open a gap that is already closed, so a whole side leaving one
+     * spawn pocket stays one side for the first sixty metres.
+     */
+    this._viaOrigin = new THREE.Vector3();
+    this._viaAxis = new THREE.Vector3();
+    this._hasAxis = false;
+    this._viaLane = 0;
     this._viaFor = new THREE.Vector3();
 
     /* ---------------- objective (owned by `match`) ---------------- */
@@ -1345,8 +1394,19 @@ export class Agent {
    */
   _laneVia(dest, dist) {
     const ft = this.fireteam;
-    if (!ft || ft.lane === 0 || dist < LANE_MIN) {
+    /**
+     * HIS OWN OFFSET IS HIS TEAM'S PLUS HIS SEAT'S. @see `SEAT_STEP`. A team on
+     * the centre lane is no longer a team with nothing to do: its four men take
+     * four tracks either side of the middle, which is the case the shipped build
+     * left as a file and the case most men are in (the ladder restarts per
+     * objective, so the biggest group on every side draws lane 0).
+     */
+    const seatOff = ft && ft.members.length > 1
+      ? (this.ftSeat - (ft.members.length - 1) * 0.5) * SEAT_STEP : 0;
+    const lane = ft ? ft.lane + seatOff : 0;
+    if (!ft || lane === 0 || dist < LANE_MIN) {
       this._hasVia = false;
+      this._hasAxis = false;
       return null;
     }
     const grid = this.ai.grid;
@@ -1362,29 +1422,98 @@ export class Agent {
     if (this._viaTimer > 0) return null;
     this._viaTimer = 2.5;
     const px = this.position.x, pz = this.position.z;
-    let ax = dest.x - px, az = dest.z - pz;
-    const L = Math.hypot(ax, az);
-    if (L < 1e-3) return null;
-    ax /= L;
-    az /= L;
-    // wider the further he has to go, and never wider than the lane asked for
-    const off = ft.lane * Math.min(1, L / 70);
-    const vx = px + ax * L * 0.55 - az * off;
-    const vz = pz + az * L * 0.55 + ax * off;
     const here = grid.nearest(px, pz, this.position.y, 3, OFFGRID_TOL);
     if (here < 0) return null;
-    const ci = grid.nearest(vx, vz, null, 6, Infinity, grid.comp[here]);
-    if (ci < 0) return null;
-    const wx = grid.worldX(ci % grid.nx), wz = grid.worldZ((ci / grid.nx) | 0);
-    // A via that snapped back onto the straight line is not a different way in.
-    const lateral = Math.abs(-az * (wx - px) + ax * (wz - pz));
-    if (lateral < 4) return null;
-    // …and one that is further from the objective than he is has turned him round
-    if (Math.hypot(dest.x - wx, dest.z - wz) > L * 1.1) return null;
-    this._via.set(wx, grid.floor[ci], wz);
-    this._viaFor.copy(dest);
-    this._hasVia = true;
-    return this._via;
+    const comp = grid.comp[here];
+
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * THE LANE HAS A LINE, AND IT IS LATCHED.
+     * ────────────────────────────────────────────────────────────────────────
+     * MEASURED on the shipped build: the worst circle of a run held 14 men, it
+     * sat 32 m from the nearest spawn point of a pocket 12 m in radius, and the
+     * walkable ground under it was 61 m wide. Not a choke, not a doorway, not
+     * the capture circle — a side leaving one gate at one moment. Every one of
+     * those twelve men already had a lane, a via and a destination, and their
+     * destinations were spread over 28 m of ground.
+     *
+     * The reason the gap never opened is that the offset was measured
+     * PERPENDICULAR TO THE LINE FROM WHERE HE IS STANDING NOW. That is a
+     * bearing, not a lane: a man 20 m out of the gate with 90 m still to go is
+     * sent to a via 50 m ahead and 20 m to the side, which is 22° off — so
+     * after those 20 m he has opened six metres on the man beside him, and the
+     * next pick re-measures from his new position and asks for the same 22°
+     * again. It converges on the objective correctly and never separates
+     * anybody early, which is exactly the frame the player screenshotted.
+     *
+     * So the line is taken ONCE, when the lane is first taken, and the via is a
+     * point ON IT: `off` metres to the side of the straight line from where he
+     * started to where he is going, `ahead` metres further along it than he
+     * has got. The first via is therefore SIDEWAYS AND CLOSE rather than
+     * forwards and far, the side fans out inside the first thirty metres, and
+     * because the line does not move there is no drift outward to correct — his
+     * lateral displacement approaches `off` and stays there.
+     */
+    if (!this._hasAxis || this._viaLane !== lane
+      || this._viaFor.distanceToSquared(dest) > 8 * 8) {
+      const dx0 = dest.x - px, dz0 = dest.z - pz;
+      const l0 = Math.hypot(dx0, dz0);
+      if (l0 < 1e-3) return null;
+      this._viaOrigin.copy(this.position);
+      this._viaAxis.set(dx0 / l0, 0, dz0 / l0);
+      this._viaLane = lane;
+      this._viaFor.copy(dest);
+      this._hasAxis = true;
+    }
+    const ax = this._viaAxis.x, az = this._viaAxis.z;
+    const ox = this._viaOrigin.x, oz = this._viaOrigin.z;
+    // how far along his own line he is, and how far along it the objective is
+    const s = (px - ox) * ax + (pz - oz) * az;
+    const axisLen = (dest.x - ox) * ax + (dest.z - oz) * az;
+    // A fight, a detour or a respawn can leave the line meaningless. Re-take it.
+    if (s < -6 || axisLen - s < LANE_MIN || Math.abs(-az * (px - ox) + ax * (pz - oz)) > 34) {
+      this._hasAxis = false;
+      return null;
+    }
+    // wider the further he has to go, and never wider than the lane asked for
+    const off = lane * Math.min(1, dist / 70);
+    /**
+     * ONE CANDIDATE WAS NOT ENOUGH, and that is measured rather than argued: on
+     * the shipped build only 31 % of live men held a lane at any moment. A
+     * street map has buildings in it, so a point fifteen metres off the middle
+     * of an avenue is very often inside one — `grid.nearest` then either finds
+     * nothing or snaps straight back onto the avenue, the lateral test refuses
+     * it, and the man gave up on his lane for two and a half seconds.
+     *
+     * So the ladder is walked instead: the furthest out and the furthest along
+     * first, then nearer and narrower, and the first candidate that is really
+     * off the line and really on the way wins. Nine `grid.nearest` calls at
+     * worst, at most once every 2.5 s per man, and both ladders are module
+     * constants — nothing is allocated here.
+     */
+    for (let i = 0; i < VIA_AHEAD.length; i++) {
+      const t = Math.min(s + VIA_AHEAD[i], axisLen - LANE_MIN);
+      if (t <= s + 4) continue;
+      for (let j = 0; j < VIA_SCALE.length; j++) {
+        const o = off * VIA_SCALE[j];
+        const vx = ox + ax * t - az * o;
+        const vz = oz + az * t + ax * o;
+        const ci = grid.nearest(vx, vz, null, 6, Infinity, comp);
+        if (ci < 0) continue;
+        const wx = grid.worldX(ci % grid.nx), wz = grid.worldZ((ci / grid.nx) | 0);
+        // A via that snapped back onto his own line is not a different way in.
+        const lateral = -az * (wx - ox) + ax * (wz - oz);
+        if (Math.abs(lateral) < Math.min(3.5, Math.abs(o) * 0.6)) continue;
+        // …and it has to be on the side of it the lane asked for
+        if (o !== 0 && lateral * o < 0) continue;
+        // …and one that is further from the objective than he is has turned him round
+        if (Math.hypot(dest.x - wx, dest.z - wz) > dist * 1.1) continue;
+        this._via.set(wx, grid.floor[ci], wz);
+        this._hasVia = true;
+        return this._via;
+      }
+    }
+    return null;
   }
 
   /**
