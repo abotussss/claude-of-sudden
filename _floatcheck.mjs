@@ -736,46 +736,104 @@ const result = await page.evaluate(
 
     /**
      * ────────────────────────────────────────────────────────────────────────
-     * AND BEFORE ANYTHING IS REPORTED, LOOK AT IT PROPERLY
+     * AND BEFORE ANYTHING IS REPORTED, LOOK AT IT AGAIN AT FOUR TIMES THE
+     * RESOLUTION — THE SAME ANALYSIS, NOT A SOFTER ONE
      * ────────────────────────────────────────────────────────────────────────
-     * The support test asks its question of the four COLUMN-NEIGHBOURS, which
-     * on a 0.5 m lattice means it asks it half a metre away. That is the right
-     * distance for a slab and the wrong one for a panel: a shopfront's roller
-     * shutter is 0.12 m thick and its collision sits 0.09 m off the plane of
-     * the wall slab it hangs in, so a column can catch the shutter and miss the
-     * wall, and the four columns half a metre out can miss both. Two slivers of
-     * a shutter set in a standing wall, on three of fourteen seeds, reported as
-     * a metal mass floating over a street.
+     * A 0.5 m lattice is the right sampling for a slab and the wrong one for a
+     * panel. A shopfront's roller shutter is 0.12 m thick and its proxy sits
+     * 0.09 m off the plane of the wall slab it hangs in, so a column hits one
+     * or the other and never both, and whether two ADJACENT columns happen to
+     * pick different planes — which is what would join the shutter to its wall
+     * — is down to where the jitter fell. Two slivers of a shutter set in a
+     * standing wall came back as metal floating over a street on three of
+     * fourteen seeds, and on a fourth only once `?breach=down` took the ground
+     * storey out from under that wall.
      *
-     * So a piece that is still unsupported is RESAMPLED where it actually is:
-     * a ring of columns at a fifth and a half of a cell round each of its own
-     * samples, asked the same question. The criterion does not move; the
-     * resolution does. A mound nine metres up over a razed plot has nothing
-     * within half a metre of it in any direction and is reported exactly as
-     * before — @see the pre-fix control in the commit that added this.
+     * So a piece that is still unsupported gets the WHOLE PROCEDURE run again
+     * over its own neighbourhood at a quarter of the cell: columns, ground
+     * plane, Y-overlap graph, the same two support clauses. Nothing is
+     * excused and no criterion moves — the piece is joined to the wall it is
+     * set in because at 0.125 m the wall is next door, and the wall is carried
+     * by jambs that reach the ground. A mound nine metres up over a razed plot
+     * has nothing next door at any resolution and is reported exactly as
+     * before; @see the pre-fix control in the commit that added this.
      */
     if (GROW > 0) {
-      const RING = [];
-      for (let k = 0; k < 8; k++) {
-        const a = (k / 8) * Math.PI * 2;
-        RING.push(Math.cos(a), Math.sin(a));
-      }
+      /** Metres of neighbourhood round the piece, so its wall is in frame. */
+      const PAD = 1.25;
+      const G = GRID / 4;
+      const LINK2 = G * 1.2;
       for (const c of comp.values()) {
         if (c.supported || c.cells.size < MIN_CELLS) continue;
         const groundY = regions[c.region].floorY + GROUND;
-        for (const id of c.ids) {
-          if (c.supported) break;
-          const n = nodes[id];
-          for (const r of [GRID * 0.2, GRID * 0.5]) {
-            for (let k = 0; k < RING.length && !c.supported; k += 2) {
-              const iv = column(n.x + RING[k] * r, n.z + RING[k + 1] * r, []);
-              grownColumns++;
-              for (let i = 0; i < iv.length; i += 2) {
-                if (iv[i + 1] > groundY) continue; // not standing on the map
-                if (iv[i] >= n.bot - TOL) { c.supported = true; refined++; break; }
+        const x0 = c.x0 - PAD;
+        const z0 = c.z0 - PAD;
+        const mx = Math.ceil((c.x1 - c.x0 + PAD * 2) / G) + 1;
+        const mz = Math.ceil((c.z1 - c.z0 + PAD * 2) / G) + 1;
+        if (mx * mz > 40000) continue; // a piece this big was sampled fine
+        const fn = []; // {ix,iz,top,bot,gap}
+        const fi = new Map();
+        const fstand = new Map();
+        for (let iz = 0; iz < mz; iz++) {
+          for (let ix = 0; ix < mx; ix++) {
+            const h = ((ix * 73856093) ^ (iz * 19349663)) >>> 0;
+            const x = x0 + (ix + 0.5) * G + (((h & 1023) / 1023) - 0.5) * G * 0.4;
+            const z = z0 + (iz + 0.5) * G + ((((h >>> 10) & 1023) / 1023) - 0.5) * G * 0.4;
+            const iv = column(x, z, []);
+            grownColumns++;
+            if (!iv.length) continue;
+            const ids = [];
+            let stands = -Infinity;
+            for (let i = 0; i < iv.length; i += 2) {
+              if (iv[i + 1] <= groundY) { if (iv[i] > stands) stands = iv[i]; continue; }
+              const below = i + 2 < iv.length ? iv[i + 2] : BOTTOM;
+              ids.push(fn.length);
+              fn.push({ ix, iz, top: iv[i], bot: iv[i + 1], gap: iv[i + 1] - below });
+            }
+            if (ids.length) fi.set(`${ix}:${iz}`, ids);
+            if (stands > -Infinity) fstand.set(`${ix}:${iz}`, stands);
+          }
+        }
+        const fp = new Int32Array(fn.length);
+        for (let i = 0; i < fp.length; i++) fp[i] = i;
+        const ffind = (a) => { while (fp[a] !== a) { fp[a] = fp[fp[a]]; a = fp[a]; } return a; };
+        for (let i = 0; i < fn.length; i++) {
+          const n = fn[i];
+          for (const [dx, dz] of [[1, 0], [0, 1]]) {
+            const ids = fi.get(`${n.ix + dx}:${n.iz + dz}`);
+            if (!ids) continue;
+            for (const j of ids) {
+              const m = fn[j];
+              if (n.bot <= m.top + LINK2 && m.bot <= n.top + LINK2) {
+                const ra = ffind(i); const rb = ffind(j);
+                if (ra !== rb) fp[ra] = rb;
               }
             }
-            if (c.supported) break;
+          }
+        }
+        /** Which fine components are the piece: same place, same height. */
+        const mine = new Set();
+        for (let i = 0; i < fn.length; i++) {
+          const n = fn[i];
+          const fx = x0 + (n.ix + 0.5) * G;
+          const fz = z0 + (n.iz + 0.5) * G;
+          for (const id of c.ids) {
+            const o = nodes[id];
+            if (Math.abs(fx - o.x) > GRID || Math.abs(fz - o.z) > GRID) continue;
+            if (n.bot > o.top + LINK2 || o.bot > n.top + LINK2) continue;
+            mine.add(ffind(i));
+            break;
+          }
+        }
+        if (!mine.size) continue; // the fine sweep cannot find it: leave the report alone
+        for (let i = 0; i < fn.length && !c.supported; i++) {
+          if (!mine.has(ffind(i))) continue;
+          const n = fn[i];
+          if (n.gap <= TOL) { c.supported = true; refined++; break; }
+          for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const st = fstand.get(`${n.ix + dx}:${n.iz + dz}`);
+            if (st === undefined) continue;
+            if (st >= n.bot - TOL) { c.supported = true; refined++; break; }
           }
         }
       }
