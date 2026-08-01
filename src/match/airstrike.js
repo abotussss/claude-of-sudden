@@ -1079,10 +1079,20 @@ export class Airstrike {
        * default 2.45 would be forty and would land on the roofs opposite.
        */
       scatter: [0.16, 1.02, 1.35],
+      /** @see the note over `delay` — 32.7 m of building, not 12. */
+      delayK: 0.26,
       /** The picture only. @see point 1 above. */
       blocking: false,
       grand: true,
-      radius: RULES.airstrikeRadius * 1.35,
+      /**
+       * THE SAME BLAST A DISTRICT BLOCK MAKES, DELIBERATELY. `grand` is about
+       * how big the event LOOKS and SOUNDS, and widening the lethal radius to
+       * match would be a balance change hiding inside a VFX one: the crossing
+       * is a capture point and this goes off 2.2 s after a salvo that has
+       * already thrown three 24 m blasts across it. The show is drawn in
+       * `_spectacle` and costs nobody any health.
+       */
+      radius: RULES.airstrikeRadius,
       damage: RULES.airstrikeDamage,
     });
     if (!site) return null;
@@ -1736,8 +1746,19 @@ export class Airstrike {
        * about two seconds instead of drifting for three.
        */
       const above = demo ? Math.max(0, pos.y - base.y) / Math.max(4, site.demo.top) : 0;
+      /**
+       * HOW LONG THE GROUND COURSES STAND THERE, and it is a per-site number
+       * because it scales with the building's HEIGHT and the default was set
+       * against a twelve-metre block. The cathedral's `top` is the campanile
+       * cap at 32.7 m, so the same half second spread over that puts the whole
+       * nave elevation — everything the player is looking at — in the last
+       * quarter of it: photographed, the front stood dead still for 0.4 s as a
+       * plain chunked slab where a facade with three portals and a rose had
+       * been the frame before. Shorter, and the collapse is under way
+       * everywhere before the eye has finished reading the swap.
+       */
       const delay = demo
-        ? (1 - Math.min(1, above)) * 0.5 + rng.range(0, 0.06)
+        ? (1 - Math.min(1, above)) * (site.delayK ?? 0.5) + rng.range(0, 0.06)
         : Math.min(0.42, (distToBlast - 0.6) * 0.045) + rng.range(0, 0.07);
       const drop = Math.max(0.5, pos.y - settlePos.y);
       // Free fall for the drop, stretched a little for the ones thrown clear.
@@ -2297,15 +2318,21 @@ export class Airstrike {
       const hw = site.demo.halfW;
       const hd = site.demo.halfD;
       const top = site.demo.top;
-      // Three fireballs up the section: the crossing, the vault, the tower cap.
-      fx.explosion({ position: b, radius: site.radius * 0.72 });
+      /**
+       * Four fireballs up the section — the crossing, both ends of the nave and
+       * the tower. Sized in METRES rather than off `site.radius`, because that
+       * is the LETHAL radius and the two are not the same number: drawn at 0.72
+       * of it the crossing burst was 17 m across, filled the frame and blew the
+       * exposure out over the whole collapse. @see `radius` in `_buildCathedralSite`.
+       */
+      fx.explosion({ position: b, radius: 11.5 });
       for (const [a, c, f] of [[0.62, 0, 0.5], [-0.62, 0, 0.5], [0, -0.55, 0.42]]) {
         this._v
           .copy(site.mound)
           .addScaledVector(u, a * hd)
           .addScaledVector(v, c * hw);
         this._v.y = top * f;
-        fx.explosion({ position: this._v, radius: site.radius * 0.46 });
+        fx.explosion({ position: this._v, radius: 7.5 });
         fx.hazeRing(this._v.x, this._v.y, this._v.z, 4.0, 30, 0.6, 3.2);
       }
       // The pressure wave off the footprint, at the height it leaves the doors.
@@ -2339,9 +2366,11 @@ export class Airstrike {
         );
       }
       fx.scorch(site.mound.x, site.mound.y + 0.2, site.mound.z, Math.max(hw, hd) * 1.7);
-      // Twice a district's peak over four times the distance: the middle of the
-      // map going up has to be readable from both bases.
-      if (fx.lights) fx.lights.flash(b.x, b.y, b.z, 1, 0.62, 0.3, 5200, 1.05, 9, 150, 8);
+      // Half again a district's peak, over half again the distance: the middle
+      // of the map going up has to be readable from both bases. Not more — at
+      // 5200/150 m the auto-exposure clamped down for the whole collapse and
+      // the falling mass went to silhouette. Photographed both.
+      if (fx.lights) fx.lights.flash(b.x, b.y, b.z, 1, 0.62, 0.3, 3600, 0.9, 10, 130, 8);
       return;
     }
 

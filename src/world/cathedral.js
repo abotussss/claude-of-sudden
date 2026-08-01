@@ -2030,8 +2030,15 @@ export function buildCathedral(A) {
       const holes = flankHoles(side).map((h) =>
         hole(u, h.sill + h.h / 2, h.c, T / 2, h.h / 2, h.w / 2)
       );
+      /**
+       * CUT FINE ENOUGH FOR THE OPENINGS TO SURVIVE THE CUT. A chunk is dropped
+       * when its CENTRE lands inside an opening, so a 2.4 m window in a wall cut
+       * at 1.9 m takes exactly one column out of it and reads as a slot. 1.35 m
+       * takes two, which is the window. This is the elevation the flank streets
+       * look at and it is worth the chunks.
+       */
       put(`flank${side < 0 ? 'W' : 'E'}`, 0, [T, SEC.aisleRoof, S.d], [u, SEC.aisleRoof / 2, 0],
-        [1, n(SEC.aisleRoof, 1.8), n(S.d, 1.9)], holes);
+        [1, n(SEC.aisleRoof, 1.8), n(S.d, 1.35)], holes);
       // the buttresses and their flyers, one lump per bay
       for (const v of [...NAVE_V, ...CHOIR_V, -HD + 0.9, HD - 0.9]) {
         put(`butt${side}${v}`, 1, [BUTT, SEC.aisleRoof - 0.9, 1.3],
@@ -2042,14 +2049,22 @@ export function buildCathedral(A) {
     /* ---- the south front: three portals, the rose, the gable ---------- */
     {
       const v = -(HD - T / 2);
+      /**
+       * THE FRONT IS THE PICTURE. It is what the mid street looks straight down
+       * and what both attacking spawns walk towards, so it is cut finer than
+       * anything else here — a 4 m great portal has to come down as a 4 m hole
+       * in the falling mass, not as one missing chunk. @see the note on the
+       * flank cut.
+       */
       put('frontS', 0, [S.w, SEC.aisleRoof, T], [0, SEC.aisleRoof / 2, v],
-        [n(S.w), n(SEC.aisleRoof, 1.8), 1], [
+        [n(S.w, 1.15), n(SEC.aisleRoof, 1.5), 1], [
           hole(0, 3.1, v, 2.0, 3.1, T / 2),
           hole(-5.6, 2.2, v, 1.1, 2.2, T / 2),
           hole(5.6, 2.2, v, 1.1, 2.2, T / 2),
         ]);
+      // …and the rose comes out of the gable as a rose-sized hole.
       put('gableS', 0, [gableW, SEC.naveRoof - SEC.aisleRoof, T],
-        [0, (SEC.aisleRoof + SEC.naveRoof) / 2, v], [n(gableW), 4, 1],
+        [0, (SEC.aisleRoof + SEC.naveRoof) / 2, v], [n(gableW, 1.2), 5, 1],
         [hole(0, SEC.aisleRoof + 3.0, v, 3.1, 3.1, T / 2)]);
     }
 
@@ -2100,7 +2115,7 @@ export function buildCathedral(A) {
        */
       const cu = side * (ARC + PW / 2 - 0.2);
       put(`clerestory${side}`, 0, [0.7, SEC.naveRoof - SEC.aisleRoof, S.d - 2 * T],
-        [cu, (SEC.aisleRoof + SEC.naveRoof) / 2, 0], [1, n(SEC.naveRoof - SEC.aisleRoof, 1.6), n(S.d, 1.9)],
+        [cu, (SEC.aisleRoof + SEC.naveRoof) / 2, 0], [1, n(SEC.naveRoof - SEC.aisleRoof, 1.5), n(S.d, 1.35)],
         [...NAVE_V, ...CHOIR_V].map((v) =>
           hole(cu, (SEC.clearSill + SEC.clearTop) / 2, v, 0.35, (SEC.clearTop - SEC.clearSill) / 2, 1.1)));
     }
