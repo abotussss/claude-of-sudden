@@ -150,17 +150,35 @@ const out = await page.evaluate(([JOBS, CLIMB]) => {
     const chain = [];
     for (let k = g; k >= 0; k = prev[k]) chain.push(k);
     chain.reverse();
-    // simplify: keep a vertex where the bearing changes
-    const poly = [];
-    for (let i = 0; i < chain.length; i++) {
-      const k = chain[i];
-      const ax = X0 + (k % NX) * GS, az = Z0 + (((k / NX) | 0)) * GS;
-      if (i === 0 || i === chain.length - 1) { poly.push([ax, az]); continue; }
-      const a = chain[i - 1], c = chain[i + 1];
-      const b1 = Math.atan2((k % NX) - (a % NX), ((k / NX) | 0) - ((a / NX) | 0));
-      const b2 = Math.atan2((c % NX) - (k % NX), ((c / NX) | 0) - ((k / NX) | 0));
-      if (Math.abs(b1 - b2) > 1e-6) poly.push([ax, az]);
+    /**
+     * DOUGLAS-PEUCKER, NOT "KEEP EVERY BEND". A lattice A* WEAVES — it steps
+     * one cell off the line and back to buy a cheaper diagonal — and a bend-
+     * keeping simplifier writes every one of those wobbles into the polyline.
+     * `Armour._bakePath` takes its travel direction from a sample's NEIGHBOURS,
+     * so a 2.25 m wobble swings the perpendicular the side probes are fired
+     * along by 45 degrees and the street it measures is not the street. Fitting
+     * a tolerance instead keeps the dodges that matter and drops the weave.
+     */
+    const raw = chain.map((k) => [X0 + (k % NX) * GS, Z0 + (((k / NX) | 0)) * GS]);
+    const EPS = 1.1;
+    const keep = new Uint8Array(raw.length);
+    keep[0] = keep[raw.length - 1] = 1;
+    const stack = [[0, raw.length - 1]];
+    while (stack.length) {
+      const [a, c] = stack.pop();
+      if (c <= a + 1) continue;
+      const ax = raw[a][0], az = raw[a][1];
+      let vx = raw[c][0] - ax, vz = raw[c][1] - az;
+      const vl = Math.hypot(vx, vz) || 1; vx /= vl; vz /= vl;
+      let worst = 0, wi = -1;
+      for (let i = a + 1; i < c; i++) {
+        const dx = raw[i][0] - ax, dz = raw[i][1] - az;
+        const off = Math.abs(dx * vz - dz * vx);
+        if (off > worst) { worst = off; wi = i; }
+      }
+      if (worst > EPS && wi > 0) { keep[wi] = 1; stack.push([a, wi], [wi, c]); }
     }
+    const poly = raw.filter((_, i) => keep[i]);
     res.push({ id: job.id, cells: chain.length, poly });
   }
   /* ---- flood the component that contains each job's START, and draw it ---- */

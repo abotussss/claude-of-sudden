@@ -167,19 +167,55 @@ const L = (x, z) => [x * SCALE, z * SCALE];
  * echelon, because the thing that keeps them from being nose to nose down a
  * firing line is now the RUIN between them — 3.1 m of rubble against a muzzle
  * 2.6 m off the road, which `MASK.SIGHT` stops dead in `_acquire`.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * …AND THEN IT STOPPED BEING ONE POLYLINE — 「戦車はできるだけ占領サれたエリアに
+ * 向かい、そこが占領し返すまで戦闘するみたいにして」
+ * ────────────────────────────────────────────────────────────────────────────
+ * A ROUTE IS NOW A WHEEL, NOT A LINE. Each side has one APPROACH — the polyline
+ * above, out of its own spawn street to the cathedral square, which is the HUB —
+ * and one SPOKE per capture point it can actually drive to. The hull takes the
+ * spoke to whichever point the enemy holds, stands off it and fights, and when
+ * his side has taken it back it comes back down the spoke and goes out the next.
+ * D needs no spoke: the hub IS the stand-off on the cathedral.
+ *
+ * EVERY SPOKE WAS SCOUTED AND THEN PROVED, and neither half was a guess. The
+ * scout is `_hullpath.mjs` — an A* on a 2.25 m lattice whose node test is this
+ * file's own "ground under the sample and HULL_W + CLEARANCE of side room",
+ * whose edges are swept so a 1.5 m wall between two lattice nodes cannot be
+ * stepped over, and which knows that mass the hull drives over is not a wall.
+ * Its output is a polyline in these same authored units; `_bakePath` then
+ * measures it against the built map exactly as it always has, and a spoke that
+ * does not survive to within `ZONE_ARRIVE` of its point is DROPPED with its
+ * reason printed. A dropped spoke costs one destination, never the sortie.
+ *
+ * The boot log prints every leg it baked and every one it did not. Believe it,
+ * not this comment.
  */
 const ROUTES = [
   {
     id: 'RED',
     team: 0,
     name: 'RED ARMOUR',
-    points: [L(8, 56), L(7, 46), L(5, 36), L(2.5, 28), L(1, 20), L(0.5, 15)],
+    approach: [L(8, 56), L(7, 46), L(5, 36), L(2.5, 28), L(1, 20), L(0.5, 15)],
+    spokes: [
+      { zone: 'C', points: [L(0.5, 15), L(-4.5, 15), L(-9, 12), L(-13.5, 10.5), L(-28.5, 10.5), L(-34.5, 4.5), L(-34.5, 1.5), L(-37.5, -1.5)] },
+      { zone: 'E', points: [L(0.5, 15), L(4.5, 15), L(9, 12), L(13.5, 10.5), L(28.5, 10.5), L(33, 9), L(34.5, 7.5), L(34.5, 1.5), L(37.5, -1.5)] },
+      { zone: 'A', points: [L(0.5, 15), L(-4.5, 21), L(-13.5, 22.5), L(-16.5, 25.5), L(-25.5, 25.5), L(-31.5, 31.5), L(-39, 31.5), L(-42, 34.5), L(-69, 36)] },
+      { zone: 'B', points: [L(0.5, 15), L(4.5, 15), L(9, 12), L(13.5, 10.5), L(13.5, 0), L(21, -6), L(25.5, -6), L(30, -10.5), L(34.5, -15), L(34.5, -18), L(40.5, -24), L(46.5, -24), L(51, -28.5), L(51, -34.5), L(52.5, -36), L(55.5, -37.5), L(69, -37.5)] },
+    ],
   },
   {
     id: 'BLUE',
     team: 1,
     name: 'BLUE ARMOUR',
-    points: [L(-8, -56), L(-7, -46), L(-5, -36), L(-2.5, -28), L(-1, -22), L(-0.5, -17)],
+    approach: [L(-8, -56), L(-7, -46), L(-5, -36), L(-2.5, -28), L(-1, -22), L(-0.5, -17)],
+    spokes: [
+      { zone: 'C', points: [L(-0.5, -17), L(-10.5, -16.5), L(-13.5, -13.5), L(-15, -7.5), L(-25.5, -7.5), L(-27, -6), L(-28.5, -7.5), L(-33, -3), L(-37.5, -1.5)] },
+      { zone: 'E', points: [L(-0.5, -17), L(4.5, -23), L(13.5, -24.5), L(24, -24.5), L(30, -18), L(34.5, -12), L(34.5, -6), L(37.5, -1.5)] },
+      { zone: 'B', points: [L(-0.5, -17), L(4.5, -23), L(13.5, -24.5), L(16.5, -27.5), L(25.5, -27.5), L(31.5, -33.5), L(39, -33.5), L(42, -36.5), L(69, -38)] },
+      { zone: 'A', points: [L(-0.5, -17), L(-10.5, -16.5), L(-13.5, -13.5), L(-15, -7.5), L(-25.5, -7.5), L(-30, -3), L(-34.5, 3), L(-34.5, 16.5), L(-40.5, 22.5), L(-46.5, 22.5), L(-51, 27), L(-51, 31.5), L(-55.5, 36), L(-69, 36)] },
+    ],
   },
 ];
 
@@ -232,6 +268,62 @@ const MIN_ROUTE = 16;
 const PLOUGH_TOP = 1.8;
 /** Under this the hull simply drives over it — a kerb is not an event. */
 const PLOUGH_MIN = 0.3;
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「また戦車は多少の障害物は破壊して乗り越えて走行できるようにして」
+ * THE OTHER HALF OF THE VERB: 乗り越え
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE PLOUGH WAS ONLY THE 破壊 HALF, AND THE 乗り越え HALF WAS MISSING TWICE
+ * OVER — once in where the tank is allowed to go, and once in what the hull
+ * does when it gets there.
+ *
+ *   1. WHERE IT MAY GO. `_bakePath`'s side probes are a single ray each way at
+ *      hull height, and ANY hit is a wall: a 0.9 m jersey barrier standing in
+ *      a street reads as the street's edge, so the sample slides away from it
+ *      and — when there is one on each side — the span comes back under
+ *      `HULL_W + CLEARANCE` and THE ROUTE IS TRIMMED THERE. Measured on the
+ *      built map, that is not a corner case: every one of the eight spokes
+ *      scouted for the zone wheel pinches inside twenty metres of the hub
+ *      under the old rule, on spans of 1.1-3.9 m, in streets a hull plainly
+ *      fits down. A tank that has to path round a kerb reads wrong, and this
+ *      one could not leave the cathedral square at all.
+ *
+ *      So a side probe now RESUMES past mass it measures at `PASS_TOP` or
+ *      less over the road it is standing on — the same height rule and the
+ *      same "over the road, never over the obstacle's own top" measurement
+ *      `_bakePlough` makes, because `groundHeight` at a point past a wall's
+ *      face comes back as the WALL'S top and would make every wall on the map
+ *      zero metres tall.
+ *
+ *   2. WHAT THE HULL DOES. The ride was `Y[i]` — one ground ray per sample,
+ *      lerped — so a 0.8 m step made the whole hull rise 0.8 m over 1.25 m
+ *      with its pitch clamped at 9 degrees: it did not climb, it POPPED. A
+ *      tracked vehicle rests on the highest thing under its TRACK RUN, so the
+ *      ride is now the two support points `SUPPORT` fore and aft of the origin
+ *      and the pitch is the line between them. The nose lifts first, the hull
+ *      levels on top and the tail settles last, which is what climbing looks
+ *      like, and it costs no raycast — both supports are a max over a handful
+ *      of baked samples.
+ *
+ * AND THE RIDE KNOWS WHAT THE PLOUGH ERASED. The plough fires `PLOUGH_NOSE`
+ * before the origin reaches a pile, so a ride that rode the baked ground would
+ * climb a pile that is no longer there and stay a foot in the air all the way
+ * across it. Each sample carries the road under it and the step on top of it
+ * separately (@see `_bakeRide`), and a fired pile drops its step.
+ */
+/** Mass no taller than this over the road is not a wall to a side probe: the
+ *  hull either erases it (@see `PLOUGH_TOP`) or drives over it. */
+const PASS_TOP = PLOUGH_TOP;
+/** The step a 40 t tracked vehicle actually gets its nose over. */
+const CLIMB_TOP = 1.0;
+/** Nose up or down the ride is allowed to reach. 24 degrees. */
+const CLIMB_PITCH = 0.42;
+/** How far fore and aft of the origin the track run bears on the ground. */
+const SUPPORT = HULL_L * 0.42;
+/** Metres the road may fall per metre travelled — the slope the lower envelope
+ *  in `_bakeRide` is allowed to follow before it calls a rise a STEP. */
+const ROAD_SLOPE = 0.17;
 /** Half the corridor the hull actually sweeps, with a little shoulder. */
 const PLOUGH_HALF = HULL_W * 0.5 + 0.25;
 /** Metres ahead of the hull origin that the glacis reaches. */
@@ -259,6 +351,73 @@ const SPEED_REVERSE = 3.4;
 const HOLD_TIME = 30;
 /** Seconds of telegraph before the engine note becomes a tank in the street. */
 const TANK_LEAD = 6.0;
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE STAND-OFF, AND WHY IT IS STILL STRUCTURAL
+ * ────────────────────────────────────────────────────────────────────────────
+ * The old guarantee was "the authored route never enters a zone", and it was
+ * true because the authored route went one place. A wheel that deliberately
+ * drives AT the capture points cannot keep that shape of promise, so it keeps
+ * the same promise a different way: EVERY BAKED LEG IS TRIMMED at the first
+ * sample that comes inside `ZONE_STANDOFF` of ANY capture centre, target or
+ * not. The hull therefore stops 16 m off the circle it is shelling — 8 m
+ * outside a `RULES.captureRadius` 8 circle, and 4.5 m outside it even measured
+ * from the far end of a 6.9 m hull — and a wreck can no more stand on a point
+ * than it could before. It is measured per leg and printed at boot.
+ *
+ * (The hull was never a nav obstacle in the first place: three moving
+ * `LAYER.SHOOT_ONLY` boxes, invisible to `MASK.CHARACTER` and to A*. The
+ * stand-off is about what the player sees standing on his point, not about
+ * whether men can walk.)
+ */
+const ZONE_STANDOFF = 16;
+/** A leg whose trimmed end is further than this from the point it was authored
+ *  at is not a route to that point, and is dropped rather than kept as a lie. */
+const ZONE_ARRIVE = 34;
+/** Seconds between "which point should we be at" decisions. */
+const RETARGET_EVERY = 2.0;
+/** Radians/second the hull swings its nose. Over `PIVOT_HOLD` off the heading
+ *  it wants, it pivots on the spot instead of driving. */
+const PIVOT_RATE = 0.5;
+const PIVOT_HOLD = 0.6;
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「また戦車の爆撃でも街を破壊できるようにして」 — THE GUN TAKES THE TOWN DOWN
+ * ────────────────────────────────────────────────────────────────────────────
+ * A shell landing on a market stall now does what the hull does driving through
+ * one, and it is the SAME primitive: a prop instance stops being drawn when
+ * sixteen floats in its `InstancedMesh` matrix are zeroed, and stops being
+ * solid when its triangles' masks are zeroed. The plough could only ever do it
+ * to piles it met on a corridor known at boot; a shell lands anywhere, so what
+ * is baked at boot is an ATLAS instead of a corridor — every `prop_*` instance
+ * in the level on a 3 m lattice, with the static triangles that draw it bound
+ * to it. @see `_buildRazeAtlas`.
+ *
+ * THE RULE IS UNCHANGED FROM THE PLOUGH'S, and it is what keeps a shell from
+ * punching an invisible hole in a building: mass with no `prop_*` instance
+ * behind it is not erased, whatever it is and however hard it is hit. `world`
+ * merges its static collision per SURFACE and publishes no per-prop registry,
+ * so a triangle is bound to an instance by being SMALL and NEAR it — a merged
+ * wall's triangles are metres long and bind to nothing.
+ *
+ * NOTHING IS EVER ADDED. Collision is only ever removed, so a nav grid baked at
+ * boot can only become more walkable than it was measured to be and
+ * `stuckcheck` cannot regress on account of this.
+ */
+/** How far from the burst the dressing comes off. Smaller than
+ *  `RULES.tankMainRadius`, which is the radius men die inside: the shell kills
+ *  at 9 m and flattens what is in the street at 5. */
+const RAZE_R = 5.0;
+/** Cell of the atlas lattice, metres. */
+const RAZE_CELL = 3.0;
+/** A triangle bigger than this in any axis is structure, not dressing. */
+const RAZE_TRI = 2.6;
+/** How close a triangle has to be to an instance to be part of it. */
+const RAZE_BIND = 1.6;
+/** A prop this far above the burst is on something the shell never reached. */
+const RAZE_UP = 6.0;
 
 /** Turret traverse and gun elevation, radians/second. */
 const TRAVERSE = 0.62;
@@ -391,6 +550,8 @@ const fragMul = (damage) => (RULES.tankHealth * FRAG_SHARE) / Math.max(1, damage
 const WRECK_R = 4.2;
 
 const UP = new THREE.Vector3(0, 1, 0);
+/** Shared by every instance the atlas bound nothing to. */
+const EMPTY_TRIS = new Int32Array(0);
 
 /* ========================================================================== */
 
@@ -501,6 +662,18 @@ export class Armour {
       const tank = this._buildTank(spec, world, physics, props);
       if (tank) this.tanks.push(tank);
     }
+    /**
+     * AFTER the hulls, because the plough claims its instances first and the
+     * atlas leaves those alone: one instance may not be owned by two erasers,
+     * or whichever restores second puts a zeroed matrix back. @see
+     * `_buildRazeAtlas` and the note on `_ploughClaimed`.
+     */
+    try {
+      this._buildRazeAtlas(props, physics);
+    } catch (err) {
+      console.warn('[tank] raze atlas failed — the gun will not take the town down', err);
+      this._atlas = null;
+    }
     props = null;
     this._ploughClaimed = null;
     if (this.tanks.length) ctx.scene.add(this.group);
@@ -516,8 +689,8 @@ export class Armour {
         this.tanks
           .map(
             (t) =>
-              `${t.id} route ${t.path.length.toFixed(0)}m/${t.path.n} samples, ` +
-              `${t.chunkCount} wreck chunks, narrowest street ${t.path.narrowest.toFixed(1)}m, ` +
+              `${t.id} ${t.legs.length} legs (${t.legs.map((l) => l.zone ?? 'HUB').join('/')}), ` +
+              `${t.chunkCount} wreck chunks, ` +
               `${t.plough?.length ?? 0} piles to plough ` +
               `(${(t.plough ?? []).reduce((a, q) => a + q.inst.length, 0)} instances, ` +
               `${(t.plough ?? []).reduce((a, q) => a + (q.tris?.length ?? 0), 0)} triangles)`
@@ -536,13 +709,49 @@ export class Armour {
   /* --------------------------------------------------------------- route -- */
 
   /**
+   * HOW FAR A SIDE PROBE REALLY GETS, which is not the same as where the first
+   * thing it touches is. Mass no taller than `PASS_TOP` over the road the probe
+   * is standing on is mass the hull erases or drives over, so the ray RESUMES
+   * past it. @see the long note on `PASS_TOP`.
+   *
+   * `oy` is road + 1.0 and the height is measured against `oy - 1.0` and never
+   * against `groundHeight` at the far side: a downward ray just past a wall's
+   * face lands on the WALL'S OWN TOP, which would make every wall on the map
+   * zero metres tall and climbable. That bug was written, measured on a scout
+   * that then routed straight through the cathedral, and is why this reads the
+   * way it does.
+   */
+  _freeSide(physics, ox, oy, oz, dx, dz, max) {
+    const o = this._bv ?? (this._bv = new THREE.Vector3());
+    const d = this._bv2 ?? (this._bv2 = new THREE.Vector3());
+    const MASK = physics.MASK.WORLD;
+    let travelled = 0;
+    for (let iter = 0; iter < 4; iter++) {
+      o.set(ox + dx * travelled, oy, oz + dz * travelled);
+      d.set(dx, 0, dz);
+      const h = physics.raycast(o, d, max - travelled, MASK);
+      if (!h?.hit) return max;
+      const at = travelled + h.distance;
+      o.set(ox + dx * (at + 0.2), oy + 29, oz + dz * (at + 0.2));
+      d.set(0, -1, 0);
+      const t = physics.raycast(o, d, 45, MASK);
+      if (!t?.hit) return at;
+      const top = oy + 29 - t.distance - (oy - 1.0);
+      if (top > PASS_TOP) return at;
+      travelled = at + 0.4;
+      if (travelled >= max) return max;
+    }
+    return travelled;
+  }
+
+  /**
    * Author -> measure -> bake. See the long note at the top of the file for why
    * this exists at all instead of `ai.grid.findPath`.
+   *
+   * `pts` are WORLD points. A spoke's first point is the approach's own baked
+   * end rather than its authored one, so the two legs join without a step.
    */
-  _bakePath(spec, world, physics) {
-    const pts = [];
-    for (const p of spec.points) pts.push(world.levelToWorld(p[0], 0, p[1], new THREE.Vector3()));
-
+  _bakePath(pts, world, physics) {
     /* ---- resample the polyline at a fixed step ------------------------- */
     const rx = [];
     const rz = [];
@@ -567,6 +776,7 @@ export class Armour {
     const side = new THREE.Vector3();
     let narrowest = Infinity;
     let kept = 0;
+    let stop = 'end of polyline';
     const px = [];
     const py = [];
     const pz = [];
@@ -584,15 +794,11 @@ export class Armour {
       let x = rx[i];
       let z = rz[i];
       let y = physics.groundHeight(x, z, 30);
-      if (!Number.isFinite(y)) break;
+      if (!Number.isFinite(y)) { stop = `no ground at sample ${i}`; break; }
 
-      probe.set(x, y + 1.0, z);
-      const right = physics.raycast(probe, side, 9, MASK);
-      side.multiplyScalar(-1);
-      const left = physics.raycast(probe, side, 9, MASK);
-      side.multiplyScalar(-1);
-      const dR = right?.hit ? right.distance : 9;
-      const dL = left?.hit ? left.distance : 9;
+      // The side probes RESUME past anything the hull drives over or through.
+      const dR = this._freeSide(physics, x, y + 1.0, z, side.x, side.z, 9);
+      const dL = this._freeSide(physics, x, y + 1.0, z, -side.x, -side.z, 9);
       // Slide to the middle of what was found, then re-probe the ground there.
       const shift = clamp((dR - dL) * 0.5, -LATERAL_MAX, LATERAL_MAX);
       x += side.x * shift;
@@ -600,7 +806,11 @@ export class Armour {
       const y2 = physics.groundHeight(x, z, 30);
       if (Number.isFinite(y2)) y = y2;
       const span = dR + dL;
-      if (span < need) break; // a pinch: the route ends here
+      if (span < need) {
+        // a pinch: the route ends here
+        stop = `pinch ${span.toFixed(1)}m at sample ${i} (${x.toFixed(0)},${z.toFixed(0)})`;
+        break;
+      }
       narrowest = Math.min(narrowest, span);
 
       px.push(x);
@@ -610,13 +820,12 @@ export class Armour {
     }
     if (kept < 4) return null;
 
-    /* ---- bake yaw, pitch and arc length -------------------------------- */
+    /* ---- bake yaw and arc length --------------------------------------- */
     const n = kept;
     const X = new Float32Array(n);
     const Y = new Float32Array(n);
     const Z = new Float32Array(n);
     const YAW = new Float32Array(n);
-    const PITCH = new Float32Array(n);
     const S = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       X[i] = px[i];
@@ -627,25 +836,160 @@ export class Armour {
     for (let i = 0; i < n; i++) {
       const i0 = Math.max(0, i - 1);
       const i1 = Math.min(n - 1, i + 1);
-      const dx = X[i1] - X[i0];
-      const dz = Z[i1] - Z[i0];
-      const dy = Y[i1] - Y[i0];
-      YAW[i] = Math.atan2(dx, dz);
-      const run = Math.hypot(dx, dz) || 1;
-      // Clamped: a kerb the ground ray caught must not stand the tank on end.
-      PITCH[i] = clamp(Math.atan2(dy, run), -0.16, 0.16);
+      YAW[i] = Math.atan2(X[i1] - X[i0], Z[i1] - Z[i0]);
     }
     const length = S[n - 1];
     if (length < MIN_ROUTE) return null;
-    return { n, X, Y, Z, YAW, PITCH, S, length, narrowest: narrowest === Infinity ? 0 : narrowest };
+    const path = {
+      n, X, Y, Z, YAW, S, length,
+      narrowest: narrowest === Infinity ? 0 : narrowest,
+      /** Filled by `_bakeRide`; `PILE` by `_bakePlough`. */
+      ROAD: null, STEP: null, PILE: null,
+      zone: null, plough: null, stop,
+    };
+    this._bakeRide(path);
+    return path;
+  }
+
+  /**
+   * THE ROAD AND WHAT IS SITTING ON IT, split out of one ground ray per sample.
+   *
+   * `Y[i]` is the top of whatever the downward ray found — road, kerb, sandbag
+   * line, rubble. The road under a pile cannot be probed directly (a second ray
+   * from under the pile's own top is a guess at where its bottom is), but it
+   * does not have to be: a road is CONTINUOUS AND ALMOST FLAT and a pile is a
+   * short spike on it, so the road is the LOWER ENVELOPE of `Y` under a slope
+   * constraint —
+   *
+   *     ROAD[i] = min over j of ( Y[j] + |S[i] - S[j]| * ROAD_SLOPE )
+   *
+   * — which follows a real ramp down and refuses to follow a 0.8 m barrier up.
+   * A plain window minimum was written first and is wrong for exactly the
+   * reason the slope term fixes: over the 6.25 m window a hull needs, a street
+   * on this map's steepest legal grade falls a whole metre, so the hull would
+   * have ridden a metre in the air down every slope.
+   *
+   * `STEP[i]` is then what stands on the road at that sample, and the ride adds
+   * it back unless the plough has taken it away.
+   */
+  _bakeRide(p) {
+    const n = p.n;
+    const ROAD = new Float32Array(n);
+    // NOT `STEP`: the module constant of that name is the sample spacing, and a
+    // local shadowing it made `W` NaN and the envelope a no-op, silently.
+    const RISE = new Float32Array(n);
+    const PILE = new Int16Array(n).fill(-1);
+    const W = Math.ceil((SUPPORT + PLOUGH_MERGE) / STEP);
+    for (let i = 0; i < n; i++) {
+      let lo = p.Y[i];
+      for (let j = Math.max(0, i - W); j <= Math.min(n - 1, i + W); j++) {
+        const v = p.Y[j] + Math.abs(p.S[i] - p.S[j]) * ROAD_SLOPE;
+        if (v < lo) lo = v;
+      }
+      ROAD[i] = lo;
+      RISE[i] = Math.max(0, p.Y[i] - lo);
+    }
+    p.ROAD = ROAD;
+    p.STEP = RISE;
+    p.PILE = PILE;
   }
 
   /* ---------------------------------------------------------- one tank --- */
 
+  /**
+   * BAKE THE WHEEL. The approach first — no approach, no sortie — then one
+   * spoke per capture point, each starting from the approach's OWN BAKED END so
+   * the two join without a step, each trimmed at the first sample that comes
+   * inside `ZONE_STANDOFF` of any capture centre, and each kept only if what
+   * survives still reaches its point. Every drop is printed with its reason.
+   */
+  _bakeLegs(spec, world, physics) {
+    const zones = this._zoneCentres();
+    const legs = [];
+    const w = new THREE.Vector3();
+    const pts = spec.approach.map((p) => world.levelToWorld(p[0], 0, p[1], new THREE.Vector3()));
+    const approach = this._bakePath(pts, world, physics);
+    if (!approach) return null;
+    this._trimToStandoff(approach, zones, null);
+    if (approach.n < 4 || approach.length < MIN_ROUTE) return null;
+    approach.zone = null;
+    legs.push(approach);
+    const hub = new THREE.Vector3(
+      approach.X[approach.n - 1], approach.Y[approach.n - 1], approach.Z[approach.n - 1]
+    );
+
+    for (const sp of spec.spokes ?? []) {
+      const target = zones.find((z) => z.id === sp.zone);
+      if (!target) {
+        console.warn(`[tank] ${spec.id}: no capture point called ${sp.zone} — spoke skipped`);
+        continue;
+      }
+      const wp = sp.points.map((p, i) =>
+        i === 0 ? hub.clone() : world.levelToWorld(p[0], 0, p[1], w.clone())
+      );
+      const path = this._bakePath(wp, world, physics);
+      if (!path) {
+        console.warn(`[tank] ${spec.id}->${sp.zone}: SPOKE DROPPED — no drivable route off the hub.`);
+        continue;
+      }
+      const why = path.stop;
+      // Join it to the hub exactly: the slide may have moved sample 0 by metres.
+      path.X[0] = hub.x; path.Z[0] = hub.z; path.Y[0] = hub.y;
+      path.ROAD[0] = Math.min(path.ROAD[0], hub.y);
+      this._trimToStandoff(path, zones, target);
+      const d = path.n
+        ? Math.hypot(path.X[path.n - 1] - target.x, path.Z[path.n - 1] - target.z)
+        : Infinity;
+      if (path.n < 4 || path.length < MIN_ROUTE || d > ZONE_ARRIVE) {
+        console.warn(
+          `[tank] ${spec.id}->${sp.zone}: SPOKE DROPPED — ${path.length.toFixed(0)} m of route ` +
+            `ends ${Number.isFinite(d) ? d.toFixed(0) : '-'} m off the point (needs <= ${ZONE_ARRIVE}) — ` +
+            `${path.stop ?? why}`
+        );
+        continue;
+      }
+      path.zone = sp.zone;
+      legs.push(path);
+    }
+    return legs;
+  }
+
+  /** Capture centres in world space, D included. @see `_logZones` on `allZones`. */
+  _zoneCentres() {
+    const m = this.ctx.peek('match');
+    const zones = m?.allZones ?? m?.sites ?? [];
+    return zones.map((z) => ({ id: z.id, x: z.position.x, z: z.position.z }));
+  }
+
+  /**
+   * Cut the path at the first sample inside `ZONE_STANDOFF` of ANY capture
+   * centre. The target's own circle is not excused — a hull that stops 16 m
+   * short of the point it is shelling is the whole guarantee.
+   */
+  _trimToStandoff(p, zones, target) {
+    let cut = p.n;
+    let which = '';
+    for (let i = 0; i < p.n; i++) {
+      for (const z of zones) {
+        if (Math.hypot(p.X[i] - z.x, p.Z[i] - z.z) < ZONE_STANDOFF) {
+          if (i < cut) { cut = i; which = z.id; }
+          break;
+        }
+      }
+      if (cut < p.n) break;
+    }
+    if (cut >= p.n) return;
+    p.n = cut;
+    p.length = cut > 0 ? p.S[cut - 1] : 0;
+    p.stop = `trimmed at the ${ZONE_STANDOFF} m stand-off on ${which}`;
+    p.trimmed = true;
+    void target;
+  }
+
   _buildTank(spec, world, physics, props) {
     const rng = this.rng.fork();
-    const path = this._bakePath(spec, world, physics);
-    if (!path) {
+    const legs = this._bakeLegs(spec, world, physics);
+    if (!legs) {
       console.error(
         `[tank] ${spec.id}: no drivable route from the authored polyline — SORTIE DROPPED. ` +
           'The street is narrower than the hull or the anchor is not on the ground; ' +
@@ -653,6 +997,7 @@ export class Armour {
       );
       return null;
     }
+    const path = legs[0];
 
     const root = new THREE.Group();
     root.name = `match_tank_${spec.id}`;
@@ -679,7 +1024,26 @@ export class Armour {
       /** So `ai.teamOf()` and `ui.isFriendlyTarget` answer correctly when a
        *  round lands on us — see the `damage:dealt` note in `_takeRound`. */
       isTank: true,
+      /** THE WHEEL. `legs[0]` is the approach and its end is the hub; every
+       *  other leg is a spoke off it, carrying the `zone` it stands off. */
+      legs,
+      /** The approach, kept under its old name for anything that reads it. */
       path,
+      /** Which leg the hull is on, and which way along it. */
+      legIx: 0,
+      legDir: 1,
+      /** The capture point it is trying to be at, and the plan to get there. */
+      targetZone: null,
+      retarget: 0,
+      /** Up to two queued legs — a spoke back to the hub, then the next spoke. */
+      plan: [
+        { leg: -1, dir: 1 }, { leg: -1, dir: 1 }, { leg: -1, dir: 1 },
+      ],
+      planN: 0,
+      planI: 0,
+      /** The hull's actual heading. It CHASES the leg's; over `PIVOT_HOLD` off
+       *  it, the hull pivots on the spot instead of driving. */
+      yaw: 0,
       root,
       turret,
       gun,
@@ -688,7 +1052,7 @@ export class Armour {
       materials: [],
       colliders: [],
       state: 'parked',
-      /** Metres travelled along the baked path. */
+      /** Metres travelled along the current leg. */
       s: 0,
       hold: 0,
       health: RULES.tankHealth,
@@ -724,6 +1088,10 @@ export class Armour {
         blasts: 0, blastDmg: 0,
         frags: 0, fragDmg: 0,
         liveT: 0, kills: 0, sorties: 0, deaths: 0,
+        /** Prop instances this hull's GUN took off the map. */
+        razed: 0,
+        /** Capture points it has stood off, in order. */
+        legs: 0,
       },
     };
 
@@ -792,7 +1160,26 @@ export class Armour {
     for (let i = 0; i < tank.id.length; i++) h = (Math.imul(h ^ tank.id.charCodeAt(i), 0x85ebca6b) >>> 0);
     tank.ploughRng = new Rng(h >>> 0);
     if (!props?.length) return;
-    const p = tank.path;
+    for (let li = 0; li < tank.legs.length; li++) this._bakeLegPlough(tank, li, physics, props);
+    if (!tank.plough.length) return;
+    this._bindPloughCollision(tank, physics);
+    for (const pile of tank.plough) this._bakePileDebris(tank, pile);
+    /**
+     * AND THE RIDE IS TOLD WHICH SAMPLES A PILE OWNS. Without this the hull
+     * climbs the baked step of a pile the glacis erased `PLOUGH_NOSE` earlier
+     * and crosses the whole thing a foot in the air. @see `_bakeRide`.
+     */
+    for (const pile of tank.plough) {
+      const p = tank.legs[pile.leg];
+      for (let i = 0; i < p.n; i++) {
+        if (Math.abs(p.S[i] - pile.s) <= PLOUGH_MERGE) p.PILE[i] = pile.ix;
+      }
+    }
+  }
+
+  /** One leg's worth of piles. @see `_bakePlough`. */
+  _bakeLegPlough(tank, legIx, physics, props) {
+    const p = tank.legs[legIx];
     const MASKW = physics.MASK.WORLD;
     const o = new THREE.Vector3();
     const d = new THREE.Vector3();
@@ -831,7 +1218,7 @@ export class Armour {
           pile.top = Math.max(pile.top, top);
           pile.s = Math.min(pile.s, p.S[i]);
         } else {
-          piles.push({ s: p.S[i], x: hx, y: g, z: hz, top, fired: false });
+          piles.push({ leg: legIx, s: p.S[i], x: hx, y: g, z: hz, top, fired: false });
         }
       }
     }
@@ -875,12 +1262,11 @@ export class Armour {
         pile.inst.push({ mesh: q.mesh, slot: q.slot, m: null });
       }
       // NOTHING TO ERASE, NOTHING TO PLOUGH. @see the note on `PLOUGH_TOP`.
-      if (pile.inst.length) tank.plough.push(pile);
+      if (pile.inst.length) {
+        pile.ix = tank.plough.length;
+        tank.plough.push(pile);
+      }
     }
-
-    if (!tank.plough.length) return;
-    this._bindPloughCollision(tank, physics);
-    for (const pile of tank.plough) this._bakePileDebris(tank, pile);
   }
 
   /**
@@ -1111,6 +1497,170 @@ export class Armour {
     }
   }
 
+  /* ====================================================================== */
+  /* THE ATLAS: WHAT A SHELL CAN TAKE OFF THE MAP                            */
+  /* ====================================================================== */
+
+  /**
+   * EVERY `prop_*` INSTANCE IN THE LEVEL, ON A LATTICE, WITH THE TRIANGLES THAT
+   * DRAW IT BOUND TO IT — so a shell landing anywhere costs a cell lookup and a
+   * fill, and nothing is searched for on the frame it goes off.
+   *
+   * WHY A TRIANGLE IS BOUND BY BEING SMALL AND NEAR. `src/world` merges its
+   * static collision per SURFACE — the whole map is eight `collide_<surface>`
+   * objects, 212146 triangles, and NOT ONE of them is named `prop_` — so
+   * `staticWorld.object[t]` cannot say which triangles are a market stall and
+   * which are the building behind it. The plough answered that with a box test
+   * per pile; this answers it once, for the whole map, with the same two rules
+   * that make the box test safe: a triangle bigger than `RAZE_TRI` in any axis
+   * is structure and binds to nothing (a merged wall's triangles are metres
+   * long), and a triangle further than `RAZE_BIND` from an instance origin is
+   * not part of it. A shell therefore CANNOT punch an invisible hole in a
+   * building, whatever it hits.
+   *
+   * PLOUGH PILES ARE LEFT ALONE. `_ploughClaimed` already owns ~35 instances
+   * and saves their matrices on its own schedule; one instance owned by two
+   * erasers means whichever restores second writes a zeroed matrix back, which
+   * is the exact bug the note in `_bakePlough` was written about. They are
+   * skipped here and the hull still flattens them.
+   */
+  _buildRazeAtlas(props, physics) {
+    this._atlas = null;
+    if (!props?.length) return;
+    const sw = physics.staticWorld;
+    const pos = sw?.pos;
+    const nTri = sw?.triCount ?? 0;
+    if (!pos || !nTri || !sw.mask) return;
+    const t0 = performance.now();
+    const claimed = this._ploughClaimed;
+    const cells = new Map();
+    const key = (cx, cz) => cx * 65536 + cz;
+    const recs = [];
+    for (const q of props) {
+      if (claimed?.has(`${q.mesh.id}:${q.slot}`)) continue;
+      const cx = Math.floor(q.x / RAZE_CELL);
+      const cz = Math.floor(q.z / RAZE_CELL);
+      const k = key(cx, cz);
+      let c = cells.get(k);
+      if (!c) cells.set(k, (c = []));
+      const rec = { ix: recs.length, mesh: q.mesh, slot: q.slot, x: q.x, y: q.y, z: q.z, m: null, tris: null, fired: false };
+      recs.push(rec);
+      c.push(rec);
+    }
+    /* ---- bind the triangles ------------------------------------------- */
+    const lists = new Array(recs.length);
+    let bound = 0;
+    for (let t = 0; t < nTri; t++) {
+      const o = t * 9;
+      const x0 = pos[o], y0 = pos[o + 1], z0 = pos[o + 2];
+      const x1 = pos[o + 3], y1 = pos[o + 4], z1 = pos[o + 5];
+      const x2 = pos[o + 6], y2 = pos[o + 7], z2 = pos[o + 8];
+      if (Math.max(x0, x1, x2) - Math.min(x0, x1, x2) > RAZE_TRI) continue;
+      if (Math.max(y0, y1, y2) - Math.min(y0, y1, y2) > RAZE_TRI) continue;
+      if (Math.max(z0, z1, z2) - Math.min(z0, z1, z2) > RAZE_TRI) continue;
+      const cxm = (x0 + x1 + x2) / 3;
+      const cym = (y0 + y1 + y2) / 3;
+      const czm = (z0 + z1 + z2) / 3;
+      const bx = Math.floor(cxm / RAZE_CELL);
+      const bz = Math.floor(czm / RAZE_CELL);
+      let best = -1;
+      let bestD = RAZE_BIND * RAZE_BIND;
+      for (let ax = bx - 1; ax <= bx + 1; ax++) {
+        for (let az = bz - 1; az <= bz + 1; az++) {
+          const c = cells.get(key(ax, az));
+          if (!c) continue;
+          for (let i = 0; i < c.length; i++) {
+            const r = c[i];
+            const dy = cym - r.y;
+            if (dy < -1.2 || dy > 3.0) continue;
+            const dx = cxm - r.x, dz = czm - r.z;
+            const d2 = dx * dx + dz * dz;
+            if (d2 < bestD) { bestD = d2; best = r.ix; }
+          }
+        }
+      }
+      if (best < 0) continue;
+      (lists[best] ?? (lists[best] = [])).push(t);
+      bound++;
+    }
+    for (let i = 0; i < recs.length; i++) {
+      recs[i].tris = lists[i] ? Int32Array.from(lists[i]) : EMPTY_TRIS;
+    }
+    this._atlas = { cells, recs, key, fired: [] };
+    console.info(
+      `[tank] raze atlas: ${recs.length} prop instances in ${cells.size} cells, ` +
+        `${bound} of ${nTri} static triangles bound, in ${(performance.now() - t0).toFixed(0)}ms`
+    );
+  }
+
+  /**
+   * A SHELL LANDED. Every prop instance inside `r` stops being drawn and stops
+   * being solid, in one pass over the cells the blast touches — no search, no
+   * allocation, and collision only ever removed.
+   */
+  _razeAt(x, y, z, r) {
+    const a = this._atlas;
+    if (!a) return 0;
+    const sw = this.physics?.staticWorld;
+    const c0 = Math.floor((x - r) / RAZE_CELL), c1 = Math.floor((x + r) / RAZE_CELL);
+    const d0 = Math.floor((z - r) / RAZE_CELL), d1 = Math.floor((z + r) / RAZE_CELL);
+    const r2 = r * r;
+    let n = 0;
+    for (let cx = c0; cx <= c1; cx++) {
+      for (let cz = d0; cz <= d1; cz++) {
+        const cell = a.cells.get(a.key(cx, cz));
+        if (!cell) continue;
+        for (let i = 0; i < cell.length; i++) {
+          const rec = cell[i];
+          if (rec.fired) continue;
+          const dx = rec.x - x, dz = rec.z - z, dy = rec.y - y;
+          if (dx * dx + dz * dz > r2) continue;
+          if (dy > RAZE_UP || dy < -RAZE_UP) continue;
+          this._eraseRec(rec, sw);
+          a.fired.push(rec);
+          n++;
+        }
+      }
+    }
+    return n;
+  }
+
+  /** The primitive: sixteen floats and a mask fill. @see `_firePlough`. */
+  _eraseRec(rec, sw) {
+    rec.fired = true;
+    const arr = rec.mesh.instanceMatrix.array;
+    const o = rec.slot * 16;
+    if (!rec.m) rec.m = arr.slice(o, o + 16);
+    arr.fill(0, o, o + 16);
+    rec.mesh.instanceMatrix.addUpdateRange(o, 16);
+    rec.mesh.instanceMatrix.needsUpdate = true;
+    if (sw?.mask && rec.tris) {
+      for (let i = 0; i < rec.tris.length; i++) sw.mask[rec.tris[i]] = 0;
+    }
+  }
+
+  /** Put the town back up before the next round. */
+  _restoreRaze() {
+    const a = this._atlas;
+    if (!a?.fired.length) return;
+    const sw = this.physics?.staticWorld;
+    const L = this.physics?.LAYER?.STATIC ?? 1;
+    for (const rec of a.fired) {
+      if (rec.m) {
+        const arr = rec.mesh.instanceMatrix.array;
+        const o = rec.slot * 16;
+        arr.set(rec.m, o);
+        rec.mesh.instanceMatrix.addUpdateRange(o, 16);
+        rec.mesh.instanceMatrix.needsUpdate = true;
+      }
+      if (sw?.mask && rec.tris) {
+        for (let i = 0; i < rec.tris.length; i++) sw.mask[rec.tris[i]] = L;
+      }
+      rec.fired = false;
+    }
+    a.fired.length = 0;
+  }
+
   /**
    * Closest the baked route ever gets to a capture circle, printed so the
    * "it must not block a capture zone" claim is a measurement.
@@ -1126,20 +1676,34 @@ export class Armour {
      */
     const zones = m?.allZones ?? m?.sites;
     if (!zones?.length) return;
-    let best = Infinity;
-    let which = '';
-    for (const z of zones) {
-      for (let i = 0; i < tank.path.n; i++) {
-        const d = Math.hypot(tank.path.X[i] - z.position.x, tank.path.Z[i] - z.position.z);
-        if (d < best) {
-          best = d;
-          which = z.id;
+    let worst = Infinity;
+    let worstLeg = '';
+    let worstZone = '';
+    const parts = [];
+    for (const leg of tank.legs) {
+      let best = Infinity;
+      let which = '';
+      let endTo = '';
+      for (const z of zones) {
+        for (let i = 0; i < leg.n; i++) {
+          const d = Math.hypot(leg.X[i] - z.position.x, leg.Z[i] - z.position.z);
+          if (d < best) { best = d; which = z.id; }
+        }
+        if (z.id === leg.zone) {
+          endTo = Math.hypot(leg.X[leg.n - 1] - z.position.x, leg.Z[leg.n - 1] - z.position.z).toFixed(1);
         }
       }
+      if (best < worst) { worst = best; worstLeg = leg.zone ?? 'HUB'; worstZone = which; }
+      parts.push(
+        `${(leg.zone ?? 'HUB').padEnd(3)} ${leg.length.toFixed(0)}m/${leg.n}, street ${leg.narrowest.toFixed(1)}m` +
+          (endTo ? `, stands ${endTo}m off ${leg.zone}` : '') +
+          (leg.stop ? ` [${leg.stop}]` : '')
+      );
     }
     console.info(
-      `[tank] ${tank.id}: closest approach to a capture circle is ${best.toFixed(1)} m ` +
-        `(zone ${which}, r${RULES.captureRadius})`
+      `[tank] ${tank.id}: ${tank.legs.length} legs — ${parts.join(' · ')}\n` +
+        `[tank] ${tank.id}: closest any leg comes to a capture circle is ${worst.toFixed(1)} m ` +
+        `(leg ${worstLeg}, zone ${worstZone}, r${RULES.captureRadius}, stand-off ${ZONE_STANDOFF})`
     );
   }
 
@@ -1677,7 +2241,7 @@ export class Armour {
     this._announce(this.onAnnounce, first);
     if (this._audio ?? (this._audio = this.ctx.peek('audio'))) {
       for (const t of this.tanks) {
-        this._v.copy(t.position.set(t.path.X[0], t.path.Y[0] + 1.2, t.path.Z[0]));
+        this._v.copy(t.position.set(t.legs[0].X[0], t.legs[0].Y[0] + 1.2, t.legs[0].Z[0]));
         this._audio.play?.('strike_jet', this._v, {
           level: 0.5, dur: TANK_LEAD, maxDist: 200, gain: 1.5, occlusion: 0.4,
         });
@@ -1700,6 +2264,13 @@ export class Armour {
     if (tank.state !== 'parked') return false;
     tank.state = 'advance';
     tank.s = 0;
+    tank.legIx = 0;
+    tank.legDir = 1;
+    tank.planN = 0;
+    tank.planI = 0;
+    tank.targetZone = null;
+    tank.retarget = 0;
+    tank.yaw = tank.legs[0].YAW[0];
     tank.health = RULES.tankHealth;
     tank.alive = true;
     tank.hold = HOLD_TIME;
@@ -1718,7 +2289,7 @@ export class Armour {
     st.hull = 0; st.turret = 0; st.deck = 0;
     st.blasts = 0; st.blastDmg = 0;
     st.frags = 0; st.fragDmg = 0;
-    st.liveT = 0;
+    st.liveT = 0; st.razed = 0; st.legs = 0;
     tank.root.visible = true;
     tank.wreck.visible = false;
     tank.uniforms.uT.value = -1;
@@ -1802,11 +2373,103 @@ export class Armour {
     this._next = this.rng.range(lo, hi);
   }
 
-  /** Advance / hold / reverse along the baked path. No raycast, no allocation. */
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * 「戦車はできるだけ占領サれたエリアに向かい、そこが占領し返すまで戦闘する」
+   * WHERE IT SHOULD BE, ASKED TWICE A SECOND
+   * ────────────────────────────────────────────────────────────────────────
+   * The point the ENEMY holds, nearest first; failing that a NEUTRAL one,
+   * because a point nobody holds is ground the fight is still over. A point
+   * this hull's own side holds is not a destination — that is the
+   * 「占領し返すまで」 half, and it is the whole reason the hull leaves a
+   * station: it stays until the zone's `owner` becomes its own team and then
+   * goes to the next one.
+   *
+   * `match` owns `allZones` and this file reads it, exactly as `_logZones`
+   * always has. A `locked` zone (D before the cathedral comes down) is not a
+   * destination and has no spoke anyway — the hub is the stand-off on D.
+   */
+  _wantZone(tank) {
+    const m = this.ctx.peek('match');
+    const zones = m?.allZones;
+    if (!zones?.length) return null;
+    let best = null;
+    let bestRank = 9;
+    let bestLen = Infinity;
+    for (let i = 1; i < tank.legs.length; i++) {
+      const leg = tank.legs[i];
+      const z = zones.find((q) => q.id === leg.zone);
+      if (!z || z.locked) continue;
+      if (z.owner === tank.team) continue;
+      // 0 = the enemy holds it, 1 = nobody does.
+      const rank = z.owner === -1 ? 1 : 0;
+      if (rank > bestRank) continue;
+      if (rank === bestRank && leg.length >= bestLen) continue;
+      bestRank = rank;
+      bestLen = leg.length;
+      best = leg.zone;
+    }
+    return best;
+  }
+
+  /**
+   * LAY IN A COURSE. At most three legs: finish the approach if we are still on
+   * it, come back down the spoke we are on, then go out the new one. A spoke is
+   * driven in reverse by driving it FORWARDS with the hull turned round — the
+   * pivot in `_drive` does the turn — because a tank reversing sixty metres
+   * down a street is not what "move to the next point" looks like.
+   */
+  _setCourse(tank, zoneId) {
+    const want = tank.legs.findIndex((l, i) => i > 0 && l.zone === zoneId);
+    if (want < 0) return false;
+    if (tank.legIx === want && tank.legDir > 0) return false;
+    tank.planN = 0;
+    tank.planI = 0;
+    if (tank.legIx === 0) {
+      // still on the approach: run it out first, from wherever we are.
+      if (tank.s < tank.legs[0].length - 0.05 || tank.state === 'advance') {
+        tank.plan[tank.planN].leg = 0;
+        tank.plan[tank.planN++].dir = 1;
+      }
+    } else {
+      tank.plan[tank.planN].leg = tank.legIx;
+      tank.plan[tank.planN++].dir = -1;
+    }
+    tank.plan[tank.planN].leg = want;
+    tank.plan[tank.planN++].dir = 1;
+    tank.targetZone = zoneId;
+    this._startPlanStep(tank, true);
+    return true;
+  }
+
+  /** Begin the plan's current step. `keepS` keeps the arc we are already at. */
+  _startPlanStep(tank, keepS) {
+    const step = tank.plan[tank.planI];
+    const same = step.leg === tank.legIx;
+    tank.legIx = step.leg;
+    tank.legDir = step.dir;
+    const leg = tank.legs[tank.legIx];
+    if (!(keepS && same)) tank.s = step.dir > 0 ? 0 : leg.length;
+    tank.state = 'advance';
+  }
+
+  /** Advance along the leg the course is on. No raycast, no allocation. */
   _drive(tank, dt) {
-    const p = tank.path;
+    const p = tank.legs[tank.legIx];
+    /**
+     * THE NOSE CHASES THE LEG. Over `PIVOT_HOLD` off the heading it wants — a
+     * hairpin, or the 180 degrees a spoke driven back to the hub asks for — the
+     * hull turns on the spot instead of driving, which is the only way a wheel
+     * of routes reads as one vehicle rather than as a sprite being slid along a
+     * new line.
+     */
+    const wantYaw = wrapPi(p.YAW[this._yawIndex(tank, p)] + (tank.legDir < 0 ? Math.PI : 0));
+    const dy = wrapPi(wantYaw - tank.yaw);
+    tank.yaw = wrapPi(tank.yaw + clamp(dy, -PIVOT_RATE * dt, PIVOT_RATE * dt));
+    const pivoting = Math.abs(dy) > PIVOT_HOLD;
+
     if (tank.state === 'advance') {
-      let speed = tank.target ? SPEED_FIGHT : SPEED_ADVANCE;
+      let speed = pivoting ? 0 : tank.target ? SPEED_FIGHT : SPEED_ADVANCE;
       /**
        * SHOVING A WALL COSTS MOMENTUM. Without this the hull crosses a pile at
        * exactly the speed it crosses open road and the destruction reads as
@@ -1816,12 +2479,20 @@ export class Armour {
         tank.ploughDrag -= dt;
         speed *= PLOUGH_SLOW;
       }
-      tank.s += speed * dt;
+      tank.s += speed * dt * tank.legDir;
       this._checkPlough(tank);
       tank.wheelSpin -= (speed * dt) / 0.44;
-      if (tank.s >= p.length) {
-        tank.s = p.length;
-        tank.state = 'hold';
+      const done = tank.legDir > 0 ? tank.s >= p.length : tank.s <= 0;
+      if (done) {
+        tank.s = tank.legDir > 0 ? p.length : 0;
+        tank.stats.legs++;
+        if (tank.planI + 1 < tank.planN) {
+          tank.planI++;
+          this._startPlanStep(tank, false);
+        } else {
+          tank.planN = 0;
+          tank.state = 'hold';
+        }
       }
     } else if (tank.state === 'hold') {
       /**
@@ -1856,17 +2527,49 @@ export class Armour {
        * circle. @see the header.
        */
       tank.hold -= dt;
+      /**
+       * …AND `hold` IS STILL TERMINAL IN THE ONLY SENSE THAT MATTERED. There is
+       * no withdrawal, no despawn and no lifetime: the hull leaves a station
+       * only to stand on ANOTHER one, and the exits from a live tank are still
+       * `_destroy` and the round reset. What changed is that standing still is
+       * no longer the end of the sortie.
+       */
+      tank.retarget -= dt;
+      if (tank.retarget <= 0) {
+        tank.retarget = RETARGET_EVERY;
+        const want = this._wantZone(tank);
+        if (want && want !== tank.targetZone) this._setCourse(tank, want);
+        else if (!want) tank.targetZone = null;
+      }
+    } else if (tank.state === 'advance') {
+      // A point taken back while we are still driving at it re-lays the course.
+      tank.retarget -= dt;
+      if (tank.retarget <= 0) {
+        tank.retarget = RETARGET_EVERY;
+        const want = this._wantZone(tank);
+        if (want && want !== tank.targetZone) this._setCourse(tank, want);
+      }
     }
+  }
+
+  /** The sample whose baked yaw the hull should be chasing. */
+  _yawIndex(tank, p) {
+    const s = clamp(tank.s, 0, p.length);
+    let i = Math.min(p.n - 1, Math.max(0, Math.round((s / Math.max(1e-4, p.length)) * (p.n - 1))));
+    if (i < 0) i = 0;
+    return i;
   }
 
   /** Has the glacis reached a pile this sortie has not already flattened? */
   _checkPlough(tank) {
     const list = tank.plough;
     if (!list || !list.length) return;
-    const reach = tank.s + PLOUGH_NOSE;
+    // The glacis leads whichever way the hull is pointing.
+    const reach = tank.s + PLOUGH_NOSE * tank.legDir;
     for (let i = 0; i < list.length; i++) {
       const pile = list[i];
-      if (!pile.fired && reach >= pile.s) this._firePlough(tank, pile);
+      if (pile.fired || pile.leg !== tank.legIx) continue;
+      if (tank.legDir > 0 ? reach >= pile.s : reach <= pile.s) this._firePlough(tank, pile);
     }
   }
 
@@ -1878,26 +2581,67 @@ export class Armour {
     this._emit('clear', tank);
   }
 
-  /** Where on the path are we? Lerped from the baked samples. */
+  /**
+   * THE RIDE HEIGHT AT AN ARC POSITION, which is the road plus whatever is
+   * standing on it that the plough has not taken away. @see `_bakeRide`.
+   */
+  _rideAt(tank, p, s) {
+    const q = clamp(s, 0, p.length);
+    let i = Math.min(p.n - 1, Math.max(0, Math.round((q / Math.max(1e-4, p.length)) * (p.n - 1))));
+    while (i > 0 && p.S[i] > q) i--;
+    while (i < p.n - 1 && p.S[i + 1] < q) i++;
+    let y = -Infinity;
+    for (let k = i; k <= Math.min(p.n - 1, i + 1); k++) {
+      const pile = p.PILE[k];
+      const gone = pile >= 0 && tank.plough && tank.plough[pile]?.fired;
+      const step = gone ? 0 : Math.min(p.STEP[k], CLIMB_TOP);
+      const v = p.ROAD[k] + step;
+      if (v > y) y = v;
+    }
+    return y;
+  }
+
+  /**
+   * A TRACKED VEHICLE RESTS ON THE HIGHEST THING UNDER ITS TRACK RUN, not on
+   * the ground under its centre — which is what makes a step read as a CLIMB
+   * instead of the whole hull popping up 0.8 m over one 1.25 m sample with its
+   * pitch clamped at 9 degrees. Two support points, `SUPPORT` fore and aft; the
+   * body sits between them and the pitch is the line through them, so the nose
+   * lifts first, the hull levels on top and the tail settles last.
+   *
+   * Costs no raycast: both supports are a max over a handful of baked samples.
+   */
   _sample(tank) {
-    const p = tank.path;
+    const p = tank.legs[tank.legIx];
     const s = clamp(tank.s, 0, p.length);
-    // The samples are evenly spaced by construction, so the index is arithmetic.
-    let i = Math.min(p.n - 2, Math.max(0, Math.floor((s / p.length) * (p.n - 1))));
+    let i = Math.min(p.n - 2, Math.max(0, Math.floor((s / Math.max(1e-4, p.length)) * (p.n - 1))));
     while (i > 0 && p.S[i] > s) i--;
     while (i < p.n - 2 && p.S[i + 1] < s) i++;
     const span = Math.max(1e-4, p.S[i + 1] - p.S[i]);
     const t = clamp((s - p.S[i]) / span, 0, 1);
     const out = this._v3;
+
+    // The two supports, in the hull's own travelling sense.
+    const dir = tank.legDir;
+    let front = -Infinity;
+    let rear = -Infinity;
+    const N = 4;
+    for (let k = 0; k <= N; k++) {
+      const u = (k / N) * SUPPORT;
+      const f = this._rideAt(tank, p, s + u * dir);
+      const r = this._rideAt(tank, p, s - u * dir);
+      if (f > front) front = f;
+      if (r > rear) rear = r;
+    }
     out.set(
       p.X[i] + (p.X[i + 1] - p.X[i]) * t,
-      p.Y[i] + (p.Y[i + 1] - p.Y[i]) * t,
+      (front + rear) * 0.5,
       p.Z[i] + (p.Z[i + 1] - p.Z[i]) * t
     );
     // yaw is not lerped through the wrap; the samples are 1.25 m apart and the
     // route is nearly straight, so the nearest one is the right answer.
     tank._yaw = p.YAW[t < 0.5 ? i : i + 1];
-    tank._pitch = p.PITCH[t < 0.5 ? i : i + 1];
+    tank._pitch = clamp(Math.atan2(front - rear, SUPPORT * 2), -CLIMB_PITCH, CLIMB_PITCH);
     return out;
   }
 
@@ -1908,7 +2652,9 @@ export class Armour {
     // A tank reversing still faces the way it drove in; that is the whole point
     // of reversing out of a street.
     const q = this._q;
-    q.setFromAxisAngle(UP, tank._yaw);
+    // `tank.yaw` and not `tank._yaw`: the hull's own heading lags the leg's and
+    // swings on the spot through a hairpin. @see `_drive`.
+    q.setFromAxisAngle(UP, tank.yaw);
     this._qp.setFromAxisAngle(RIGHT, -tank._pitch);
     q.multiply(this._qp);
     tank.root.position.copy(at);
@@ -1956,7 +2702,8 @@ export class Armour {
       const dz = p.z - tank.position.z;
       const dy = p.y - (tank.position.y + 2.0);
       const world = Math.atan2(dx, dz);
-      wantYaw = wrapPi(world - tank._yaw);
+      // The HULL's heading, not the leg's: the two differ through a pivot.
+      wantYaw = wrapPi(world - tank.yaw);
       wantPitch = clamp(Math.atan2(dy, Math.hypot(dx, dz)), GUN_DOWN, GUN_UP);
       const dyaw = wrapPi(wantYaw - tank.turretYaw);
       const dpitch = wantPitch - tank.gunPitch;
@@ -2069,12 +2816,31 @@ export class Armour {
     b.source = tank;
     this.ctx.events.emit('explosion', b);
 
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * 「また戦車の爆撃でも街を破壊できるようにして」
+     * ──────────────────────────────────────────────────────────────────────
+     * AND THE TOWN TAKES IT. The same erase the glacis makes, at the point the
+     * shell landed rather than at a pile baked on a corridor — sixteen floats
+     * per instance and a mask fill per instance, off an index built at boot.
+     * @see `_buildRazeAtlas`. `tank.stats.razed` counts it so "the gun destroys
+     * the town" is a number in the boot/death log and not a claim.
+     */
+    const razed = this._razeAt(at.x, at.y, at.z, RAZE_R);
+    tank.stats.razed += razed;
+
     // Muzzle blast, the tracer down range and the dust it kicks off the street.
     const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
     if (fx) {
       fx.explosion?.({ position: from, radius: 1.5 });
       fx.tracer?.(from, at, 900);
       fx.hazeRing?.(from.x, from.y, from.z, 1.6, 12, 0.4, 1.6);
+      // What came off the street goes up as dust, so the props do not simply
+      // stop existing inside the fireball.
+      if (razed) {
+        fx.dust?.(at.x, at.y + 0.5, at.z, RAZE_R * 0.6);
+        fx.hazeRing?.(at.x, at.y + 0.4, at.z, RAZE_R * 0.5, 14, 0.5, 1.5);
+      }
       if (fx.lights) fx.lights.flash(from.x, from.y, from.z, 1, 0.76, 0.42, 900, 0.5, 6, 40, 4);
     }
     const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
@@ -2305,7 +3071,8 @@ export class Armour {
         `alive ${st.liveT.toFixed(0)}s, ${st.rounds} rounds for ${st.roundDmg.toFixed(0)} ` +
         `(hull ${st.hull.toFixed(0)} / turret ${st.turret.toFixed(0)} / deck ${st.deck.toFixed(0)}), ` +
         `${st.frags} frags for ${st.fragDmg.toFixed(0)}, ${st.blasts} blasts for ${st.blastDmg.toFixed(0)}, ` +
-        `${st.kills} kills`
+        `${st.kills} kills, ${st.legs} legs driven, ${st.razed} props shelled off the map, ` +
+        `last standing off ${tank.targetZone ?? 'the cathedral'}`
     );
     this._announce(this.onImpact, tank);
     this.onKill?.(tank, by ?? null);
@@ -2323,7 +3090,9 @@ export class Armour {
     a.lead = TANK_LEAD;
     a.count = 0;
     // Where it is going, so the HUD arrow points at the street it will be in.
-    this._end.set(tank.path.X[tank.path.n - 1], tank.path.Y[tank.path.n - 1] + 1, tank.path.Z[tank.path.n - 1]);
+    const leg = tank.legs[tank.planN ? tank.plan[tank.planN - 1].leg : tank.legIx] ?? tank.legs[0];
+    const j = tank.legDir < 0 && !tank.planN ? 0 : leg.n - 1;
+    this._end.set(leg.X[j], leg.Y[j] + 1, leg.Z[j]);
     a.position = tank.state === 'dead' ? tank.position : this._end;
     a.points[a.count++] = a.position;
     hook(a);
@@ -2400,6 +3169,8 @@ export class Armour {
 
   reset() {
     this.disarm();
+    // Every stall the guns took off the map goes back up before the next round.
+    this._restoreRaze();
     for (const tank of this.tanks) {
       // Every pile the last round flattened goes back up before the next one.
       this._restorePlough(tank);
@@ -2407,6 +3178,12 @@ export class Armour {
       tank.state = 'parked';
       tank.alive = false;
       tank.s = 0;
+      tank.legIx = 0;
+      tank.legDir = 1;
+      tank.planN = 0;
+      tank.planI = 0;
+      tank.targetZone = null;
+      tank.yaw = tank.legs[0].YAW[0];
       tank.health = RULES.tankHealth;
       tank.root.visible = false;
       tank.uniforms.uT.value = -1;
