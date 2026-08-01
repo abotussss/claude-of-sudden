@@ -1964,6 +1964,197 @@ export function buildMiniReflex(asm, o) {
 }
 
 /**
+ * 1x HOLOGRAPHIC SIGHT (EOTech pattern) — an open hood with a flat combiner at
+ * the front of it, standing on a rail clamp.
+ *
+ * IT IS THE OPPOSITE OF `src/ui/scope.js`, and deliberately so. A magnified
+ * scope takes the world camera to FOV/magnification and puts a black surround
+ * over everything but the sight picture: you see the optic and NOTHING else.
+ * A holographic sight is unmagnified — the world camera never moves (there is
+ * no `scope` entry in the def, so `WeaponSystem.adsFovScale` returns null and
+ * the camera keeps the global ADS pull every iron-sighted weapon gets), the
+ * viewmodel stays visible, the hood is open at the rear, and the world outside
+ * the 36 x 26 mm window is the same world at the same size. Both eyes open,
+ * both sides of the glass live. So there is no overlay, no vignette ring and no
+ * `fullScreen`: the ONLY thing this adds to the frame is a pane of glass and
+ * the collimated reticle the viewmodel already draws on the optical axis.
+ *
+ * The layout is forced by the fact that the eye has to see through it:
+ *
+ *   hood roof     ABOVE the window, its rear edge further from the eye than the
+ *                 window's top edge is, so it can never crop the sight picture
+ *   side walls    outboard of the glass by 1.8 mm, same argument on X
+ *   body          BELOW the sight line — its top is flush with the window's
+ *                 bottom edge, so the battery housing and the emitter live
+ *                 under the optical path instead of in it. This is why the body
+ *                 is a low slab and not a tube: a mini-holo's electronics are
+ *                 under the glass, and modelling it any other way puts a wall
+ *                 across the ADS frame.
+ *   open rear     no ocular, no bezel, no eye relief. The reticle is at optical
+ *                 infinity on the tube axis, which is what makes it 1x.
+ *
+ * `y` is the WINDOW CENTRE — i.e. the sight line, the thing the ADS solve puts
+ * on the camera axis — and `z` is the plane of the combiner. Everything else is
+ * derived from those two so the caller cannot detach the glass from the sight
+ * node by editing one and not the other.
+ */
+export function buildHoloSight(asm, o) {
+  const y = o.y ?? 0;
+  const z = o.z ?? 0;
+  /** Top of the rail this clamps onto — the foot is grown DOWN to meet it. */
+  const railTop = o.railTop ?? y - 0.04;
+  const glassW = o.w ?? 0.036;
+  const glassH = o.h ?? 0.026;
+  const matBody = o.matBody ?? 'alu_fine';
+  const matSteel = o.matSteel ?? 'steel';
+  const tint = o.tint ?? 'glass';
+
+  const hw = glassW * 0.5;
+  const hh = glassH * 0.5;
+  const yWinBot = y - hh;
+  const yWinTop = y + hh;
+  const wallX = hw + 0.0018; // inner face of each hood wall
+  const outX = wallX + 0.0018; // outer face
+  const yHood = yWinTop + 0.005; // top of the hood roof
+  const zHood = z - 0.011; // the roof's front brow, ahead of the glass
+  const zRear = z + 0.056; // back of the battery housing
+  const zWallRear = z + 0.03; // the hood is open from here back
+
+  /* ---- rail clamp ------------------------------------------------------- */
+  /**
+   * The foot straddles the rail rather than resting on it: it starts 1.5 mm
+   * BELOW `railTop` so the recoil slot teeth are inside it. A clamp that stops
+   * exactly at the rail's top face is a part touching a part along one plane,
+   * which is the same defect as a part touching nothing — see the AK's front
+   * sight hood, which floated 35.4 mm over its own block.
+   */
+  const footBot = railTop - 0.0015;
+  const footTop = yWinBot - 0.021;
+  const zFoot0 = z - 0.012;
+  const foot = box(0.0296, footTop - footBot, zRear - zFoot0, 0.0009, 2);
+  asm.add(foot, matBody, { y: (footBot + footTop) / 2, z: (zFoot0 + zRear) / 2 });
+  foot.dispose();
+  // Cross-bolt and its thumb nut, on the right where a shooter's hand is not.
+  const bolt = rodZ(0.0026, 0.0026, 0.036, 10, 0.0004);
+  bolt.rotateY(Math.PI / 2);
+  asm.add(bolt, matSteel, { y: footBot + 0.004, z: z + 0.03 });
+  bolt.dispose();
+  const nut = knurlBand(0.0072, 0.005, 18, 0.0004, 3);
+  nut.rotateY(Math.PI / 2);
+  asm.add(nut, matSteel, { x: 0.0168, y: footBot + 0.004, z: z + 0.03 });
+  nut.dispose();
+
+  /* ---- body: everything electrical, UNDER the sight line ----------------- */
+  const zBody0 = z - 0.006;
+  const body = box(outX * 2, yWinBot - footTop, zRear - zBody0, 0.0012, 2);
+  asm.add(body, matBody, { y: (footTop + yWinBot) / 2, z: (zBody0 + zRear) / 2 });
+  body.dispose();
+  // Battery tube across the back, and the two adjustment pads beside it.
+  const batt = latheZ(
+    [
+      [0, 0.0068],
+      [0.0018, 0.0082],
+      [0.0225, 0.0082],
+      [0.0243, 0.0068],
+    ],
+    14
+  );
+  batt.rotateY(Math.PI / 2);
+  asm.add(batt, matBody, { x: -0.0122, y: (footTop + yWinBot) / 2, z: zRear - 0.009 });
+  batt.dispose();
+  for (const dz of [0, 0.009]) {
+    const pad = box(0.008, 0.0055, 0.0062, 0.0012, 2);
+    asm.add(pad, 'rubber', { x: outX - 0.0012, y: (footTop + yWinBot) / 2, z: zRear - 0.014 - dz });
+    pad.dispose();
+  }
+  // Emitter shroud on the body's top face, just behind the glass. It is BELOW
+  // the window bottom, so it is under the sight picture and not in it.
+  const emitter = blob(0.014, 0.0055, 0.016, 0.0016, 2);
+  asm.add(emitter, matBody, { y: yWinBot - 0.0022, z: z + 0.016 });
+  emitter.dispose();
+  const led = latheZ(
+    [
+      [0, 0],
+      [0, 0.0017],
+      [0.0013, 0.0019],
+      [0.0013, 0],
+    ],
+    10
+  );
+  asm.add(led, 'steel_bright', { y: yWinBot + 0.0002, z: z + 0.0105, rx: -0.6 });
+  led.dispose();
+
+  /* ---- hood: two walls and a roof, open at the rear ---------------------- */
+  const yWall0 = yWinBot - 0.002;
+  for (const sx of [-1, 1]) {
+    const wall = box(0.0036, yHood - yWall0, zWallRear - zHood, 0.0007, 2);
+    asm.add(wall, matBody, {
+      x: sx * (wallX + 0.0018),
+      y: (yWall0 + yHood) / 2,
+      z: (zHood + zWallRear) / 2,
+    });
+    wall.dispose();
+    // A milled panel in the outer face. A hood wall is 36 x 41 mm of flat plate
+    // seen edge-on in hipfire, i.e. exactly the "no flat untextured surfaces"
+    // failure the AK's own receiver flank was fixed for.
+    const panel = box(0.0014, yHood - yWall0 - 0.011, zWallRear - zHood - 0.012, 0.0004, 1);
+    asm.add(panel, 'cavity', {
+      x: sx * (wallX + 0.0032),
+      y: (yWall0 + yHood) / 2,
+      z: (zHood + zWallRear) / 2,
+    });
+    panel.dispose();
+  }
+  const roof = box(outX * 2, 0.005, zWallRear - zHood, 0.0011, 2);
+  asm.add(roof, matBody, { y: yHood - 0.0025, z: (zHood + zWallRear) / 2 });
+  roof.dispose();
+  /**
+   * The inside of the hood, in the light-trap material. `optic_tube`, not
+   * `cavity`: a pure black pocket reads as a hole punched in the frame (see
+   * buildOptic), and this pocket is the thing the eye looks straight into.
+   */
+  const liner = box(hw * 2 + 0.0004, 0.0018, zWallRear - zHood - 0.001, 0.0003, 1);
+  asm.add(liner, 'optic_tube', { y: yHood - 0.0058, z: (zHood + zWallRear) / 2 });
+  liner.dispose();
+
+  /* ---- the combiner ------------------------------------------------------ */
+  /**
+   * Canted 3.4 degrees back off vertical, as a real holographic combiner is —
+   * a flat pane square to the bore reflects the emitter straight back at the
+   * eye, and it is the cant that puts that reflection out of the sight picture.
+   */
+  const tilt = o.tilt ?? 0.06;
+  const pane = extrude(roundRect(glassW, glassH, 0.0018, 3), 0.0013, { bevel: 0.0003 });
+  asm.add(pane, tint, { y, z, rx: tilt });
+  pane.dispose();
+  /**
+   * The bezel is what makes the sight ONE object: its outer edge overlaps both
+   * hood walls, its top overlaps the roof and its bottom overlaps the body, so
+   * glass, hood and housing are a single connected mass.
+   */
+  const bezel = extrude(roundRect(glassW + 0.006, glassH + 0.006, 0.002, 3), 0.0032, {
+    bevel: 0.0006,
+    holes: [roundRect(glassW - 0.0004, glassH - 0.0004, 0.0016, 3)],
+  });
+  asm.add(bezel, matBody, { y, z: z + 0.0004, rx: tilt });
+  bezel.dispose();
+
+  return {
+    center: [0, y, z],
+    lensZ: z,
+    /**
+     * The exit pupil the reticle vignettes against. A holo has no exit pupil in
+     * the tube-optic sense — the window IS the aperture — so it is the shorter
+     * half-axis of the glass.
+     */
+    apertureR: Math.min(glassW, glassH) * 0.46,
+    windowW: hw,
+    windowH: hh,
+    top: yHood,
+  };
+}
+
+/**
  * Pistol slide: a machined block with front and rear grasping serrations, a
  * lightening cut, the ejection port, a chamber hood, sight dovetails and a
  * breech face. Built in slide space with the origin at the bore axis, so the

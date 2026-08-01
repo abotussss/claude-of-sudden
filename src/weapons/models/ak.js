@@ -2,10 +2,12 @@ import { Assembly, box, blob, dome, extrude, roundRect, latheZ, rodZ, tubeZ, knu
 import {
   addBarrel,
   addPistolGrip,
+  addRail,
   addRollmark,
   addSlingLoop,
   addPin,
   addScrew,
+  buildHoloSight,
   buildMagazine,
   triggerPart,
   cartridge,
@@ -97,7 +99,66 @@ export function buildAk() {
    * tube runs forward to a visible front post, and there is a sight picture
    * where there was none.
    */
+  /**
+   * THE CLAIM ABOVE — "this constant drives the sight BLOCKS as well" — WAS
+   * FALSE, and it is the whole of「AKは今ADSの時に部品が浮いてる状態になってしまっている」.
+   *
+   * The blocks were never moved. `fsbBase` is still added at `y: bore` and
+   * `rsBase` at `y: bore + 0.001`, and their extrusion profiles top out at
+   * +15.8 mm and +10.0 mm respectively. Only the things ON them — the hood, the
+   * post, the post collar, the tangent leaf, the slider and the notch — read
+   * this constant, so raising it from 24.5 mm to 68 mm lifted them off their
+   * own mounts and left them hanging in mid air. MEASURED, per part, as the
+   * AABB gap from each cluster to the nearest geometry that is not in it:
+   *
+   *   front hood + slot + post + collar    35.40 mm clear of the front block
+   *   leaf + slider + notch shoulders      16.84 mm clear of anything at all
+   *
+   * and photographed from the side: two objects hovering over the barrel.
+   *
+   * So the two heights are separated, because they were always two different
+   * things pretending to be one. `sightY` stays at bore + 68 mm and is now the
+   * OPTIC's line — see `railTop` below, where a rail and a holographic sight
+   * put real geometry at that height for the first time. `ironY` is where the
+   * iron sights actually are: bore + 24.5 mm, the value this file measured as
+   * authentic before the raise, which is inside both blocks with millimetres to
+   * spare. The eye does not move (defs.js `eyeRelief`), the sight line does not
+   * move, and nothing floats.
+   */
   const sightY = bore + 0.068;
+  const ironY = bore + 0.0245;
+  /**
+   * THE RAILED TOP COVER AND THE 1x HOLOGRAPHIC SIGHT THAT STANDS ON IT.
+   *
+   * `sightY` above is 68 mm over the bore and the note that raised it there is
+   * correct about WHY — from an eye 5.7 mm above the dust cover there is no
+   * sight picture, only a 440 mm slab running to a vanishing point. What it is
+   * not is an iron sight height. Nothing on a Kalashnikov's rear sight block
+   * reaches 68 mm; the block tops out at bore + 15.8 mm, which is why the leaf,
+   * the slider, the notch, the front hood and the post ended up hanging in mid
+   * air with 16.8 mm and 35.4 mm of daylight under them (measured, per part).
+   *
+   * 68 mm over bore is, however, almost exactly where a rail-mounted optic's
+   * glass sits: a Picatinny rail on the cover puts its top face 28 mm over the
+   * bore and a holographic sight's window centre is a further 40 mm up. So the
+   * sight line does not move — every number in defs.js that was measured
+   * against it survives — and what is AT the sight line becomes a thing that
+   * can actually be there.
+   *
+   *   railTop  bore + 28 mm. The rail's base runs 7.4 mm below that, i.e.
+   *            1.7 mm INTO the cover's crest (bore + 22.3 mm), so it is bedded
+   *            in the sheet rather than resting on it.
+   *   opticZ   -0.0515, and this is chosen, not free. The ADS solve lands the
+   *            `sight` node at -eyeRelief on the camera axis, so the pose is a
+   *            function of (sight.z + eyeRelief) alone: at 0.16 of relief this
+   *            glass puts the eye at weapon z = +0.1085 — the SAME place the
+   *            0.238/-0.1295 pair put it. The hands, the arms, the support
+   *            forearm angle and the framing are therefore untouched by fitting
+   *            an optic. See `eyeRelief` in defs.js.
+   */
+  const railTop = bore + 0.028;
+  const opticY = sightY;
+  const opticZ = -0.0515;
   const gasY = bore + 0.019;
   /** Handguard collision axis — see `handguard` in nodes for the derivation. */
   const hgAxisY = 0.0595;
@@ -210,6 +271,15 @@ export function buildAk() {
   const portLip = extrude(roundRect(portW + 0.005, portH + 0.005, 0.0022, 3), 0.0022, { bevel: 0.0006 });
   body.add(portLip, 'steel_enamel', { x: recW * 0.5 - 0.0018, y: bore + 0.0022, z: portZ, ry: Math.PI / 2 });
   portLip.dispose();
+  /**
+   * CHARGING HANDLE SLOT — the cut the carrier's arm actually comes out of,
+   * open at the top of the right wall and 88 mm long so the handle stays inside
+   * it over its whole 75 mm of travel (`chargePull`). Without it the stem is a
+   * bar passing through unbroken sheet steel.
+   */
+  const chSlot = box(0.006, 0.0105, 0.088, 0.0004, 1);
+  body.add(chSlot, 'cavity', { x: recW * 0.5 - 0.0015, y: bore + 0.0055, z: 0.03 });
+  chSlot.dispose();
 
   /**
    * Magazine opening. There is no magwell: the receiver floor simply has a
@@ -275,6 +345,25 @@ export function buildAk() {
     body.add(rHead, 'steel', { x: -recW * 0.5 - 0.0054, y: bore - 0.0125, z: rz, ry: -Math.PI / 2 });
     rHead.dispose();
   }
+
+  /* ---- railed top cover + 1x holographic sight --------------------------- */
+  /**
+   * The rail is 112 mm and sits entirely inside the cover's 190 mm, so both of
+   * its ends land on sheet steel and neither overhangs into air. `steel_enamel`
+   * because it is painted with the rest of the cover — a bare-phosphate rail on
+   * a blued receiver is the "white rectangle pasted on" failure the selector
+   * lever below documents.
+   */
+  addRail(body, 'steel_enamel', -0.086, 0.026, railTop);
+  const holo = buildHoloSight(body, {
+    y: opticY,
+    z: opticZ,
+    railTop,
+    w: 0.036,
+    h: 0.026,
+    matBody: 'steel_enamel',
+    matSteel: 'steel',
+  });
 
   /* ---- trigger guard + grip -------------------------------------------- */
   const guardOuter = [
@@ -395,15 +484,15 @@ export function buildAk() {
   // Hood: a short tube standing on +Y, split by the sight slot.
   const hood = tubeZ(0.0092, 0.0076, 0.0215, 18, 0.0004);
   hood.rotateX(Math.PI / 2);
-  body.add(hood, 'steel_soot', { y: sightY, z: zFsb });
+  body.add(hood, 'steel_soot', { y: ironY, z: zFsb });
   hood.dispose();
   const hoodSlot = box(0.0058, 0.0045, 0.0225, 0.0004, 1);
-  body.add(hoodSlot, 'cavity', { y: sightY + 0.0105, z: zFsb });
+  body.add(hoodSlot, 'cavity', { y: ironY + 0.0105, z: zFsb });
   hoodSlot.dispose();
   // The post, on the sight line.
   const post = rodZ(0.0013, 0.0011, 0.0145, 8, 0.0002);
   post.rotateX(Math.PI / 2);
-  body.add(post, 'steel_enamel', { y: sightY - 0.0072, z: zFsb });
+  body.add(post, 'steel_enamel', { y: ironY - 0.0072, z: zFsb });
   post.dispose();
   const postCollar = latheZ(
     [
@@ -414,7 +503,7 @@ export function buildAk() {
     ],
     10
   );
-  body.add(postCollar, 'steel_enamel', { y: sightY - 0.0158, z: zFsb, rx: -Math.PI / 2 });
+  body.add(postCollar, 'steel_enamel', { y: ironY - 0.0158, z: zFsb, rx: -Math.PI / 2 });
   postCollar.dispose();
 
   /**
@@ -453,19 +542,32 @@ export function buildAk() {
     { bevel: 0.0005 }
   );
   leaf.rotateY(Math.PI / 2);
-  body.add(leaf, 'steel_enamel', { y: sightY - 0.0112, z: zRearSight - 0.006, rx: -0.06 });
+  /**
+   * THE CHAIN THAT HAS TO CLOSE, block -> leaf -> slider -> notch, and it is
+   * authored as a chain rather than as four offsets from `ironY` because that
+   * is what was wrong with it: every one of these was `sightY - k`, so the
+   * whole assembly moved as a rigid group when the sight line moved and none of
+   * it stayed on the block underneath. Even at the old bore + 24.5 mm the leaf
+   * sat 1.5 mm off the block and the notch 4.1 mm off the leaf.
+   *
+   *   rsBase top    bore + 10.0 mm  (profile max, at y: bore + 0.001)
+   *   leaf          0.6 mm INTO the block, 3.6 mm thick with its bevel
+   *   slider        rides the leaf, tall enough to reach the notch
+   *   notch ears    stand on the slider, their tops ON the sight line
+   */
+  body.add(leaf, 'steel_enamel', { y: ironY - 0.0133, z: zRearSight - 0.006, rx: -0.06 });
   leaf.dispose();
-  const slider = box(0.0165, 0.0052, 0.0075, 0.0008, 1);
-  body.add(slider, 'steel_enamel', { y: sightY - 0.0072, z: zRearSight + 0.0155 });
+  const slider = box(0.0165, 0.008, 0.0075, 0.0008, 1);
+  body.add(slider, 'steel_enamel', { y: ironY - 0.009, z: zRearSight + 0.0155 });
   slider.dispose();
   // Notch blade: the two shoulders either side of a U-notch, on the sight line.
   for (const sx of [-1, 1]) {
     const shoulder = box(0.0052, 0.0055, 0.0022, 0.0005, 1);
-    body.add(shoulder, 'steel_enamel', { x: sx * 0.0044, y: sightY - 0.0026, z: zRearSight + 0.0185 });
+    body.add(shoulder, 'steel_enamel', { x: sx * 0.0044, y: ironY - 0.0026, z: zRearSight + 0.0185 });
     shoulder.dispose();
   }
   const notchFloor = box(0.0035, 0.0022, 0.0022, 0.0004, 1);
-  body.add(notchFloor, 'cavity', { y: sightY - 0.0044, z: zRearSight + 0.0185 });
+  body.add(notchFloor, 'cavity', { y: ironY - 0.0044, z: zRearSight + 0.0185 });
   notchFloor.dispose();
 
   /* ---- furniture: lower + upper handguards ------------------------------ */
@@ -724,8 +826,20 @@ export function buildAk() {
    */
   const charging = new Assembly('ak-charging');
   const chParts = [];
-  const chStem = box(0.014, 0.0085, 0.011, 0.0012, 2);
-  chStem.translate(0.007, 0, 0);
+  /**
+   * The stem runs 12 mm INBOARD of this assembly's origin as well as 14 mm out.
+   *
+   * `chargeRest` sits the handle at x = recW/2 + 3 mm — outside the receiver's
+   * right wall, which is the clearance a reciprocating part needs. A 14 mm stem
+   * from there therefore started 3 mm off the flank and touched nothing: the
+   * whole handle measured 2.08 mm clear of the weapon. An AK's charging handle
+   * is not a stub bolted to the outside of the receiver, it is the bolt
+   * carrier's own arm coming out through a slot, so the stem reaches back
+   * through the wall to the carrier (whose surface is at x = 13.1 mm at this
+   * height) and the slot it comes through is cut below.
+   */
+  const chStem = box(0.026, 0.0085, 0.011, 0.0012, 2);
+  chStem.translate(0.001, 0, 0);
   chParts.push(chStem);
   const chKnob = latheZ(
     [
@@ -738,8 +852,20 @@ export function buildAk() {
     ],
     14
   );
-  chKnob.rotateY(-Math.PI / 2);
-  chKnob.translate(-0.012, 0, 0);
+  /**
+   * `+PI/2`, not `-PI/2`, and this is the third detached piece on this weapon.
+   *
+   * `latheZ` builds along +Z; R_y(-PI/2) maps +Z onto -X, so the knob was
+   * lathed INBOARD — x -27.8 to -12.0 mm, which after `chargeRest` puts it at
+   * -6.7 to +9.1 mm, i.e. entirely inside a receiver whose right wall is at
+   * +18.1 mm. The handle rendered as a bare stem with the knurl band hanging
+   * 2.14 mm past the end of it and no knob anywhere (MEASURED as a one-part
+   * cluster 2.14 mm clear of everything). +PI/2 maps +Z onto +X: the knob is
+   * now at +12.0 to +27.8 mm, overlapping the stem's +0 to +14 and carrying the
+   * knurl band's +15 to +24, which is a charging handle.
+   */
+  chKnob.rotateY(Math.PI / 2);
+  chKnob.translate(0.012, 0, 0);
   chParts.push(chKnob);
   const chG = mergeAll(chParts);
   charging.add(chG, 'steel', {});
@@ -867,11 +993,25 @@ export function buildAk() {
        * two guns behave.
        */
       ejectDir: [0.76, 0.58, -0.3],
-      sight: [0, sightY, zRearSight + 0.0185],
+      /**
+       * ADS aligns against the HOLOGRAPHIC SIGHT'S COMBINER, not the notch. The
+       * irons are still on the weapon and still zeroed to the same bore — they
+       * are simply 42 mm below the glass now, which is what a rail-mounted optic
+       * does to a set of irons that do not co-witness with it.
+       */
+      sight: [0, opticY, holo.lensZ],
       sightAxis: [0, 0, -1],
-      ironSight: [0, sightY, zRearSight + 0.0185],
+      ironSight: [0, ironY, zRearSight + 0.0185],
       /** Rear notch to front post — a short AK sight radius, as it should be. */
       sightRadius: zRearSight + 0.0185 - zFsb,
+      /**
+       * The combiner, for `Viewmodel._updateReticle`. It is what makes the
+       * reticle a COLLIMATED image on the bore axis rather than a sprite glued
+       * to the glass: the dot's apparent direction from the eye is the sight's
+       * own axis, so it stays on target while the weapon sways, and it vignettes
+       * out when the eye leaves the window.
+       */
+      opticGlass: holo,
       /**
        * SHOOTING HAND — wrist target, derived exactly as models/rifle.js's is
        * (`knuckleContact - 0.098 * finger`), then carried across the 0.06 rad

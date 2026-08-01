@@ -281,8 +281,32 @@ export const WEAPON_DEFS = {
      * the cover, the leaf's near edge subtends 64 px instead of 400, the front
      * sight hood lands at 0.48 m, and the firing hand sits 9 mm behind the eye
      * — the same margin the M4 has.
+     *
+     * 0.238 -> 0.160, AND THE EYE DOES NOT MOVE. `sight` is no longer the rear
+     * notch: it is the holographic sight's combiner at z = -0.0515 (see the
+     * `railTop` note in models/ak.js). The three constraints above are all
+     * statements about where the EYE ends up, and the eye is at
+     * sight.z + eyeRelief:
+     *
+     *   before   -0.1295 + 0.238 = +0.1085
+     *   after    -0.0515 + 0.160 = +0.1085
+     *
+     * — the same point, to a tenth of a millimetre, so the whole derivation
+     * above still holds and so does everything measured against the ADS pose:
+     * `_adsPos` is unchanged, which means the hands, the arms, the support
+     * forearm angle and the framing are all bit-identical to what they were.
+     * What changed is that the glass is 160 mm from the eye instead of the
+     * notch being 238 mm from it, so the 36 x 26 mm window subtends a 269 x 195
+     * px sight picture at 1080p instead of a 16 mm leaf subtending 64.
+     *
+     * There is no `scope` entry on this weapon and there must not be: that is
+     * what makes it 1x. `WeaponSystem.adsFovScale` returns null, the world
+     * camera keeps the global ADS pull every unmagnified weapon gets, and
+     * `ui.scoped` stays false so `ScopeOverlay` never covers the frame and the
+     * viewmodel is never hidden. You keep your field of view and the world
+     * around the glass stays visible — the opposite of the sniper's 6x.
      */
-    eyeRelief: 0.238,
+    eyeRelief: 0.16,
     sprintPos: [0.094, -0.249, -0.287],
     sprintRot: [-0.4, 0.6, 0.2],
     lowReadyPos: [0.116, -0.267, -0.301],
