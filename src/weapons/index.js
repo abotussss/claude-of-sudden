@@ -537,7 +537,53 @@ export class WeaponSystem {
      */
     if (this._cooking || this._throwing) return false;
     this._switchTo = id;
-    this._switchTimer = this.viewmodel.play('holster');
+    /**
+     * THE HOLSTER CLIP IS THE ANIMATION, NOT THE PROMISE. `_switchTimer` is the
+     * deadline the swap is finished by whatever happens to that clip, and
+     * `update` ticks it — see `_completeSwitch`.
+     */
+    this._switchTimer = this.viewmodel.play('holster') || 0.4;
+    return true;
+  }
+
+  /**
+   * PUT THE NEW WEAPON IN THE HANDS. The end of a swap, and the ONLY place that
+   * moves `activeId`.
+   *
+   * ────────────────────────────────────────────────────────────────────────────
+   * WHY THIS IS NOT JUST THE CLIP CALLBACK ANY MORE — 「ハンドガンしか持てなくて
+   * それすらもう撃てない」
+   * ────────────────────────────────────────────────────────────────────────────
+   * `setWeapon` latches `_switchTo` and this used to be inlined in the holster
+   * clip's `end` event, i.e. THE ONLY THING THAT COULD EVER CLEAR IT WAS THAT
+   * CLIP RUNNING TO ITS LAST FRAME. Anything that cancelled the clip first
+   * stranded the latch, and `_switchTo` is checked by everything:
+   *
+   *   `switching` is true for ever    → `canFire()` and `tryFire()` refuse
+   *   `setWeapon` returns false       → 1/2/3/4 and the mouse wheel are dead
+   *
+   * — a player who can neither shoot nor change weapon for the rest of the
+   * match. `resetAmmo()` is exactly such a cancel (`viewmodel.stopClip()`), and
+   * `match` calls it on EVERY respawn, so a swap that was still in the air when
+   * the respawn landed bricked the weapon system. Measured with `_switchwedge.mjs`:
+   * `setWeapon('pistol')` then `resetAmmo()` one frame later leaves
+   * `_switchTo:'pistol', switching:true, canFire:false` for ever, 0 rounds fired,
+   * and Digit1 does nothing.
+   *
+   * So the completion is a method, called from the clip event when the animation
+   * gets there (unchanged, and still the normal path) and from the `_switchTimer`
+   * watchdog in `update` when something took the animation away.
+   */
+  _completeSwitch() {
+    const id = this._switchTo;
+    this._switchTo = null;
+    this._switchTimer = 0;
+    if (!id || !this.states.has(id)) return false;
+    this.activeId = id;
+    this.viewmodel.setActive(id);
+    this.viewmodel.play('draw');
+    this._shotIndex = 0;
+    this._spread = 0;
     return true;
   }
 
@@ -720,9 +766,26 @@ export class WeaponSystem {
   /**
    * Full loadout, as if you had just walked out of spawn: every magazine
    * topped off, every reserve refilled, no half-finished animation. Called by
-   * `match` at the top of each round — the round's ammunition is the round's
-   * budget, and `scavenge()` above is the only thing that adds to it inside a
-   * round (never above this same starting figure).
+   * `match` at the top of each round AND ON EVERY RESPAWN — the round's
+   * ammunition is the round's budget, and `scavenge()` above is the only thing
+   * that adds to it inside a round (never above this same starting figure).
+   *
+   * ────────────────────────────────────────────────────────────────────────────
+   * AND THE PRIMARY IS IN THE HANDS — 「武器を武器庫から変えた後に死ぬとメイン武器
+   * [消失]する」
+   * ────────────────────────────────────────────────────────────────────────────
+   * "As if you had just walked out of spawn" is the whole contract of this
+   * method and it was only ever half-kept: every magazine was refilled and then
+   * `draw` was played on WHATEVER HAPPENED TO BE IN HAND, which after a death is
+   * not the weapon the player chose. `primaryId` — the rack's pick or the pause
+   * menu's — survived the death perfectly; `activeId` was the thing that did not,
+   * so the man who had just carried an AK out of W2 respawned holding a pistol
+   * and reported his main weapon as gone. Slot 1 IS the loadout, so coming back
+   * alive draws it, exactly as walking out of spawn does.
+   *
+   * It is also the last word on a latched swap: `stopClip()` below cancels the
+   * holster animation, and a `_switchTo` left over from it would brick the
+   * trigger for the rest of the match. @see `_completeSwitch`.
    */
   resetAmmo() {
     for (const s of this.states.values()) {
@@ -738,6 +801,16 @@ export class WeaponSystem {
       s.mag = s.def.magSize;
       s.chambered = true;
       s.reserve = s.def.reserve;
+    }
+    // No swap is in the air across a spawn: the clip that would have finished it
+    // is stopped at the bottom of this method.
+    this._switchTo = null;
+    this._switchTimer = 0;
+    // Slot 1, drawn — and BEFORE the grenade visibility below, which reads
+    // `activeId` to decide whether the frag is the thing in the hands.
+    if (this.activeId !== this.primaryId && this.states.has(this.primaryId)) {
+      this.activeId = this.primaryId;
+      this.viewmodel?.setActive(this.activeId);
     }
     // A round boundary is not a place to be holding a lit grenade. The model
     // is hidden between the release beat and the end of the throw clip, so if
@@ -1197,14 +1270,7 @@ export class WeaponSystem {
           this._emitReload('end');
           this.viewmodel.boltHold = 0;
         }
-        if (clipName === 'holster' && this._switchTo) {
-          this.activeId = this._switchTo;
-          this._switchTo = null;
-          this.viewmodel.setActive(this.activeId);
-          this.viewmodel.play('draw');
-          this._shotIndex = 0;
-          this._spread = 0;
-        }
+        if (clipName === 'holster' && this._switchTo) this._completeSwitch();
         break;
       default:
         break;
@@ -1331,6 +1397,18 @@ export class WeaponSystem {
     const melee = def.class === 'melee';
     const thrown = def.class === 'grenade';
 
+    /**
+     * ---- the swap deadline ----------------------------------------------
+     * A latched swap is finished by this clock even if the holster clip it was
+     * riding is taken away — @see `_completeSwitch` for the match this bricked.
+     * The clip's own `end` event fires at 0.995 of its duration and normally
+     * gets there first; this only ever runs when it did not.
+     */
+    if (this._switchTo) {
+      this._switchTimer -= dt;
+      if (this._switchTimer <= 0 || !this.viewmodel.clipPlaying) this._completeSwitch();
+    }
+
     // ---- the fuze, and everything already in the air ---------------------
     // A burning fuze does not care whether the trigger is available: it is the
     // only clock in this system that runs while the weapon is locked.
@@ -1346,7 +1424,28 @@ export class WeaponSystem {
     if (this._sinceShot > 0.6) this._shotIndex = 0;
 
     // ---- gather state ----------------------------------------------------
-    const live = !input.frozen && input.enabled !== false && this.debugMode === null;
+    /**
+     * A DEAD MAN DOES NOT WORK HIS WEAPON — 「メイン武器[消失]するし、ハンドガン
+     * しか持てなくて」.
+     *
+     * This read only `input.frozen` / `input.enabled`, and neither of them goes
+     * false when the player is killed: `match` takes his FEET away
+     * (`player.setControlEnabled(false)`) and puts the spectator camera up, but
+     * the mouse and the keyboard are still live, because the spectator is driven
+     * BY THEM — `Spectator.update` cycles which team-mate you are watching on
+     * `input.firePressed`. So every click a dead player made to look at somebody
+     * else pulled the trigger on the corpse's rifle, and the wheel and the number
+     * keys kept changing which weapon that corpse held.
+     *
+     * Measured (`_diebug.mjs`, four armoury weapons × two consecutive deaths):
+     * one click and one wheel notch while dead spent 12 rounds out of the
+     * magazine and left `activeId` on the SMG, the sniper, or the pistol — so the
+     * man came back from the dead holding a handgun instead of the primary he had
+     * just taken off the rack. Being dead is not a state in which any of this is
+     * a request, so none of it is read.
+     */
+    const alive = player?.dead !== true;
+    const live = alive && !input.frozen && input.enabled !== false && this.debugMode === null;
     // RMB is the heavy attack on a blade and the underhand toss on a grenade,
     // not an aim request; neither weapon has sights to look through.
     st.ads = melee || thrown
@@ -1414,6 +1513,11 @@ export class WeaponSystem {
     } else if (this.debugMode) {
       this._runDebug(ctx);
       st.trigger = this._sinceShot < 0.09;
+    } else {
+      // Nobody is holding this trigger. `st` is the persistent pose state, so a
+      // man killed mid-burst would otherwise keep the firing pose all the way
+      // through the death camera.
+      st.trigger = false;
     }
 
     // Push the ADS curve to the player so camera FOV / move speed follow it.

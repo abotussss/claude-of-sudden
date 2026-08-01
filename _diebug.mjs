@@ -255,6 +255,32 @@ const putTarget = () =>
     return { name: a.name, team: a.team, health: a.health, dist: +Math.hypot(dx, dz).toFixed(1) };
   });
 
+/**
+ * Re-point at the target and say what the muzzle line actually reaches. Called
+ * before every trigger pull, because the man is a live agent and walks.
+ */
+const aim = () =>
+  page.evaluate(() => {
+    const e = window.__ENGINE__;
+    const p = e.ctx.peek('player');
+    const a = window.__TGT__;
+    if (!a) return null;
+    const cam = e.ctx.camera;
+    const dx = a.position.x - cam.position.x;
+    const dz = a.position.z - cam.position.z;
+    const dy = a.position.y + 1.2 - cam.position.y;
+    p.movement.yaw = Math.atan2(-dx, -dz);
+    p.movement.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+    p.rig.update(1 / 60, p.movement, p.health);
+    p.rig.applyTo(cam);
+    cam.updateMatrixWorld();
+    const phys = e.ctx.peek('physics');
+    const dir = cam.position.clone().set(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
+    const h = phys.raycast(cam.position, dir, 40, phys.MASK.BULLET);
+    return { reaches: h.hit ? (h.actor?.name ?? h.surface ?? 'world') : 'nothing',
+      onTarget: h.actor === a, dist: h.hit ? +h.distance.toFixed(1) : null };
+  });
+
 /** Pull the trigger for real and count the rounds that left the barrel. */
 const shoot = async (ms = 900) => {
   await page.evaluate(() => {
@@ -265,12 +291,18 @@ const shoot = async (ms = 900) => {
     window.__MAG0__ = window.__W__.ammo.mag;
   });
   // A semi/bolt weapon needs the trigger cycled; auto only needs it held.
+  let lane = null;
   for (let i = 0; i < 6; i++) {
+    lane = await aim();
     await page.mouse.down();
     await page.waitForTimeout(ms / 6);
     await page.mouse.up();
-    await page.waitForTimeout(120);
+    // Long enough for a bolt gun to cycle: the sniper fires ~1 round per pull
+    // and a 120 ms gap gave it two shots in six pulls.
+    await page.waitForTimeout(320);
   }
+  if (lane) console.log(`   muzzle line reaches ${lane.reaches} at ${lane.dist}m ` +
+    `(on the probe target: ${lane.onTarget})`);
   await page.waitForTimeout(500);
   return page.evaluate(() => ({
     fireEvents: window.__FIRED__,
@@ -334,7 +366,7 @@ for (const [wid, rack] of byWeapon) {
     console.log(`   target: ${JSON.stringify(tgt)}`);
     await page.waitForTimeout(500);
     await page.screenshot({ path: `${SHOTS}/diebug-${wid}-respawn-${n}.png` });
-    const fire = await shoot(1100);
+    const fire = await shoot(2100);
     console.log(`   FIRE after respawn ${n}: ${JSON.stringify(fire)}`);
     check(`respawn ${n}: rounds left the barrel`, fire.fireEvents > 0,
       `${fire.fireEvents} weapon:fire, ${fire.magSpent} out of the magazine`);
