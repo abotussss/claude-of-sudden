@@ -2343,10 +2343,18 @@ export class Airstrike {
        * building, `c` across it; the crossing column is taller and lasts longer
        * because it is the one the player is standing next to.
        */
+      /**
+       * SEVEN, AND THE NUMBER IS A BUDGET RATHER THAN A COMPOSITION.
+       * `fx.addSmokeColumn` draws from a pool of 24 (`MAX_EMITTERS`), and the
+       * `CATHEDRAL` salvo is still holding sixteen of them when this fires 2.2 s
+       * later — three columns on each of its three sites plus its own
+       * seven-column wall (@see `SALVO_DUST`). Ten would have stolen the salvo's
+       * own dust out from under it on the frame the building came down, which is
+       * the exact failure `SALVO_DUST` was written to stop.
+       */
       const plan = [
-        [0, 0, 1], [-0.55, 0, 0], [0.55, 0, 0], [-0.9, 0, 0], [0.9, 0, 0],
-        [-0.3, -0.92, 0], [0.3, -0.92, 0], [-0.3, 0.92, 0], [0.3, 0.92, 0],
-        [-0.72, -0.72, 0],
+        [0, 0, 1], [-0.62, 0, 0], [0.62, 0, 0],
+        [-0.34, -0.92, 0], [0.34, 0.92, 0], [0.34, -0.92, 0], [-0.34, 0.92, 0],
       ];
       for (let i = 0; i < plan.length; i++) {
         const [a, c, mid] = plan[i];
@@ -2365,7 +2373,9 @@ export class Airstrike {
           }
         );
       }
-      fx.scorch(site.mound.x, site.mound.y + 0.2, site.mound.z, Math.max(hw, hd) * 1.7);
+      // The footprint and its parvis, not the whole middle of the map: 1.7 of a
+      // 22.5 m half-extent is a 38 m disc and takes in the buildings opposite.
+      fx.scorch(site.mound.x, site.mound.y + 0.2, site.mound.z, Math.max(hw, hd) * 1.1);
       // Half again a district's peak, over half again the distance: the middle
       // of the map going up has to be readable from both bases. Not more — at
       // 5200/150 m the auto-exposure clamped down for the whole collapse and

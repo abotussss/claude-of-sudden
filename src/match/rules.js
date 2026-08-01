@@ -741,6 +741,53 @@ export const RULES = {
    * the wreckage — the fourth capture point and both tanks arrive together, and
    * the routes now END 24 m off the ruin instead of 35 m short of it. @see
    * `ROUTES` in src/match/tank.js.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * "IT ARRIVES IN THE LAST FEW SECONDS, OR NOT AT ALL" — MEASURED, AND IT DOES
+   * NOT. THE NUMBERS ARE RECORDED HERE SO NOBODY RE-LITIGATES IT FROM MEMORY.
+   * ──────────────────────────────────────────────────────────────────────────
+   * The report this block was re-opened for was "seed 12 telegraphs at t = 262,
+   * rolls at t = 268, of a ~276-316 s round; seed 7 never rolled at all in
+   * 280 s". Both halves of that are artefacts rather than schedule:
+   *
+   *   • "~276-316 s" is the match length from the THREE-POINT era, quoted out of
+   *     the block above. There are five points now and `scoreTarget` is 500;
+   *     four matches run to a natural end below measure 380-460 s.
+   *   • "never rolled in 280 s" is a probe budget expiring, not a match ending.
+   *     Seed 7 rolls at t = 228 of a 460 s match.
+   *
+   * `_events.mjs`, four matches to a NATURAL end, stamped in the column the ask
+   * is actually about — SECONDS BEFORE THE END. The last row is at `time.scale`
+   * 4 rather than 12, i.e. four times the simulation fidelity, because the SCORE
+   * RATE is what every threshold in this file is really measured against
+   * (`_matchProgress` is score-dominated) and it is exactly what a coarse `dt`
+   * distorts:
+   *
+   *                 length   cathedral        tank rolls       tank killed
+   *   seed  7 @12x  460.2 s  t=200 T-260 44%  t=228 T-232 50%  —
+   *   seed 12 @12x  380.0 s  t=200 T-180 53%  t=228 T-152 60%  —
+   *   seed 21 @12x  412.0 s  t=208 T-204 51%  t=236 T-176 57%  —
+   *   seed 12 @4x   444.0 s  t=228 T-216 51%  t=256 T-188 58%  T-56 (BLUE)
+   *
+   * So the hulls roll with 152-232 s of match left — two and a half to four
+   * minutes — in every run, and the lag from the cathedral event opening to a
+   * hull moving is 28 s in all four: 10 s of `cathedralLead`, 9 s to the
+   * `armour` beat, this 3 s, and ~6 s of the tank's own telegraph.
+   *
+   * NOTHING IN THAT CHAIN WAS RETUNED, and the reason is the floor rather than
+   * the mean. A measurement that says 152-232 s does not justify moving a
+   * threshold whose floor is argued from `districtSalvoGap` (@see
+   * `cathedralOpenProgress`): the second district salvo lands at t = 148-168,
+   * and at 0.36 the collapse would move about fifteen seconds and would then
+   * start being decided by that guard instead of by this schedule. Fifteen
+   * seconds is not worth breaking a documented floor for.
+   *
+   * WHAT THE SAME RUNS DO SHOW IS A DIFFERENT DEFECT, and it is the one worth
+   * looking at next: in three of the four matches NEITHER HULL WAS EVER
+   * DESTROYED, over 152-232 s of life apiece, and the single kill that did land
+   * was the FINAL COLLAPSE flattening BLUE rather than anybody shooting it.
+   * That is a lethality question for `src/match/tank.js`, not a timing one —
+   * and it is now measurable, which is all this schedule was ever blocking.
    */
   tankAfterCathedral: 3.0,
   /**
