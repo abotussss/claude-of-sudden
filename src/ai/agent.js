@@ -1533,10 +1533,26 @@ export class Agent {
          * compete with that penalty rather than to be tasteful, and they are
          * still bounded: the rise is clamped at 6 m inside `pick`.
          */
-        heightBias: isSniper ? 2.6 : 0,
+        heightBias: isSniper ? 2.0 : 0,
         indoorBonus: isSniper ? 6 : 0,
         maxThreat: isSniper ? Math.max(40, this.weaponRange * 0.85) : 40,
-        minRange: Math.max(3, want * 0.45),
+        /**
+         * AND THE FLOOR OF HIS WINDOW IS LOWER THAN HIS PREFERENCE.
+         *
+         * `want * 0.45` is 23 m for a sniper, and `pick` charges 0.55 a metre
+         * for anything closer — so a window twelve metres from the contact was
+         * six points down before the indoor bonus was even added, and the
+         * buildings on this map sit ON the capture points, i.e. exactly where
+         * the contacts are. The first attempt at this measured him indoors
+         * 0-5 % of the time against the marksman's 13 %: the range preference
+         * was pushing him out of the one place he was asked to prefer.
+         *
+         * `maxRange` is untouched at `want * 1.7`, so he still WANTS the long
+         * shot and still backs out of a brawl. What changes is that he no
+         * longer refuses a good position for being too close to the enemy,
+         * which is not a thing a man holding a window does.
+         */
+        minRange: Math.max(3, want * (isSniper ? 0.25 : 0.45)),
         // The window has a floor: a rusher who wants the fight at 9 m would
         // rather have a wall at 22 m than no wall at all, and the range terms in
         // `CoverMap.pick` are a soft penalty, not a filter.
