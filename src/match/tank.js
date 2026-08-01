@@ -222,6 +222,39 @@ const COAX_REST = 1.5;
 const PART_MUL = { hull: 0.22, turret: 0.4, deck: 1.7 };
 const EXPLOSION_MUL = 1.35;
 
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「戦車は空爆で破壊される仕様にして」 — A BOMB KILLS ARMOUR
+ * ────────────────────────────────────────────────────────────────────────────
+ * `_takeBlast` has always taken airstrike damage, and it has always been
+ * pointless: `RULES.airstrikeDamage` is 260 over a 15 m radius, so a bomb
+ * landing ON the hull took 260 x 1.35 = 351 of `RULES.tankHealth` 2600 — 13 %,
+ * and three direct hits from the biggest weapon in the game left it driving.
+ * A tank that shrugs off a five-hundred-pounder is not armour, it is weather.
+ *
+ * These are the two `explosion` sources that are AERIAL BOMBS. `strafe` is a
+ * cannon raking a lane and stays on `EXPLOSION_MUL` — twenty millimetres does
+ * not kill a tank, and the player asked for 空爆. The bombardments
+ * (`MatchSystem._cathShell`, `_updateBombard`) emit `source: null` and are
+ * indistinguishable from any other environmental blast, so they are unchanged.
+ */
+const AIR_ORDNANCE = new Set(['airstrike', 'bomber']);
+
+/**
+ * …AND THE MULTIPLIER IS DERIVED, NOT TUNED.
+ *
+ * The rule wanted is "a bomb that lands inside half its own blast radius
+ * destroys a full-health tank", which is one line of algebra rather than a
+ * magic number: at half the radius the linear falloff has already taken half
+ * the damage, so the multiplier that reaches `tankHealth` there is
+ * 2 x health / damage. Writing it out means it stays true when somebody moves
+ * `tankHealth`, `airstrikeDamage` or the bomber's own numbers — which is not
+ * hypothetical, they have all moved before. At the centre it is 2x overkill, at
+ * the rim it is nothing, and a tank that has already been fought is killed
+ * further out.
+ */
+const airMul = (damage) => (2 * RULES.tankHealth) / Math.max(1, damage);
+
 /** Where the fracture ends up: the debris settles inside this radius, locally. */
 const WRECK_R = 4.2;
 
@@ -1525,9 +1558,18 @@ export class Armour {
     this._wound(tank, e.amount ?? 0, e.source ?? null);
   }
 
-  /** Blast damage: a grenade, an airstrike, or the other tank's shell. */
+  /**
+   * Blast damage: a grenade, an airstrike, or the other tank's shell.
+   *
+   * NO TEAM TEST, AND THAT IS THE RULE RATHER THAN AN OVERSIGHT —
+   * 「空爆は敵味方関係なくダメージを喰らう仕様にして」. A side's own bombs kill its own
+   * armour, which is what makes calling a strike on a street your tank is in a
+   * decision. `_takeRound` is the one that honours `RULES.friendlyFire`, because
+   * a rifle is aimed and a bomb is not.
+   */
   _takeBlast(e) {
     if (!e?.position) return;
+    const air = typeof e.source === 'string' && AIR_ORDNANCE.has(e.source);
     for (const tank of this.tanks) {
       if (!tank.alive) continue;
       if (e.source === tank) continue; // our own shell going off down the street
@@ -1538,8 +1580,18 @@ export class Armour {
       );
       const r = e.radius ?? 5;
       if (d > r) continue;
-      const amount = (e.damage ?? 90) * (1 - d / r) * EXPLOSION_MUL;
-      this._wound(tank, amount, e.source ?? null);
+      const dmg = e.damage ?? 90;
+      const amount = dmg * (1 - d / r) * (air ? airMul(dmg) : EXPLOSION_MUL);
+      /**
+       * A BOMB IS NOT AN ACTOR. `e.source` on air ordnance is the string that
+       * named the system ('airstrike', 'bomber'), and `MatchSystem`'s own note
+       * on `_onTankKill` already says the killer "can be nothing at all (an
+       * airstrike…)"; handing the string on would put it through `ai.teamOf`
+       * and into the killfeed as an attacker called "airstrike". Passing null
+       * leaves `lastHitBy` alone, so a hull somebody had already been shooting
+       * still pays him and one nobody touched pays nobody.
+       */
+      this._wound(tank, amount, air ? null : e.source ?? null);
     }
   }
 
