@@ -149,7 +149,20 @@ function terrace(A, rng, spec, y, t) {
  * @returns {object} anchors for the dressing pass:
  *   { facades:[{side, x, y, ry, wx, wz, nx, nz}], roof:{...}, doors:[], balconies:[] }
  */
-export function buildBuilding(A, rng, spec) {
+/**
+ * @param {Assembler} A
+ * @param {Rng} rng
+ * @param {object} spec
+ * @param {object|null} hooks  optional. `{ scopeGroundSide, scopeId }` brackets
+ *   the GROUND-STOREY facade of ONE side in an `Assembler` scope, so that panel
+ *   — its geometry, its window units and the `slabBox` collision `facadeWall`
+ *   authors under it — can later stop existing on its own. The scope handle
+ *   comes back on `info.facadeScope`. `src/world/breach.js` is the only caller;
+ *   @see the note over `Assembler.beginScope`, and note that `_scope` is a
+ *   SINGLE SLOT, so a building already bracketed by a demolition shell scope
+ *   must never be handed this (`planBreaches` is what refuses).
+ */
+export function buildBuilding(A, rng, spec, hooks = null) {
   const t = spec.t ?? 0.34;
   const floors = spec.floors ?? 3;
   const groundH = spec.groundH ?? 3.45;
@@ -235,7 +248,11 @@ export function buildBuilding(A, rng, spec) {
     const fs = floorSpec(spec, f);
     for (let side = 0; side < 4; side++) {
       if (spec.skipSides?.includes(side)) continue;
+      // The one elevation a breach can take off, bracketed. @see `hooks` above.
+      const brack = hooks && f === 0 && hooks.scopeGroundSide === side;
+      if (brack) info.facadeScope = A.beginScope(hooks.scopeId);
       buildFacade(A, rng, fs, info, { side, f, y, h, t, wallKey, streetSide, floors });
+      if (brack) A.endScope();
     }
     // ---- floor / ceiling slab of the NEXT level ----
     y += h;

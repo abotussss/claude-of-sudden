@@ -149,7 +149,7 @@ export class Assembler {
      */
     this._scope = null;
     /**
-     * Armed spatial claims: [{ scope, x0, z0, x1, z1, y0 }] in LEVEL space.
+     * Armed spatial claims: [{ scope, x0, z0, x1, z1, y0, y1 }] in LEVEL space.
      * Empty (the default) costs one array-length test per `add`.
      */
     this.claimZones = [];
@@ -226,12 +226,18 @@ export class Assembler {
 
   /**
    * Arm a SPATIAL claim: anything written inside this level-space footprint and
-   * at or above `y0` belongs to `scope` even though no lexical scope is open.
-   * @see the `claimZones` note in the constructor — this is what keeps a
+   * between `y0` and `y1` belongs to `scope` even though no lexical scope is
+   * open. @see the `claimZones` note in the constructor — this is what keeps a
    * demolished building's roof clutter from surviving the building.
+   *
+   * `y1` IS WHY THIS TAKES A CEILING AT ALL. A whole building's claim wants
+   * everything above the plinth and `Infinity` is the right answer for it; a
+   * BREACH claims one storey of one elevation (`src/world/breach.js`), and
+   * without a top the AC unit two floors up over the hole would be filed under
+   * the wall and would vanish with it.
    */
-  claim(scope, x0, z0, x1, z1, y0 = 0.3) {
-    this.claimZones.push({ scope, x0, z0, x1, z1, y0 });
+  claim(scope, x0, z0, x1, z1, y0 = 0.3, y1 = Infinity) {
+    this.claimZones.push({ scope, x0, z0, x1, z1, y0, y1 });
     return this;
   }
 
@@ -265,7 +271,7 @@ export class Assembler {
     }
     for (let i = 0; i < zones.length; i++) {
       const c = zones[i];
-      if (y >= c.y0 && x >= c.x0 && x <= c.x1 && z >= c.z0 && z <= c.z1) return c.scope;
+      if (y >= c.y0 && y <= c.y1 && x >= c.x0 && x <= c.x1 && z >= c.z0 && z <= c.z1) return c.scope;
     }
     return null;
   }

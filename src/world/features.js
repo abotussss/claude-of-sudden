@@ -135,6 +135,21 @@ const CAPSULE = 0.32; // floorcheck: UNITS.playerRadius
 const CLEAR_R = RING + CAPSULE;
 
 /**
+ * DOES THIS BUILDING HOLD SUPPLIES — answered off `SPOTS` itself rather than off
+ * `enterable`, because the two are not the same set: the three sheds are
+ * enterable and carry nothing, and being enterable is a property of the
+ * FOOTPRINT while carrying a cache is a property of this table.
+ *
+ * `src/world/breach.js` is the caller. It has to know which houses hold the
+ * caches BEFORE a single wall goes up (it opens a scope round one elevation of
+ * each), and `buildFeatures` does not run until the very end of the build — so
+ * the question has to be answerable from the id alone, and it is.
+ */
+export function holdsCaches(id) {
+  return !!SPOTS[id];
+}
+
+/**
  * The spots for one building, resolved to LEVEL space. Pure: no geometry, no
  * rng, no side effects — `buildings.js` calls it while it is still laying
  * partitions out, and `buildFeatures` calls it again to build.

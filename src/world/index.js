@@ -10,6 +10,7 @@ import { buildFeatures } from './features.js';
 import { buildLinks } from './links.js';
 import { buildSiteWorks } from './sitework.js';
 import { planDemolitions, buildRuins, publishDemolitions } from './demolition.js';
+import { planBreaches, buildBreaches, publishBreaches, claimRect } from './breach.js';
 import { registerProps } from './props.js';
 import {
   registerDressingProps,
@@ -73,6 +74,21 @@ import {
  *                             `world.demolish` and src/world/demolition.js.
  *   world.demolish(id, down)  swap one building for its ruin, or back
  *   world.demolishAll(down)   …all of them. The round reset, and `?demo=down`.
+ *   world.breaches            the CACHE HOUSES, which lose a WALL rather than
+ *                             the building: [{ id, building, side, name,
+ *                                position, normal, along, halfLen, holeW, holeH,
+ *                                reach, strength, level, navRect, mass,
+ *                                surfaces, tint, down, setVisual(d),
+ *                                setCollision(d), setDown(d) }]. Both forms are
+ *                             built at boot and live in the merged batches; the
+ *                             wall coming off is two index-range fills and two
+ *                             mask fills. See src/world/breach.js.
+ *   world.damageAt(p, s)      A HIT, at a world position, carrying a strength.
+ *                             Returns the `world.breaches` record that opened,
+ *                             or null (nothing there / already open / too weak).
+ *                             This is the entry point `match` fires through.
+ *   world.breach(id, down)    open one wall, or put it back, by id
+ *   world.breachAll(down)     …all of them. The round reset, and `?breach=down`.
  *   world.interiorVolumes     the GROUND FLOOR of every enterable building, as
  *                             an oriented box the bot height field can re-sample
  *                             itself against: [{ building, cx, cz, c, s, hw, hd,
@@ -196,14 +212,34 @@ export class WorldSystem {
     const demoPlan = planDemolitions(BUILDINGS);
     const demoOf = new Map(demoPlan.map((d) => [d.id, d]));
 
+    /**
+     * …AND THE HOUSES THAT ONLY LOSE A WALL, decided in the same breath and for
+     * the same reason. A cache house may not be levelled — that deletes the
+     * reason to walk into it — so what it carries is ONE ELEVATION's worth of
+     * damaged state, and the scope has to be opened round that elevation as the
+     * facade goes up. @see src/world/breach.js. No rng is drawn to plan it.
+     */
+    const breachPlan = planBreaches(BUILDINGS);
+    const breachOf = new Map(breachPlan.map((b) => [b.building, b]));
+
     const infos = [];
     for (const spec of BUILDINGS) {
       const demo = demoOf.get(spec.id);
+      const br = breachOf.get(spec.id);
       if (demo) demo.shell = A.beginScope(`shell:${spec.id}`);
-      const info = buildBuilding(A, rng, spec);
+      const info = buildBuilding(
+        A,
+        rng,
+        spec,
+        br ? { scopeGroundSide: br.side, scopeId: `wall:${br.id}` } : null
+      );
       if (demo) {
         A.endScope();
         demo.info = info;
+      }
+      if (br) {
+        br.info = info;
+        br.wall = info.facadeScope ?? null;
       }
       infos.push(info);
       if (spec.collapse) {
@@ -262,6 +298,19 @@ export class WorldSystem {
       A.claim(d.shell, d.spec.x - d.spec.w / 2 - 1.2, d.spec.z - d.spec.d / 2 - 1.2,
         d.spec.x + d.spec.w / 2 + 1.2, d.spec.z + d.spec.d / 2 + 1.2, 0.45);
     }
+    /**
+     * …AND THE SAME CLAIM OVER THE ONE STOREY OF ONE ELEVATION A BREACH TAKES.
+     * An AC unit or a run of conduit bracketed to the piece of wall that is
+     * about to stop existing would otherwise be left hanging in the hole, which
+     * is the demolition claim's own bug at 1/60th the size. Bounded ABOVE at the
+     * ground storey's ceiling — see `Assembler.claim`'s `y1` — so the dressing
+     * two floors up over the opening is untouched.
+     */
+    for (const b of breachPlan) {
+      if (!b.wall) continue;
+      const r = claimRect(b);
+      A.claim(b.wall, r.x0, r.z0, r.x1, r.z1, 0.45, b.groundH);
+    }
     dressBuildings(A, rng, infos);
     A.disarmClaims();
     scatterDebris(A, rng);
@@ -271,6 +320,13 @@ export class WorldSystem {
      * per building, so it cannot move a prop the dressing has already placed.
      */
     buildRuins(A, demoPlan, infos);
+    /**
+     * …and the cache houses' damaged walls, in the same place in the order and
+     * for the same three reasons: the triangles land in the merged batches, the
+     * dressing has already been placed so nothing here can move it, and each one
+     * draws from its own fixed-seed stream. @see src/world/breach.js.
+     */
+    buildBreaches(A, breachPlan);
 
     /**
      * WHY YOU WOULD EVER GO IN, AND WHY YOU WOULD EVER GO UP.
@@ -303,9 +359,33 @@ export class WorldSystem {
      */
     this.demolitions = publishDemolitions(A, demoPlan, physics, this.root);
     this._demoDown = false;
+    /**
+     * THE DAMAGED WALLS, PUBLISHED. Every breach is hidden and intangible from
+     * here. `match` owns the event that opens one — see `world.damageAt` at the
+     * foot of this file, which is the entry point a shell lands through.
+     */
+    this.breaches = publishBreaches(A, breachPlan, physics);
+    /**
+     * `?breach=down` — boot with every cache house's wall already blown open.
+     * The gates need the damaged state as a STATE rather than as an event, the
+     * same way `?demo=down` and `?cath=down` give them the other two: floorcheck,
+     * indoorcheck, throughcheck, navcheck, boundcheck, solidcheck and
+     * `_floatcheck.mjs` all boot a URL and measure what they find.
+     */
+    try {
+      const flag = new URLSearchParams(globalThis.location?.search ?? '').get('breach');
+      if (flag === 'down' || flag === '1') {
+        console.info(`[world] ?breach=down — ${this.breachAll(true)} walls booted OPEN`);
+      }
+    } catch {
+      /* no location (a node import of this module): nothing to read */
+    }
 
     // -------------------------------------------------------------- queries --
     this._v = new THREE.Vector3();
+    /** `damageAt` scratch — it is called from a shell impact, not from init. */
+    this._bv = new THREE.Vector3();
+    this._bw = new THREE.Vector3();
     this._inv = new THREE.Matrix4().copy(A.xform).invert();
     /** The level->world yaw, so gameplay can author facings in level space. */
     this.levelYaw = LEVEL_YAW;
@@ -742,6 +822,80 @@ export class WorldSystem {
       n++;
     }
     this._demoDown = !!down;
+    return n;
+  }
+
+  // ---------------------------------------------------------------- breach --
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * A HIT ON A HOUSE — the entry point `match` fires a shell through
+   * ────────────────────────────────────────────────────────────────────────────
+   * 「物資やビーコンのある家も破壊できるようにして、破壊と言っても家の一部を破壊したり、
+   *  外壁が破壊されるような破壊にしてください」
+   *
+   * `match` may not know which building a wall belongs to, which side of it faces
+   * the street, or where the merged batches put its triangles — so what it hands
+   * over is A WORLD POSITION AND A STRENGTH, which is everything a shell knows
+   * about itself. `world` answers with the elevation that came off, or null.
+   *
+   *   const br = world.damageAt(impact.point, 1);
+   *   if (br) { …use br.mass / br.position / br.normal for the picture… }
+   *
+   * NULL IS A REAL ANSWER AND THERE ARE THREE OF THEM: nothing breachable within
+   * `reach` of the point (most of the map), the wall is already open, or the
+   * strength is under that wall's own `strength` bar — a hit that scarred the
+   * render. A caller that wants the bar can read `world.breaches[i].strength`
+   * rather than discover it.
+   *
+   * The distance is to the OPENING's rectangle rather than to its centre, so a
+   * shell into the jamb beside the hole takes the same wall off as one dead in
+   * the middle of it. Allocation-free: two preallocated vectors, no matrices.
+   *
+   * @param {THREE.Vector3} position world space
+   * @param {number} strength in `match`'s own units; 1 is a tank main-gun round
+   * @returns {object|null} the `world.breaches` record that opened, or null
+   */
+  damageAt(position, strength = 1) {
+    if (!position || !this.breaches?.length) return null;
+    let best = null;
+    let bestD = Infinity;
+    for (const b of this.breaches) {
+      if (b.down) continue;
+      // point -> the opening's centre line, clamped to its own half-length
+      this._bv.copy(position).sub(b.position);
+      const along = Math.max(-b.halfLen, Math.min(b.halfLen, this._bv.dot(b.along)));
+      this._bw.copy(b.position).addScaledVector(b.along, along);
+      const d = position.distanceTo(this._bw);
+      if (d < b.reach && d < bestD) {
+        bestD = d;
+        best = b;
+      }
+    }
+    if (!best) return null;
+    if (strength < best.strength) return null;
+    best.setDown(true);
+    return best;
+  }
+
+  /**
+   * Open one wall, or put it back, by its `world.breaches[i].id`. The round
+   * reset and the tools; `damageAt` is the gameplay path.
+   */
+  breach(id, down = true) {
+    const rec = this.breaches?.find((b) => b.id === id || b.building === id);
+    if (!rec || rec.down === !!down) return false;
+    rec.setDown(!!down);
+    return true;
+  }
+
+  /** Every damaged wall at once — the round reset, and `?breach=down`. */
+  breachAll(down = true) {
+    let n = 0;
+    for (const rec of this.breaches ?? []) {
+      if (rec.down === !!down) continue;
+      rec.setDown(!!down);
+      n++;
+    }
     return n;
   }
 
