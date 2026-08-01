@@ -644,6 +644,18 @@ export const SITEWORKS = [
  */
 export const KEEPOUT = [
   [-28.0, -1.0, 3.0], // ZONE C — the west courtyard, on the equidistant line
+  /**
+   * ZONE E — the east courtyard, and it is ρ(C) rather than a mirror of this
+   * line. `widenX` is odd, so the widened pair is (-37, -1) and (37, -1), and
+   * ρ(x, z) = (-x, -2 - z) sends the first to the second exactly. @see the E
+   * entry in `ZONES`, src/match/sites.js — IF ONE MOVES, MOVE THE OTHER, which
+   * this file has now had to write five times.
+   *
+   * Radius 3.0 like every other zone centre, sized to `standRing`'s 4 m
+   * forward-spawn ring. The demolition circle at (28, -7) below is a different
+   * point in a different mode and both stay.
+   */
+  [28.0, -1.0, 3.0], // ZONE E — the east courtyard, ρ(C)
   [-28.0, -7.0, 2.2], // site A plant area
   [28.0, -7.0, 2.2], // site B plant area
   /**
@@ -1988,8 +2000,13 @@ KEEPOUT.push(
   [-10, 40, 2.2],     // BEACON — the north plaza, which zone A vacated
   [10, -42, 2.2],     // BEACON — the south plaza, its 180° image
   [-34.75, -20, 2.2], // BEACON — west lane, south run
-  [34.75, 18, 2.2],   // BEACON — east lane, north run
-  [40, -3, 2.2]       // BEACON — east courtyard
+  [34.75, 18, 2.2]    // BEACON — east lane, north run
+  /**
+   * …AND THE EAST COURTYARD'S BEACON CIRCLE IS GONE WITH THE BEACON. `FLANK-C`
+   * stood at (40, -3); the east courtyard is capture point E now, and `ZONE E`
+   * above reserves its centre instead. @see `BEACON_SPOTS` at the foot of this
+   * file for why the beacon could not simply be fenced off the point.
+   */
 );
 
 /**
@@ -2677,7 +2694,34 @@ export const BEACON_SPOTS = [
   { id: 'FLANK-SE', name: 'SOUTH PLAZA', x: 10, z: -42, yaw: Math.PI / 2 },
   { id: 'FLANK-W', name: 'WEST LANE DEPOT', x: -34.75, z: -20, yaw: Math.PI / 2 },
   { id: 'FLANK-E', name: 'EAST LANE DEPOT', x: 34.75, z: 18, yaw: -Math.PI / 2 },
-  { id: 'FLANK-C', name: 'EAST COURTYARD DEPOT', x: 40, z: -3, yaw: -Math.PI / 2 },
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * AND THE THIRD ONE IS GONE, BECAUSE THE EAST COURTYARD IS A CAPTURE POINT NOW
+   * ──────────────────────────────────────────────────────────────────────────
+   * `FLANK-C` stood at (40, -3) and its own justification, three paragraphs up,
+   * was "the three flank areas that have NO capture point on them once the zones
+   * move … and the EAST courtyard — which is zone C's mirror image". Zone E is
+   * that mirror image now (ρ(C) = widened (37, -1), `ZONES` in
+   * src/match/sites.js), so the sentence is no longer true of this square.
+   *
+   * IT COULD NOT STAY AND BE FENCED OFF. (40, -3) is 3.6 authored units from
+   * E's centre — 5.4 m, INSIDE the 8 m capture circle — and `KEEPOUT` does not
+   * govern a beacon: it holds off the DRESSING, while a beacon is a
+   * `world.features` cache with real geometry and real collision under it
+   * (src/world/features.js). That is the precise failure this list already
+   * records two entries up: a beacon crate standing on zone A's centre made the
+   * nav cell under it a connected component of ONE against a 0.45 m `maxStep`,
+   * and nothing could path to the capture point at all. The zones and the first
+   * two beacons SWAPPED for that reason; this is the same swap with nowhere left
+   * to swap to.
+   *
+   * AND KEEPING IT WOULD BREAK THE THING E WAS ADDED TO FIX. C's circle has no
+   * beacon in it. A beacon in E's would be a forward spawn on one of the two
+   * courtyards and not on the other — an asymmetry authored into the very pair
+   * that exists to remove one. The two remaining beacons are still a ρ pair
+   * (FLANK-NW/FLANK-SE, FLANK-W/FLANK-E), so the flank invariant is unchanged
+   * and is now unbroken by an odd one out.
+   */
 ];
 
 /* ========================================================================== */

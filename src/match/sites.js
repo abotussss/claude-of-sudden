@@ -493,6 +493,69 @@ export const ZONES = [
     holdLevel: LW(-28.0, -1.0),
     flankLevel: null,
   },
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * E — ρ(C), AND IT IS THE ANSWER THE ENTRY ABOVE SAID IT COULD NOT GIVE
+   * ══════════════════════════════════════════════════════════════════════════
+   * "Cサイトが片方に有利な位置なのでEサイトを作ってください"
+   *
+   * THE PLAYER IS RIGHT AND THE PROOF IS IN THIS FILE'S OWN TABLE. A and B are a
+   * ρ pair — ρ(x, z) = (-x, -2 - z) about the cathedral at (0, -1) — so any route
+   * advantage one side has to A the other has by construction to B. D is ρ of
+   * ITSELF: the rotation's fixed point. C IS THE ONLY ZONE ρ SENDS NOWHERE. It
+   * stands in the WEST courtyard, and until this entry there was nothing in the
+   * east one, so the set of capture points was not symmetric under the symmetry
+   * the rest of the map is built on.
+   *
+   * WHAT THAT IS WORTH, and it is not the attack/defend numbers — C is on level
+   * z -1, the line equidistant from the two bases, so `navcheck` measures it
+   * nearly even (110.5 vs 112.6 m) and always did. It is the ROTATION:
+   *
+   *              A(-69.7, 36)   C(-37, -1)   B(69.7, -38)   E(37, -1)
+   *   A—C          —              40 u          124 u          107 u
+   *   B—C        124 u            94 u            —             40 u   <- E fixes
+   *
+   * The side that holds A has a 40-unit leg to a second point; the side holding B
+   * had 94. Two points on one flank against one on the other, permanently, in a
+   * mode that never swaps ends — which is the exact class of failure the three
+   * long notes above this table were each written about.
+   *
+   * IT IS ρ(C) AND NOTHING ELSE WAS EYEBALLED. C is authored `LW(-28, -1)`,
+   * which is WIDENED (-37, -1); ρ(-37, -1) = (37, -1), which is `LW(28, -1)`
+   * because `widenX(28)` is 37. The fallback is ρ'd the same way: C's
+   * `LW(-27, -3)` is widened (-36, -3), ρ of that is (36, 1), and `widenX(27)`
+   * is 36. That is the whole derivation, and it is written out because the B
+   * entry below spent six commits two authored units off the ρ it claimed.
+   *
+   * WHY THIS IS NOT THE MOVE THE C ENTRY REJECTED. That one tried to make C
+   * itself far from the cathedral — `LW(-70, -1)` — and measured a 103 m gift to
+   * one side, because the west flank district only exists at z 15..62 and there
+   * is no ground at z -1 out there. This does not move C. It ADDS the point ρ
+   * says is missing, on ground that already exists and is already dressed: the
+   * east courtyard is the west one's mirror, `SITEWORKS` in src/world/layout.js
+   * already stands the same six pieces of mass in it (authored for demolition
+   * site B, and every one of them the exact x-mirror of the pieces C counts), and
+   * both courtyards are on z -1 so both sides are equidistant from both.
+   *
+   * THE COURTYARD'S BEACON HAD TO LEAVE, exactly as the two yard beacons left
+   * when A and B moved into the districts. `BEACON_SPOTS`' `FLANK-C` stood at
+   * widened (40, -3) — 5.4 m inside this circle — and a beacon is a real crate
+   * with collision under it, not a decal. @see the removal in src/world/layout.js.
+   *
+   * WHAT THIS COSTS THE MATCH, MEASURED AND NOT FIXED HERE. A fifth zone is a
+   * fifth income stream on a `scoreTarget` of 250, so it shortens the match and
+   * everything scheduled on `_matchProgress` moves with it. The numbers are in
+   * the commit message; `rules.js` and the schedule belong to another agent.
+   */
+  {
+    id: 'E',
+    name: 'EAST COURTYARD',
+    level: LW(28.0, -1.0),
+    /** ρ(C's fallback): two units into the courtyard's middle, off the spine. */
+    fallback: LW(27.0, 1.0),
+    holdLevel: LW(28.0, -1.0),
+    flankLevel: null,
+  },
   {
     id: 'B',
     name: 'SOUTH-EAST DISTRICT',
