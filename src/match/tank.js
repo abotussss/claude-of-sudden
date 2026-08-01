@@ -99,6 +99,17 @@
 import * as THREE from 'three';
 import { RULES, TEAM_COLOR } from './rules.js';
 import { fracture, chunkGeometry, makeChunkMaterial, mergeGeometries, clamp } from './airstrike.js';
+/**
+ * ITS OWN STREAM, KEYED TO THE HULL'S ID — the same move `world/demolition.js`
+ * makes for each building's ruin, and for the same reason. `tank.rng` is not a
+ * boot-only generator: `_mainGun` and `_coax` draw their dispersion from it on
+ * every shot, so a fork taken while BAKING re-phases every round the tank ever
+ * fires. The plough cuts one pile per fork, which would have shifted that
+ * stream by up to six draws and quietly changed the fall of shot of a feature
+ * this change is not supposed to touch. An independently seeded generator
+ * costs one import and moves nobody else's dice.
+ */
+import { Rng } from '../core/rng.js';
 
 /**
  * THE MAP IS 1.5x. Same note as `src/match/sites.js` and `src/match/airstrike.js`
@@ -765,6 +776,11 @@ export class Armour {
    */
   _bakePlough(tank, physics, props) {
     tank.plough = [];
+    // @see the note on the `Rng` import: never `tank.rng`, which the gun draws
+    // its dispersion from at runtime.
+    let h = 0x9e3779b9;
+    for (let i = 0; i < tank.id.length; i++) h = (Math.imul(h ^ tank.id.charCodeAt(i), 0x85ebca6b) >>> 0);
+    tank.ploughRng = new Rng(h >>> 0);
     if (!props?.length) return;
     const p = tank.path;
     const MASKW = physics.MASK.WORLD;
@@ -917,7 +933,7 @@ export class Armour {
    * cannot find a floating solid piece that came from a plough.
    */
   _bakePileDebris(tank, pile) {
-    const rng = tank.rng.fork();
+    const rng = tank.ploughRng;
     const w = (pile.maxX - pile.minX) * 0.85;
     const dp = (pile.maxZ - pile.minZ) * 0.85;
     const chunks = [];
