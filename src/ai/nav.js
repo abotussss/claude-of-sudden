@@ -180,6 +180,27 @@ export class NavGrid {
     /** how enclosed a cell is: 0 open, 1 hemmed in — used for cover scoring */
     this.enclosure = new Uint8Array(n);
     /**
+     * ────────────────────────────────────────────────────────────────────────
+     * IS THIS CELL A ROOM? 1 = strictly inside an interior volume.
+     * ────────────────────────────────────────────────────────────────────────
+     * `_carveInteriors` already knows the answer — it computes `inside` for
+     * every cell it touches and throws it away after incrementing a counter.
+     * Keeping it costs one byte per cell and one store, and it is the only way
+     * anything downstream can say "this spot is INDOORS" without re-deriving
+     * the level's footprint rectangles in a different space and getting it
+     * wrong (@see the LEVEL-vs-WORLD note in tools/indoorcheck.mjs, which is
+     * exactly that mistake made twice).
+     *
+     * It is deliberately the STRICT test — the apron cells outside the wall,
+     * which the same pass promotes, are NOT marked. A doorstep is not a room.
+     *
+     * Read by `CoverMap.build`, which stamps it onto every cover point, so
+     * "prefer a firing position inside a building" is a flag compare and not a
+     * per-frame geometry query. Nothing else in this file behaves differently
+     * because of it.
+     */
+    this.indoor = new Uint8Array(n);
+    /**
      * DIAGONAL STEPS THE CORNER RULE WOULD REFUSE AND A SWEPT CAPSULE ALLOWS.
      * Bit d (4..7) set means "this diagonal was MEASURED passable". Written only
      * for the interior pass, so the open-air grid behaves exactly as it always
@@ -592,6 +613,10 @@ export class NavGrid {
     const p0 = this._p0, p1 = this._p1;
     this.interiorCells = 0;
     this.apronCells = 0;
+    // Cleared here rather than in the constructor: `build()` re-fills `flags`
+    // and `floor` for every cell but this pass only ever WRITES ones, so a
+    // second build would otherwise keep the first one's rooms.
+    this.indoor.fill(0);
     for (const v of volumes) {
       // world-space AABB of the rect, which is on the LEVEL axes, not these
       const ex = Math.abs(v.hw * v.c) + Math.abs(v.hd * v.s) + APRON;
@@ -665,6 +690,9 @@ export class NavGrid {
           }
           this.flags[i] = flag;
           this.enclosure[i] = blocked;
+          // The one fact this pass has and nothing downstream can recover.
+          // @see the `indoor` field. Strict: the apron is a doorstep, not a room.
+          if (inside) this.indoor[i] = 1;
           if (inside) this.interiorCells++;
           else this.apronCells++;
         }
@@ -1153,6 +1181,12 @@ export class CoverMap {
             score: 0,
             /** In the live set? Only `applyBlocks` ever clears it. */
             live: true,
+            /**
+             * Is this firing position INSIDE a building? Copied off the grid's
+             * own interior mask (@see `NavGrid.indoor`), once, at bake time.
+             * `pick` reads it for the men whose whole game is a window.
+             */
+            indoor: g.indoor ? g.indoor[i] === 1 : false,
             /** cell, so `bakeBlockDeps` can find this point again */
             cell: i,
             /** per-block facings, or null for a point no block can change */
@@ -1518,6 +1552,41 @@ export class CoverMap {
      * `coverDwell` in agent.js.
      */
     const avoid = opts.avoid ?? null;
+    /**
+     * ════════════════════════════════════════════════════════════════════════
+     * THE MARKSMAN'S THREE OPTIONS. All default to the behaviour this method
+     * has always had, so a man who does not ask for them is scored by exactly
+     * the same arithmetic as before.
+     * ════════════════════════════════════════════════════════════════════════
+     * `maxThreat` was a hard-coded 40 m ceiling, and it is a ceiling on the
+     * FIGHT and not on the cover: a man whose `traits.range` is 48 m could
+     * never be offered a single position, because every point that far from the
+     * contact was skipped before it was scored. He therefore fought at the same
+     * distance as everybody else — which is most of the reason "a sniper" was
+     * indistinguishable from "a bot with a tighter cone".
+     *
+     * `heightBias` is metres-of-rise turned into score. It is the "高台を優先"
+     * half of the request and it is deliberately measured against THE MAN'S OWN
+     * FEET rather than against sea level, so it means "somewhere higher than
+     * here" on a map whose ground is not flat.
+     *
+     * `comp` is the thing that makes the height preference safe, and it is not
+     * optional decoration. MEASURED on this level: of 6095 baked cover points,
+     * 1293 sit above 2.5 m and NOT ONE of them shares a nav component with any
+     * square a bot ever stands on. They are roofs, parapets and upper floors —
+     * the height field samples from above, so a roof is a perfectly walkable
+     * cell 6.5 m up, and a 6.4 m step off the pavement is not a step. Scoring
+     * height without this filter aims every marksman at a roof he cannot reach,
+     * `_goTo` gets 0 waypoints back, and that is precisely the doorway-stuck
+     * epidemic in a new costume. A component label is symmetric — the step test
+     * that built it is — so "same component" is also the proof he can get back
+     * DOWN from whatever he climbs.
+     */
+    const maxThreat = opts.maxThreat ?? 40;
+    const heightBias = opts.heightBias ?? 0;
+    const indoorBonus = opts.indoorBonus ?? 0;
+    const comp = opts.comp ?? -1;
+    const compArr = comp >= 0 ? this.grid?.comp ?? null : null;
     const dTowardNow = toward ? Math.hypot(toward.x - pos.x, toward.z - pos.z) : 0;
     let best = null;
     let bestScore = -Infinity;
@@ -1526,9 +1595,10 @@ export class CoverMap {
       const p = this.points[i];
       if (p === avoid) continue;
       if (p.claimed >= 0 && p.claimed !== claimId) continue;
+      if (compArr !== null && compArr[p.cell] !== comp) continue;
       const toThreatX = tx - p.x, toThreatZ = tz - p.z;
       const dT = Math.hypot(toThreatX, toThreatZ);
-      if (dT < 2.5 || dT > 40) continue;
+      if (dT < 2.5 || dT > maxThreat) continue;
       const travel = Math.hypot(p.x - pos.x, p.z - pos.z);
       if (travel > maxTravel) continue;
       if (yRef !== null && Math.abs(p.y - yRef) > yTol) continue;
@@ -1540,6 +1610,15 @@ export class CoverMap {
       if (dT < wantMin) score -= (wantMin - dT) * 0.55;
       else if (dT > wantMax) score -= (dT - wantMax) * 0.28;
       score -= travel * 0.16;
+      /**
+       * HEIGHT AND A ROOM. Both are opt-in and both are bounded: the rise is
+       * clamped at 6 m so one freak cell cannot outscore protection itself,
+       * and it is one-sided — a position BELOW him is not punished, it simply
+       * earns nothing, because a marksman driven off every dip in the road is
+       * a marksman who spends the round walking.
+       */
+      if (heightBias !== 0) score += Math.min(6, Math.max(0, p.y - pos.y)) * heightBias;
+      if (indoorBonus !== 0 && p.indoor) score += indoorBonus;
       // Progress toward the objective, in metres gained, scaled.
       if (toward) {
         const gain = dTowardNow - Math.hypot(toward.x - p.x, toward.z - p.z);

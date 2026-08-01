@@ -182,7 +182,20 @@ const AI_ROLE_FIELD = 'field';
  * `RESUPPLY_AFTER` / `RESUPPLY_RANGE`: a man who has been alive 40 s has been
  * shooting, and 22 m is close enough that the detour is on his way.
  */
-const CACHE_LEGS = 3;
+/**
+ * 3 -> 5, AND THE CAP FROM A FIFTH OF THE SIDE TO A QUARTER. "もっとAIが屋内に
+ * 入って" is a request for a bigger number and this is the number. At the 20 v 20
+ * roster that is five men per side per refresh instead of three, and the cap
+ * (20/4 = 5) stops binding rather than the other way round; at five men a side
+ * it is still one, so a thin team is not emptied into a building.
+ *
+ * It is safe to raise because of what it was measured DOING, not because five
+ * felt right: of 39 legs handed out on one seed, 10 arrived, 11 died on the way
+ * and 12 timed out — nobody was queueing at a door. The failure mode this
+ * constant guards against is crowding at a doorway (@see `tools/stuckcheck.mjs`,
+ * which is the gate), and the gate reports 0/39 with it at 5.
+ */
+const CACHE_LEGS = 5;
 const CACHE_NEAR_ZONE = 26;
 const RESUPPLY_AFTER = 40;
 const RESUPPLY_RANGE = 22;
@@ -241,6 +254,17 @@ const CACHE_ARRIVE = 2.2;
  * room somebody else's side has a reason to walk into; let him hold it.
  */
 const CACHE_DWELL = 14;
+/**
+ * Metres from the zone this side is fighting for, inside which a crate is a
+ * FORWARD position and therefore worth the beacon. @see `_beaconWorth`.
+ *
+ * Wider than `CACHE_NEAR_ZONE` (26 m, "part of the fight for this point") on
+ * purpose: a spawn does not have to be in the fight, it has to be a short walk
+ * into it, and 40 m is roughly the far side of a block — near enough that the
+ * men coming out of it arrive at the point, far enough that the beacon is not
+ * itself standing in the contested paint.
+ */
+const BEACON_NEAR_ZONE = 40;
 
 /** Metres. Close enough to the flank staging point to count as "been there". */
 const FLANK_ARRIVE = 7;
@@ -1611,7 +1635,7 @@ export class MatchSystem {
     }
 
     const now = this.ctx.time.elapsed;
-    let legs = Math.min(CACHE_LEGS, Math.max(1, (live.length / 5) | 0));
+    let legs = Math.min(CACHE_LEGS, Math.max(1, (live.length / 4) | 0));
     // 1. the men already on an errand keep it, and count against the cap.
     for (let i = 0; i < live.length && legs > 0; i++) {
       const a = live[i];
@@ -1641,6 +1665,40 @@ export class MatchSystem {
          * pouch.
          */
         this.caches.takeForBot(c, a, this.ai, now);
+        /**
+         * ────────────────────────────────────────────────────────────────────
+         * …AND HE SWITCHES THE BEACON ON — "ビーコン起動したりするようにして".
+         * ────────────────────────────────────────────────────────────────────
+         * Until this line the beacon was a PLAYER verb and nothing else: the
+         * only call to `plantBeacon` in the repo is on the human's KeyF tap, so
+         * across a whole bot-only match `stats.beacons` was 0 and so was
+         * `beaconSpawns`. That is a feature that does not exist for nineteen of
+         * the twenty men on each side.
+         *
+         * It is planted on ARRIVAL and by the man who was sent, i.e. exactly
+         * where and when the crate is opened, because `plantBeacon` pins the
+         * spawn to the CACHE's authored position rather than to wherever a
+         * capsule happens to be standing — the same guarantee that makes the
+         * player's beacon land somewhere `floorcheck` proved has standing room.
+         * It is therefore free of the "twenty men materialise in a doorway"
+         * risk that picking an arbitrary point would carry.
+         *
+         * THE GATE IS THE PLAYER'S OWN GATE, unchanged: the record is one per
+         * MAP (`Caches.beacon` is a single object with a `team` on it), so bots
+         * planting greedily would starve the human of a verb he has a key
+         * bound to. `beaconCooldown` is 75 s and `beaconTime` 30 s, so both
+         * sides and the player are racing for the same one slot, which is the
+         * same race the crates already are.
+         *
+         * `_beaconWorth` is the only new judgement: a beacon nobody can respawn
+         * at is a wasted cooldown, so it has to pass the same veto
+         * (`forwardSpawnBlockRadius`) that `_safeSpawn` will apply to it, and it
+         * has to be forward — near the point this side is fighting for — rather
+         * than a crate behind its own line.
+         */
+        if (this._beaconWorth(team, c, now)) {
+          this.caches.plantBeacon(c, team, a.yaw, now);
+        }
       }
       legs--;
       this._orderCache(a, c, face);
@@ -1662,10 +1720,33 @@ export class MatchSystem {
      * was ever consulted. A man who is out of ammunition now outranks a man who
      * is near a door.
      */
-    for (let pass = 0; pass < 2 && legs > 0; pass++) {
+    /**
+     * A THIRD PASS, AND THE MEASUREMENT THAT DEMANDED IT.
+     *
+     * `_legfate.mjs` followed every leg on one seed: 39 handed out, 10 ARRIVED
+     * — and `stats.botTakes` was 1. The errand was working; the reward was not.
+     * `Agent.resupply` is capped at what a man spawned with, so a bot who has
+     * not yet reloaded once is FULL, `takeForBot` hands him nothing and returns
+     * null (correctly — a full pouch must not burn a crate's cooldown), and the
+     * leg bought a walk and no物資. 74 of the 79 legs on that seed went to men
+     * selected purely on proximity by `_spareCache`, i.e. to men who could not
+     * be paid.
+     *
+     * So the middle pass now takes the contest/veteran rules AND asks whether
+     * the crate can actually give this man something. `ammoState` is the same
+     * published hook `_needCache` ranks by — `match` still never reads
+     * `Agent.reserve` — and it is < 1 for anybody who has loaded a magazine.
+     *
+     * The old rule is NOT deleted, it is demoted to a third pass, because
+     * footfall is a feature in its own right: a man walking into a room the
+     * other side also wants is 屋内戦闘 whether or not he needed the rounds.
+     * The order is need, then need-and-near, then near.
+     */
+    for (let pass = 0; pass < 3 && legs > 0; pass++) {
       for (let i = 0; i < live.length && legs > 0; i++) {
         const a = live[i];
         if (a._matchCache) continue;
+        if (pass === 1 && this.ai.ammoState(a) >= 1 && !this.ai.needsGrenade(a)) continue;
         const c = pass === 0 ? this._needCache(a, claimed) : this._spareCache(a, team, claimed, now);
         if (!c) continue;
         claimed.add(c);
@@ -1676,6 +1757,38 @@ export class MatchSystem {
         this._orderCache(a, c, face);
       }
     }
+  }
+
+  /**
+   * IS THIS CRATE WORTH SPENDING THE BEACON ON? @see `_assignCacheLegs`.
+   *
+   * Four questions, cheapest first, and every one of them is a question the
+   * spawn code is going to ask anyway — a beacon that fails any of them burns a
+   * 75 s cooldown and produces zero respawns, which is the exact state the
+   * feature was already in before bots could plant at all.
+   *
+   *  1. DOMINATION ONLY. `_safeSpawn` only consults the beacon in domination;
+   *     in the demolition ruleset there are no respawns for it to change.
+   *  2. THE SLOT IS FREE. One record per MAP, not per side (`Caches.beacon`),
+   *     and the human has a key bound to it. Bots use the player's own gate —
+   *     nothing live, cooldown clear — so they cannot lock him out of it any
+   *     more than another player would.
+   *  3. IT WILL SURVIVE THE VETO. `_safeSpawn` refuses a beacon inside
+   *     `forwardSpawnBlockRadius` of a live enemy. Testing it here as well
+   *     means a beacon is not planted into a room the other side is already in.
+   *  4. IT IS FORWARD. `_focus[team]` is the zone this side is fighting for; a
+   *     beacon near it is a forward spawn, and one behind the line is a slower
+   *     walk to the same place. No focus (nothing contested) means no beacon:
+   *     there is nothing for it to be forward OF.
+   */
+  _beaconWorth(team, c, now) {
+    if (!this.domination || !this.caches) return false;
+    const b = this.caches.beacon;
+    if (b.active || this.caches.beaconCooldown(now) > 0) return false;
+    if (this._nearestFoeDist(team, c.position) < RULES.forwardSpawnBlockRadius) return false;
+    const zone = this._focus[team];
+    if (!zone) return false;
+    return c.stand.distanceToSquared(zone.position) < BEACON_NEAR_ZONE * BEACON_NEAR_ZONE;
   }
 
   /**

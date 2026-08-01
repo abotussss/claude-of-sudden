@@ -94,16 +94,42 @@ const ARCHETYPES = {
   support: { aggression: 0.44, patience: 0.62, range: 25, exposure: 0.36, flank: 0.22, trigger: 0.66 },
   anchor: { aggression: 0.30, patience: 0.80, range: 28, exposure: 0.24, flank: 0.10, trigger: 0.78 },
   marksman: { aggression: 0.16, patience: 0.92, range: 36, exposure: 0.14, flank: 0.04, trigger: 0.92 },
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE SNIPER — "敵味方にスナイパーを持つキャラを追加して".
+   * ────────────────────────────────────────────────────────────────────────
+   * The extreme end of the marksman family and NOT a seventh flavour of
+   * rifleman: 52 m is past the far edge of every lane on this map, so cover
+   * scored around it puts him behind the fight looking down it rather than in
+   * it. `flank` is a touch above the marksman's on purpose — a sniper who
+   * cannot reposition is a sniper the first grenade kills — and everything
+   * else is dialled to a man who holds one angle and waits.
+   *
+   * The GUN is not here. Traits say what a man DOES; what he is carrying is a
+   * different set of numbers and it is applied in the constructor, keyed on
+   * this archetype. @see the bolt-gun block there.
+   */
+  sniper: { aggression: 0.12, patience: 0.95, range: 52, exposure: 0.10, flank: 0.14, trigger: 0.97 },
 };
 
 /**
  * Who each side is made of. Ten slots, drawn from with replacement, so a
  * fifteen-man team is a plausible mix rather than a guaranteed one.
+ *
+ * ONE SLOT IN TEN IS A SNIPER, IN EVERY MIX, WHICH IS WHAT "敵味方に" MEANS.
+ * Domination hands `ai.spawn` the same `role` for both sides (`AI_ROLE_FIELD`
+ * in src/match), so both draw from `any` and both sides get them; the demolition
+ * mixes carry one each so the ruleset the repo shipped with is not left out.
+ * The slot is TAKEN FROM an existing long-range one rather than added — the
+ * mixes are ten slots by construction and growing one silently re-weights every
+ * other archetype in it. `attack` trades its marksman (its only man who wanted
+ * the fight past 30 m), `defend` trades one of its two anchors so it keeps a
+ * marksman as well, and `any` trades one of its two marksmen.
  */
 const ARCHETYPE_MIX = {
-  attack: ['rusher', 'rusher', 'rusher', 'flanker', 'flanker', 'hunter', 'hunter', 'support', 'anchor', 'marksman'],
-  defend: ['rusher', 'rusher', 'flanker', 'hunter', 'hunter', 'support', 'support', 'anchor', 'anchor', 'marksman'],
-  any: ['rusher', 'flanker', 'hunter', 'hunter', 'support', 'support', 'anchor', 'anchor', 'marksman', 'marksman'],
+  attack: ['rusher', 'rusher', 'rusher', 'flanker', 'flanker', 'hunter', 'hunter', 'support', 'anchor', 'sniper'],
+  defend: ['rusher', 'rusher', 'flanker', 'hunter', 'hunter', 'support', 'support', 'anchor', 'sniper', 'marksman'],
+  any: ['rusher', 'flanker', 'hunter', 'hunter', 'support', 'support', 'anchor', 'anchor', 'sniper', 'marksman'],
 };
 
 /**
@@ -473,6 +499,62 @@ export class Agent {
     /** Baseline hand shake, before suppression is added on top. */
     this.aimWobble = 0.007 + (1 - k) * 0.026;
     this.weaponDamage = 17;
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * AND IF HE IS THE SNIPER, HE IS CARRYING A DIFFERENT GUN.
+     * ══════════════════════════════════════════════════════════════════════
+     * Every number above is the 5.56 carbine every bot on the map has always
+     * had. A bolt gun is not that weapon with a tighter cone — it is a
+     * different trade in all six dimensions, and the trade is what a player
+     * reads as "there is a sniper on that side":
+     *
+     *   ROUNDS PER SECOND  10x -> ~0.9x. One shot a second, and the second one
+     *                      is a decision. This is the whole balance: he can be
+     *                      pushed, because the man crossing his lane only has
+     *                      to survive one round to be inside the cycle.
+     *   DAMAGE             17 -> 55. Two rounds on a torso, one on a head
+     *                      (the head hitbox scales x4). Deliberately NOT a
+     *                      one-shot torso kill on a 100 HP player: this repo
+     *                      already threw out one "decided before you can
+     *                      react" weapon (@see the `skill` note above) and a
+     *                      1.25x point-blank multiplier on 55 is 69, so the
+     *                      player always gets a second in which to break line
+     *                      of sight.
+     *   CONE               a quarter of the carbine's. At 60 m his group is
+     *                      about 0.45 m across, i.e. a torso, which is the
+     *                      only reason a 60 m engagement is worth taking.
+     *   SETTLE             SLOWER, not faster. He is deadly from a held angle
+     *                      and poor when surprised, and that asymmetry is what
+     *                      makes flanking him the answer.
+     *   TRACKING           slower too — a scope is a bad way to follow a
+     *                      sprinting man, and it is why rushing him works.
+     *   MAGAZINE           5 + 6 spares. He runs dry on this map's timescale,
+     *                      which puts him on the same crate errands as
+     *                      everybody else rather than outside the economy.
+     *
+     * `weaponRange` and `viewRange` are the two that make the rest mean
+     * anything: `_combat` will not pull a trigger past `weaponRange` and
+     * `_sightTo` will not acquire past `viewRange`, so a 52 m preferred range
+     * on a man who could neither see nor shoot past 58/62 m was a preference
+     * with nothing behind it. The perception budget is unchanged — it is a
+     * fixed two line-of-sight rays per actor per call, not a function of the
+     * radius — and this is one man in ten.
+     */
+    this.sniper = this.archetype === 'sniper';
+    if (this.sniper) {
+      this.fireRate = 0.92 * (0.82 + k * 0.42);
+      this.weaponDamage = 55;
+      this.magSize = 5;
+      this.ammo = this.magSize;
+      this.reserve = this.magSize * 6;
+      this.startReserve = this.reserve;
+      this.spread = 0.0072 + (1 - k) * 0.0135;
+      this.settleTime = 2.05 - k * 1.15;
+      this.trackRate = 1.6 + k * 2.2;
+      this.aimWobble = 0.004 + (1 - k) * 0.012;
+      this.weaponRange = 78 + k * 30;
+      this.viewRange = 96;
+    }
     this.aimTarget = new THREE.Vector3();
     this.aimActual = new THREE.Vector3();
     this.aimWeight = 0;
@@ -1399,17 +1481,53 @@ export class Agent {
         towardPt = bold ? target : this.objective.position;
         towardW = bold ? 0.25 + tr.aggression * 0.45 : 0.2 + (1 - tr.aggression) * 0.35;
       }
+      /**
+       * ══════════════════════════════════════════════════════════════════════
+       * "スナイパーは基本高台や建物に優先していき" — AND ONLY WHERE HE CAN WALK.
+       * ══════════════════════════════════════════════════════════════════════
+       * Four options, all of which are zero for everybody else, so no other
+       * archetype's cover choice changes by a single point of score.
+       *
+       * `comp` is the important one and it is a REFUSAL, not a preference. The
+       * measurement that forced it: of the 6095 cover points this map bakes,
+       * 1293 are above 2.5 m and every single one of them is on a nav island —
+       * roofs and upper floors, walkable in a 2.5D height field and reachable
+       * by nobody, because a stair is zero waypoints in it. A height bias
+       * without the component filter is an order to walk onto a roof, `_goTo`
+       * gets no route, and the man stands in the street: the exact failure the
+       * `objectiveBlocked` ladder exists to catch, manufactured on purpose.
+       * With it, the 53 low-rise positions (berms, docks, plinths) that ARE on
+       * his component are the ones he climbs, and because a component label is
+       * symmetric they are also positions he can climb back down from.
+       *
+       * `indoorBonus` is the "建物" half and it is the one that actually pays
+       * on this level: 1071 of the baked points are inside an enterable
+       * footprint and the ground storeys are in the grid, so a window is
+       * somewhere a bot can genuinely hold.
+       *
+       * `maxThreat` lifts the hard 40 m ceiling in `CoverMap.pick` to his own
+       * reach. Without it a man whose preferred range is 52 m is offered
+       * nothing at all past 40 and fights where everyone else does.
+       */
+      const isSniper = this.sniper === true;
       const pick = this.ai.cover?.pick(this.position, target, {
         id: this.id,
         squad: sq?.members,
+        comp: isSniper ? this._navComp() : -1,
+        heightBias: isSniper ? 1.6 : 0,
+        indoorBonus: isSniper ? 2.4 : 0,
+        maxThreat: isSniper ? Math.max(40, this.weaponRange * 0.85) : 40,
         minRange: Math.max(3, want * 0.45),
         // The window has a floor: a rusher who wants the fight at 9 m would
         // rather have a wall at 22 m than no wall at all, and the range terms in
         // `CoverMap.pick` are a soft penalty, not a filter.
         maxRange: Math.max(22, want * 1.7),
         // An eager man is willing to cross more ground to get where he wants to
-        // be; a careful one shuffles between two adjacent walls.
-        maxTravel: this.cover ? 7 + tr.aggression * 11 : 26,
+        // be; a careful one shuffles between two adjacent walls. The sniper is
+        // the exception on purpose: his aggression is 0.12, which buys him an
+        // 8 m leash, and a building he can hold is rarely eight metres away —
+        // walking to the position IS his contribution, so he gets a long one.
+        maxTravel: isSniper ? (this.cover ? 15 : 34) : this.cover ? 7 + tr.aggression * 11 : 26,
         // Rotating out of a stale spot has to be allowed to go somewhere; with
         // the current point excluded and no room to move, the man would drop
         // cover entirely and stand in the open.
@@ -1829,6 +1947,29 @@ export class Agent {
     if (this.position.distanceToSquared(this._detour) < 0.9 * 0.9) return false;
     this._commitDetour(2.4);
     return true;
+  }
+
+  /**
+   * WHICH PIECE OF THE MAP IS THIS MAN STANDING ON, or -1.
+   *
+   * `NavGrid.comp` is the connected-component label A* already uses to decide
+   * whether a goal is reachable before it searches for it. Handing it to
+   * `CoverMap.pick` turns "prefer somewhere higher" from an order to walk onto
+   * a roof into an order to walk onto the highest thing that is actually
+   * joined to the ground he is on. @see the option block in `_combat`.
+   *
+   * -1 when the grid has not been built or when he is off it — and -1 is
+   * `pick`'s "no filter", so a man in that state gets exactly the behaviour he
+   * had before, which is what we want: an off-grid man has bigger problems and
+   * `_unstick` owns them.
+   */
+  _navComp() {
+    const g = this.ai.grid;
+    if (!g || !g.comp) return -1;
+    const ix = g.cellX(this.position.x);
+    const iz = g.cellZ(this.position.z);
+    if (!g.inside(ix, iz)) return -1;
+    return g.comp[g.index(ix, iz)];
   }
 
   /** Hand the steering to `_detour` for `t` seconds and keep the planner off it. */
