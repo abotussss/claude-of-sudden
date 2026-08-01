@@ -79,7 +79,13 @@
  *   --region=demo  every `world.demolitions` block's own footprint, against
  *                  `?demo=down`.
  *   --region=strike each authored strike site's own settled mound, fired.
- *   --region=all   all three.
+ *   --region=breach every `world.breaches` opening and the rubble spilling
+ *                  through it, against `?breach=down`. A PARTIAL state and the
+ *                  only one on this list where most of the building is still
+ *                  standing, so the region is the hole and its spill rather than
+ *                  a footprint: the house's own upper storeys are ground-standing
+ *                  mass and must not be swept as candidates for floating.
+ *   --region=all   all four.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * --fire, AND WHY THE BOOT FLAGS ARE NOT ENOUGH ON THEIR OWN
@@ -131,7 +137,8 @@ const FLAGS = {
   cath: ['cath=down'],
   demo: ['demo=down'],
   strike: [],
-  all: ['cath=down', 'demo=down'],
+  breach: ['breach=down'],
+  all: ['cath=down', 'demo=down', 'breach=down'],
 };
 
 function url(region) {
@@ -283,6 +290,35 @@ const result = await page.evaluate(
            * its own plot, so anything further out is somebody's balcony.
            */
           hw: d.halfW + 2.0, hd: d.halfD + 2.0,
+          floorY: 0,
+        });
+      }
+    }
+    /**
+     * THE BREACHED WALLS. `src/world/breach.js` takes one ground-storey
+     * elevation off a cache house and leaves the storeys above it standing on
+     * two jambs, so this is the one region on the list that is a PIECE of a
+     * building rather than a plot. Everything the damaged form authors is either
+     * solid and on the ground (the spill, which is the ramp over the plinth) or
+     * carries no proxy at all (the teeth, the fallen panels, the loose lumps) —
+     * and "carries no proxy" is exactly the claim this sweep is here to check,
+     * because the spandrel over the hole IS solid and IS held up from the side.
+     *
+     * The extent is the opening plus its spill, taken off the published `side`
+     * and `holeW`; the apron is generous enough to catch a panel thrown clear
+     * and tight enough to stay off the neighbour's balcony.
+     */
+    if (REGION === 'breach' || REGION === 'all') {
+      const APRON_B = 4.6;
+      for (const b of w.breaches ?? []) {
+        const yaw = w.levelYaw ?? 0;
+        const alongX = b.side === 0 || b.side === 2;
+        regions.push({
+          id: b.id,
+          cx: b.position.x, cz: b.position.z,
+          c: Math.cos(yaw), s: Math.sin(yaw),
+          hw: (alongX ? b.holeW / 2 + 1.6 : APRON_B),
+          hd: (alongX ? APRON_B : b.holeW / 2 + 1.6),
           floorY: 0,
         });
       }

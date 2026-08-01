@@ -416,7 +416,8 @@ function _teeth(A, rng, spec, side, rec, t, wallKey) {
       A.add(
         key,
         BOX_SOFT(A),
-        LL(pm, edge - end * bite * 0.5, y + bh / 2, t * 0.5, rng.range(-0.1, 0.1),
+        // …and bitten 0.08 m back INTO the jamb for the same reason as the head.
+        LL(pm, edge - end * (bite * 0.5 - 0.08), y + bh / 2, t * 0.5, rng.range(-0.1, 0.1),
           bite, bh, t * rng.range(0.55, 1.0), rng.range(-0.14, 0.14), rng.range(-0.14, 0.14)),
         { masks: [rng.range(0.5, 0.9), rng.range(0.6, 1.0), rng.range(0.45, 0.85)] }
       );
@@ -439,7 +440,13 @@ function _teeth(A, rng, spec, side, rec, t, wallKey) {
       A.add(
         rng.float() < 0.5 ? 'brick_fine' : wallKey,
         BOX_SOFT(A),
-        LL(pm, x, hh - drop / 2, t * 0.5, rng.range(-0.12, 0.12),
+        /**
+         * BITTEN 0.1 m UP INTO THE SPANDREL, not hung off its bottom edge.
+         * A tooth flush with the head is one rotation away from a gap, and a
+         * brick with daylight over it reads as floating masonry whatever the
+         * collision says — which is the complaint this project has had twice.
+         */
+        LL(pm, x, hh - drop / 2 + 0.1, t * 0.5, rng.range(-0.12, 0.12),
           rng.range(0.35, 0.8), drop, t * rng.range(0.5, 0.95), rng.range(-0.2, 0.2), rng.range(-0.2, 0.2)),
         { masks: [rng.range(0.5, 0.9), rng.range(0.6, 1.0), rng.range(0.4, 0.8)] }
       );
