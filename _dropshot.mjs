@@ -89,12 +89,30 @@ const aim = await page.evaluate(() => {
   window.__DROPTEAM__ = team;
   window.__DROPZONE__ = zone;
   const c = zone.position;
-  const from = new V3(c.x + 30, 0, c.z + 30);
-  const h = phys.raycast(from.x, 60, from.z, 0, -1, 0, 90, phys.MASK.WORLD);
-  e.camera.position.set(from.x, (h.hit ? h.point.y : 0) + 1.62, from.z);
-  e.camera.lookAt(new V3(c.x, 26, c.z));
+  /**
+   * STAND ON THE ZONE'S OWN GROUND, ON THE FAR SIDE FROM THE APPROACH.
+   *
+   * The first version parked at `c + (30, 30)` and raycast down for a floor,
+   * which found a BUILDING ROOF twice — every photograph was taken from a
+   * parapet looking at sky. The zone's `position` is street level by
+   * construction (`resolveLayout` snapped and proved it), so back off along the
+   * bearing the helicopter is coming down and use that height: the aircraft
+   * then flies straight at the camera and the canopies come down in front of it.
+   */
+  const base = roleOf2(m, team);
+  const dx = c.x - base.x;
+  const dz = c.z - base.z;
+  const len = Math.hypot(dx, dz) || 1;
+  const from = new V3(c.x + (dx / len) * 23, c.y + 1.65, c.z + (dz / len) * 23);
+  window.__CAM__ = from;
+  e.camera.position.copy(from);
+  e.camera.lookAt(new V3(c.x, c.y + 20, c.z));
   e.ctx.peek('player')?.teleport?.(e.camera.position, e.camera.rotation);
-  return { team, zone: zone.id, score: m.score.slice() };
+  return { team, zone: zone.id, score: m.score.slice(), cam: [+from.x.toFixed(1), +from.y.toFixed(2), +from.z.toFixed(1)] };
+  function roleOf2(mm, tm) {
+    // `_spawnCentre` is the same pair `_callReinforcement` hands to `fire`.
+    return mm.playerTeam === tm ? mm._spawnCentre.attack : mm._spawnCentre.defend;
+  }
 });
 console.log('drop side:', JSON.stringify(aim));
 
@@ -105,10 +123,12 @@ const place = () =>
     const c = window.__DROPZONE__.position;
     const r = e.ctx.peek('match').reinforce;
     // Track the aircraft while it is up, then settle on the ground it dropped on.
-    const look = r?.run && up ? r.heli.matrix.elements : null;
+    const look = r?.run && r.run.landed < 4 && up ? r.heli.matrix.elements : null;
+    // Once men start arriving the story is the GROUND, not the aircraft.
     const tx = look ? look[12] : c.x;
-    const ty = look ? look[13] : 2;
+    const ty = look ? look[13] : c.y + 2.4;
     const tz = look ? look[14] : c.z;
+    e.camera.position.copy(window.__CAM__);
     e.camera.lookAt(new V3(tx, ty, tz));
     e.ctx.peek('player')?.teleport?.(e.camera.position, e.camera.rotation);
     return {

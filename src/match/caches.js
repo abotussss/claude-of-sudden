@@ -496,7 +496,12 @@ export class Caches {
     const wp = this.weapons;
     if (!wp) return null;
     if (!this.ready(c, now)) {
-      return this._deny('CACHE RESUPPLYING', `READY IN ${Math.ceil(c.readyAt - now)}S`);
+      // A dressing station is not "resupplying" — it is out of kits. The whole
+      // reason `_deny` carries two strings is that a refusal the player cannot
+      // tell from a broken key is what this feature was rebuilt to stop.
+      return c.kind === 'medic'
+        ? this._deny('NO KIT LEFT', `READY IN ${Math.ceil(c.readyAt - now)}S`)
+        : this._deny('CACHE RESUPPLYING', `READY IN ${Math.ceil(c.readyAt - now)}S`);
     }
     let out = null;
     if (c.kind === 'medic') {
