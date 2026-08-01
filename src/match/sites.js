@@ -744,27 +744,50 @@ export const ZONES = [
  *   z  57.9 .. 71.1   attack       21 points, seven ranks of three
  *   z -59.9 .. -73.1  defence      pitch unchanged at 2.2 units in z, 6 in x
  *
- * DENSITY IS THE THING THAT MUST NOT GO UP, and this is why it is two ranks and
- * not two more columns. The original stuck epidemic — 22 of 29 men wedged and
- * going nowhere — was CROWDING, men shoved on to one-cell nav islands, and a
- * spawn cluster is the most crowded ground on the map for the first ten seconds
- * of a match and for six seconds after every wave of deaths. Adding ranks keeps
- * the 2.2 x 6.0 unit pitch exactly as it was and grows the pocket instead:
- * ~8.7 m² per stand point before, ~9.3 m² after. A fourth column at x ∓3 would
- * have put 21 men in the same ground at 6.2 m² each.
+ * RANKS RATHER THAN COLUMNS, BECAUSE DENSITY IS THE THING THAT MUST NOT GO UP.
+ * The original stuck epidemic — 22 of 29 men wedged and going nowhere — was
+ * CROWDING, men shoved on to one-cell nav islands, and a spawn cluster is the
+ * most crowded ground on the map for the first ten seconds of a match and for
+ * six seconds after every wave of deaths. A fourth column would have put 21 men
+ * in the same ground; seven ranks grow the pocket with the roster instead.
  *
- * IT STILL FITS INSIDE THE KEEPOUT CIRCLE, which is the constraint that decides
- * how far the ranks can go and it lives in a file this one may not edit.
- * `KEEPOUT` (src/world/layout.js) reserves 9.5 units on (0, ∓64.5/66.5); the new
- * corner man stands at (6, 71.1), which is |(6, 6.6)| = 8.9 units from the
- * centre. Inside, with 0.6 units to spare — so the dressing still cannot drop a
- * crate on any of the twenty-one, and layout.js needed no change.
+ * TWO CONSTRAINTS DECIDE WHERE THE RANKS CAN GO AND BOTH WERE MEASURED ON THE
+ * RUNNING LEVEL RATHER THAN READ OFF THE PLAN (`_spawnfit.mjs`, `_navedge.mjs`):
  *
- * THE TWO NEW RANKS ARE 1.2 UNITS OFF THE N2/S2 SHEDS at their inner end
- * (N2 is z 51.3..56.7 and its steps run out to 59.65 at x 1.3..2.85; S2 mirrors
- * it), which is tight enough that it was not assumed: `resolveLayout` runs
- * `walkable()` over every one of the forty-two points at boot and each of them
- * resolves on to a nav cell within the 3 m search without being relocated.
+ *   1. THE KEEPOUT CIRCLE. `KEEPOUT` (src/world/layout.js — a file this one may
+ *      not edit) reserves 9.5 units on (0, 64.5) and (0, -66.5), and it is what
+ *      stops the dressing dropping a crate on a respawn. The corner man of the
+ *      new outer rank stands at (6, 68.7), i.e. |(6, 4.2)| = 7.3 units out; the
+ *      corner man of the new inner rank at (6, 57.9) is |(6, -6.6)| = 8.9. Both
+ *      inside, so layout.js needed no change.
+ *   2. THE GROUND ACTUALLY RUNS OUT, AND IT IS NOT SYMMETRIC. Walking the nav
+ *      grid outward along each column: the ATTACK end stays walkable to level
+ *      |z| = 81.8, the DEFENCE end only to 71.6-72.0. The first attempt put the
+ *      outer ranks at the ρ-images ∓(2 + 71.1), and the three defence points at
+ *      -73.1 were past that edge — `walkable()` dragged each of them ~2.0-2.4 m
+ *      forward on to the nearest cell, which collapsed the two back ranks into
+ *      each other at 0.8 m apart. That is the crowding this note exists to
+ *      avoid, arriving through the back door of a silent relocation. Caught by
+ *      `_spawnfit.mjs`, which reports the drag distance per point precisely
+ *      because a relocated spawn looks perfectly valid from every other angle.
+ *
+ * So the pitch is 1.8 units rather than 2.2 and the band is sized to the
+ * DEFENCE end, which is the binding one:
+ *
+ *   z  57.9 59.7 61.5 63.3 65.1 66.9 68.7   attack   (N2's face is at z 56.7)
+ *   z -59.9 …                       -70.7   defence  (last walkable is -71.6)
+ *
+ * Both clusters are still exact ρ-images of each other (ρ(x, z) = (-x, -2 - z)),
+ * so neither side gets the better pocket. Stand points went 15 -> 21 and the
+ * ground under them 8.8 -> 10.8 units of z. MEASURED on the running level over
+ * all 42 points: no point dragged more than 0.53 m off where it is authored
+ * (that is ordinary nav-cell snapping, the same magnitude the fifteen already
+ * had), every point with 11 or 12 of 12 clear bearings at 1.5 m, and
+ * nearest-neighbour spacing min 1.79 m / median 2.88 m against min 2.88 m at the
+ * old 2.2-unit pitch. So it IS tighter, and the honest reason that is accepted
+ * rather than argued away is `tools/stuckcheck.mjs`: 0 of 39 stuck. A man is
+ * 0.8 m across and 1.79 m is two of him, with `_jitterOnto` and `spawnProtect`
+ * covering the moment itself.
  *
  * THE SEPARATION IS STILL LOAD-BEARING, and it is now enormous: the closest
  * attack/defence pair is 131 units = 197 m against an `Agent.viewRange` of 58 m,
@@ -778,21 +801,21 @@ export const ZONES = [
  */
 export const SPAWNS = {
   attack: spawnRow([
-    [-6.0, 71.1, Math.PI], [0.0, 71.1, Math.PI], [6.0, 71.1, Math.PI],
-    [-6.0, 68.9, Math.PI], [0.0, 68.9, Math.PI], [6.0, 68.9, Math.PI],
-    [-6.0, 66.7, Math.PI], [0.0, 66.7, Math.PI], [6.0, 66.7, Math.PI],
-    [-6.0, 64.5, Math.PI], [0.0, 64.5, Math.PI], [6.0, 64.5, Math.PI],
-    [-6.0, 62.3, Math.PI], [0.0, 62.3, Math.PI], [6.0, 62.3, Math.PI],
-    [-6.0, 60.1, Math.PI], [0.0, 60.1, Math.PI], [6.0, 60.1, Math.PI],
+    [-6.0, 68.7, Math.PI], [0.0, 68.7, Math.PI], [6.0, 68.7, Math.PI],
+    [-6.0, 66.9, Math.PI], [0.0, 66.9, Math.PI], [6.0, 66.9, Math.PI],
+    [-6.0, 65.1, Math.PI], [0.0, 65.1, Math.PI], [6.0, 65.1, Math.PI],
+    [-6.0, 63.3, Math.PI], [0.0, 63.3, Math.PI], [6.0, 63.3, Math.PI],
+    [-6.0, 61.5, Math.PI], [0.0, 61.5, Math.PI], [6.0, 61.5, Math.PI],
+    [-6.0, 59.7, Math.PI], [0.0, 59.7, Math.PI], [6.0, 59.7, Math.PI],
     [-6.0, 57.9, Math.PI], [0.0, 57.9, Math.PI], [6.0, 57.9, Math.PI],
   ]),
   defend: spawnRow([
-    [-6.0, -73.1, 0], [0.0, -73.1, 0], [6.0, -73.1, 0],
-    [-6.0, -70.9, 0], [0.0, -70.9, 0], [6.0, -70.9, 0],
-    [-6.0, -68.7, 0], [0.0, -68.7, 0], [6.0, -68.7, 0],
-    [-6.0, -66.5, 0], [0.0, -66.5, 0], [6.0, -66.5, 0],
-    [-6.0, -64.3, 0], [0.0, -64.3, 0], [6.0, -64.3, 0],
-    [-6.0, -62.1, 0], [0.0, -62.1, 0], [6.0, -62.1, 0],
+    [-6.0, -70.7, 0], [0.0, -70.7, 0], [6.0, -70.7, 0],
+    [-6.0, -68.9, 0], [0.0, -68.9, 0], [6.0, -68.9, 0],
+    [-6.0, -67.1, 0], [0.0, -67.1, 0], [6.0, -67.1, 0],
+    [-6.0, -65.3, 0], [0.0, -65.3, 0], [6.0, -65.3, 0],
+    [-6.0, -63.5, 0], [0.0, -63.5, 0], [6.0, -63.5, 0],
+    [-6.0, -61.7, 0], [0.0, -61.7, 0], [6.0, -61.7, 0],
     [-6.0, -59.9, 0], [0.0, -59.9, 0], [6.0, -59.9, 0],
   ]),
 };
