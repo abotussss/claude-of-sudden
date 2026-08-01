@@ -281,6 +281,16 @@ export class SpatialField {
     this._accAudio = 0;
     this.stats.deficit = deficit;
     this.stats.behind = +this.behind.toFixed(3);
+    /**
+     * The baseline is allowed to walk BACK UP by 2 ms a window while the thread
+     * is level. Two clocks from two sources drift against each other — a few
+     * hundred parts per million is ordinary — and a running minimum with no
+     * forgiveness would read that drift as debt and eventually hold the pool
+     * down in a match that is running perfectly. 8 ms a second forgives any
+     * plausible drift by three orders of magnitude and cannot hide a real
+     * stall, which loses tenths of a second per second.
+     */
+    if (deficit < DEFICIT_RELEASE) this._lagMin = Math.min(lag, this._lagMin + 0.002);
     if (deficit > DEFICIT_SHRINK || this.behind > BEHIND_SHRINK) {
       this.cap = Math.max(MIN_EMITTERS, Math.floor(this.cap * 0.55));
     } else if (deficit < DEFICIT_RELEASE && this.behind < BEHIND_LEVEL && this.cap < MAX_EMITTERS) {
