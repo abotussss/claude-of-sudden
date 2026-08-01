@@ -48,18 +48,22 @@ const placed = await p.evaluate((N) => {
     a.pathLen = 0;
     a.repathTimer = 0;
     a.objectiveBlocked = false;
+    a.__watch = k;
+    ai.protect(a, 9999);
     out.push({ name: a.name, id: a.id, roofY: +y.toFixed(1), comp: r.c, escape: g.escape[r.c], roofCells: r.cells.length, x: +x.toFixed(1), z: +z.toFixed(1) });
   }
   window.__W__ = out.map((o) => o.id);
+  window.__PROT__ = () => { for (const m of ai.agents) if (m.__watch !== undefined) ai.protect(m, 9999); };
   window.__S__ = out.map(() => ({ downAt: -1, start: null, travel: 0, minY: 1e9, last: null }));
   window.__CLK__ = 0;
   window.__TICK__ = (dt) => {
     const S = window.__S__;
     window.__CLK__ += dt;
     for (let k = 0; k < window.__W__.length; k++) {
-      const a = ai.agents.find((m) => m.id === window.__W__[k]);
+      const a = ai.agents.find((m) => m.__watch === k);
       const s = S[k];
-      if (!a || !a.alive) { s.dead = true; continue; }
+      if (!a) { s.gone = true; continue; }
+      if (!a.alive) { s.dead = true; continue; }
       if (!s.start) s.start = { x: a.position.x, y: a.position.y, z: a.position.z };
       if (s.last) s.travel += Math.hypot(a.position.x - s.last.x, a.position.z - s.last.z);
       s.last = { x: a.position.x, z: a.position.z };
@@ -76,15 +80,15 @@ const placed = await p.evaluate((N) => {
 }, N);
 console.log('placed:', JSON.stringify(placed));
 
-for (let i = 0; i < 120; i++) {
+for (let i = 0; i < 260; i++) {
   await wait(6);
-  await p.evaluate(() => window.__TICK__(6 / 60 * window.__ENGINE__.ctx.time.scale));
+  await p.evaluate(() => { window.__PROT__(); window.__TICK__(6 / 60 * window.__ENGINE__.ctx.time.scale); });
 }
 const r = await p.evaluate(() => ({ clock: +window.__CLK__.toFixed(1), rows: window.__S__ }));
 console.log('after', r.clock, 's of game time:');
 for (let k = 0; k < r.rows.length; k++) {
   const s = r.rows[k];
-  console.log(`  ${placed[k]?.name ?? k}  roofY=${placed[k]?.roofY}  descendedAt=${s.downAt < 0 ? 'NEVER' : s.downAt + 's'}  finalY=${s.y}  minY=${s.minY}  travelled=${(s.travel ?? 0).toFixed(1)}m  hp=${s.hp}  state=${s.state}  route=${s.hasRoute}  blocked=${s.blocked}${s.dead ? '  DEAD' : ''}`);
+  console.log(`  ${placed[k]?.name ?? k}  roofY=${placed[k]?.roofY}  descendedAt=${s.downAt < 0 ? 'NEVER' : s.downAt + 's'}  finalY=${s.y}  minY=${s.minY}  travelled=${(s.travel ?? 0).toFixed(1)}m  hp=${s.hp}  state=${s.state}  route=${s.hasRoute}  blocked=${s.blocked}${s.dead ? '  DEAD' : ''}${s.gone ? '  GONE' : ''}`);
 }
 const down = r.rows.filter((s) => s.downAt >= 0).length;
 console.log(`\n  descended: ${down} / ${r.rows.length}`);
