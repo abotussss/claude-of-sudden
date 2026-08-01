@@ -110,7 +110,16 @@ export class Mixer {
     // Headroom stage. It sits BEFORE the compressor/clipper on purpose: a
     // post-limiter volume control only scales an already-squashed signal, and
     // that is what destroys the difference between a footstep and a gunshot.
-    this.preGain = gain(actx, 0.22);
+    /**
+     * NOMINAL. Every gain in this file that is allowed to MOVE has a nominal
+     * value written down beside it, because the recovery path
+     * (`resetDynamics`) has to be able to put the mix back without knowing what
+     * happened to it. A recovery that ramps "back towards where it was" is not a
+     * recovery — if where it was is zero, multiplying it by anything is still
+     * zero, and that is the whole shape of 「音が全て消える」.
+     */
+    this.basePreGain = 0.22;
+    this.preGain = gain(actx, this.basePreGain);
     this.masterComp = actx.createDynamicsCompressor();
     // Safety net only: a single gunshot should barely touch it, a firefight
     // plus a grenade should be held together by it.
@@ -450,6 +459,53 @@ export class Mixer {
         this._tin = null;
       }
     }
+  }
+
+  /**
+   * PUT EVERY MOVEABLE GAIN BACK WHERE IT BELONGS, NOW.
+   *
+   * This is the mixer half of "whatever the pause menu is doing, do it without
+   * the pause menu". Six gains in this file can be pushed down by gameplay and
+   * are brought back by integrators: three bus ducks, the muffle's level, its
+   * low-pass and its high-shelf. An integrator only finishes if it keeps being
+   * stepped, and every one of them is stepped from `AudioSystem.update`, which
+   * is a main-thread frame loop that can stop (a hidden tab throttles rAF to
+   * nothing), can be starved, or can return early. Anything driven that way
+   * needs a way to be SET rather than approached.
+   *
+   * `setValueAtTime` and not `setTargetAtTime` on purpose: this runs when the
+   * game is already wrong, and an asymptote is how it got there.
+   *
+   * Cheap enough to be called on a hunch — it is eleven parameter writes — and
+   * safe to call when nothing is wrong, which is what lets the watchdog use it
+   * as a first response instead of reasoning about the cause.
+   */
+  resetDynamics() {
+    const t = this.actx.currentTime;
+    for (const name in this.buses) {
+      const b = this.buses[name];
+      b.duckAmount = 0;
+      b.duckHold = 0;
+      b.duck.gain.cancelScheduledValues(t);
+      b.duck.gain.setValueAtTime(1, t);
+      b.trim.gain.cancelScheduledValues(t);
+      b.trim.gain.setValueAtTime(b.baseTrim, t);
+    }
+    this.deafness = 0;
+    this.muffleLP.frequency.cancelScheduledValues(t);
+    this.muffleLP.frequency.setValueAtTime(20000, t);
+    this.muffleHS.gain.cancelScheduledValues(t);
+    this.muffleHS.gain.setValueAtTime(0, t);
+    this.muffleGain.gain.cancelScheduledValues(t);
+    this.muffleGain.gain.setValueAtTime(1, t);
+    this.preGain.gain.cancelScheduledValues(t);
+    this.preGain.gain.setValueAtTime(this.basePreGain, t);
+    this.masterGain.gain.cancelScheduledValues(t);
+    this.masterGain.gain.setValueAtTime(this.masterVolume, t);
+    this.worldSum.gain.cancelScheduledValues(t);
+    this.worldSum.gain.setValueAtTime(1, t);
+    this.masterSum.gain.cancelScheduledValues(t);
+    this.masterSum.gain.setValueAtTime(1, t);
   }
 
   setMasterVolume(v) {

@@ -141,6 +141,21 @@ class Emitter {
     this.busName = 'foley';
     this.attached = null;
     this.tracked = false;
+    /**
+     * WALL TIME A TRACKED EMITTER IS HELD UNTIL WITHOUT BEING RENEWED.
+     *
+     * `tracked` means "the expiry loop must not touch this" — beds and engines
+     * end when their owner says so, not on a timer. That is an IMMORTAL SLOT,
+     * and an immortal slot whose owner has stopped running (an exception in a
+     * frame loop, a subsystem torn down, a tank record dropped) pins a share of
+     * the pool for the rest of the match with nothing playing through it.
+     *
+     * So a tracked emitter holds a LEASE instead: its owner renews it every
+     * frame, and if the owner stops for a couple of seconds the field takes the
+     * slot back. Nothing in this subsystem is allowed to hold a voice for ever
+     * on the strength of somebody else's loop still working.
+     */
+    this.lease = Infinity;
     /** What KIND of sound is in this slot. @see SpatialField.acquire */
     this.kindTag = null;
     this.pos = { x: 0, y: 0, z: 0 };
@@ -237,6 +252,10 @@ export class SpatialField {
       // How far behind real time the audio thread is running, 0..1, and how
       // many slots the field is willing to fill because of it.
       deficit: 0, behind: 0, cap: MAX_EMITTERS, expired: 0,
+      /** Tracked slots reclaimed because nobody renewed them. @see Emitter.lease */
+      leaked: 0,
+      /** Emitters freed by a watchdog drain. @see SpatialField.drain */
+      drained: 0,
     };
     this.occlusionEnabled = true;
 
@@ -542,6 +561,8 @@ export class SpatialField {
     em.endTime = opts.endTime ?? now + 1;
     em.busName = opts.bus ?? 'foley';
     em.tracked = !!opts.tracked;
+    // A tracked slot is leased, not granted. @see Emitter.lease
+    em.lease = em.tracked ? nowWall() + (opts.lease ?? 3) : Infinity;
     em.userGain = opts.gain ?? 1;
     /**
      * A LABEL, PURELY SO THE POOL CAN BE AUDITED. `busName` says which quota a
@@ -640,6 +661,18 @@ export class SpatialField {
         e.detach();
         continue;
       }
+      /**
+       * AN UNRENEWED LEASE IS A DEAD OWNER. This is the only way a `tracked`
+       * emitter can ever be reclaimed, and it runs on the WALL clock for the
+       * same reason the deadline above does: the audio clock is the one that
+       * stops advancing when the graph is in trouble, and a rule that only fires
+       * on a healthy clock is not a rule.
+       */
+      if (e.tracked && wall > e.lease) {
+        this.stats.leaked++;
+        e.detach();
+        continue;
+      }
       active++;
     }
     this.stats.active = active;
@@ -657,6 +690,32 @@ export class SpatialField {
         }
       }
     }
+  }
+
+  /**
+   * FREE EVERYTHING, NOW. The pool half of "do what the pause menu does".
+   *
+   * A pause fixes the reported dropout, and one of the things a pause does is
+   * stop every subsystem emitting for a few seconds so the field empties on its
+   * own. This is that, without the pause and without waiting: it is the only
+   * response that is correct whatever pinned the pool — a stalled clock, a
+   * governor that never fired, a lifetime that was mis-scheduled, or a bug not
+   * yet found.
+   *
+   * `tracked` slots go too. Their owners re-acquire on their next frame (the
+   * tank engine does, see battle.js), and a slot nobody re-acquires was one
+   * nobody was using.
+   */
+  drain() {
+    let n = 0;
+    for (const e of this.emitters) {
+      if (e.free) continue;
+      e.detach();
+      n++;
+    }
+    this.stats.drained += n;
+    this.stats.active = 0;
+    return n;
   }
 
   dispose() {

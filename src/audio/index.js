@@ -21,6 +21,10 @@
  *                                      men's footsteps, armour. `.enabled=false`
  *                                      turns all three off at runtime (A/B).
  *   audio.report()                     diagnostics snapshot
+ *   audio.diagnose()                   THE DROPOUT PANEL, as an object. The same
+ *                                      numbers are on screen with `?audiodbg=1`
+ *                                      or the F9 key. @see src/audio/watchdog.js
+ *   audio.watchdog                     resume / reset / drain / rebuild ladder
  *
  * All of it is a no-op — never a throw — before the graph exists, so callers
  * never have to check whether audio started.
@@ -42,6 +46,7 @@ import {
 } from './weapons.js';
 import { tankGun } from './vehicle.js';
 import { BattleLayer } from './battle.js';
+import { AudioWatchdog } from './watchdog.js';
 import {
   surfaceImpact, footstep, shellCasing, reloadPhase, explosion, bodyFall, uiSound,
   heartbeat, cloth, meleeSwing, meleeHit,
@@ -226,6 +231,10 @@ export class AudioSystem {
       space: 'open', started: false, contextState: 'none', events: 0, errors: 0,
     };
 
+    this.battle = null;
+    this.watchdog = null;
+    /** How many times the graph has been rebuilt under it. @see _restartGraph */
+    this.restarts = 0;
     this._offs = [];
     this._gestureHandler = null;
     this._ambienceApi = null;
@@ -243,15 +252,26 @@ export class AudioSystem {
     // Web Audio needs a user gesture. Arm every plausible one; the first to
     // land builds the graph. Capture mode never gestures, so shots render in
     // silence and stay byte-identical.
+    this._armGesture();
+    if (typeof window !== 'undefined') window.__AUDIO__ = this;
+  }
+
+  /**
+   * Arm every plausible user gesture. Re-armable, because a browser can take the
+   * context away again long after boot — an autoplay policy suspend, an audio
+   * focus change, a device that disappeared — and a `resume()` it keeps refusing
+   * is a browser asking for a gesture it will never get if the listeners were
+   * removed on the first click of the match. @see AudioWatchdog GUARD 1.
+   */
+  _armGesture() {
+    if (this._gestureHandler || typeof addEventListener !== 'function') return;
     const kick = () => {
       this._disarmGesture();
+      if (this.running) { this.actx?.resume?.().catch(() => {}); return; }
       this.start().catch(() => {});
     };
     this._gestureHandler = kick;
-    if (typeof addEventListener === 'function') {
-      for (const ev of GESTURES) addEventListener(ev, kick, { passive: true });
-    }
-    if (typeof window !== 'undefined') window.__AUDIO__ = this;
+    for (const ev of GESTURES) addEventListener(ev, kick, { passive: true });
   }
 
   _disarmGesture() {
@@ -280,6 +300,8 @@ export class AudioSystem {
       this.ambience = new Ambience(actx, this.bank, this.mixer, this.field, this.rng.fork());
       this.ambience.start();
       this.battle = new BattleLayer(this);
+      this.watchdog = new AudioWatchdog(this);
+      this.watchdog.start();
       this.mixer.setSpace(this._space, 0.001);
 
       if (actx.state === 'suspended') await actx.resume();
@@ -300,6 +322,7 @@ export class AudioSystem {
     try {
       // Before the field: it holds tracked emitters (tank engines) and loop
       // sources that have to be stopped while the context still exists.
+      this.watchdog?.dispose();
       this.battle?.dispose();
       this.ambience?.dispose();
       this.field?.dispose();
@@ -309,6 +332,7 @@ export class AudioSystem {
     } catch { /* nothing useful to do */ }
     this.ambience = this.field = this.mixer = this.bank = null;
     this.battle = null;
+    this.watchdog = null;
     this.actx = null;
     this.running = false;
   }
@@ -329,7 +353,16 @@ export class AudioSystem {
     if (!this.running) return;
     try {
       const actx = this.actx;
-      if (actx.state === 'suspended') return; // tab hidden, or resume pending
+      /**
+       * A CONTEXT THAT IS NOT RUNNING IS THE WATCHDOG'S PROBLEM, NOT A REASON TO
+       * GIVE UP. This line used to be `if (actx.state === 'suspended') return;`
+       * and nothing in the subsystem ever called `resume()` after boot — so any
+       * suspend, from any cause, was permanent silence with every duck and the
+       * muffle frozen at whatever value the last blast left them. The watchdog
+       * runs FIRST and unconditionally for exactly that reason.
+       */
+      this.watchdog?.update();
+      if (actx.state !== 'running') return;
 
       /* ---- listener from the render camera ----------------------- */
       const cam = ctx.camera;
@@ -426,14 +459,107 @@ export class AudioSystem {
     return true;
   }
 
+  /**
+   * ERRORS DECAY, AND FORTY OF THEM NO LONGER END THE MATCH.
+   *
+   * The old rule was a running total with no clock on it: the fortieth throw of
+   * a whole session tore the graph down permanently, whether those forty came
+   * inside one bad second or were spread over twenty minutes of play. That is a
+   * second, quieter way for the game to go silent for good — and one that a
+   * pause cannot fix, which is how it can be told apart from the reported bug.
+   *
+   * Now the counter is a RATE. It bleeds off at one per two seconds of wall
+   * time, so only a genuine storm of failures reaches the threshold, and the
+   * response is to rebuild the graph rather than to switch it off. Two rebuilds
+   * that both fail is a real, permanent fault and it is still fatal — a third
+   * would be a loop.
+   */
   _error(err) {
+    const wall = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    if (this._errPrev) {
+      const bleed = (wall - this._errPrev) * 0.5;
+      this.stats.errors = Math.max(0, this.stats.errors - bleed);
+    }
+    this._errPrev = wall;
     this.stats.errors++;
-    if (this.stats.errors < 6) console.error('[audio]', err);
-    if (this.stats.errors === 40) {
-      console.error('[audio] too many errors — disabling audio');
+    this.stats.errorsTotal = (this.stats.errorsTotal ?? 0) + 1;
+    if (this.stats.errorsTotal < 6) console.error('[audio]', err);
+    if (this.stats.errors < 40) return;
+    this.stats.errors = 0;
+    if (this.restarts >= 2) {
+      console.error('[audio] too many errors after two rebuilds — disabling audio');
       this.failed = true;
       this._teardown();
+      return;
     }
+    console.error('[audio] error storm — rebuilding the graph');
+    this._restartGraph();
+  }
+
+  /**
+   * REBUILD EVERYTHING. The last rung of the watchdog's ladder, and the only
+   * answer to a fault that lives in a node's internal state — a NaN through the
+   * master compressor or the soft clipper poisons it permanently, and no gain
+   * change, pool drain or context resume will ever bring it back.
+   *
+   * Everything the player has chosen survives it: master volume, ambience
+   * intensity, and the diagnostic panel's own state and history, so a rebuild
+   * that happens while he is reading the numbers does not wipe them.
+   */
+  _restartGraph() {
+    const keepVolume = this.mixer?.masterVolume ?? 0.95;
+    const keepAmb = this.ambience?.intensity ?? 1;
+    const w = this.watchdog;
+    const keepDbg = w
+      ? { log: w.log.slice(0), visible: w.visible, soft: w.softRecoveries, hard: w.hardRecoveries }
+      : null;
+    this.restarts++;
+    this._teardown();
+    this.failed = false;
+    this.start().then((ok) => {
+      if (!ok) return;
+      this.mixer.setMasterVolume(keepVolume);
+      if (this.ambience) this.ambience.intensity = keepAmb;
+      if (keepDbg && this.watchdog) {
+        this.watchdog.log = keepDbg.log;
+        this.watchdog.softRecoveries = keepDbg.soft;
+        this.watchdog.hardRecoveries = keepDbg.hard;
+        this.watchdog.setVisible(keepDbg.visible);
+      }
+      console.info(`[audio] graph rebuilt (#${this.restarts})`);
+    }).catch(() => {});
+  }
+
+  /** Free every head-locked slot. The dry half of a watchdog drain. */
+  drainDry() {
+    let n = 0;
+    for (const d of this._dry) {
+      if (!d.node) continue;
+      try { d.node.disconnect(); } catch { /* already gone */ }
+      try { d.send?.disconnect(); } catch { /* already gone */ }
+      d.node = null; d.send = null;
+      n++;
+    }
+    return n;
+  }
+
+  /**
+   * Open every rate gate immediately. The gates are absolute times on the AUDIO
+   * clock, so a clock that stalled while a gate was set holds that gate closed
+   * for as long as the stall lasted — a category that is rate limited to five a
+   * second can be silent for twenty seconds on a clock that only advanced one.
+   */
+  clearRateGates() {
+    for (const k in this._rateNext) this._rateNext[k] = 0;
+    this._lastBarkTime = -99;
+    this._lastEnemyFire = -99;
+  }
+
+  /** The diagnostic snapshot, for the console: `__AUDIO__.diagnose()`. */
+  diagnose() {
+    const snap = this.watchdog?.snapshot() ?? { error: 'audio not running' };
+    console.info('[audio] diagnostics', snap);
+    return snap;
   }
 
   /* ================================================================ */

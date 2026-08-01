@@ -33,6 +33,7 @@ import {
 } from './weapons.js';
 import { tankEngine, tankGun } from './vehicle.js';
 import { attenuationAt } from './spatial.js';
+import { remoteStepLevel } from './battle.js';
 import {
   surfaceImpact, footstep, shellCasing, reloadPhase, explosion, bodyFall, uiSound,
   heartbeat, cloth, meleeSwing, meleeHit,
@@ -291,13 +292,13 @@ export async function runAudioSelfTest(opts = {}) {
   for (const d of [8, 20, 40]) {
     await push(`battle:step:remote@${d}m`, 2.2, ({ bank, rng, mixer, t }) => {
       atDist(mixer, footstep(mixer.actx, bank, rng, {
-        when: t, surface: 'concrete', gait: 'walk', level: 1, gear: 0.3,
+        when: t, surface: 'concrete', gait: 'walk', level: remoteStepLevel(d), gear: 0.22,
       }), 'foley', d, 1);
     });
   }
   await push('battle:step:remote@20m:run', 2.2, ({ bank, rng, mixer, t }) => {
     atDist(mixer, footstep(mixer.actx, bank, rng, {
-      when: t, surface: 'concrete', gait: 'run', level: 1, gear: 0.6,
+      when: t, surface: 'concrete', gait: 'run', level: remoteStepLevel(20), gear: 0.45,
     }), 'foley', 20, 1);
   });
   /** Armour: the gun at two ranges and the engine idling and rolling. */
