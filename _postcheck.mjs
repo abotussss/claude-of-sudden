@@ -109,7 +109,10 @@ await page.evaluate(() => {
   // cathedral is still standing — which is the exact class of half-measured
   // state this file exists to catch. @see MatchSystem._razeCathedral.
   m._razeCathedral();
-  m._cathedralPending = 7.4;
+  // …and D, which used to ride on `_cathedralPending`. The cathedral event is
+  // one scored clock now (`MatchSystem._updateCathedralEvent`) and forcing
+  // `_cathedralCalled` skips all of it, so the point is opened directly.
+  m._openCathedral();
   m.tank.fire();
   e.time.scale = 4;
 });

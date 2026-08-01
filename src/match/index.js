@@ -117,10 +117,19 @@ const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', 
  */
 const CATH_BEATS = [
   [-JET_LEAD, 'salvo'],
-  // The aeroplane is its own telegraph: 2.4 s on screen before it releases and
-  // 1.7 s of fall after, so firing it here puts its stick down just behind the
-  // salvo and puts the airframe over the square while the warning is still up.
-  [-3.0, 'bomber'],
+  /**
+   * The aeroplane is its own telegraph: 2.4 s on screen before it releases and
+   * 1.7 s of fall after, so firing it here puts its stick down just behind the
+   * salvo and puts the airframe over the square while the warning is still up.
+   *
+   * -3.4 RATHER THAN -3.0 BECAUSE THE BARRAGE OPENS AT -3.0. Measured with
+   * `_cathcost.mjs`: on the same frame the two cost 303 ms against a
+   * neighbourhood median of 131, and `Bomber.fire` is the expensive half (it
+   * poses and first-draws an airframe whose materials have never been on
+   * screen). Four hundred milliseconds of separation is a dozen frames, and it
+   * costs the choreography nothing.
+   */
+  [-3.4, 'bomber'],
   [RULES.cathedralRazeDelay, 'raze'],
   [3.4, 'strafe'],
   [9.0, 'aftermath'],
@@ -2398,6 +2407,27 @@ export class MatchSystem {
    */
   _announceAir(info) {
     if (!info) return;
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * THE CATHEDRAL EVENT KEEPS ITS OWN HEADLINE
+     * ────────────────────────────────────────────────────────────────────────
+     * PHOTOGRAPHED, not reasoned about (`_evshots.mjs`, shots 01-08 of the first
+     * pass). The event calls three of this file's other weapons inside itself,
+     * every one of them announces itself through this method, and every
+     * announcement resets the strip and takes the banner — so the sequence the
+     * player actually read was "THE CATHEDRAL IS BEING LEVELLED · 10 SECONDS"
+     * for four seconds, then "BOMBER INBOUND · MAIN STREET · GET CLEAR", then
+     * "BLOCK LEVELLED", then "STRAFING RUN", then "AIRSTRIKE INBOUND". The one
+     * thing the HUD had to say — the middle of the map is being annihilated and
+     * here is how long you have — was overwritten by its own component parts,
+     * and the countdown bar restarted three times.
+     *
+     * So while the event is running its sub-events keep their DANGER RETICLES,
+     * which are the half that is genuinely per-impact and which read as an area
+     * to leave, and give up the strip and the banner. The headline is re-asserted
+     * by the event itself at `raze` and `aftermath`. @see `_cathBeat`.
+     */
+    const inEvent = this._cath.t >= 0;
     const h = this._airHud;
     const p = info.position;
     h.kind = info.kind;
@@ -2436,8 +2466,9 @@ export class MatchSystem {
         label = 'AIRSTRIKE';
         break;
     }
-    this.ui.airAlert(h);
     for (let i = 0; i < info.count; i++) this.ui.airDanger(info.points[i], h.lead, label);
+    if (inEvent) return;
+    this.ui.airAlert(h);
     this.ui.banner.show(
       h.title,
       info.kind === 'SALVO'
@@ -2454,6 +2485,9 @@ export class MatchSystem {
   /** It went off. The strip switches to its impact read; the banner confirms. */
   _airLanded(info) {
     if (!info) return;
+    // Inside the cathedral event the impact read belongs to the event, not to
+    // whichever of its parts happens to have landed. @see `_announceAir`.
+    if (this._cath.t >= 0) return;
     const title =
       info.kind === 'SALVO'
         ? 'BLOCK LEVELLED'
@@ -2686,7 +2720,26 @@ export class MatchSystem {
     const hd = RULES.cathedralBarrageHalfD;
     const rng = this.rng.fork();
     for (let i = 0; i < n; i++) {
-      const t = n > 1 ? i / (n - 1) : 0.5;
+      /**
+       * THE FIRST TWO GO ON THE TWO PORTALS, AND THAT IS A PHOTOGRAPH RATHER
+       * THAN A PREFERENCE. The mid street runs the length of the nave and the
+       * player is at one end of it or the other; a walk that starts inside the
+       * footprint of a building that is still standing puts its opening rounds
+       * where the building itself hides them, and the first pass of
+       * `_evshots.mjs` caught exactly that — six shells down and nothing on
+       * screen but a flat facade. Both ends first, so the bombardment announces
+       * itself from wherever you are watching, and the walk follows.
+       */
+      if (i < 4) {
+        // Both portals, then both flank streets: four rounds that are OUTSIDE
+        // the standing shell and therefore visible from anywhere in the middle
+        // of the map, before the walk goes inside where the building hides it.
+        const portal = i < 2;
+        this._cathU[i] = portal ? rng.range(-3, 3) : (i === 2 ? -1 : 1) * hw * 0.95;
+        this._cathV[i] = portal ? (i === 0 ? -1 : 1) * hd * 0.98 : rng.range(-hd * 0.5, hd * 0.5);
+        continue;
+      }
+      const t = (i - 4) / Math.max(1, n - 5);
       // Along the nave, end to end, with enough jitter that the walk is not a
       // metronome. Alternating the direction of the sweep would read as a
       // pendulum; one pass in one direction reads as a barrage being walked.
@@ -2743,7 +2796,11 @@ export class MatchSystem {
     const h = this._airHud;
     h.kind = 'SALVO';
     h.title = 'THE CATHEDRAL IS BEING LEVELLED';
-    h.impactTitle = 'THE CATHEDRAL IS GONE';
+    // NOT "GONE" — the strip flips to its impact read the moment the countdown
+    // expires, and at that instant the building is still standing with the first
+    // bays only just coming off it. Photographed reading "THE CATHEDRAL IS GONE"
+    // over an intact facade. The `raze` beat owns that line. @see `_cathBeat`.
+    h.impactTitle = 'THE CATHEDRAL UNDER BOMBARDMENT';
     h.name = z?.name ?? 'THE CATHEDRAL';
     h.lead = RULES.cathedralLead;
     h.x = z?.position.x ?? 0;
@@ -2833,6 +2890,21 @@ export class MatchSystem {
         break;
       case 'raze': {
         const razed = this._razeCathedral();
+        // …and the strip is taken back off the sub-events, with a second
+        // countdown that runs to the last shell of the barrage. The alert puts
+        // itself away 2.2 s after its lead expires, so without this the event's
+        // own headline would be gone for the whole second half of it.
+        const z = this.lockedZone;
+        const h = this._airHud;
+        h.kind = 'SALVO';
+        h.title = 'THE CATHEDRAL IS COMING DOWN';
+        h.impactTitle = 'THE CATHEDRAL IS GONE';
+        h.name = z?.name ?? 'THE CATHEDRAL';
+        h.lead = 9.0 - RULES.cathedralRazeDelay;
+        h.x = z?.position.x ?? 0;
+        h.y = z?.position.y ?? 0;
+        h.z = z?.position.z ?? 0;
+        this.ui.airAlert(h);
         console.info(
           `[match] cathedral SHELL DOWN at +${(RULES.cathedralLead + RULES.cathedralRazeDelay).toFixed(1)}s ` +
             `(${razed ? 'levelled' : 'no ruin state available'})`
@@ -3086,7 +3158,19 @@ export class MatchSystem {
     let target = null;
     let best = -1;
     for (const z of this.sites) {
-      if (z.id !== 'A' && z.id !== 'B') continue;
+      /**
+       * EVERY PERMANENT POINT, NOT `'A'` AND `'B'`.
+       *
+       * The rule is "camping kills you" and the id list was written when there
+       * were three zones and only two of them were flank districts. There are
+       * four permanent points now — A, C, E, B — and hard-coding two of them
+       * means half the map may be sat on for the whole match with no answer,
+       * which is the failure this rule exists to prevent rather than a tuning
+       * preference. D is out because D is the locked point: it only exists at
+       * all because a bombardment levelled the building it stands in, and the
+       * contest for the ruin is the event's own consequence.
+       */
+      if (z.locked) continue;
       if (z.owner < 0) continue;
       const held = now - z.ownedSince;
       if (held > best) {

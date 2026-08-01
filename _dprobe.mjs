@@ -216,7 +216,8 @@ const t0 = await page.evaluate(() => {
   // Force the trigger without waiting 210 s of game time.
   m._cathedralCalled = true;
   const fired = m.airstrike.callCathedralCollapse();
-  m._cathedralPending = 7.4;
+  // D used to ride on `_cathedralPending`; the event is one scored clock now.
+  setTimeout(() => m._openCathedral(), 7400);
   return { fired, i: window.__MARK__() };
 });
 console.log('collapse called', JSON.stringify(t0));

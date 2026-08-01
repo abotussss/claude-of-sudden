@@ -1,0 +1,11 @@
+import { chromium } from 'playwright';
+const URL = process.argv[2] ?? 'http://127.0.0.1:4272/';
+const FILTER = new RegExp(process.argv[3] ?? '\\[airstrike\\]|\\[tank\\]|\\[match\\]');
+const b = await chromium.launch({ headless: true, args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--mute-audio'] });
+const page = await b.newPage({ viewport: { width: 900, height: 600 } });
+const errs = []; page.on('pageerror', (e) => errs.push(String(e.message)));
+page.on('console', (m) => { const t = m.text(); if (FILTER.test(t)) console.log(`[${m.type()}] ${t}`); });
+await page.goto(`${URL}?capture=1`, { waitUntil: 'domcontentloaded' });
+await page.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
+console.log(errs.length ? `[pageerror] ${errs.slice(0, 5).join(' | ')}` : '[pageerror] none');
+await b.close();
