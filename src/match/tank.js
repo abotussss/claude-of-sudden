@@ -938,7 +938,13 @@ export class Armour {
     const dp = (pile.maxZ - pile.minZ) * 0.85;
     const chunks = [];
     fracture(
-      { id: 'pile', size: [w, pile.top, dp], at: [pile.x, pile.y + pile.top * 0.5, pile.z], cut: [3, 2, 3] },
+      /**
+       * 5x2x5, NOT 3x2x3. Photographed at 3x2x3 the pieces came off a 0.76 m
+       * pile at roughly 1.2 x 0.38 x 1.2 m and read as SLABS lying in the road
+       * rather than as a barrier that had been broken up. Fifty pieces off the
+       * same box are ~0.7 m across, which is a lump of concrete.
+       */
+      { id: 'pile', size: [w, pile.top, dp], at: [pile.x, pile.y + pile.top * 0.5, pile.z], cut: [5, 2, 5] },
       0, rng, (c) => chunks.push(c)
     );
     const n = chunks.length;

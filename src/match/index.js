@@ -77,7 +77,7 @@
  */
 
 import * as THREE from 'three';
-import { RULES, MODE, TEAM, TEAM_NAME, TEAM_COLOR, ROLE, attackingTeam, roleOf, BOT_NAMES, TEAM_VARIANTS } from './rules.js';
+import { RULES, MODE, TEAM, TEAM_NAME, TEAM_COLOR, ROLE, attackingTeam, roleOf, BOT_NAMES, REINFORCE_NAMES, TEAM_VARIANTS } from './rules.js';
 import { resolveLayout } from './sites.js';
 import { CaptureZones } from './capture.js';
 import { Bomb, BOMB } from './bomb.js';
@@ -89,6 +89,7 @@ import { Strafe } from './strafe.js';
 import { Armour } from './tank.js';
 import { AmmoDrops } from './ammo.js';
 import { Caches } from './caches.js';
+import { Reinforcements } from './reinforce.js';
 
 const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', MATCH_OVER: 'matchover' };
 
@@ -532,6 +533,39 @@ export class MatchSystem {
      * protection is `ai.targetable`, which takes the human as happily as it
      * takes an Agent).
      */
+    /**
+     * THE REINFORCEMENT DROP — the fifth thing in the sky, and the only one that
+     * is not a weapon. @see src/match/reinforce.js for the aircraft and the
+     * fall, `_updateReinforcements` for when, and `RULES.reinforceDeficit` for
+     * why the trigger is the SCORE GAP and not `_matchProgress`.
+     *
+     * It is deliberately NOT in `this.air`: it has no `armRound`, it takes no
+     * `setFocus` (its target is a held zone, not the centroid of the fight), and
+     * it must not appear in any other system's `coBusy` or a sixty-second-long
+     * comeback would stand the whole sky down. The one-way courtesy — it waits
+     * for clear air, nothing waits for it — is in `_updateReinforcements`.
+     */
+    this.reinforce = new Reinforcements(ctx, { rng: this.rng.fork() }).build();
+    this.reinforce.onLand = (i, p, yaw) =>
+      this._landReinforcement(this._reinforceTeam, i, p, yaw);
+    this.reinforce.onAnnounce = (info) => this._announceReinforce(info);
+    /** Drops spent, per team. @see `RULES.reinforceMaxPerTeam`. */
+    this._reinforceUsed = [0, 0];
+    /** Whose sortie is in the air. Read by `onLand`, which is per man. */
+    this._reinforceTeam = -1;
+    this._reinforcePoll = RULES.reinforcePoll;
+    /**
+     * REPORTED, NOT GAMEPLAY, and it exists because the brief asks a question
+     * that cannot be answered from the rules: how often does it actually fire,
+     * for which side, at what score, and did it change the result.
+     * `windows` counts polls at which a side QUALIFIED — the gap between it and
+     * `calls` is what `reinforceChance` is doing.
+     */
+    this.reinforceStats = {
+      calls: 0, windows: [0, 0], landed: [0, 0], lost: [0, 0], at: [],
+    };
+    if (typeof window !== 'undefined') window.__REINFORCE__ = this.reinforce;
+
     this.tank.enemies = (team, out) => this._tankEnemies(team, out);
     this.tank.onKill = (t, by) => this._onTankKill(t, by);
     /**
@@ -953,6 +987,19 @@ export class MatchSystem {
     this.strafe?.reset();
     // Both hulls back in their pockets, invisible, colliders off, wreck hidden.
     this.tank?.reset();
+    /**
+     * THE DROP GOES BACK IN ITS BOX WITH EVERYTHING ELSE. A new match is a new
+     * scoreline, so both sides get their one sortie back — and any canopy still
+     * in the air belongs to a match that no longer exists. `_reinforceUsed` is
+     * the ceiling and `reinforceStats` is only reported, so it is left to
+     * accumulate across a restart on purpose: a probe running several matches
+     * wants the total.
+     */
+    this.reinforce?.reset();
+    this._reinforceUsed[0] = 0;
+    this._reinforceUsed[1] = 0;
+    this._reinforceTeam = -1;
+    this._reinforcePoll = RULES.reinforcePoll;
 
     // ---- the charge ---------------------------------------------------
     // Last round's pouches go with last round's bodies: `_resetPlayer` has
@@ -1128,6 +1175,28 @@ export class MatchSystem {
    */
   _queueRespawn(rec) {
     if (!rec || rec.alive) return;
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * A REINFORCEMENT DOES NOT COME BACK — "その１０人はリスポーンしない"
+     * ────────────────────────────────────────────────────────────────────────
+     * ONE LINE, AND IT IS DELIBERATELY IN THIS METHOD RATHER THAN IN
+     * `_safeSpawn`. `_safeSpawn` answers WHERE a man returns and has three tiers
+     * of its own to get right; the question here is WHETHER, and it is a
+     * property of the MAN. `rec.noRespawn` is written once when he is created
+     * (`_landReinforcement`) and read here, which is the single gate BOTH death
+     * paths already pass through — the bot's and the human's, on one queue and
+     * one timer, which is the whole reason this method exists.
+     *
+     * So there is no branch anywhere else that could disagree with it: he is not
+     * queued, so `_updateRespawns` cannot reach him, so `_respawnBot` cannot be
+     * called for him, so no tier of `_safeSpawn` is ever consulted. He is on the
+     * scoreboard as a dead man for the rest of the match, which is exactly what
+     * "形勢逆転要素なだけで、リスポーンなし" describes.
+     */
+    if (rec.noRespawn) {
+      this.reinforceStats.lost[rec.team]++;
+      return;
+    }
     if (!this._respawnsOpen()) return;
     for (const q of this._respawnQueue) if (q.rec === rec) return;
     this._respawnQueue.push({ rec, at: this.ctx.time.elapsed + RULES.respawnDelay });
@@ -2464,6 +2533,13 @@ export class MatchSystem {
         if (this.domination) {
           this._updateMapEvents(dt);
           this._updateBombard(dt);
+          /**
+           * TEN MEN FOR WHOEVER IS LOSING. It is polled here, INSIDE the
+           * domination branch and after the score tick, so the gap it reads is
+           * this frame's and not last frame's — the same reason `capture.update`
+           * runs before `_assignObjectives`. @see `_updateReinforcements`.
+           */
+          this._updateReinforcements(dt);
         }
         this._updatePlayerInteraction(dt);
         this._updateAmmoDrops(dt, audio);
@@ -2499,6 +2575,14 @@ export class MatchSystem {
     this.bomber?.update(dt, live);
     this.strafe?.update(dt, live);
     this.tank?.update(dt, live);
+    /**
+     * The helicopter runs its own clock in every phase, exactly as the four
+     * above do: a sortie that is in the air when a match ends still has to
+     * finish crossing the map. `live` is what stops the MEN arriving — a canopy
+     * that touches down after the final whistle lands nobody. @see
+     * `Reinforcements._land`.
+     */
+    this.reinforce?.update(dt, live);
 
     // Dead players watch. Written here, in update(), so it lands before `ui`
     // and `render` read the camera this frame.
@@ -2810,6 +2894,311 @@ export class MatchSystem {
         `[match] FINAL COLLAPSE at t=${t.toFixed(0)}s p=${p.toFixed(2)} — ${this._finalLeft} sites still standing`
       );
     }
+  }
+
+  /* ==================================================================== */
+  /* THE REINFORCEMENT DROP                                               */
+  /* ==================================================================== */
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * TEN MEN FOR THE SIDE THAT IS LOSING, ONCE, AND THEY DO NOT COME BACK
+   * ══════════════════════════════════════════════════════════════════════════
+   * "大幅に負けている（１００ポイント差とか、残り１００ポイントに相手チームがなったら）
+   *  チームはたまに増援として１０人追加されるようにしてAI"
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * IT IS NOT ON `_matchProgress`, AND THAT IS THE ONE DESIGN DECISION HERE
+   * ────────────────────────────────────────────────────────────────────────
+   * Every other scheduled event in this file fires on
+   * `max(elapsed/matchTime, leader/scoreTarget)` — the districts, the cathedral,
+   * the final collapse — because they are about the SHAPE of a match and have to
+   * land at the same point in it whether it is decided on points in four minutes
+   * or runs the clock out in ten.
+   *
+   * This one must not be, and the reason is that `_matchProgress` reads the
+   * LEADER. It says how close the match is to ending and it says NOTHING about
+   * whether it is close: 400-390 and 400-120 are the same progress and they are
+   * opposite matches. A comeback mechanic hung off it would fire in the second
+   * one — which is right — and equally in the first, which is a rubber band on a
+   * game somebody is winning fairly. So the trigger is the two things the player
+   * actually named, and both are about the GAP or about the loser:
+   *
+   *   • `RULES.reinforceDeficit` behind — being ground down, at any point in the
+   *     match.
+   *   • the enemy within `RULES.reinforceEndgame` of `scoreTarget` — a match
+   *     about to end, where the trailing side may be only forty behind.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * "たまに" IS A ROLL PER POLL AND NOT A TIMER. @see `RULES.reinforceChance`
+   * ────────────────────────────────────────────────────────────────────────
+   * The condition is sticky — a side a hundred behind is usually still a hundred
+   * behind eight seconds later — so "fire when true" would mean "fire the
+   * instant you fall behind" and every match with a drop in it would have it at
+   * the same moment. The window opens; the dice decide when inside it.
+   *
+   * BOTH SIDES ARE POLLED. The map is symmetric and so is this: whichever side
+   * is losing gets the offer, including the human's. A mechanic that only ever
+   * helped the bots would read as the game cheating, and one that only ever
+   * helped the player would read as the game apologising.
+   */
+  _updateReinforcements(dt) {
+    const r = this.reinforce;
+    if (!r?.ready) return;
+    const t = RULES.matchTime - this.roundClock;
+    if (t < RULES.reinforceFirstDelay) return;
+    this._reinforcePoll -= dt;
+    if (this._reinforcePoll > 0) return;
+    this._reinforcePoll = RULES.reinforcePoll;
+    /**
+     * ONE SORTIE IN THE SKY AT A TIME, AND NOT UNDER SOMEBODY ELSE'S. A
+     * helicopter is not in the other three weapons' `coBusy` — adding it would
+     * change the schedule of events this pass was not asked to touch — but it
+     * stands down for them, because flying a slow airframe into a telegraphed
+     * salvo is two events fighting for the same four seconds of the player's
+     * attention, which is the exact failure `_announceAir`'s header records.
+     */
+    if (r.busy) return;
+    if (this.airstrike?.busy || this.bomber?.busy || this.strafe?.busy) return;
+    if (this._cath.t >= 0) return;
+
+    for (const team of [0, 1]) {
+      if (this._reinforceUsed[team] >= RULES.reinforceMaxPerTeam) continue;
+      const mine = this.score[team];
+      const theirs = this.score[1 - team];
+      const behind = theirs - mine >= RULES.reinforceDeficit;
+      const endgame = RULES.scoreTarget - theirs <= RULES.reinforceEndgame;
+      if (!behind && !endgame) continue;
+      this.reinforceStats.windows[team]++;
+      if (!this.rng.chance(RULES.reinforceChance)) continue;
+      if (this._callReinforcement(team, t, behind, endgame)) return;
+    }
+  }
+
+  /**
+   * Fly one. Returns false when there was nowhere to put the men, in which case
+   * nothing is spent and the next poll tries again.
+   */
+  _callReinforcement(team, t, behind, endgame) {
+    const zone = this._dropZone(team);
+    const landings = this._dropPoints(team, zone);
+    if (!landings.length) {
+      console.warn(
+        `[match] reinforcement for ${TEAM_NAME[team]} found no landing ground — not called`
+      );
+      return false;
+    }
+    const approach =
+      roleOf(team, this.round) === ROLE.ATTACK
+        ? this._spawnCentre.attack
+        : this._spawnCentre.defend;
+    const label = zone ? `ZONE ${zone.id}` : `${TEAM_NAME[team]} LINE`;
+    const ok = this.reinforce.fire({
+      team,
+      label,
+      centre: zone ? zone.position : landings[0],
+      // The aircraft crosses its OWN side's ground before it crosses the drop
+      // zone, so a comeback never flies in over the people it is coming to fight.
+      approach,
+      landings,
+    });
+    if (!ok) return false;
+    this._reinforceUsed[team]++;
+    this._reinforceTeam = team;
+    this.reinforceStats.calls++;
+    this.reinforceStats.at.push({
+      team,
+      t: +t.toFixed(1),
+      score: this.score.slice(),
+      zone: zone?.id ?? 'BASE',
+      reason: behind ? (endgame ? 'behind+endgame' : 'behind') : 'endgame',
+    });
+    console.info(
+      `[match] REINFORCEMENTS: ${TEAM_NAME[team]} + ${landings.length} (no respawn) at ` +
+        `t=${t.toFixed(0)}s score ${this.score[0]}-${this.score[1]} · ${label} · ` +
+        `${behind ? 'behind' : ''}${behind && endgame ? '+' : ''}${endgame ? 'endgame' : ''}`
+    );
+    return true;
+  }
+
+  /**
+   * WHICH HELD SITE THE DROP GOES IN AT — "占領されているサイト付近から".
+   *
+   * A zone this side OWNS, and of those the one nearest the fight
+   * (`_airFocus`, the same centroid the three air weapons are aimed by), because
+   * ten men put down on the quiet end of the map are ten men who spend the rest
+   * of the match walking.
+   *
+   * IT MAY RETURN NULL, AND THE FALLBACK IS DELIBERATE. The side this event
+   * exists for is the side that is being beaten, and a side a hundred points
+   * behind very often holds NOTHING — which would make a comeback mechanic
+   * unable to fire in exactly the match it was written for. So a side with no
+   * zone drops on its own base cluster instead, which is ground it certainly
+   * holds and which `resolveLayout` has already proved. The log and the
+   * announcement both say which it was.
+   */
+  _dropZone(team) {
+    let best = null;
+    let bestD = Infinity;
+    for (const z of this.sites) {
+      if (z.owner !== team) continue;
+      if (!z.stand?.length) continue;
+      const d = z.position.distanceToSquared(this._airFocus);
+      if (d < bestD) {
+        bestD = d;
+        best = z;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * `RULES.reinforceCount` places a man can be put down, and EVERY ONE OF THEM
+   * IS GROUND SOMEBODY HAS ALREADY PROVED.
+   *
+   * This is the trap the brief names: "paratroopers must land on ground that
+   * exists and is reachable", and `ensureReachable` will either quietly relocate
+   * a bad point or hunt for four minutes without a word when there is no ground
+   * under it. So nothing here is invented:
+   *
+   *   • A ZONE's points are `z.stand` — up to eight cells `standRing` snapped to
+   *     the nav grid and then A*-PROVED from a spawn of each side, which is a
+   *     stronger claim than the drop needs.
+   *   • A BASE's points are the spawn cluster, twenty-one cells that
+   *     `resolveLayout` proved can reach the sites and that twenty men already
+   *     stand on every round.
+   *
+   * They are handed out ROUND-ROBIN with a rotating offset, so ten men over
+   * eight points is at most two men per point and never the same two points
+   * every drop. Combined with `RULES.reinforceDropGap` — 0.62 s between
+   * touchdowns — that is the whole answer to "ten men landing in one place is a
+   * crowding event": at no instant are two men arriving on one cell.
+   *
+   * The array is rebuilt per drop rather than pooled: a drop happens at most
+   * twice a match and the alternative is ten Vector3s living for ever to save an
+   * allocation nobody will ever see.
+   */
+  _dropPoints(team, zone) {
+    const src = zone
+      ? zone.stand
+      : (roleOf(team, this.round) === ROLE.ATTACK ? this.spawns.attack : this.spawns.defend)
+          .map((sp) => sp.position);
+    if (!src?.length) return [];
+    const out = [];
+    const rot = this._zoneRotate++;
+    for (let i = 0; i < RULES.reinforceCount; i++) {
+      const p = src[(i + rot) % src.length];
+      /**
+       * A metre of scatter about the proved cell, and NOT more: `_jitterOnto`
+       * uses 1.1 m for the same reason on every spawn in the game, and the point
+       * of a small number is that the man is still on the cell that was proved.
+       * The height is re-probed with `ai.groundAt` exactly as `_jitterOnto`
+       * does, because a drop zone in the cathedral ruin is not at zone y.
+       */
+      const a = this.rng.range(0, Math.PI * 2);
+      const rad = this.rng.range(0, 1.1);
+      const v = new THREE.Vector3(p.x + Math.cos(a) * rad, p.y, p.z + Math.sin(a) * rad);
+      v.y = this.ai.groundAt(v.x, v.z, p.y + 3);
+      out.push(v);
+    }
+    return out;
+  }
+
+  /**
+   * ONE MAN'S FEET TOUCH THE GROUND. Called by `Reinforcements` at touchdown,
+   * once per canopy.
+   *
+   * THIS IS THE SAME CODE PATH AS EVERY OTHER ARRIVAL IN THE GAME and that is
+   * on purpose: `ai.spawn` with the side's variant, into the side's `Squad`,
+   * `_stampSpawn` so `_assignCacheLegs` has a clock for him, into
+   * `_botsByTeam`, on to the roster, and `ai.protect` for `RULES.spawnProtect`
+   * — because a man who materialises in a contested zone with no protection is
+   * a free kill for whoever is standing in it, and spawn protection is
+   * implemented as "not a valid target" rather than immunity, so it cannot make
+   * him invulnerable either.
+   *
+   * THE TWO THINGS THAT ARE DIFFERENT ARE BOTH ON THE ROSTER RECORD:
+   *   `noRespawn`      the gate in `_queueRespawn`. @see `RULES.reinforceRespawns`.
+   *   `reinforcement`  reporting only, so a probe can tell these ten from the
+   *                    twenty who started.
+   *
+   * A CALLSIGN FROM `REINFORCE_NAMES`, NOT FROM `BOT_NAMES`: the roster grows
+   * past the twenty-one names a side has, and `_spawnTeam`'s own note says what
+   * happens then — "two men share a name and the killfeed stops being readable".
+   */
+  _landReinforcement(team, index, position, yaw) {
+    if (this.phase !== PHASE.LIVE) return;
+    const names = REINFORCE_NAMES[team] ?? REINFORCE_NAMES[0];
+    const name = names[index % names.length];
+    const variants = TEAM_VARIANTS[team];
+    const variant = variants[index % variants.length];
+    const agent = this.ai.spawn(variant, position, yaw, {
+      team,
+      name,
+      // Must match `_spawnTeam`, or the persona cache draws a different man.
+      role: this.domination ? AI_ROLE_FIELD : roleOf(team, this.round),
+    });
+    this._squads[team]?.add(agent);
+    this._stampSpawn(agent);
+    this._botsByTeam[team].push(agent);
+    this.roster.push({
+      name,
+      team,
+      kills: 0,
+      deaths: 0,
+      alive: true,
+      isPlayer: false,
+      actor: agent,
+      role: roleOf(team, this.round),
+      variant,
+      slot: this.roster.length,
+      /** THE WHOLE RULE. @see `_queueRespawn`. */
+      noRespawn: true,
+      reinforcement: true,
+    });
+    this.ai.protect(agent, RULES.spawnProtect);
+    this.reinforceStats.landed[team]++;
+    this.ctx.events.emit('match:respawn', { name, team, isPlayer: false });
+    // Re-cut the plan on the LAST man, not on each: `_assignObjectives` walks
+    // every live actor of both sides and running it ten times in six seconds is
+    // ten full re-tasks for nine partial rosters.
+    if (index >= RULES.reinforceCount - 1) this._assignObjectives();
+  }
+
+  /**
+   * THE ANNOUNCEMENT. It reuses `_announceAir`'s record and `ui.airAlert`,
+   * because "an aircraft is coming and here is where it is going" is exactly
+   * what that strip was built to say — @see `src/ui/airalert.js`, whose own
+   * header is about air events that fired correctly for weeks while the player
+   * reported they never happened.
+   *
+   * IT IS TOLD TO BOTH SIDES, in the sense that there is one HUD and it is the
+   * human's: if the drop is his, it is help arriving; if it is the enemy's, it
+   * is ten men about to land on a point and the ten seconds of warning is the
+   * only chance to be somewhere else. The banner says which.
+   */
+  _announceReinforce(info) {
+    if (!info) return;
+    const mine = this._reinforceTeam === this.playerTeam;
+    const h = this._airHud;
+    h.kind = 'REINFORCE';
+    h.name = info.name ?? '';
+    h.lead = info.lead ?? RULES.reinforceLead;
+    const p = info.position;
+    h.x = p?.x ?? 0;
+    h.y = p?.y ?? 0;
+    h.z = p?.z ?? 0;
+    h.title = mine ? 'REINFORCEMENTS INBOUND' : 'ENEMY REINFORCEMENTS';
+    h.impactTitle = mine ? 'REINFORCEMENTS DOWN' : 'ENEMY ON THE GROUND';
+    // The drop zone as a world reticle, the same one an impact gets: it is the
+    // patch of ground that is about to matter.
+    for (let i = 0; i < info.count; i++) this.ui.airDanger(info.points[i], h.lead, 'DROP');
+    this.ui.airAlert(h);
+    this.ui.banner.show(
+      h.title,
+      `${RULES.reinforceCount} ${mine ? 'FRIENDLIES' : 'HOSTILES'} · ${info.name}`,
+      2.6
+    );
   }
 
   /**
@@ -4389,6 +4778,7 @@ export class MatchSystem {
     this.bomber?.dispose();
     this.strafe?.dispose();
     this.tank?.dispose();
+    this.reinforce?.dispose();
     if (typeof window !== 'undefined') {
       if (window.__STRIKE__ === this.airstrike) delete window.__STRIKE__;
       if (window.__BOMBER__ === this.bomber) delete window.__BOMBER__;

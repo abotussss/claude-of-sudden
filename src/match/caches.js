@@ -1,14 +1,57 @@
 import * as THREE from 'three';
 import { RULES } from './rules.js';
+
 /**
- * WITHIN `src/match`, so it is an import and not a fourth copy. ARCHITECTURE.md
- * rule 2 forbids reaching into another SUBSYSTEM's module — `bomb.js` carries
- * its own merge for that reason, and `airstrike.js` says so where it exports
- * this one. `caches.js` and `airstrike.js` are the same subsystem and
- * `index.js` already imports from both, so there is no new coupling and no
- * cycle: `airstrike.js` imports `rules.js` and nothing else of ours.
+ * Merge position/normal/uv geometries into one, disposing the sources.
+ *
+ * A FOURTH COPY OF THIS FUNCTION, AND THE DUPLICATION IS THE POINT. `bomb.js`,
+ * `airstrike.js` and `bomber.js` each carry their own, and `airstrike.js`'s
+ * copy explains why: a subsystem never imports another subsystem's module, so
+ * `world`'s merge is out of reach. Importing `airstrike.js`'s export instead
+ * would be legal — it is the same subsystem — and it was tried and taken back
+ * out, because that file is being worked on by somebody else and a shared
+ * export is a shared fate. Twenty lines is cheaper than a coupling.
+ *
+ * Exported so `reinforce.js`, which is this pass's own file, can use the same
+ * one rather than making a fifth.
  */
-import { mergeGeometries } from './airstrike.js';
+export function mergeGeometries(list) {
+  let vtx = 0;
+  let idx = 0;
+  for (const g of list) {
+    vtx += g.attributes.position.count;
+    idx += g.index ? g.index.count : g.attributes.position.count;
+  }
+  const pos = new Float32Array(vtx * 3);
+  const nrm = new Float32Array(vtx * 3);
+  const uv = new Float32Array(vtx * 2);
+  const ind = new Uint32Array(idx);
+  let vo = 0;
+  let io = 0;
+  for (const g of list) {
+    const a = g.attributes.position;
+    const n = g.attributes.normal;
+    const t = g.attributes.uv;
+    pos.set(a.array, vo * 3);
+    if (n) nrm.set(n.array, vo * 3);
+    if (t) uv.set(t.array, vo * 2);
+    if (g.index) {
+      const src = g.index.array;
+      for (let i = 0; i < src.length; i++) ind[io++] = src[i] + vo;
+    } else {
+      for (let i = 0; i < a.count; i++) ind[io++] = i + vo;
+    }
+    vo += a.count;
+    g.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  out.setIndex(new THREE.BufferAttribute(ind, 1));
+  out.computeBoundingSphere();
+  return out;
+}
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
