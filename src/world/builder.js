@@ -54,10 +54,12 @@ export class Assembler {
    * not be standable, a wall that is conditionally missing — dead-ends there.
    *
    * Armed, `box()` and `clipBox()` record their arguments plus `new Error().stack`,
-   * and `_boxdump.mjs` prints the boxes inside a level-space window with the
-   * first non-builder frame of each. It named `interiorSlab`, `buildBuilding`
-   * and `kit.js:balcony` — the whole of the seed-12 boundary leak — in four
-   * lines of output.
+   * plus the WORLD centre and the open scope (@see `_tag`), and `_boxdump.mjs`
+   * prints the boxes inside a level-space window with the first non-builder
+   * frame of each. It named `interiorSlab`, `buildBuilding` and `kit.js:balcony`
+   * — the whole of the seed-12 boundary leak — in four lines of output.
+   * `_whatbox.mjs` asks the same question in world space, which is the frame
+   * `_floatcheck` reports a floating mass in.
    *
    * OFF BY DEFAULT AND FREE WHEN OFF: `TAG` is null unless the query string asks
    * for it, so the cost on a real boot is one truthiness test per box and no
@@ -614,9 +616,36 @@ export class Assembler {
   }
 
   // ------------------------------------------------------------ collision --
+  /**
+   * `?boxtag`'s record for one proxy — ITS ARGUMENTS, ITS AUTHOR, AND WHERE IT
+   * ACTUALLY IS.
+   *
+   * The arguments are LEVEL-SPACE and every building sets its own
+   * `setTransform`, so `cx,cz` is a coordinate in a frame the caller has to
+   * guess at. Every other probe on this map — `_floatcheck`, the nav grid, the
+   * boundary sweep — speaks WORLD space, so a tag that only carries the local
+   * numbers cannot be joined to any of them, and "which authored thing is the
+   * solid at world 47.7, 13.3" is the whole reason the instrument exists.
+   * So the world centre and the world yaw are resolved here, at the one moment
+   * the transform that produced them is still on the Assembler.
+   *
+   * The scope goes in for the same reason: a proxy written inside `shell:SE6`
+   * belongs to a building that has a down-state, and that is the difference
+   * between a slab and a slab that is about to stop existing.
+   */
+  _tag(k, surface, cx, cy, cz, sx, sy, sz, ry) {
+    const w = this.toWorld(cx, cy, cz, new THREE.Vector3());
+    Assembler.TAG.push({
+      k, surface, cx, cy, cz, sx, sy, sz, ry,
+      wx: w.x, wy: w.y, wz: w.z, wry: ry + this.ry,
+      scope: this._scope?.id ?? null,
+      at: new Error().stack,
+    });
+  }
+
   /** Axis-aligned (or Y-rotated) box collision proxy. */
   box(surface, cx, cy, cz, sx, sy, sz, ry = 0) {
-    if (Assembler.TAG) Assembler.TAG.push({ k: 'box', surface, cx, cy, cz, sx, sy, sz, ry, at: new Error().stack });
+    if (Assembler.TAG) this._tag('box', surface, cx, cy, cz, sx, sy, sz, ry);
     this._accum(surface).add(UNIT_BOX, this._x(trs(_m, cx, cy, cz, ry, sx, sy, sz)));
     return this;
   }
@@ -644,7 +673,7 @@ export class Assembler {
    * cover nobody can contest.
    */
   clipBox(surface, cx, cy, cz, sx, sy, sz, ry = 0, rx = 0) {
-    if (Assembler.TAG) Assembler.TAG.push({ k: 'clip', surface, cx, cy, cz, sx, sy, sz, ry, at: new Error().stack });
+    if (Assembler.TAG) this._tag('clip', surface, cx, cy, cz, sx, sy, sz, ry);
     this._clipAccum(surface).add(UNIT_BOX, this._x(trs(_m, cx, cy, cz, ry, sx, sy, sz, rx)));
     return this;
   }

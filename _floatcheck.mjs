@@ -141,10 +141,23 @@ const FLAGS = {
   all: ['cath=down', 'demo=down', 'breach=down'],
 };
 
+/**
+ * `--down=none` sweeps the SAME REGIONS on the INTACT map, and it is a state
+ * worth gating: the down-flags are the only reason a plot is empty, so a mass
+ * that floats with every building still standing is one no demolition has
+ * touched. `--down=cath,breach` picks the set by hand. Named by EVENT and not
+ * by query string because the argument parser splits on `=`.
+ */
+const FLAG_OVERRIDE = args.down === undefined
+  ? null
+  : (args.down === 'none' || args.down === true
+      ? []
+      : String(args.down).split(',').map((s) => `${s}=down`));
+
 function url(region) {
   // With --fire the events do the work; booting already-down would put the
   // shell away before the strike that is supposed to knock it down.
-  const q = FIRE ? [] : [...(FLAGS[region] ?? [])];
+  const q = FIRE ? [] : [...(FLAG_OVERRIDE ?? FLAGS[region] ?? [])];
   if (SEED !== undefined) q.push(`seed=${SEED}`);
   return q.length ? `${BASE}${BASE.includes('?') ? '&' : '?'}${q.join('&')}` : BASE;
 }
@@ -329,70 +342,104 @@ const result = await page.evaluate(
     const TOP = 44;
     /** Well under any floor on this map, so "the world" is unbounded below. */
     const BOTTOM = -6;
-    /** Two hits closer than this are one surface seen twice; the ray has to be
-     *  nudged past a hit to make progress. @see the note on closure below. */
-    const NUDGE = 2e-3;
-
     let anomalies = 0;
 
-    const ys = [];
-    const fs = [];
     /**
      * ────────────────────────────────────────────────────────────────────────
-     * CLOSURE IS THE FIRST BACK FACE, NOT A DEPTH COUNT — COINCIDENT FACES
+     * THE COLUMN IS CUT OUT OF THE BVH, NOT WALKED WITH A RAY
      * ────────────────────────────────────────────────────────────────────────
-     * Counting depth (+1 per front face, -1 per back) reconstructs overlapping
-     * boxes exactly, and it was the first thing this file did. It is wrong here,
-     * and the reason is that a closest-hit ray has to be RESTARTED past each hit
-     * to find the next one — so every face sharing a plane with the one that was
-     * returned is behind the new origin and is never seen at all.
+     * A closest-hit ray cannot reconstruct this world's solids, and it is not a
+     * question of nudge size or of how closure is defined. `physics.raycast`
+     * returns ONE hit and the walk has to restart past it, so of two faces
+     * SHARING A PLANE exactly one is ever seen — and this map is built out of
+     * boxes stacked flush. A four-storey building's column really comes back:
      *
-     * `Airstrike._buildMoundProxy` builds ten boxes ALL SUNK TO THE SAME
-     * `mound.y - 0.25`: three tops at three heights, ten undersides on one
-     * plane. Depth counts three entries and one exit, never returns to zero, and
-     * the mound is reported as a single solid running from its own crown down
-     * into the terrain ten metres below — i.e. as standing on the ground. That
-     * is a FALSE NEGATIVE on exactly the bug this file exists for, and no size
-     * of nudge fixes it: below the plane the partners are behind you and above
-     * it you have not moved.
+     *     10.43 FRONT   parapet top
+     *      9.55 back    parapet underside — and the storey top under it is lost
+     *      6.50 back    storey 3 underside, its partner top lost
+     *      3.45 back    storey 2 underside, its partner top lost
+     *      0.42 FRONT   the kerb
      *
-     * So a solid is opened by a front face while outside and closed by the FIRST
-     * back face after it, whatever happens in between. Coincident undersides
-     * close correctly (the first one is the underside). Overlapping boxes with
-     * staggered undersides close early — the remainder is then measured as the
-     * next thing down and reads as a joint rather than as air, which is the safe
-     * direction: it can under-report a piece's thickness, never invent daylight.
+     * Under any front-opens/back-closes rule that is one solid from 10.43 to
+     * 9.55 and then NINE METRES OF DAYLIGHT under a standing building. That is
+     * where the "9 floating masses" on the intact map came from: they were the
+     * intact buildings. Depth counting is no better — it sees three exits and no
+     * entries and drives the depth negative.
+     *
+     * So the faces are taken from the BVH directly. `queryAabb` over a hair-thin
+     * vertical box returns EVERY triangle whose own box straddles this (x, z) —
+     * coincident planes and all, nothing culled by being the second-closest —
+     * and the exact crossing height of each comes from the plane it lies in.
+     * With the whole multiset in hand, depth counting is exact: `nrm.y > 0` is a
+     * surface being entered on the way down and `nrm.y < 0` one being left, a
+     * solid runs from 0 -> 1 to 1 -> 0, and flush-stacked storeys read as the
+     * one continuous solid they are. Vertical faces never cross a vertical line
+     * and are skipped; a single-sided upward surface (the terrain) opens and
+     * never closes, which is exactly "the ground".
+     *
+     * It is also four times fewer queries than the ray walk it replaces.
      */
+    const sw = ph.staticWorld;
+    const EPS = 1e-4;
+    /** Crossing heights and their winding, filled per column. */
+    const cy = [];
+    const cw = [];
+    const ord = [];
     const column = (x, z, out) => {
       out.length = 0;
-      ys.length = 0;
-      fs.length = 0;
-      let y = TOP;
-      for (let guard = 0; guard < 400 && y > BOTTOM; guard++) {
-        const h = ph.raycast(x, y, z, 0, -1, 0, y - BOTTOM, MASK);
-        if (!h.hit) break;
-        ys.push(h.point.y);
-        fs.push(h.frontFace ? 1 : 0);
-        const ny = h.point.y - NUDGE;
-        if (ny >= y) break;
-        y = ny;
+      cy.length = 0;
+      cw.length = 0;
+      const n = sw.queryAabb(x - EPS, BOTTOM, z - EPS, x + EPS, TOP, z + EPS, MASK);
+      if (!n) return out;
+      const cand = sw.candidates;
+      const pos = sw.pos;
+      const nrm = sw.nrm;
+      for (let c = 0; c < n; c++) {
+        const t = cand[c];
+        const ny = nrm[t * 3 + 1];
+        // A vertical face never crosses a vertical line, and its XZ projection
+        // is a segment: no crossing to compute and no winding to count.
+        if (ny > -1e-6 && ny < 1e-6) continue;
+        const p = t * 9;
+        const ax = pos[p], ay = pos[p + 1], az = pos[p + 2];
+        const bx = pos[p + 3], by = pos[p + 4], bz = pos[p + 5];
+        const gx = pos[p + 6], gy = pos[p + 7], gz = pos[p + 8];
+        // Barycentric of (x, z) in the triangle's XZ projection.
+        const v0x = bx - ax, v0z = bz - az;
+        const v1x = gx - ax, v1z = gz - az;
+        const den = v0x * v1z - v1x * v0z;
+        if (den > -1e-12 && den < 1e-12) continue;
+        const px = x - ax, pz = z - az;
+        const u = (px * v1z - v1x * pz) / den;
+        if (u < 0 || u > 1) continue;
+        const v = (v0x * pz - px * v0z) / den;
+        if (v < 0 || u + v > 1) continue;
+        cy.push(ay + u * (by - ay) + v * (gy - ay));
+        cw.push(ny > 0 ? 1 : -1);
       }
-      let inside = false;
+      if (!cy.length) return out;
+      ord.length = cy.length;
+      for (let i = 0; i < cy.length; i++) ord[i] = i;
+      /**
+       * Down the column, and AT A SHARED PLANE THE ENTRY IS TAKEN FIRST. Two
+       * boxes flush on one plane give an exit and an entry at the same height;
+       * entry-first keeps the depth at 1 through it and reads them as the one
+       * solid they are, where exit-first would close and reopen and leave a
+       * zero-metre "gap" for the joint test to have an opinion about.
+       */
+      ord.sort((i, j) => cy[j] - cy[i] || cw[j] - cw[i]);
+      let depth = 0;
       let top = 0;
-      for (let i = 0; i < ys.length; i++) {
-        if (fs[i]) {
-          if (!inside) { top = ys[i]; inside = true; }
-        } else if (inside) {
-          out.push(top, ys[i]);
-          inside = false;
-        } else {
-          // a back face while outside: a single-sided surface, or the partner
-          // of a front face that shared a plane with an earlier hit
-          anomalies++;
-        }
+      for (let k = 0; k < ord.length; k++) {
+        const i = ord[k];
+        const before = depth;
+        depth += cw[i];
+        if (depth < 0) { anomalies++; depth = 0; continue; }
+        if (before === 0 && depth === 1) top = cy[i];
+        else if (before === 1 && depth === 0) out.push(top, cy[i]);
       }
       // Never closed: whatever this is, it reaches the bottom of the sweep.
-      if (inside) out.push(top, BOTTOM);
+      if (depth > 0) out.push(top, BOTTOM);
       return out;
     };
 
