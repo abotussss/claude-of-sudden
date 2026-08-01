@@ -576,24 +576,23 @@ function _spill(A, rng, spec, side, rec, t, wallKey) {
    * none — it lies ON the field and stands at most a step proud of it.
    */
   {
-    const len = rec.holeW * rng.range(0.32, 0.55);
-    const u = rng.range(-rec.holeW * 0.2, rec.holeW * 0.2);
-    const v = SPILL_OUT * rng.range(0.35, 0.7);
+    const len = rng.range(2.0, 3.4);
+    const wide = rng.range(0.8, 1.5);
+    const u = rng.range(-rec.holeW * 0.22, rec.holeW * 0.22);
+    const v = SPILL_OUT * rng.range(0.4, 0.75);
     const cx = fx + ax * u + nx * v;
     const cz = fz + az * u + nz * v;
-    const ry = Math.atan2(ax, az) + rng.range(-0.5, 0.5);
-    const y = SILL * 0.5 + rng.range(0.04, 0.16);
-    A.add(
-      wallKey,
-      soft,
-      LL(IDENT, cx, y, cz, ry, len, t, len * rng.range(0.45, 0.8), rng.range(-0.16, 0.16), rng.range(-0.16, 0.16)),
-      { masks: [rng.range(0.5, 0.9), rng.range(0.55, 0.95), rng.range(0.4, 0.8)] }
-    );
+    const ry = Math.atan2(ax, az) + rng.range(-0.6, 0.6);
+    const y = SILL * 0.55 + rng.range(0.03, 0.12);
+    const tilt = rng.range(-0.26, 0.26);
+    const roll = rng.range(-0.22, 0.22);
+    A.add(wallKey, soft, LL(IDENT, cx, y, cz, ry, len, t, wide, tilt, roll), {
+      masks: [rng.range(0.5, 0.9), rng.range(0.55, 0.95), rng.range(0.4, 0.8)],
+    });
     A.add(
       'brick_fine',
       soft,
-      LL(IDENT, cx, y + t * 0.55, cz, ry, len * rng.range(0.35, 0.7), 0.05, len * rng.range(0.3, 0.55),
-        rng.range(-0.16, 0.16), rng.range(-0.16, 0.16)),
+      LL(IDENT, cx, y + t * 0.55, cz, ry, len * rng.range(0.35, 0.7), 0.05, wide * rng.range(0.4, 0.75), tilt, roll),
       { masks: [0.65, 0.75, 0.6] }
     );
     for (let b = 0; b < rng.int(2, 4); b++) {
@@ -601,8 +600,44 @@ function _spill(A, rng, spec, side, rec, t, wallKey) {
       A.add(
         'metal_rust',
         BOX_THIN(A),
-        LL(IDENT, cx + rng.range(-len * 0.5, len * 0.5), y + rng.range(0.08, 0.3), cz + rng.range(-len * 0.4, len * 0.4),
+        LL(IDENT, cx + rng.range(-len * 0.5, len * 0.5), y + rng.range(0.08, 0.3), cz + rng.range(-wide * 0.5, wide * 0.5),
           rng.float() * 6.28, 0.024, bl, 0.024, rng.range(-1.3, 1.3), rng.range(-1.3, 1.3)),
+        { masks: [0.9, 0.75, 0.1] }
+      );
+    }
+  }
+
+  /**
+   * …AND ONE PROPPED AGAINST A JAMB, which is what carries the silhouette. A
+   * spill capped at 0.32 m so it stays walkable reads from twenty metres as
+   * gravel; a two-metre run of elevation leaning on the corner it came off says
+   * the wall fell rather than that somebody swept something up. Its foot is on
+   * the ground and its head is against the jamb, so it is held up the way an
+   * arch's voussoirs are — and it carries no collision either way.
+   */
+  {
+    const end = rng.float() < 0.5 ? -1 : 1;
+    const tall = rng.range(1.7, 2.4);
+    const lean = rng.range(0.55, 0.85);
+    const u = end * (rec.holeW / 2 - rng.range(0.1, 0.7));
+    const v = Math.sin(lean) * tall * 0.5 + rng.range(0.1, 0.4);
+    const cx = fx + ax * u + nx * v;
+    const cz = fz + az * u + nz * v;
+    const ry = Math.atan2(ax, az) + rng.range(-0.25, 0.25);
+    const y = Math.cos(lean) * tall * 0.5 + SILL * 0.4;
+    A.add(
+      wallKey,
+      soft,
+      LL(IDENT, cx, y, cz, ry, rng.range(1.1, 1.9), tall, t, 0, end * lean),
+      { masks: [rng.range(0.5, 0.9), rng.range(0.55, 0.95), rng.range(0.4, 0.8)] }
+    );
+    for (let b = 0; b < rng.int(2, 4); b++) {
+      const bl = rng.range(0.3, 0.9);
+      A.add(
+        'metal_rust',
+        BOX_THIN(A),
+        LL(IDENT, cx + rng.range(-0.7, 0.7), y + tall * rng.range(0.25, 0.45), cz + rng.range(-0.3, 0.3),
+          rng.float() * 6.28, 0.022, bl, 0.022, rng.range(-1.2, 1.2), rng.range(-1.2, 1.2)),
         { masks: [0.9, 0.75, 0.1] }
       );
     }
