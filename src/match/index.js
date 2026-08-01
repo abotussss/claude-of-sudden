@@ -124,8 +124,11 @@ const CATH_BEATS = [
   [RULES.cathedralRazeDelay, 'raze'],
   [3.4, 'strafe'],
   [9.0, 'aftermath'],
+  // ARMED ON THE AFTERMATH, NOT ON D, so `RULES.tankAfterCathedral` lands the
+  // hulls on the same second the point opens rather than three after it. It is
+  // one line either way; what it buys is the two events reading as one.
+  [9.0, 'armour'],
   [RULES.cathedralOpenDelay, 'open'],
-  [RULES.cathedralOpenDelay, 'armour'],
 ];
 
 /**

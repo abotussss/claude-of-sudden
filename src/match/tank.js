@@ -252,6 +252,8 @@ export class Armour {
     this._liveT = 0;
     /** Pending telegraphed launch: seconds left. */
     this._pending = -1;
+    /** The cathedral's own sortie rolls through the dust. @see `armAfter`. */
+    this._ignoreCoBusy = false;
 
     this.group = new THREE.Group();
     this.group.name = 'match-armour';
@@ -1180,7 +1182,9 @@ export class Armour {
   }
 
   _scheduleNext() {
-    if (this.busy || this._coBusy) {
+    // `_ignoreCoBusy` is the cathedral's own sortie coming in through the dust.
+    // @see `armAfter`.
+    if (this.busy || (this._coBusy && !this._ignoreCoBusy)) {
       this._next = 6;
       return;
     }
@@ -1193,6 +1197,9 @@ export class Armour {
     for (const t of this.tanks) if (t.state !== 'parked') return;
     this.call();
     this._sorties++;
+    // Spent: every sortie after the first is the ordinary interval draw and
+    // stands down for the sky like the other three air weapons.
+    this._ignoreCoBusy = false;
     const [lo, hi] = RULES.tankInterval;
     this._next = this.rng.range(lo, hi);
   }
@@ -1639,6 +1646,7 @@ export class Armour {
     this._next = Infinity;
     this._sorties = 0;
     this._liveT = 0;
+    this._ignoreCoBusy = false;
   }
 
   /**
@@ -1653,6 +1661,21 @@ export class Armour {
     if (this._next !== Infinity) return false;
     if (this._sorties >= RULES.tankMaxPerMatch) return false;
     this._next = Math.max(0, seconds);
+    /**
+     * AND THIS ONE SORTIE DOES NOT STAND DOWN FOR THE SKY.
+     *
+     * `_scheduleNext` waits out `_coBusy` because rolling a tank out under an
+     * INBOUND salvo is two telegraphs at once — which is right for the ordinary
+     * interval draw and exactly wrong here. `busy` on `Airstrike` is also true
+     * while a mass is still FALLING and settling (`SETTLE_AT` = 6.5 s after the
+     * last of a staggered group), so a sortie armed on the aftermath of the
+     * cathedral spent its first three retries watching the church's own debris
+     * come to rest: measured, the hull rolled 27 s after D opened rather than
+     * with it, at 77-85 % of the match instead of 66-73 %, and the sortie was
+     * still out when the clock ran down. Its own `busy` is still respected, so a
+     * hull already in the street never gets a twin.
+     */
+    this._ignoreCoBusy = true;
     console.info(`[tank] armed — first sortie in ${this._next.toFixed(1)}s`);
     return true;
   }
@@ -1660,6 +1683,7 @@ export class Armour {
   disarm() {
     this._next = Infinity;
     this._pending = -1;
+    this._ignoreCoBusy = false;
   }
 
   reset() {

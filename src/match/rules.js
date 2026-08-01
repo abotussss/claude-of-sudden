@@ -745,8 +745,27 @@ export const RULES = {
    * The event telegraphs for `cathedralLead` and the wreckage takes
    * `cathedralOpenDelay` more to stop moving, so D goes live about half a
    * minute after the first thing the player hears. @see `cathedralLead`.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * 0.50 -> 0.44, AND BOTH REASONS ARE MEASUREMENTS RATHER THAN TASTE
+   * ──────────────────────────────────────────────────────────────────────────
+   * The paragraphs above were measured against a match that ran 276-316 s with
+   * three capture points. There are FIVE now — E was added on the east flank
+   * while this was being written — and a fifth point pays a fifth stream of
+   * points, so the same `scoreTarget` arrives sooner: three matches run to their
+   * natural end measured 232, 244 and 256 s. The event itself also grew, from a
+   * 4.4 s telegraph and a 7.4 s wait to a `cathedralLead` warning and a
+   * `cathedralOpenDelay` of 12. Neither number moved on its own and the two
+   * compound, so at 0.50 D was opening at 66-73 % of a match against the 62 %
+   * this block was tuned to, and the fourth point was getting 62-74 s of life
+   * against the 85-120 s the paragraph above promises it.
+   *
+   * MEASURED AT 0.44 over three matches run to their natural end (`_tankdiag.mjs`,
+   * `_events.mjs`) — see the commit message for the table. Nothing else moved:
+   * `scoreTarget` is deliberately untouched, because a five minute fight is the
+   * other thing that was asked for and this may not be paid for out of it.
    */
-  cathedralOpenProgress: 0.50,
+  cathedralOpenProgress: 0.44,
 
   /**
    * ──────────────────────────────────────────────────────────────────────────
