@@ -944,6 +944,22 @@ export class Airstrike {
     let n = 0;
     for (const site of this.sites) {
       if (!site.demo || site.dropped) continue;
+      /**
+       * NOT EVERY `demo` RECORD OWNS ITS OWN DOWN-STATE.
+       *
+       * `world.demolitions[]` records do — they are switched by this flag and by
+       * `_demoprobe.mjs` and by nothing else. The CATHEDRAL record does not: it
+       * exposes `setVisual`/`setCollision` separately, on purpose, because
+       * `match` owns that building's collision *and* site D's nav, and two
+       * owners would be a race with a capture point in the middle. So it has no
+       * `setDown`, and this loop called it on every site and threw:
+       *
+       *   [boot] init failed TypeError: s.demo.setDown is not a function
+       *
+       * which killed `?demo=down` outright. Skip records this flag does not
+       * drive — the cathedral has its own boot flag, `?cath=down`.
+       */
+      if (typeof site.demo.setDown !== 'function') continue;
       if (site.demo.down === !!down) continue;
       site.demo.setDown(!!down);
       site.struck = !!down;
