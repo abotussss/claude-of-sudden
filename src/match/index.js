@@ -232,6 +232,19 @@ const GRENADE_KINDS = new Set(['grenade']);
  * not because it does anything today. @see `Caches.takeForBot`.
  */
 const VANTAGE_KINDS = new Set(['vantage']);
+/**
+ * EVERY KIND THAT IS WORTH A BOT'S WALK, which is now "not the med posts".
+ *
+ * The two `_spareCache` rules used to pass no filter at all and meant "any
+ * proved cache" — which was right while every kind handed a bot SOMETHING.
+ * `medic` does not: `Caches.takeForBot` refuses it, because `Agent.health` is
+ * `src/ai`'s state and there is no `ai.heal` on the hook list in
+ * ARCHITECTURE.md. Without this the contest rule would happily walk a man to a
+ * dressing station, stand him on it for `CACHE_DWELL` and hand him nothing —
+ * the exact "what was measured was footfall" failure `Caches.takeForBot`'s own
+ * header exists to have fixed. @see `Caches.takeForBot`.
+ */
+const BOT_USEFUL_KINDS = new Set(['ammo', 'vantage', 'weapon', 'grenade']);
 const VANTAGE_PATIENCE = 0.62;
 const VANTAGE_RANGE = 24;
 /**
@@ -394,7 +407,19 @@ export class MatchSystem {
      * them. See src/match/caches.js — including the measurement it exists to
      * move (4.25 % of bot-time indoors before anything was bound to them).
      */
-    this.caches = new Caches(ctx, this.world?.features ?? [], this.weapons);
+    /**
+     * `player` is handed over for ONE verb — `health.heal` — which is what the
+     * medical zone gives. @see `Caches.take`'s `medic` branch and
+     * `RULES.medicHeal`; the two promoted features are named in `MEDIC_FEATURES`.
+     */
+    this.caches = new Caches(ctx, this.world?.features ?? [], this.weapons, this.player);
+    /**
+     * THE MEDICAL ZONE'S DRESSING — a painted disc, a red cross and a standard
+     * at each promoted feature, so a dressing station does not look like the
+     * ammunition dump `world` built there. @see `Caches.buildMedicMarkers`.
+     */
+    const med = this.caches.buildMedicMarkers();
+    if (med) ctx.scene.add(med);
     /**
      * …and then PROVED against the real nav grid, because `world.features`'s
      * `botReachable` is `floor === 0` and four of the eight ground floors on
@@ -407,12 +432,35 @@ export class MatchSystem {
         `PROVED walkable · racks: ${this.caches.list.filter((c) => c.weaponId)
           .map((c) => `${c.building}f${c.floor}=${c.label}`).join(' ') || 'none'}`
     );
+    /**
+     * THE MEDICAL ZONE, REPORTED SEPARATELY AND PROVED LIKE EVERYTHING ELSE.
+     * Two lines rather than one, because the promotion is a `match` decision
+     * (`MEDIC_FEATURES`) and a boot on which `world` renamed or moved a flank
+     * square would otherwise show up as a feature that silently is not there.
+     */
+    {
+      const med = this.caches.list.filter((c) => c.kind === 'medic');
+      const proved = med.filter((c) => c.stand).length;
+      if (!med.length) {
+        console.warn(
+          '[match] MEDICAL ZONE: no published feature matched — the med kit is unreachable ' +
+            'this boot. `MEDIC_FEATURES` in src/match/caches.js names them by id.'
+        );
+      } else {
+        console.info(
+          `[match] medical zone: ${med.length} post(s) — ${med.map((c) => c.id).join(' ')} · ` +
+            `${proved} walkable-proved · +${RULES.medicHeal} HP on HOLD F, ` +
+            `${RULES.medicCooldown}s per post, no team lock`
+        );
+      }
+    }
     const patcher = ctx.peek('render')?.patcher;
     if (patcher) {
       for (const m of this.bomb.materials) patcher.patch(m);
       for (const m of this.ammoDrops.materials) patcher.patch(m);
       // Three paints, not one: neutral plus a tint per side. @see SiteMarks.
       for (const m of this.marks.materials) patcher.patch(m);
+      for (const m of this.caches.medMaterials ?? []) patcher.patch(m);
     }
     this.spectator = new Spectator(ctx);
 
@@ -1835,7 +1883,7 @@ export class MatchSystem {
     const zone = this._focus[team] ?? null;
     // 1. contest: a cache beside the point this side is trying to take.
     if (zone) {
-      const c = caches.nearestBotCache(zone.position, claimed, CACHE_NEAR_ZONE);
+      const c = caches.nearestBotCache(zone.position, claimed, CACHE_NEAR_ZONE, BOT_USEFUL_KINDS);
       if (c) { caches.stats.legsContest++; return c; }
     }
     /**
@@ -1846,7 +1894,7 @@ export class MatchSystem {
      * in it". It is last now — `_needCache` asks the real question.
      */
     if (now - (a._matchSpawnedAt ?? now) > RESUPPLY_AFTER) {
-      const c = caches.nearestBotCache(a.position, claimed, RESUPPLY_RANGE);
+      const c = caches.nearestBotCache(a.position, claimed, RESUPPLY_RANGE, BOT_USEFUL_KINDS);
       if (c) { caches.stats.legsVeteran++; return c; }
     }
     return null;
@@ -3831,18 +3879,29 @@ export class MatchSystem {
     const frag = this.caches.grenadeCooldown(now);
     const p = this._cachePrompt;
     p.text =
-      c.kind === 'weapon' ? `TAKE ${c.label}`
-        : c.kind === 'grenade' ? 'RESUPPLY FRAGS'
-          : 'RESUPPLY AMMUNITION';
+      c.kind === 'medic' ? 'TAKE MED KIT'
+        : c.kind === 'weapon' ? `TAKE ${c.label}`
+          : c.kind === 'grenade' ? 'RESUPPLY FRAGS'
+            : 'RESUPPLY AMMUNITION';
     p.sub = !ready
-      ? `CACHE RESUPPLYING · ${Math.ceil(c.readyAt - now)}S`
-      : c.kind === 'grenade'
-        ? frag > 0
-          ? `FRAGS READY IN ${Math.ceil(frag)}S`
-          : `+${RULES.cacheGrenades} FRAGS · ONE PER ${RULES.grenadeResupplyCooldown | 0}S`
-        : c.kind === 'weapon'
-          ? 'SWAP YOUR PRIMARY'
-          : `+${RULES.cacheAmmoMags} MAGS`;
+      ? // A dressing station is not "resupplying"; say what it is doing.
+        c.kind === 'medic'
+        ? `NO KIT · ${Math.ceil(c.readyAt - now)}S`
+        : `CACHE RESUPPLYING · ${Math.ceil(c.readyAt - now)}S`
+      : c.kind === 'medic'
+        ? // The number the player asked for, and the state he is in, on the
+          // prompt rather than after the hold. `RULES.regen` is false, so a man
+          // who is full has no reason to spend `cacheHoldTime` finding out.
+          this.player.health && this.player.health.value >= this.player.health.max - 0.5
+          ? 'NO INJURIES'
+          : `+${RULES.medicHeal} HP`
+        : c.kind === 'grenade'
+          ? frag > 0
+            ? `FRAGS READY IN ${Math.ceil(frag)}S`
+            : `+${RULES.cacheGrenades} FRAGS · ONE PER ${RULES.grenadeResupplyCooldown | 0}S`
+          : c.kind === 'weapon'
+            ? 'SWAP YOUR PRIMARY'
+            : `+${RULES.cacheAmmoMags} MAGS`;
     p.progress = st.at === c && !st.done ? Math.min(1, st.held / RULES.cacheHoldTime) : 0;
     const alt = this._promptAlt;
     alt.hold = false;
@@ -3892,11 +3951,20 @@ export class MatchSystem {
       view[i] = v;
       v.id = c.id;
       v.kind = c.kind;
+      /**
+       * `medic` HAS NO GLYPH OF ITS OWN AND KEEPS THE AMMO ONE. `ui.markers`
+       * holds a four-entry table and falls back to the supply glyph on anything
+       * it does not know (`this._cacheGlyph[o.kind] ?? 1`), which is `src/ui`'s
+       * to extend and not this pass's file. The LABEL is what carries it, and
+       * the world dressing — a painted disc and a red cross — is what actually
+       * says "medical zone" at range. @see `Caches.buildMedicMarkers`.
+       */
       v.label =
-        c.kind === 'weapon' ? c.label || 'WEAPON'
-          : c.kind === 'grenade' ? 'FRAGS'
-            : c.kind === 'vantage' ? 'NEST'
-              : 'AMMO';
+        c.kind === 'medic' ? 'MED KIT'
+          : c.kind === 'weapon' ? c.label || 'WEAPON'
+            : c.kind === 'grenade' ? 'FRAGS'
+              : c.kind === 'vantage' ? 'NEST'
+                : 'AMMO';
       v.position = c.position;
       v.ready = this.caches.ready(c, now);
       v.cooldown = Math.max(0, c.readyAt - now);
@@ -4316,6 +4384,7 @@ export class MatchSystem {
     this.bomb?.dispose();
     this.ammoDrops?.dispose();
     this.marks?.dispose();
+    this.caches?.dispose();
     this.airstrike?.dispose();
     this.bomber?.dispose();
     this.strafe?.dispose();

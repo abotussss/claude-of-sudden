@@ -334,6 +334,47 @@ export const RULES = {
   beaconTime: 30,
   beaconCooldown: 75,
 
+  /* ────────────────────────────────────────────────────────────────────────
+   * THE MEDICAL ZONE — "医療ゾーンを作り、そこで医療キットをFで取得したら体力を
+   * ５０回復するようにして 医療ゾーンは基本、敵味方関係なく使えるようにして"
+   * ────────────────────────────────────────────────────────────────────────
+   * IT IS A CACHE, AND THAT IS THE WHOLE IMPLEMENTATION. `src/match/caches.js`
+   * is already the "walk to a thing, press a key, get a benefit" system: it has
+   * a use radius, a hold, a per-cache cooldown, a refusal that says WHY, a HUD
+   * marker, a world prompt and twenty-six authored positions that
+   * `tools/floorcheck.mjs` proves a man can stand on. A med kit needs every one
+   * of those and nothing else, so a fifth `kind` is the entire change and there
+   * is no parallel mechanism to keep in step.
+   *
+   * `world` PUBLISHES NO SUCH KIND AND MUST NOT. `world.features` is four
+   * strings and `world` "may not decide what a pickup gives" — so `match`
+   * PROMOTES two of the published features to `medic` at init, by id, which is
+   * exactly the split ARCHITECTURE.md describes. @see `MEDIC_FEATURES`.
+   *
+   * "敵味方関係なく" IS A STATEMENT ABOUT TEAMS AND IT IS SATISFIED BY DOING
+   * NOTHING: no cache in this file has ever had an owner. `Caches.take` never
+   * looks at a team, the zone stands on neutral flank ground either side of the
+   * map, and a beacon can still be planted on it by whoever gets there — which
+   * is the one thing on a cache that IS per side.
+   */
+  /** HP one med kit returns. "体力を５０回復". */
+  medicHeal: 50,
+  /**
+   * Seconds before the SAME med post hands out another kit.
+   *
+   * 30, against `cacheCooldown`'s 40, and shorter on purpose: a resupply crate
+   * is a reason to cross the map (that is what its own note says it is for) and
+   * a dressing station is a place you retreat to under fire. Half a minute is
+   * long enough that it cannot be milked mid-firefight and short enough that
+   * falling back to one twice in a push is a real option.
+   *
+   * There is deliberately NO per-player clock like `grenadeResupplyCooldown`.
+   * Frags needed one because six stacks on the map made a circuit; there are two
+   * med posts and they are 70 m apart on opposite flanks, so the walk between
+   * them IS the cooldown.
+   */
+  medicCooldown: 30,
+
   /* ---- clocks (seconds) ---- */
   /** One-off, before the first round: lets the level finish streaming in. */
   warmup: 5,
@@ -1239,6 +1280,120 @@ export const RULES = {
    */
   respawnSafeRadius: 26,
 
+  /* ══════════════════════════════════════════════════════════════════════ */
+  /* THE REINFORCEMENT DROP — the comeback, and nothing else                */
+  /* ══════════════════════════════════════════════════════════════════════ */
+  /**
+   * "ゲリライベントとして増援イベントで 大幅に負けている（１００ポイント差とか、残り
+   *  １００ポイントに相手チームがなったら）チームはたまに増援として１０人追加される
+   *  ようにしてAI その場合、その１０人はリスポーンしない 形勢逆転要素なだけで、
+   *  リスポーンなし 増援は占領されているサイト付近からヘリでパラシュート降下して登場
+   *  するようにして"
+   *
+   * A side that is being beaten badly gets ten more men, ONCE, and those ten
+   * never come back. It is a lever on the shape of a lost match and it is not a
+   * lever on anything else — @see `reinforceRespawns` for why "does not respawn"
+   * is a property of the MAN and not a branch in the spawn path.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * WHY THERE ARE TWO TRIGGERS AND NOT ONE
+   * ────────────────────────────────────────────────────────────────────────
+   * The player named both and they are not the same match. A hundred-point gap
+   * is a side being ground down — it can happen at 150-50 with two thirds of the
+   * match left. A side within a hundred of `scoreTarget` is a match that is
+   * about to END, and the trailing side may be only forty behind. `MatchSystem`
+   * ORs them, so the drop can be a mid-match correction or a last stand, which
+   * are the two things a comeback mechanic is for.
+   */
+  /** Points behind before a side is "大幅に負けている". */
+  reinforceDeficit: 100,
+  /**
+   * …or the enemy is within this many of winning. At `scoreTarget` 500 this is
+   * the enemy on 400+, which measures at roughly the last minute and a half of a
+   * decided match — late enough to be a last stand, early enough that ten men
+   * walking off a drop zone can still reach a capture point and hold it.
+   */
+  reinforceEndgame: 100,
+  /** Men in a drop. "１０人追加". */
+  reinforceCount: 10,
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * WHAT "たまに" IS, AND WHY IT IS A DICE ROLL AND NOT A TIMER
+   * ────────────────────────────────────────────────────────────────────────
+   * The condition above is STICKY: a side that is a hundred behind is usually
+   * still a hundred behind ten seconds later. So a plain "fire when true" is not
+   * "たまに", it is "the instant you fall behind" — and the drop would land at
+   * the same point in every match that has one, which is a rubber band with a
+   * different name.
+   *
+   * So the condition only opens a WINDOW, and every `reinforcePoll` seconds
+   * inside it the side rolls `reinforceChance`. At 0.22 on an 8 s poll the
+   * expected wait is ~32 s of qualifying, and the distribution has a long enough
+   * tail that two matches with the same scoreline drop at different moments —
+   * which is what makes it read as an event rather than as a mechanic.
+   *
+   * MEASURED — @see the commit message for the table. The number to watch is
+   * the FRACTION OF MATCHES IN WHICH IT FIRES AT ALL: a comeback that never
+   * happens is not a mechanic and one that always happens is a rubber band.
+   */
+  reinforcePoll: 8,
+  reinforceChance: 0.22,
+  /**
+   * ONE PER SIDE PER MATCH. It is "形勢逆転要素" — a chance to turn it round —
+   * and a side that can call ten men every time it falls behind is a side that
+   * is never behind. Both sides may have one, so the ceiling on the map is
+   * twenty extra actors on top of forty; that cost is measured, not assumed.
+   */
+  reinforceMaxPerTeam: 1,
+  /**
+   * Seconds into a LIVE match before the first drop may be called. A side that
+   * is a hundred behind in the first two minutes is a side that lost one
+   * exchange, not a side that is losing — and the map events this schedule is
+   * built around have not happened yet.
+   */
+  reinforceFirstDelay: 120,
+  /**
+   * DOES A REINFORCEMENT RESPAWN? No — "その場合、その１０人はリスポーンしない".
+   *
+   * This constant exists to be read by ONE line in `_queueRespawn`, because the
+   * alternative was a special case bolted onto `_safeSpawn` and that is the
+   * wrong place: `_safeSpawn` answers WHERE a man comes back, and the question
+   * here is WHETHER. It is a field on the roster record (`rec.noRespawn`), set
+   * once when the man is created and read by the one gate every death in the
+   * game already passes through, so a reinforcement cannot come back by the
+   * player path, the bot path, a re-task or a queue flush.
+   */
+  reinforceRespawns: false,
+  /* ---- the helicopter ---- */
+  /**
+   * "増援は占領されているサイト付近からヘリでパラシュート降下して登場するようにして"
+   *
+   * The aircraft is the telegraph, exactly as the bomber's is: it is on screen
+   * and audible for `reinforceLead` seconds before the first man steps out, so
+   * the other side gets to see ten men coming and do something about it. A
+   * comeback that arrives without warning is a spawn camp in reverse.
+   */
+  reinforceLead: 4.5,
+  /** Metres above the drop zone the aircraft runs. High enough to read against the sky. */
+  reinforceAltitude: 46,
+  /** Metres per second along the run. 8 s of aircraft over a 260 m line. */
+  reinforceSpeed: 33,
+  /**
+   * Seconds between one man leaving the door and the next.
+   *
+   * 0.62, AND IT IS THE ANTI-CROWDING NUMBER RATHER THAN A COSMETIC ONE.
+   * `tools/stuckcheck.mjs` sits at 0/39 at 20 v 20 and the failure it gates is
+   * the crowding epidemic that once wedged 22 of 29 men on nav islands at
+   * doorways. Ten men arriving on one square is that failure by construction.
+   * Two things stop it: the men leave the aircraft 0.62 s apart, so at
+   * `reinforceSpeed` they are 20 m apart ALONG THE RUN before a canopy opens;
+   * and each is steered to a DIFFERENT proved standing point of the zone
+   * (`z.stand`, which `standRing` has already A*-proved from both bases).
+   */
+  reinforceDropGap: 0.62,
+  /** Metres per second under an open canopy. ~7 s from 46 m. */
+  reinforceDescent: 6.4,
+
   /* ---- bots ---- */
   /**
    * MEAN bot skill, 0..1. Each actor draws its own around this (gaussian, sd
@@ -1293,6 +1448,27 @@ export const BOT_NAMES = [
   ['FROST', 'TALON', 'NOMAD', 'AZURE', 'ECHO', 'MAKO', 'VECTOR', 'SPARK', 'GLACIER',
    'COBALT', 'MERIDIAN', 'HALCYON', 'TUNDRA', 'PELAGIC', 'BOREAL', 'KESTREL',
    'SIROCCO', 'LANTERN', 'THRESHER', 'WEIR', 'ZEPHYR'],
+];
+
+/**
+ * CALLSIGNS FOR THE MEN WHO CAME OUT OF THE HELICOPTER, and they are a separate
+ * list rather than more entries on `BOT_NAMES` for one measurable reason.
+ *
+ * `_spawnTeam` indexes `BOT_NAMES` MODULO its length, and the note over it says
+ * what happens when the roster outgrows the list: "two men share a name and the
+ * killfeed stops being readable". Twenty-one names carry a `teamSize` of 20 with
+ * one to spare; a drop adds `reinforceCount` more men to the SAME side inside
+ * the same match, so ten of the twenty-one would have been worn twice at once.
+ *
+ * They are also deliberately a different KIND of name — a numbered flight rather
+ * than a word — so that "ROTOR-3 killed you" reads in the feed as somebody who
+ * was not on the board a minute ago. That is the whole point of the event.
+ */
+export const REINFORCE_NAMES = [
+  ['ROTOR-1', 'ROTOR-2', 'ROTOR-3', 'ROTOR-4', 'ROTOR-5',
+   'ROTOR-6', 'ROTOR-7', 'ROTOR-8', 'ROTOR-9', 'ROTOR-10'],
+  ['CHALK-1', 'CHALK-2', 'CHALK-3', 'CHALK-4', 'CHALK-5',
+   'CHALK-6', 'CHALK-7', 'CHALK-8', 'CHALK-9', 'CHALK-10'],
 ];
 
 /**

@@ -1,5 +1,14 @@
 import * as THREE from 'three';
 import { RULES } from './rules.js';
+/**
+ * WITHIN `src/match`, so it is an import and not a fourth copy. ARCHITECTURE.md
+ * rule 2 forbids reaching into another SUBSYSTEM's module — `bomb.js` carries
+ * its own merge for that reason, and `airstrike.js` says so where it exports
+ * this one. `caches.js` and `airstrike.js` are the same subsystem and
+ * `index.js` already imports from both, so there is no new coupling and no
+ * cycle: `airstrike.js` imports `rules.js` and nothing else of ours.
+ */
+import { mergeGeometries } from './airstrike.js';
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -119,15 +128,63 @@ import { RULES } from './rules.js';
 /** The kinds `world.features` can publish. Anything else is ignored. */
 const KINDS = new Set(['ammo', 'weapon', 'grenade', 'vantage']);
 
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE MEDICAL ZONE — "医療ゾーンを作り、そこで医療キットをFで取得したら体力を５０
+ * 回復するようにして 医療ゾーンは基本、敵味方関係なく使えるようにして"
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHICH PUBLISHED FEATURES BECOME DRESSING STATIONS, BY ID.
+ *
+ * `world` publishes four kinds and must go on publishing four: "`world` may not
+ * decide what a pickup gives any more than it may decide who is on which side".
+ * So the fifth kind is made HERE, at init, by renaming two of them — which is
+ * the same sentence `features.js` writes about its own flank squares ("`kind:
+ * 'ammo'` is deliberate rather than lazy … a new kind would be an inert painted
+ * square until a file outside `world` was edited"). This is that file.
+ *
+ * THE TWO LANE DEPOTS, AND THE CHOICE IS NOT ARBITRARY:
+ *
+ *   • They are a ρ PAIR. `BEACON_SPOTS` authors them at level (∓34.75, ±19)
+ *     under the map's own (x, z) -> (-x, -2 - z) symmetry, so neither side is
+ *     nearer its own dressing station. "敵味方関係なく" has to be true of the
+ *     GEOMETRY as well as of the code, or it is only true on paper.
+ *   • They are OUTDOORS, on flank lanes with no capture point on them, and
+ *     `features.js` put them there precisely because those lanes had no reason
+ *     to be walked. A place you retreat to for fifty health is that reason, and
+ *     it is a better one than a crate of rounds on ground nobody contests.
+ *   • They are ground-floor and `botReachable`, so `Caches.prove` measures them
+ *     against the real nav grid like everything else.
+ *
+ * WHAT IT COSTS: the map loses two of its four flank `ammo` squares. That is a
+ * real subtraction and it is the intended one — a med post has to BE somewhere,
+ * the two plaza squares (`FLANK-NW` / `FLANK-SE`) keep ammunition on the flanks,
+ * and seven of the eight indoor ground-floor dumps are untouched.
+ *
+ * A BEACON CAN STILL BE PLANTED ON ONE. `plantBeacon` never looked at `kind`,
+ * and a dressing station is the safest square on a flank to switch a forward
+ * spawn on at — which is the same argument `features.js` makes for the two
+ * cathedral aisles.
+ */
+const MEDIC_FEATURES = new Set(['FLANK-W-beacon', 'FLANK-E-beacon']);
+
 export class Caches {
   /**
    * @param {object} ctx
    * @param {Array} features `world.features`, or an empty list if world has none
    * @param {object} weapons the `weapons` subsystem, for the primary-id table
+   * @param {object} player  the `player` subsystem, for the med kit's `health.heal`
    */
-  constructor(ctx, features, weapons) {
+  constructor(ctx, features, weapons, player = null) {
     this.ctx = ctx;
     this.weapons = weapons;
+    /**
+     * THE LOCAL PLAYER'S HEALTH, and it is reached the same way `weapons` is:
+     * a reference to the owning subsystem's own object, whose verbs
+     * (`heal`, and the `max` it clamps to) belong to `src/player`. `match`
+     * already writes `player.health.regenEnabled`, so this is not a new surface.
+     * Null when there is no player, and every use is guarded.
+     */
+    this.health = player?.health ?? null;
     /** Every cache, in publication order. Built once; never reallocated. */
     this.list = [];
     /** Just the ones a bot can walk to. A subset of `list`, same objects. */
@@ -149,11 +206,22 @@ export class Caches {
       (id) => weapons.states.get(id)?.def?.class !== 'grenade'
     );
     let weaponSeen = 0;
+    /** How many features were promoted to `medic`. Logged by `match`. */
+    this.medicCount = 0;
     for (const f of features ?? []) {
       if (!f || !KINDS.has(f.kind) || !f.position) continue;
+      /**
+       * THE ONE PLACE THE FIFTH KIND IS MADE. @see `MEDIC_FEATURES` — `world`
+       * publishes four kinds and `match` decides what a published place is
+       * worth, so the promotion happens on the way into this list and nothing
+       * downstream of here knows the difference between an authored kind and a
+       * bound one.
+       */
+      const medic = MEDIC_FEATURES.has(f.id);
+      if (medic) this.medicCount++;
       const rec = {
         id: f.id,
-        kind: f.kind,
+        kind: medic ? 'medic' : f.kind,
         building: f.building,
         floor: f.floor,
         indoor: !!f.indoor,
@@ -192,6 +260,7 @@ export class Caches {
         rec.weaponId = primaries[weaponSeen++ % primaries.length];
         rec.label = weapons.states.get(rec.weaponId)?.def?.label ?? rec.weaponId;
       }
+      if (medic) rec.label = 'MED KIT';
       this.list.push(rec);
     }
 
@@ -218,6 +287,8 @@ export class Caches {
     /** Reported by `_publishHud`; written in place. */
     this.stats = {
       taken: 0, weapons: 0, ammo: 0, frags: 0, beacons: 0, beaconSpawns: 0,
+      /** Med kits taken and HP actually returned. @see `RULES.medicHeal`. */
+      medkits: 0, healed: 0,
       /** Of `taken`, how many were opened by a BOT. @see `takeForBot`. */
       botTakes: 0,
       /** Cache legs handed out, split by the reason. @see `_assignCacheLegs`. */
@@ -385,7 +456,35 @@ export class Caches {
       return this._deny('CACHE RESUPPLYING', `READY IN ${Math.ceil(c.readyAt - now)}S`);
     }
     let out = null;
-    if (c.kind === 'weapon' && c.weaponId) {
+    if (c.kind === 'medic') {
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * THE MED KIT — "医療キットをFで取得したら体力を５０回復する"
+       * ────────────────────────────────────────────────────────────────────
+       * `health.heal(n)` is `src/player`'s own verb and it already clamps at
+       * `HEALTH.max`, which is why nothing here reads `value` to decide how
+       * much to give: the same "the owning subsystem decides what it is worth"
+       * split every other branch in this method is written under.
+       *
+       * A MAN ON FULL HEALTH IS REFUSED, and that refusal is the reason `take`
+       * returns null instead of a string. The rule is the one `AmmoDrops` and
+       * the frag stack already apply — a pickup that hands over nothing must
+       * not burn the cooldown, or a full-health man standing on the post takes
+       * it away from the wounded man behind him. `RULES.regen` is false, so on
+       * this map "full" means "has not been shot yet".
+       */
+      const h = this.health;
+      if (!h) return this._deny('NO MEDICAL SUPPORT', '');
+      const before = h.value;
+      if (before >= h.max - 0.5) {
+        return this._deny('NO INJURIES', `${Math.round(before)} HP`);
+      }
+      h.heal(RULES.medicHeal);
+      const got = Math.round(h.value - before);
+      out = { title: 'MED KIT', sub: `+${got} HP · ${Math.round(h.value)} HP` };
+      this.stats.healed += got;
+      this.stats.medkits++;
+    } else if (c.kind === 'weapon' && c.weaponId) {
       const prev = wp.pickUpPrimary(c.weaponId);
       if (prev) {
         const prevLabel = wp.states.get(prev)?.def?.label ?? prev;
@@ -423,7 +522,8 @@ export class Caches {
       }
     }
     if (!out) return null;
-    c.readyAt = now + RULES.cacheCooldown;
+    // A dressing station recovers faster than a supply dump. @see `RULES.medicCooldown`.
+    c.readyAt = now + (c.kind === 'medic' ? RULES.medicCooldown : RULES.cacheCooldown);
     this.stats.taken++;
     return out;
   }
@@ -520,6 +620,22 @@ export class Caches {
    */
   takeForBot(c, actor, ai, now) {
     if (!c || !actor || !ai || !this.ready(c, now)) return null;
+    /**
+     * A BOT CANNOT BE HANDED A MED KIT, AND THAT IS A BOUNDARY RATHER THAN AN
+     * OMISSION. `Agent.health` is `src/ai`'s state and there is no `ai.heal`
+     * hook on the list in ARCHITECTURE.md — `match` may no more write it than it
+     * may write `weapons.reserve`, which is the whole reason `ai.resupply`
+     * exists for ammunition and this method is a second decision table rather
+     * than a copy of `take()`.
+     *
+     * So a med post is refused rather than faked, and `MatchSystem`'s
+     * `MEDIC_KINDS` keeps `_assignCacheLegs` from sending anybody to one — an
+     * errand whose reward is nothing is exactly the "pretend reward" this file
+     * exists not to write. "敵味方関係なく使える" is a statement about SIDES and
+     * it holds: neither team owns the post, and the human takes one whichever
+     * team he is on.
+     */
+    if (c.kind === 'medic') return null;
     let rounds = 0;
     let grenade = false;
     if (c.kind === 'grenade') {
@@ -612,8 +728,135 @@ export class Caches {
 
   /** How many of the proved bot caches are of each kind. Reported, not gameplay. */
   botKindCounts() {
-    const out = { ammo: 0, weapon: 0, grenade: 0, vantage: 0 };
+    const out = { ammo: 0, weapon: 0, grenade: 0, vantage: 0, medic: 0 };
     for (const c of this.botList) out[c.kind] = (out[c.kind] ?? 0) + 1;
     return out;
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * WHAT A MEDICAL ZONE LOOKS LIKE — and why `match` builds it rather than `world`
+   * ══════════════════════════════════════════════════════════════════════════
+   * The two promoted features already have `world`'s own `ammo` cache standing on
+   * them — a pallet, two olive crates, an open one — because `world` published
+   * them as ammunition and `world` is not being edited. A dressing station that
+   * looked identical to a resupply dump would be the "inert painted square" that
+   * `features.js`'s own note warns a new kind becomes.
+   *
+   * So the DRESSING is `match`'s, exactly as `SiteMarks` paints the capture
+   * circles from resolved positions rather than authored ones: a ground disc, a
+   * red cross on it, and a two-metre standard with a cross panel that reads from
+   * the far end of the lane. Six boxes and a disc per post, merged into two
+   * meshes, built once, disposed in `dispose()`. Nothing here is per frame.
+   *
+   * THE CROSS IS EMISSIVE. It is the only cue at 40 m down a shadowed flank lane
+   * and the quality bar's "no uniform lighting" cuts both ways: a matte red
+   * square on a grey street at dusk is invisible, which is the same failure
+   * `ui.setCaches` exists to fix from the other end.
+   *
+   * @returns {THREE.Group|null} added to the scene by the caller, or null when
+   *          no feature was promoted.
+   */
+  buildMedicMarkers() {
+    const posts = this.list.filter((c) => c.kind === 'medic');
+    if (!posts.length) return null;
+    const group = new THREE.Group();
+    group.name = 'match-medzone';
+
+    const lib = this.ctx.peek?.('materials') ?? null;
+    const surface = (tint, name, emissive = 0x000000, eInt = 0) => {
+      const set = lib?.getTextureSet?.(name) ?? null;
+      const m = new THREE.MeshStandardMaterial({
+        color: tint,
+        roughness: 0.72,
+        metalness: 0.04,
+        emissive,
+        emissiveIntensity: eInt,
+        dithering: true,
+      });
+      m.name = `medzone_${name}`;
+      if (set) {
+        m.map = set.albedo;
+        m.normalMap = set.normal;
+        m.normalScale.set(0.7, 0.7);
+        m.roughnessMap = set.orm;
+      }
+      return m;
+    };
+    // Two materials for the whole feature, so it is two draw calls however many
+    // posts there are.
+    const pale = surface(0xd9d6cc, 'plaster');
+    const red = surface(0xb4231d, 'plaster', 0x5a0e0a, 0.85);
+
+    const paleGeo = [];
+    const redGeo = [];
+    const box = (into, w, h, d, x, y, z, ry = 0) => {
+      const g = new THREE.BoxGeometry(w, h, d);
+      if (ry) g.rotateY(ry);
+      g.translate(x, y, z);
+      into.push(g);
+    };
+
+    for (const c of posts) {
+      const { x, y, z } = c.position;
+      const yaw = c.yaw ?? 0;
+      /**
+       * THE GROUND PAINT. A disc rather than a ring: `RULES.cacheUseRadius` is
+       * 2.6 m and the paint is 2.9, so the ground that is painted is very
+       * nearly the ground the key works on — the same honesty `SiteMarks` keeps
+       * between the capture paint and the capture radius.
+       */
+      const disc = new THREE.CircleGeometry(2.9, 28);
+      disc.rotateX(-Math.PI / 2);
+      disc.translate(x, y + 0.025, z);
+      paleGeo.push(disc);
+      // The cross on the ground, two bars, lifted a hair so it never z-fights.
+      box(redGeo, 2.6, 0.02, 0.72, x, y + 0.05, z, yaw);
+      box(redGeo, 0.72, 0.02, 2.6, x, y + 0.05, z, yaw);
+
+      /**
+       * THE STANDARD. Off the centre of the disc on the cache's own facing, so
+       * it never stands between a man and the crate he is holding F on.
+       */
+      const px = x + Math.sin(yaw) * 2.15;
+      const pz = z + Math.cos(yaw) * 2.15;
+      box(paleGeo, 0.11, 2.35, 0.11, px, y + 1.17, pz);
+      box(paleGeo, 0.62, 0.05, 0.62, px, y + 2.34, pz, yaw);
+      // The panel, and the cross on it. Faces the lane, i.e. the cache's facing.
+      box(paleGeo, 0.94, 0.94, 0.07, px, y + 2.05, pz, yaw);
+      box(redGeo, 0.74, 0.2, 0.1, px, y + 2.05, pz, yaw);
+      box(redGeo, 0.2, 0.74, 0.1, px, y + 2.05, pz, yaw);
+    }
+
+    const add = (geos, mat, name) => {
+      // `mergeGeometries` disposes the sources it consumes — see its own note.
+      const g = geos.length ? mergeGeometries(geos) : null;
+      if (!g) return null;
+      const mesh = new THREE.Mesh(g, mat);
+      mesh.name = name;
+      mesh.matrixAutoUpdate = false;
+      mesh.updateMatrix();
+      // A 2 cm ground decal in the shadow cascades is shadow acne, nothing else.
+      mesh.userData.owNoShadow = true;
+      group.add(mesh);
+      return mesh;
+    };
+    add(paleGeo, pale, 'match_medzone_pale');
+    add(redGeo, red, 'match_medzone_cross');
+
+    this.medGroup = group;
+    this.medMaterials = [pale, red];
+    return group;
+  }
+
+  /** Free the medical zone dressing. Everything else here is data. */
+  dispose() {
+    if (this.medGroup) {
+      this.medGroup.removeFromParent();
+      this.medGroup.traverse((o) => o.geometry?.dispose?.());
+      this.medGroup = null;
+    }
+    for (const m of this.medMaterials ?? []) m.dispose();
+    this.medMaterials = null;
   }
 }
