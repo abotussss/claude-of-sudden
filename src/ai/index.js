@@ -75,12 +75,54 @@ const DECK_HALF_W = 1.9;
 /** Slope a plunging shot needs to clear the turret roof. 0.37 m over 1.1 m. */
 const DECK_PLUNGE = 0.37 / 1.1;
 /**
- * A MAN IN YOUR FACE BEATS A TANK DOWN THE STREET. `pickVisibleHostile` takes
- * the nearest thing it can see; scaling a hull's distance up by this makes the
- * armour lose every tie and win only when it is genuinely the nearer problem —
- * a hull at 20 m beats a rifleman at 27 m, and does not beat one at 25 m.
+ * ────────────────────────────────────────────────────────────────────────────
+ * A SHOT ON A TANK IS A PRIORITY, NOT A TIE-BREAK — and it was measured both
+ * ways before it was decided
+ * ────────────────────────────────────────────────────────────────────────────
+ * `pickVisibleHostile` takes the nearest thing it can see, and a hull competes
+ * against twenty men. The first cut of this was 1.35 — "a man in your face
+ * beats a tank down the street" — and over a full 424 s match at seed 12 that
+ * produced, per hull, the following (`_tankfight.mjs`):
+ *
+ *     RED    12217 man-samples in range, 897 with a DECK shot, 333 with a frag
+ *            ready — AIMED AT BY 0.   Killed nobody, was hit 3 times.
+ *     BLUE   15855 / 1114 / 854              — AIMED AT BY 39.  One frag landed.
+ *
+ * i.e. the policy gate was doing its job and the SELECTION was throwing the
+ * result away: a man who has walked into the one arc that can hurt a tank had a
+ * team-mate's opponent closer to him essentially always, so he shot that
+ * instead. The bias was the whole difference between "bots may engage armour"
+ * and "bots engage armour".
+ *
+ * 0.5 makes it the other way round: a hull at 40 m beats a rifleman at 21 m,
+ * and a rifleman at 19 m still wins. That is not a licence to mob it, because
+ * `armourWorth` is what decides whether the hull is a candidate at all and it
+ * says no to 93 % of the men inside `RULES.tankRange` — the priority only ever
+ * applies to a man who is astern of it, above it, or holding a grenade inside
+ * throwing range.
  */
-const ARMOUR_BIAS = 1.35;
+const ARMOUR_BIAS = 0.5;
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * YOU DO NOT HAVE TO BE LOOKING AT A TANK TO KNOW IT IS THERE
+ * ────────────────────────────────────────────────────────────────────────────
+ * `_sightTo` applies a 100 degree cone to everything, and already exempts
+ * anything inside 4.5 m from it — a man does not miss somebody standing next to
+ * him. A hull is 6.9 m long and 2.5 m tall, runs a tracked engine and fires a
+ * 300-damage main gun every 5.5 seconds; the same argument applies to it at a
+ * great deal more than four and a half metres, and the cone was measurably
+ * where the engagement went. Seed 12, one match, BLUE: 647 man-samples with a
+ * clear line to the engine deck, 608 of them inside the man's own `viewRange` —
+ * and 106 that actually became a target, because the other five sixths were
+ * facing the way the fight was.
+ *
+ * 40 m is the radius, not the range: past it the cone applies exactly as it
+ * does to a man, so a hull at 60 m still has to be looked at. It changes
+ * nothing about who may SHOOT — `armourWorth` still says no to a man in front
+ * of it — and it changes nothing at all for an `Agent`, whose 4.5 m is
+ * untouched.
+ */
+const ARMOUR_NOTICE = 40;
 
 export class AiSystem {
   static id = 'ai';
@@ -966,7 +1008,9 @@ export class AiSystem {
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (dist > agent.viewRange || dist < 1e-4) return -1;
     const inv = 1 / dist;
-    if ((dx * inv) * fx + (dz * inv) * fz <= cone && dist > 4.5) return -1;
+    // @see ARMOUR_NOTICE — a tank is not something you fail to notice at 4.6 m.
+    const blind = target.isVehicle === true ? ARMOUR_NOTICE : 4.5;
+    if ((dx * inv) * fx + (dz * inv) * fz <= cone && dist > blind) return -1;
     if (this.phys && !this.phys.lineOfSight(eye, p, this.phys.MASK.SIGHT)) return -1;
     return dist;
   }

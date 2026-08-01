@@ -67,8 +67,8 @@ export { STATE };
  * `Agent._combat` cannot disagree about it; `index.js` imports it from this
  * file, which it already imports.
  */
-export const ARMOUR_FRAG_MIN = 7.5;
-export const ARMOUR_FRAG_MAX = 26;
+export const ARMOUR_FRAG_MIN = 6.5;
+export const ARMOUR_FRAG_MAX = 28;
 
 /**
  * PERSONALITY — and why one `skill` scalar was not enough.
@@ -1536,6 +1536,35 @@ export class Agent {
         const bold = tr.aggression > 0.55 && this.health > 55 && dist > want;
         towardPt = bold ? target : this.objective.position;
         towardW = bold ? 0.25 + tr.aggression * 0.45 : 0.2 + (1 - tr.aggression) * 0.35;
+      }
+      /**
+       * ══════════════════════════════════════════════════════════════════════
+       * THE ONE MANOEUVRE THE ARMOUR GETS, AND IT IS NOT A CHARGE
+       * ══════════════════════════════════════════════════════════════════════
+       * A man carrying a frag he cannot throw yet is the whole anti-armour plan
+       * standing forty metres too far back. Measured over a full match, seed 12:
+       * BLUE had 1633 man-samples inside the throwing window and only 585 of
+       * them still had a grenade — the supply is there, the RANGE is what is
+       * missing, and a bot who never closes it is a bot who watches.
+       *
+       * So he is pulled in, and he is pulled in through the machinery that
+       * already exists: `toward` is a SCORE BIAS ON COVER POINTS, not a
+       * destination, so what this buys is a man working from wall to wall
+       * towards the hull rather than a man walking into a coaxial machine gun
+       * across an open square. Everything that made his last cover point safe
+       * still scores. `0.8` is between an attacker's push (0.3-0.9) and a
+       * planter's (0.9): a tank in your street outranks taking ground, and does
+       * not outrank arming the bomb.
+       *
+       * DELIBERATELY NOT A MANOEUVRE FOR THE ENGINE DECK. Sending riflemen round
+       * the back of a hull whose coax already scores 11-27 kills a match is
+       * feeding it; this sends men who are ALREADY holding the answer to the
+       * range at which it works, and only while they are holding it.
+       */
+      if (this.targetActor?.isVehicle === true && this.hasGrenade &&
+          this.grenadeCooldown <= 0 && dist > ARMOUR_FRAG_MAX) {
+        towardPt = target;
+        towardW = 0.8;
       }
       /**
        * ══════════════════════════════════════════════════════════════════════

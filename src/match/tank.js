@@ -500,6 +500,13 @@ const DECK_AIM = [0, 2.18, -3.05];
 /** `stats` key that counts rounds into a part, beside the one that sums them. */
 const PART_COUNT = { hull: 'nHull', turret: 'nTurret', deck: 'nDeck' };
 
+/**
+ * How far along the hull a blast still counts as landing ON it. `HULL_L` is
+ * 6.9, so the true half is 3.45; this is short of it because the glacis and the
+ * tail plate slope away. @see `_takeBlast`.
+ */
+const HULL_HALF = 2.8;
+
 /** How long a man who hit the hull stays the crew's problem. @see `_acquire`. */
 const RETALIATE = 6.0;
 /** …and how much nearer he counts than he is while he does. */
@@ -3191,10 +3198,41 @@ export class Armour {
     for (const tank of this.tanks) {
       if (!tank.alive) continue;
       if (e.source === tank) continue; // our own shell going off down the street
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * A TANK IS 6.9 m LONG AND THIS MEASURED IT AS A POINT
+       * ────────────────────────────────────────────────────────────────────
+       * The distance was to `tank.position`, which is the hull's ORIGIN —
+       * between the tracks, under the turret. A frag that lands dead centre on
+       * the ENGINE DECK is 3.05 m astern of that, so at the bot grenade's 6.5 m
+       * radius it was scored as a 53 % hit: 230 of the 433 that
+       * 「一発でtankHealthの六分の一」 is meant to be worth. And the engine deck is
+       * exactly where the anti-armour policy in `src/ai` sends every grenade.
+       * Measured over one match at seed 12: six frags on BLUE for 1012, an
+       * average of 169 apiece against a contact value of 433.
+       *
+       * So the offset is CLAMPED ALONG THE HULL first, which is the same move
+       * `world.damageAt` makes ("the distance is to the opening's RECTANGLE
+       * rather than its centre") and the same one `_acquire` has always made
+       * with its own targets. A blast anywhere over the length of the tank is a
+       * blast ON the tank; one beside it still falls off from the side it is
+       * beside. `HULL_HALF` is short of the true 3.45 m half-length on purpose —
+       * the glacis and the tail plate slope away, and a shell that lands level
+       * with the very tip of either is not sitting on armour.
+       *
+       * IT IS NOT A GRENADE RULE. Every blast reads the same geometry, so an
+       * airstrike or the other hull's shell that lands over the engine deck is
+       * credited the same way — which is what they always should have been.
+       */
+      const ox = e.position.x - tank.position.x;
+      const oz = e.position.z - tank.position.z;
+      const s = Math.sin(tank.yaw);
+      const c = Math.cos(tank.yaw);
+      const along = clamp(ox * s + oz * c, -HULL_HALF, HULL_HALF);
       const d = Math.hypot(
-        e.position.x - tank.position.x,
+        ox - s * along,
         e.position.y - (tank.position.y + 1.4),
-        e.position.z - tank.position.z
+        oz - c * along
       );
       const r = e.radius ?? 5;
       if (d > r) continue;
