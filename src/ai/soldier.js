@@ -407,10 +407,28 @@ export function buildSoldier(name, { rng, materials }) {
       }
     );
     if (V.kneePads) {
+      /**
+       * RIGID TO THE SHIN, not smooth-bound across the joint.
+       *
+       * A knee pad is a hard cup on a pair of elastic straps. It does not
+       * deform, and it does not straddle the hinge: the straps are cinched
+       * around the shin and the cup rides the patella with it. Smooth-binding
+       * it (`bones: [Leg, UpLeg]`, `bias: [1, 0.5]`) gave its upper half to the
+       * thigh and its cup to the shin, so the two ends went opposite ways the
+       * moment the knee bent — fine at the 30 degrees the old locomotion ever
+       * reached, and torn wide open at the 90 the run cycle now reaches in
+       * mid-swing. Photographed at 2.4 m off the flexed knee it was a grey slab
+       * hanging in the air beside the leg with its straps stretched into wires.
+       *
+       * `bone` (rigid, weight 1) instead of `bones` is the whole fix. It costs
+       * nothing, it cannot stretch, and it is what the object actually does.
+       * The part NAME is untouched, so `PART_MUL` and tools/lethality.mjs — which
+       * key damage off the ragdoll's own part table, not this one — are not in
+       * the blast radius either way.
+       */
       B.add(P.kneePad(nz, kn, side), {
         material: 'gear',
-        bones: [`Leg${suffix}`, `UpLeg${suffix}`],
-        bias: [1, 0.5],
+        bone: `Leg${suffix}`,
         colour: GEAR.pad,
         grime: 1.0,
         dirt: 0.9,
