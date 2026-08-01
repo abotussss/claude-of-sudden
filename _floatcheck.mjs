@@ -35,13 +35,13 @@
  * "Supported" is a question about CONNECTIVITY, not about what is directly
  * below one point, so this probe answers it as one:
  *
- *   1. COLUMNS. Over a lattice, walk straight down through the world collecting
- *      EVERY hit, front faces and back. `src/physics/bvh.js` does not cull
- *      backfaces (bullet penetration needs exit hits) and reports `frontFace`,
- *      so a front face is a solid being ENTERED and a back face one being LEFT.
- *      Counting depth turns that into the exact list of solid intervals in the
- *      column, and it stays exact through overlapping boxes — which is what the
- *      whole map is made of.
+ *   1. COLUMNS. Over a lattice, CUT the world with a vertical line and keep the
+ *      exact list of solid intervals on it. Not a ray walk — `queryAabb` over a
+ *      hair-thin vertical box, every triangle it returns crossed against the
+ *      line, depth counted off `nrm.y`. @see the note on the `column` function
+ *      for why a closest-hit ray cannot do this on a map of flush-stacked boxes
+ *      and reported four-storey buildings as parapets with nine metres of
+ *      daylight under them.
  *   2. THE WORLD. An interval whose UNDERSIDE is at or below `--ground` metres
  *      is standing on the map: the terrain, a foundation, a wall, a heap of
  *      rubble on the tile. It is a seed and it is never anything else.
@@ -53,18 +53,23 @@
  *      GROUND-standing mass comes up to at least that underside. The second
  *      clause is what tells a roof or a balcony — nothing under it at all, held
  *      up perfectly well by the wall beside it — from a mass in the sky.
- *   5. A component with no supported node in it is standing on nothing. That is
+ *   5. AND THE WINDOW IS NOT THE WORLD. Every region below is a small frame
+ *      chosen so it does not take in the neighbours' roofs, so a piece can run
+ *      out of one — and then the support question was being asked of a fragment.
+ *      An unsupported piece touching the edge of its frame is FOLLOWED off it,
+ *      columns cut on demand, before it is judged. @see the note on the growth
+ *      pass. `--grow=0` turns it off.
+ *   6. A component with no supported node in it is standing on nothing. That is
  *      the bug, and it is reported with its extent, its height and the metres of
  *      open air under it.
  *
  * THE ONE RULE THAT MATTERS IS THAT A SKY NODE NEVER JOINS A GROUND NODE
- * LATERALLY, and it is not fastidiousness. A ray that clips the corner of a box
- * can miss its exit face, and one such column anywhere in a 17 000-column sweep
- * produces a single interval running from the top of the rubble all the way into
- * the terrain — which, under plain Y-overlap linking, welds the sky to the
- * ground and the sweep comes back clean. That is exactly what the first version
- * of this file did on the bug it was written for: 16 900 columns, ONE component,
- * "OK", with a solid mass sitting 7.2 m up in open air inside it.
+ * LATERALLY, and it is not fastidiousness. A column that loses a face produces a
+ * single interval running from the top of the rubble all the way into the
+ * terrain — which, under plain Y-overlap linking, welds the sky to the ground
+ * and the sweep comes back clean. That is exactly what the first version of this
+ * file did on the bug it was written for: 16 900 columns, ONE component, "OK",
+ * with a solid mass sitting 7.2 m up in open air inside it.
  *
  * An arch passes (its jambs are ground nodes and the voussoirs rest on them). A
  * cathedral vault 20 m up over a razed footprint does not, and neither does a
@@ -723,6 +728,53 @@ const result = await page.evaluate(
           }
         }
         if (c.grown >= GROW) c.budget = true;
+      }
+    }
+
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * AND BEFORE ANYTHING IS REPORTED, LOOK AT IT PROPERLY
+     * ────────────────────────────────────────────────────────────────────────
+     * The support test asks its question of the four COLUMN-NEIGHBOURS, which
+     * on a 0.5 m lattice means it asks it half a metre away. That is the right
+     * distance for a slab and the wrong one for a panel: a shopfront's roller
+     * shutter is 0.12 m thick and its collision sits 0.09 m off the plane of
+     * the wall slab it hangs in, so a column can catch the shutter and miss the
+     * wall, and the four columns half a metre out can miss both. Two slivers of
+     * a shutter set in a standing wall, on three of fourteen seeds, reported as
+     * a metal mass floating over a street.
+     *
+     * So a piece that is still unsupported is RESAMPLED where it actually is:
+     * a ring of columns at a fifth and a half of a cell round each of its own
+     * samples, asked the same question. The criterion does not move; the
+     * resolution does. A mound nine metres up over a razed plot has nothing
+     * within half a metre of it in any direction and is reported exactly as
+     * before — @see the pre-fix control in the commit that added this.
+     */
+    if (GROW > 0) {
+      const RING = [];
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        RING.push(Math.cos(a), Math.sin(a));
+      }
+      for (const c of comp.values()) {
+        if (c.supported || c.cells.size < MIN_CELLS) continue;
+        const groundY = regions[c.region].floorY + GROUND;
+        for (const id of c.ids) {
+          if (c.supported) break;
+          const n = nodes[id];
+          for (const r of [GRID * 0.2, GRID * 0.5]) {
+            for (let k = 0; k < RING.length && !c.supported; k += 2) {
+              const iv = column(n.x + RING[k] * r, n.z + RING[k + 1] * r, []);
+              grownColumns++;
+              for (let i = 0; i < iv.length; i += 2) {
+                if (iv[i + 1] > groundY) continue; // not standing on the map
+                if (iv[i] >= n.bot - TOL) { c.supported = true; c.refined = true; break; }
+              }
+            }
+            if (c.supported) break;
+          }
+        }
       }
     }
 
