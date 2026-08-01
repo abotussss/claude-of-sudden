@@ -258,6 +258,28 @@ export function buildBuilding(A, rng, spec) {
   const roofHole = holeFor(floors);
   interiorSlab(A, rng, ts, y, t, roofHole, true);
   info.roofHole = roofHole;
+  /**
+   * WHICH WAY YOU WALK OUT OF THE STAIRHEAD, as a unit vector on the plan axes.
+   *
+   * Two things need this and they must not disagree: the stairhead cuts its
+   * DOORWAY on this side (see `buildInterior`), and `dressBuilding` has to keep
+   * the roof clutter off the walk-off in front of that doorway. Both used to
+   * assume +Z — the stairhead by deriving it from the flight, the dressing by
+   * hard-coding `rh.z1 + 2.4` — and the two agreed only because every top flight
+   * on the map climbed +Z. `resolveStairFlights` turns them, so it is derived
+   * once here and read twice.
+   *
+   * MEASURED: without this, `floorcheck` seed 1 put a crate stack in W1's and
+   * E1's stairhead doorways and scored both roof flights ARRIVES AT NOTHING —
+   * the roof landing has exactly one way off it (the other three probes are the
+   * shed's own walls and its stairwell), so anything in the door seals a roof.
+   */
+  const topG = (info.stairs ?? []).find((s) => s.floor === floors - 1);
+  info.roofExit = topG
+    ? (Math.abs(Math.sin(topG.ry)) > 0.5
+        ? [Math.sign(Math.sin(topG.ry)), 0]
+        : [0, Math.sign(Math.cos(topG.ry))])
+    : [0, 1];
   if (spec.parapet !== false) {
     parapet(A, spec.parapetKey ?? wallKey, ts.x, ts.z, ts.w + 0.1, ts.d + 0.1, y, rng, {
       h: spec.parapetH ?? 0.78,
@@ -1467,10 +1489,13 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
     const pz = (hv.z0 + hv.z1) / 2;
     const pw = hv.x1 - hv.x0 + 1.0;
     const pd = hv.z1 - hv.z0 + 1.0;
-    /** The wall the player walks OUT of: the end the flight climbs toward. */
-    const g = (info.stairs ?? []).find((s) => s.floor === floors - 1);
-    const exitSide = g ? (Math.abs(Math.sin(g.ry)) > 0.5 ? (Math.sin(g.ry) > 0 ? 1 : 3)
-      : (Math.cos(g.ry) > 0 ? 2 : 0)) : 2;
+    /**
+     * The wall the player walks OUT of: the end the flight climbs toward, taken
+     * from `info.roofExit` so the doorway and the roof clutter's keep-out cannot
+     * end up on opposite sides of the shed.
+     */
+    const [rex, rez] = info.roofExit ?? [0, 1];
+    const exitSide = rex > 0 ? 1 : rex < 0 ? 3 : rez < 0 ? 0 : 2;
     for (let side = 0; side < 4; side++) {
       const pm = panelMatrix({ x: px, z: pz, w: pw, d: pd }, side, y).clone();
       const len = side === 0 || side === 2 ? pw : pd;

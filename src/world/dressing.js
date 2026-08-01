@@ -1778,10 +1778,21 @@ function dressBuilding(A, rng, info) {
    * stairhead is built around it (see `buildBuilding`). A water tank rolled
    * onto the hatch, or a crate stack in front of its door, is a sealed roof —
    * the same defect as a crate stack in a doorway, three storeys up where it is
-   * far less obvious. Resample off it, and keep the walk-off in +Z clear too,
-   * because that is the side the stairhead's door is in.
+   * far less obvious. Resample off it, and keep the WALK-OFF clear too, on the
+   * side the stairhead's door is actually in.
+   *
+   * That extra 1.1 m used to be spent on +Z unconditionally — `rh.z1 + 2.4` —
+   * which was right only while every top flight on the map climbed +Z. They no
+   * longer do (`resolveStairFlights` turns each storey's flight a quarter), and
+   * `info.roofExit` is the one derivation of which way you walk out; the
+   * stairhead's doorway is cut off the same vector. Measured with the margin
+   * still nailed to +Z: crate stacks in W1's and E1's stairhead doorways and
+   * two roofs scored ARRIVES AT NOTHING by `floorcheck`.
    */
   const rh = info.roofHole;
+  const [rex, rez] = info.roofExit ?? [0, 1];
+  /** The walk-off in front of the door, over and above the 1.3 m ring. */
+  const WALK = 1.1;
   /**
    * NUDGED, NOT RESAMPLED, and that is deliberate. Resampling would draw a
    * variable number of numbers out of `rng` and every random value in the rest
@@ -1792,8 +1803,10 @@ function dressBuilding(A, rng, info) {
    * the keep-out along whichever axis is nearer: the stream is byte-identical
    * to the one this map was tuned against.
    */
-  const kx0 = rh ? rh.x0 - 1.3 : 0, kx1 = rh ? rh.x1 + 1.3 : 0;
-  const kz0 = rh ? rh.z0 - 1.3 : 0, kz1 = rh ? rh.z1 + 2.4 : 0;
+  const kx0 = rh ? rh.x0 - 1.3 - (rex < 0 ? WALK : 0) : 0;
+  const kx1 = rh ? rh.x1 + 1.3 + (rex > 0 ? WALK : 0) : 0;
+  const kz0 = rh ? rh.z0 - 1.3 - (rez < 0 ? WALK : 0) : 0;
+  const kz1 = rh ? rh.z1 + 1.3 + (rez > 0 ? WALK : 0) : 0;
   const nudge = (out) => {
     if (!rh) return;
     let x = out[0], z = out[1];
