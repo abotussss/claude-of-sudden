@@ -200,6 +200,17 @@ export function buildBuilding(A, rng, spec) {
    * walks head-first into the underside of the next floor, so the void is the
    * strip — not a guess at one.
    */
+  /**
+   * …and WHERE each one stands, which above the ground floor is derived rather
+   * than authored. @see `resolveStairFlights` — this is the answer to "階段が
+   * 全く同じ位置の縦軸が違うだけ". Written back onto the spec so the builder,
+   * the void, the stairhead and `tools/floorcheck.mjs --climb` all read one
+   * table. Idempotent: the ground flight it derives from is never rewritten.
+   */
+  if (spec.stairFlights?.length) {
+    spec.stairFlights = resolveStairFlights(spec, info, t, floors);
+  }
+
   info.stairs = [];
   const stairVoids = {};       // level -> {x0,x1,z0,z1}, unioned
   for (const fl of spec.stairFlights ?? []) {
@@ -752,6 +763,152 @@ function buildFacade(A, rng, spec, info, ctx) {
 
 // ================================================================= stairs ===
 /**
+ * How many treads a given climb takes. Shared so `resolveStairFlights` can know
+ * how LONG a flight is before `stairGeometry` builds it, and the two cannot
+ * drift apart.
+ */
+const stairSteps = (climb) => Math.max(6, Math.round(climb / 0.19));
+
+/** Landing depth, as `buildInterior` builds it: a 1.1 m slab centred at D+0.55. */
+const STAIR_LANDING = 1.1;
+
+/**
+ * ry = k * 90°, indexed 0..3, as (dx, dz). 0 = +Z, 1 = +X, 2 = -Z, 3 = -X, which
+ * is the same numbering `stairGeometry` gets out of (sin ry, cos ry).
+ */
+const QUARTER = [[0, 1], [1, 0], [0, -1], [-1, 0]];
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHERE EACH STOREY'S FLIGHT STANDS — "階段が全く同じ位置の縦軸が違うだけ"
+ * ────────────────────────────────────────────────────────────────────────────
+ * Every flight in layout.js was authored as a copy of the one below it. Measured
+ * on the six multi-storey interiors, the plan distance between the foot of one
+ * flight and the foot of the next was 0.00-0.10 m and the turn between them was
+ * 0°: W1, W2, W3, E1, E2 and E3 all had a vertical tube in one corner with the
+ * treads redrawn at three heights. It reads as a copy-paste because it is one,
+ * and it plays as one too — the top of every flight is the bottom of the next,
+ * so an interior has exactly one place worth holding on every floor and no
+ * reason to walk across a storey you have arrived on.
+ *
+ * THE RULE: A FLIGHT TURNS AWAY FROM THE WALL IT RUNS AGAINST, AT EVERY LANDING.
+ *
+ * That is the whole derivation, and it is a real stair rather than a jitter. A
+ * flight on this map is authored hard against one wall of the plan; the landing
+ * at its head can only turn into the room, never into that wall, so the sense of
+ * the turn is fixed by the ground flight and nothing else. Keep turning the same
+ * way and the stair walks the four bays of the perimeter, one bay per storey,
+ * and arrives back where it started on the fifth — which is a stair circulating
+ * a plan, the ordinary thing a building with one core actually does.
+ *
+ * WHAT IS AUTHORED AND WHAT IS DERIVED. The GROUND flight stays authored: it is
+ * the one that has to answer to the front door, the through-route and the room
+ * plan, and layout.js places it against all three. Everything above it is this
+ * function's, carried up in METRES — the gap to the wall it hugs and the
+ * set-back of its bottom tread from the wall behind it are preserved exactly,
+ * so a flight lands the same distance off the masonry in a 12.8 m bay as in a
+ * 26.3 m one and a setback storey gets the same stair as a full one.
+ *
+ * WHY NOT A SWITCHBACK. A dog-leg is the other real answer and it was measured
+ * and rejected: it moves the flight about 1.4 m, which is a quarter-turn's worth
+ * of nothing against a complaint that the flights are in the same place.
+ *
+ * WHAT THIS DOES NOT TOUCH. `NavGrid._carveInteriors` keeps the GROUND storey of
+ * every footprint and nothing else — a bot cannot use a stair at all on a 2.5D
+ * height field — so moving flights above the ground floor cannot move a single
+ * nav cell. The ground flight is deliberately left exactly where it was for the
+ * same reason.
+ *
+ * The result is written back onto `spec.stairFlights` because it is now the
+ * truth about the building: `tools/floorcheck.mjs --climb` reads that table to
+ * decide where to stand a player and drive him upstairs, and a table that no
+ * longer describes the map is worse than no table.
+ */
+function resolveStairFlights(spec, info, t, floors) {
+  const src = spec.stairFlights;
+  if (!src?.length) return src ?? [];
+  const list = src.slice().sort((a, b) => a.floor - b.floor);
+  const first = list[0];
+  if (first.x === undefined || first.z === undefined) return src;
+
+  // ---- the authored flight, read back as (climb dir, hug wall, start, hug) --
+  const fs0 = floorSpec(spec, first.floor);
+  const iw0 = fs0.w - t * 2, id0 = fs0.d - t * 2;
+  const ox0 = fs0.x - iw0 / 2 + first.x * iw0;
+  const oz0 = fs0.z - id0 / 2 + first.z * id0;
+  let k = (((Math.round((first.ry ?? 0) / (Math.PI / 2)) % 4) + 4) % 4);
+  const alongZ0 = k % 2 === 0;
+  const Lk0 = alongZ0 ? id0 : iw0;
+  const Lm0 = alongZ0 ? iw0 : id0;
+  const cen0 = alongZ0 ? fs0.z : fs0.x;         // plan centre, climb axis
+  const ccen0 = alongZ0 ? fs0.x : fs0.z;        // plan centre, cross axis
+  const c0 = alongZ0 ? oz0 : ox0;
+  const cc0 = alongZ0 ? ox0 : oz0;
+  const sk0 = alongZ0 ? QUARTER[k][1] : QUARTER[k][0];
+  /** Bottom tread's set-back from the wall BEHIND it, in metres. */
+  const start = sk0 > 0 ? c0 - (cen0 - Lk0 / 2) : (cen0 + Lk0 / 2) - c0;
+  const dLow = cc0 - (ccen0 - Lm0 / 2);
+  const dHigh = (ccen0 + Lm0 / 2) - cc0;
+  /** Gap from the flight's centreline to the wall it hugs, in metres. */
+  const hug = Math.min(dLow, dHigh);
+  /** The quarter-turn index that POINTS AT that wall. */
+  let m = alongZ0 ? (dLow < dHigh ? 3 : 1) : (dLow < dHigh ? 2 : 0);
+  /** Wall on the right -> the landing can only turn left, and vice versa. */
+  const turn = m === (k + 1) % 4 ? -1 : 1;
+
+  const out = [{ ...first }];
+  let prev = out[0];
+  for (let i = 1; i < list.length; i++) {
+    const fl = list[i];
+    const f = fl.floor;
+    if (f < 0 || f >= floors) { out.push({ ...fl }); continue; }
+    const fs = floorSpec(spec, f);
+    const iw = fs.w - t * 2, id = fs.d - t * 2;
+    const base = info.floorY[f] + (f === 0 ? 0.13 : 0);
+    const climb = (info.floorY[f + 1] ?? info.roofY) - base;
+    const run = fl.run ?? first.run ?? 0.275;
+    const sw = fl.w ?? first.w ?? 1.2;
+    const len = stairSteps(climb) * run + STAIR_LANDING;
+
+    const nk = (k + turn + 4) % 4;
+    const nm = (m + turn + 4) % 4;
+    const alongZ = nk % 2 === 0;
+    const Lk = alongZ ? id : iw;
+    const Lm = alongZ ? iw : id;
+    const half = sw / 2 + 0.3;
+    /**
+     * A TURN THAT DOES NOT FIT IS NOT A TURN. A flight plus its landing is
+     * 5.5-5.8 m; a bay shorter than that has nowhere to put one, and a stacked
+     * flight is far better than a flight that walks out through a wall. Nothing
+     * on this map hits either of these — the shortest bay any flight turns into
+     * is 12.8 m — but the level is scalable and this is the one failure that
+     * would be silent.
+     */
+    const room = Lk - len - 0.3;
+    if (room < 0.35 || Lm < half * 2) { out.push({ ...fl, x: prev.x, z: prev.z, ry: prev.ry }); continue; }
+    const startC = Math.min(Math.max(start, 0.35), room);
+    const hugC = Math.min(Math.max(hug, half), Lm - half);
+
+    const sk = alongZ ? QUARTER[nk][1] : QUARTER[nk][0];
+    const sm = alongZ ? QUARTER[nm][0] : QUARTER[nm][1];
+    const along = (alongZ ? fs.z : fs.x) + sk * (startC - Lk / 2);
+    const cross = (alongZ ? fs.x : fs.z) + sm * (Lm / 2 - hugC);
+    const ox = alongZ ? cross : along;
+    const oz = alongZ ? along : cross;
+
+    k = nk; m = nm;
+    prev = {
+      ...fl,
+      x: (ox - (fs.x - iw / 2)) / iw,
+      z: (oz - (fs.z - id / 2)) / id,
+      ry: (nk * Math.PI) / 2,
+    };
+    out.push(prev);
+  }
+  return out;
+}
+
+/**
  * One authored flight, resolved. LEVEL SPACE throughout.
  *
  * This is the single place that knows how a flight is laid out, and both the
@@ -772,7 +929,7 @@ function stairGeometry(spec, info, fl, t, groundH, upperH, floors) {
   const base = info.floorY[f] + (f === 0 ? 0.13 : 0);
   const climb = (info.floorY[f + 1] ?? info.roofY) - base;
   if (climb <= 0.5) return null;
-  const steps = Math.max(6, Math.round(climb / 0.19));
+  const steps = stairSteps(climb);
   const rise = climb / steps;
   const run = fl.run ?? 0.275;
   const sw = fl.w ?? 1.2;
@@ -781,18 +938,24 @@ function stairGeometry(spec, info, fl, t, groundH, upperH, floors) {
   const oz = fs.z - id / 2 + fl.z * id;
   const D = steps * run;
   /** Landing depth, as built below: a 1.1 m slab centred at D + 0.55. */
-  const landing = 1.1;
+  const landing = STAIR_LANDING;
   const ax = Math.sin(ry), az = Math.cos(ry); // the climb direction
   /**
    * THE VOID STARTS WHERE THE HEAD CLEARANCE DOES, NOT AT THE BOTTOM TREAD.
    *
    * Cutting the whole flight out of the slab above is the obvious thing and it
    * is wrong, for a reason that only shows up once a building has TWO flights.
-   * `floorcheck` measured it: W1, W3, E1 and E2 all stack their upper flight
+   * `floorcheck` measured it: W1, W3, E1 and E2 all stacked their upper flight
    * directly over the lower one, so with a full-length void the upper flight's
    * bottom step stood over five metres of open stairwell — no floor to walk to
    * it across, and the storey above was sealed. E1's second floor and the roofs
    * of four buildings were unreachable for exactly this.
+   *
+   * NOTHING STACKS ANY MORE (@see `resolveStairFlights`) and the soffit still
+   * has to be here. It was never only about the flight above: it is the head of
+   * the flight BELOW, and without it the last three treads of every staircase on
+   * the map come up through a hole in a floor with no ceiling over them, which
+   * is a hatch, not a stairwell.
    *
    * A real stairwell has a soffit: the slab covers the lower treads and opens
    * where a climber's head would otherwise hit it. That is `nextY - thick -

@@ -793,9 +793,17 @@ export const BUILDINGS = [
       ['s0', [0.5, 0.16], [0.58, 0.4], [0.62, 0.62]],
       ['w3', [0.16, 0.86], [0.28, 0.74], [0.36, 0.66]],
     ],
+    /**
+     * ONLY THE GROUND FLIGHT IS AUTHORED. Every storey above it is derived by
+     * `resolveStairFlights` in buildings.js: the flight turns away from the wall
+     * it runs against at each landing and walks the next bay of the plan, so the
+     * stair is a circulation core and not the same fourteen treads redrawn at
+     * three heights. `x`/`z` on an upper entry would be ignored; `w`, `run` and
+     * `railing` are still honoured.
+     */
     stairFlights: [
       { floor: 0, x: 0.12, z: 0.06, ry: 0, w: 1.15, railing: 'right' },
-      { floor: 1, x: 0.12, z: 0.06, ry: 0, w: 1.15, railing: 'right' },
+      { floor: 1, w: 1.15, railing: 'right' },
     ],
     rooms: [
       {
@@ -852,7 +860,8 @@ export const BUILDINGS = [
     route: [['s3', [0.16, 0.84], [0.34, 0.8], [0.5, 0.76], [0.7, 0.8], [0.88, 0.85], 's1']],
     stairFlights: [
       { floor: 0, x: 0.12, z: 0.08, ry: 0, w: 1.2, railing: 'right' },
-      { floor: 1, x: 0.14, z: 0.08, ry: 0, w: 1.2, railing: 'right' },
+      // derived — see W1
+      { floor: 1, w: 1.2, railing: 'right' },
     ],
     rooms: [
       {
@@ -915,7 +924,8 @@ export const BUILDINGS = [
     ],
     stairFlights: [
       { floor: 0, x: 0.86, z: 0.06, ry: 0, w: 1.15, railing: 'right' },
-      { floor: 1, x: 0.86, z: 0.06, ry: 0, w: 1.15, railing: 'right' },
+      // derived — see W1
+      { floor: 1, w: 1.15, railing: 'right' },
     ],
     rooms: [
       {
@@ -1005,8 +1015,9 @@ export const BUILDINGS = [
     ],
     stairFlights: [
       { floor: 0, x: 0.86, z: 0.06, ry: 0, w: 1.2, railing: 'right' },
-      { floor: 1, x: 0.86, z: 0.06, ry: 0, w: 1.2, railing: 'right' },
-      { floor: 2, x: 0.86, z: 0.06, ry: 0, w: 1.2, railing: 'right' },
+      // derived — see W1. Three storeys, so the core walks three of the four bays.
+      { floor: 1, w: 1.2, railing: 'right' },
+      { floor: 2, w: 1.2, railing: 'right' },
     ],
     rooms: [
       {
@@ -1069,8 +1080,9 @@ export const BUILDINGS = [
     ],
     stairFlights: [
       { floor: 0, x: 0.88, z: 0.08, ry: 0, w: 1.2, railing: 'right' },
-      { floor: 1, x: 0.88, z: 0.08, ry: 0, w: 1.2, railing: 'right' },
-      { floor: 2, x: 0.88, z: 0.08, ry: 0, w: 1.2, railing: 'right' },
+      // derived — see W1. Three storeys, so the core walks three of the four bays.
+      { floor: 1, w: 1.2, railing: 'right' },
+      { floor: 2, w: 1.2, railing: 'right' },
     ],
     rooms: [
       {
@@ -1132,7 +1144,8 @@ export const BUILDINGS = [
     ],
     stairFlights: [
       { floor: 0, x: 0.14, z: 0.06, ry: 0, w: 1.15, railing: 'right' },
-      { floor: 1, x: 0.14, z: 0.06, ry: 0, w: 1.15, railing: 'right' },
+      // derived — see W1
+      { floor: 1, w: 1.15, railing: 'right' },
     ],
     rooms: [
       {
