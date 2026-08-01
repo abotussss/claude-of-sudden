@@ -33,12 +33,23 @@ const URL = process.argv[2] ?? 'http://127.0.0.1:4335/';
 const SEED = process.argv[3] ?? '12';
 const SCALE = Number(process.argv[4] ?? 8);
 const ONEWOUND = process.argv[5] === '1';
+/**
+ * `--shot` freezes the clock on the frame a hull the INFANTRY killed brews up
+ * and photographs it. It is bolted onto THIS probe rather than written as its
+ * own because the sim is sensitive to the probe: a separate, lighter run of
+ * seed 7 turns "RED destroyed by LANTERN, twelve frags" into "RED flattened by
+ * the final salvo" purely on frame timing. A picture of a fight has to come out
+ * of the run that measured it.
+ */
+const SHOT = process.argv.includes('--shot');
+const SHOTS = './shots/tankkill';
+if (SHOT) (await import('node:fs')).mkdirSync(SHOTS, { recursive: true });
 
 const b = await chromium.launch({
   headless: true,
   args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--mute-audio'],
 });
-const page = await b.newPage({ viewport: { width: 900, height: 600 } });
+const page = await b.newPage({ viewport: SHOT ? { width: 1280, height: 720 } : { width: 900, height: 600 } });
 const errs = [];
 page.on('pageerror', (e) => errs.push(String(e.message)));
 await page.goto(`${URL}?capture=1&seed=${SEED}${ONEWOUND ? '&onewound=1' : ''}`, {
@@ -46,7 +57,7 @@ await page.goto(`${URL}?capture=1&seed=${SEED}${ONEWOUND ? '&onewound=1' : ''}`,
 });
 await page.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
 
-const res = await page.evaluate(async (SCALE) => {
+const res = await page.evaluate(async ({ SCALE, SHOT }) => {
   const e = window.__ENGINE__;
   const ctx = e.ctx;
   const m = ctx.peek('match');
@@ -97,6 +108,29 @@ const res = await page.evaluate(async (SCALE) => {
     r.health = t.health;
     r.life = s.liveT;
   };
+
+  /**
+   * THE DEATH FRAME IS ONE FRAME, so the engine says so and stops the clock
+   * where it happened — polling for it from node at 8x misses it entirely.
+   * Only a hull the MEN killed counts: a tank flattened by the final cathedral
+   * salvo is the failure this whole change is about.
+   */
+  window.__DEAD__ = null;
+  for (const t of a.tanks) t.health0 = t.health;
+  const offShot = ctx.events.on('match:tank', (ev) => {
+    if (!SHOT || ev.phase !== 'dead' || window.__DEAD__) return;
+    const t = a.tanks.find((x) => x.id === ev.id);
+    const men = t.stats.fragDmg + t.stats.roundDmg;
+    if (men < 0.55 * t.health0) return;
+    window.__DEAD__ = {
+      id: ev.id, x: t.position.x, y: t.position.y, z: t.position.z,
+      by: t.lastHitBy?.name ?? null, men: Math.round(men),
+      env: Math.round(t.stats.blastDmg - t.stats.fragDmg),
+      frags: t.stats.frags, rounds: t.stats.rounds, deck: t.stats.nDeck,
+      kills: t.stats.kills, live: Math.round(t.stats.liveT),
+    };
+    e.time.scale = 0.06;
+  });
 
   const offKill = ctx.events.on('match:tank', (ev) => {
     const t = a.tanks.find((x) => x.id === ev.id);
@@ -156,8 +190,10 @@ const res = await page.evaluate(async (SCALE) => {
       }
     }
     for (const br of w.breaches ?? []) if (br.down) breachedEver = 1;
+    if (window.__DEAD__) break;
   }
   offKill?.();
+  offShot?.();
 
   for (const t of a.tanks) if (!rec.has(t.id)) row(t);
   for (const t of a.tanks) if (t.state !== 'dead') snap(t);
@@ -170,8 +206,9 @@ const res = await page.evaluate(async (SCALE) => {
     breachedEver,
     breachOpenAtEnd: (w.breaches ?? []).filter((x) => x.down).length,
     oneWound: a.oneWoundPerRound,
+    shot: window.__DEAD__ ?? null,
   };
-}, SCALE);
+}, { SCALE, SHOT });
 
 const f = (n, d = 0) => (n === null || n === undefined ? '—' : n.toFixed(d));
 console.log(`\n=== seed ${SEED} @${SCALE}x  oneWoundPerRound=${res.oneWound} ===`);
@@ -212,6 +249,64 @@ console.log(
   `\n  breachable walls ${res.breaches0} · any opened this match: ${res.breachedEver ? 'YES' : 'no'} · ` +
     `open at the end: ${res.breachOpenAtEnd}`
 );
+
+/* ---- the picture, if the men earned one --------------------------------- */
+if (SHOT && res.shot) {
+  const d = res.shot;
+  console.log(`\n  PHOTOGRAPHING ${d.id}: killed by ${d.by}, ${d.men} from men ` +
+    `(${d.frags} frags, ${d.rounds} rounds, ${d.deck} of them on the deck) vs ${d.env} from the environment`);
+  const aim = { x: d.x, y: d.y + 1.8, z: d.z };
+  // A fixed offset in a town puts the lens inside a shop: twelve bearings at
+  // three ranges, first with a clear line wins.
+  const findView = (lift, dists) =>
+    page.evaluate(({ aim, lift, dists }) => {
+      const ph = window.__ENGINE__.ctx.peek('physics');
+      const V3 = window.__ENGINE__.camera.position.constructor;
+      const to = new V3(aim.x, aim.y, aim.z);
+      let fb = null;
+      for (const dd of dists) for (let i = 0; i < 12; i++) {
+        const ang = (i / 12) * Math.PI * 2;
+        const x = aim.x + Math.sin(ang) * dd;
+        const z = aim.z + Math.cos(ang) * dd;
+        // `groundHeight`'s third argument is where the probe STARTS, not how
+        // far it reaches — 60 finds the roof of every building it crosses.
+        const g = ph.groundHeight(x, z, aim.y + 6);
+        if (!Number.isFinite(g)) continue;
+        if (!fb) fb = { x, y: g, z, d: dd };
+        if (ph.lineOfSight(new V3(x, g + 1.62 + lift, z), to, ph.MASK.SIGHT)) return { x, y: g, z, d: dd };
+      }
+      return fb;
+    }, { aim, lift, dists });
+  const look = (v, lift) =>
+    page.evaluate(({ v, aim, lift }) => {
+      const e = window.__ENGINE__;
+      const player = e.ctx.peek('player');
+      e.ctx.peek('ui')?.setHudVisible?.(false);
+      e.ctx.viewScene.visible = false;
+      const p = e.camera.position.clone().set(v.x, v.y + lift, v.z);
+      const dx = aim.x - v.x, dz = aim.z - v.z;
+      // `player`'s yaw convention is the negative of `ai`'s: forward (-sin,-cos).
+      player.respawnAt(p, Math.atan2(-dx, -dz));
+      if (lift > 0) player.movement.teleport(v.x, v.y + lift, v.z);
+      const dy = aim.y - (player.position.y + 1.62);
+      player.movement.pitch = Math.asin(dy / Math.hypot(dx, dy, dz));
+      return { x: +v.x.toFixed(1), y: +player.position.y.toFixed(1), z: +v.z.toFixed(1) };
+    }, { v, aim, lift });
+  for (const [name, lift, dists] of [
+    ['30-killed-by-infantry', 0, [12, 16, 21]],
+    ['31-killed-by-infantry-close', 0, [8, 11, 15]],
+    ['32-wreck', 3.5, [14, 19, 25]],
+  ]) {
+    const v = await findView(lift, dists);
+    if (!v) { console.log(`   ${name} — no clear camera`); continue; }
+    console.log(`   ${name} camera ${JSON.stringify(await look(v, lift))} at ${v.d} m`);
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${SHOTS}/${name}.png` });
+  }
+} else if (SHOT) {
+  console.log('\n  no hull was destroyed by the infantry in this match');
+}
+
 if (errs.length) console.log('\nPAGEERRORS:', errs);
 else console.log('\npageerror: none');
 await b.close();
