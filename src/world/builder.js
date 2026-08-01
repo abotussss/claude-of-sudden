@@ -441,10 +441,47 @@ export class Assembler {
    * Ask the prototype.
    */
   isSolid(id) {
+    return !!this.footprint(id);
+  }
+
+  /**
+   * HOW BIG THE SOLID PART ACTUALLY IS — `{ sx, sy, sz }` in the prototype's own
+   * space, at scale 1, or null when the prop carries no proxy.
+   *
+   * `isSolid` answers "does this thing block", and every caller that asked it
+   * then went on to invent its own number for "and how far". `interiors.js` had
+   * a column of hand-picked pads — 0.25, 0.35, 0.4, 0.5 — next to placements of
+   * a bucket, a crate stack, a shelf unit and a wardrobe, and none of them was
+   * the size of the thing being placed. A wardrobe is 0.9 m across, was tested
+   * as a point, and stood in doorways and on stair treads: the centre cleared
+   * the keep-out circle and the body of the object did not.
+   *
+   * The extent is already known exactly — `_protoBox` derives it from the same
+   * geometry the proxy is built from — so publish it rather than let four files
+   * guess at it. A table of magic radii per kind is the version of this that
+   * rots the first time a prop's geometry changes.
+   */
+  footprint(id) {
     const p = this._protos.get(id);
-    if (!p || !p.collide) return false;
+    if (!p || !p.collide) return null;
     if (p._cbox === undefined) p._cbox = this._protoBox(p);
-    return !!p._cbox;
+    const c = p._cbox;
+    return c ? { sx: c.sx, sy: c.sy, sz: c.sz } : null;
+  }
+
+  /**
+   * The radius of that footprint: half its diagonal, so it is independent of the
+   * yaw the prop will be placed at. Props are yawed by hand, by `put`'s jitter,
+   * or both, so a width and a depth cannot be assigned to level axes here; the
+   * circumscribing circle is the honest bound and it is at most 4 cm wider than
+   * the true half-width on the longest prop indoors (a 1.1 x 0.35 m shelf unit).
+   * 0 for anything that carries no proxy — a bucket, a sandbag, a lying tyre —
+   * because the character controller steps over those and the gates, which
+   * measure standing room from `STANCE.stand.stepHeight` up, cannot see them.
+   */
+  footprintR(id, s = 1) {
+    const f = this.footprint(id);
+    return f ? (Math.hypot(f.sx, f.sz) / 2) * s : 0;
   }
 
   /** Add an instance. `masks` scales the geometry's [wear, grime, ao]. */

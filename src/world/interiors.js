@@ -14,22 +14,51 @@ import { clothGeometry, patchGeometry, chamferBox, fillMasks } from './util.js';
  */
 
 /**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * A PROP IS NOT A POINT.
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Everything below used to test a prop's CENTRE against the keep-clear circles,
+ * and a wardrobe is 0.9 m across. So the centre cleared the circle and the body
+ * of the object did not, and furniture landed in doorways and on stair treads —
+ * `tools/floorcheck.mjs`'s four named failure modes ("buried cache", "sealed
+ * flight", "cul-de-sac", "one-way-out") are all exactly what a blocked doorway
+ * or a blocked tread produces, and it has been flaky for as long as it has
+ * existed. What made it look like an architecture bug rather than a dressing
+ * bug is that the victims move: adding one `clearSpot` draw anywhere shifts
+ * every subsequent number in the level, so the same latent defect re-rolls onto
+ * a different building on the next edit.
+ *
+ * Every predicate here therefore takes `rad`, the radius of the prop's own
+ * collision footprint, and inflates the keep-clear region by it. `rad` comes
+ * from `Assembler.footprintR`, which derives it from the very geometry the
+ * physics proxy is built from — there is no table of radii per kind in this
+ * file, because a table of radii per kind is the version of this fix that rots.
+ *
+ * `rad` is 0 for anything with no proxy (litter, sandbags, a bucket, a lying
+ * tyre): the character controller steps over those and every gate measures
+ * standing room from `STANCE.stand.stepHeight` up, so they cannot block
+ * anything and are not filtered — the same rule `KEEPOUT` applies outdoors.
+ */
+
+/**
  * True where a piece of clutter that carries a COLLISION PROXY must not stand.
  *
- * `r.doorways` is the set of circles just inside this building's exterior doors
- * (see `buildInterior`). A crate stack or an oil drum dropped there is not
- * dressing, it is a locked door: E3's side-3 and K2's side-2 openings were both
- * blocked down to a 0.3 m slot, and the player capsule is 0.64 m across. Flat
- * dressing — patches, litter, stains — has no proxy and is not filtered, which
- * is the same rule `KEEPOUT` applies outdoors.
+ * `r.doorways` is the set of keep-clear circles this floor was handed by
+ * `buildInterior`: the spots just inside the exterior doors, the whole run of
+ * every staircase leaving or arriving on this floor, and every loot cache. A
+ * crate stack or an oil drum dropped in one is not dressing, it is a locked
+ * door: E3's side-3 and K2's side-2 openings were both blocked down to a 0.3 m
+ * slot, and the player capsule is 0.64 m across.
  */
-function inDoorway(r, x, z) {
+function inDoorway(r, x, z, rad = 0) {
   const ds = r.doorways;
   if (!ds) return false;
   for (let i = 0; i < ds.length; i++) {
     const dx = x - ds[i].x;
     const dz = z - ds[i].z;
-    if (dx * dx + dz * dz < ds[i].r * ds[i].r) return true;
+    const rr = ds[i].r + rad;
+    if (dx * dx + dz * dz < rr * rr) return true;
   }
   return false;
 }
@@ -53,6 +82,8 @@ const ROUTE_R = 0.85;
 function onRoute(r, x, z, pad = 0) {
   const lines = r.route;
   if (!lines) return false;
+  // `pad` is the prop's own footprint radius, so what is being kept clear is
+  // ROUTE_R to its FACE — which is what ROUTE_R's derivation above assumes.
   const rad = ROUTE_R + pad;
   const r2 = rad * rad;
   for (let l = 0; l < lines.length; l++) {
@@ -72,19 +103,66 @@ function onRoute(r, x, z, pad = 0) {
   return false;
 }
 
-/** Anywhere a collision-bearing prop must not stand: a doorway or the route. */
-function blocksWay(r, x, z, pad = 0) {
-  return inDoorway(r, x, z) || onRoute(r, x, z, pad);
+/**
+ * Anywhere a collision-bearing prop of footprint radius `rad` must not stand:
+ * a doorway, a staircase, a cache, or the through-route.
+ */
+function blocksWay(r, x, z, rad = 0) {
+  return inDoorway(r, x, z, rad) || onRoute(r, x, z, rad);
+}
+
+/**
+ * WHERE THE SURPLUS GOES.
+ *
+ * Once clearance is measured against the real footprint, more pieces have to
+ * move than before, and a few genuinely have nowhere near their authored spot
+ * to go. Dropping those is the wrong answer twice over: it thins rooms the
+ * player has objected to having thinned, and it hides the failure — a room that
+ * quietly loses its wardrobe looks exactly like a room that never had one.
+ *
+ * So the last resort is a sweep of the whole rectangle for the legal spot
+ * NEAREST the authored one. It draws no random numbers, so a piece finding its
+ * home this way cannot shift the rest of the level's dice; and the count of
+ * pieces that reach it, and of the few that still find nothing, is published on
+ * the assembler (`A.furnishStats`) so it can be read rather than guessed at.
+ */
+const SWEEP = 0.3; // m between candidates; a quarter of the smallest room
+function nearestLegal(r, x, z, x0, z0, x1, z1, rad) {
+  if (x1 <= x0 || z1 <= z0) return null;
+  const nx = Math.max(1, Math.ceil((x1 - x0) / SWEEP));
+  const nz = Math.max(1, Math.ceil((z1 - z0) / SWEEP));
+  let bx = 0, bz = 0, bd = Infinity;
+  for (let iz = 0; iz <= nz; iz++) {
+    const pz = z0 + ((z1 - z0) * iz) / nz;
+    for (let ix = 0; ix <= nx; ix++) {
+      const px = x0 + ((x1 - x0) * ix) / nx;
+      const d = (px - x) * (px - x) + (pz - z) * (pz - z);
+      if (d >= bd) continue;
+      if (blocksWay(r, px, pz, rad)) continue;
+      bd = d; bx = px; bz = pz;
+    }
+  }
+  return bd === Infinity ? null : [bx, bz];
+}
+
+/** Tally of what the furnishing pass had to do to keep a room legal. */
+function tally(A, key) {
+  const s = A.furnishStats ?? (A.furnishStats = { kept: 0, nudged: 0, moved: 0, homeless: 0 });
+  s[key]++;
 }
 
 /** A spot for a collision-bearing prop, resampled off the doorways and route. */
-function clearSpot(rng, r, x0, z0, x1, z1) {
+function clearSpot(A, rng, r, x0, z0, x1, z1, rad = 0) {
   for (let i = 0; i < 8; i++) {
     const x = rng.range(x0, x1);
     const z = rng.range(z0, z1);
-    if (!blocksWay(r, x, z)) return [x, z];
+    if (!blocksWay(r, x, z, rad)) { tally(A, 'kept'); return [x, z]; }
   }
-  return null; // room is mostly threshold — leave it empty rather than block it
+  // Eight misses does not mean the room is full — a random sample is a poor way
+  // to find the corner of a room whose middle is corridor. Sweep it.
+  const p = nearestLegal(r, (x0 + x1) / 2, (z0 + z1) / 2, x0, z0, x1, z1, rad);
+  tally(A, p ? 'moved' : 'homeless');
+  return p;
 }
 
 /**
@@ -92,11 +170,10 @@ function clearSpot(rng, r, x0, z0, x1, z1) {
  *
  * The alternative — dropping anything that lands in the corridor — empties the
  * rooms the corridor runs through, which is most of them. So try the authored
- * spot, then a ring of nearby ones, and only give up if the whole
- * neighbourhood is corridor.
+ * spot, then a ring of nearby ones, then the whole room.
  */
-function shiftClear(r, x, z, x0, z0, x1, z1, pad = 0) {
-  if (!blocksWay(r, x, z, pad)) return [x, z];
+function shiftClear(A, r, x, z, x0, z0, x1, z1, rad = 0) {
+  if (!blocksWay(r, x, z, rad)) { tally(A, 'kept'); return [x, z]; }
   for (let ring = 1; ring <= 4; ring++) {
     const step = ring * 0.55;
     for (let k = 0; k < 8; k++) {
@@ -104,10 +181,37 @@ function shiftClear(r, x, z, x0, z0, x1, z1, pad = 0) {
       const px = x + Math.cos(a) * step;
       const pz = z + Math.sin(a) * step;
       if (px < x0 || px > x1 || pz < z0 || pz > z1) continue;
-      if (!blocksWay(r, px, pz, pad)) return [px, pz];
+      if (!blocksWay(r, px, pz, rad)) { tally(A, 'nudged'); return [px, pz]; }
     }
   }
-  return null;
+  const p = nearestLegal(r, x, z, x0, z0, x1, z1, rad);
+  tally(A, p ? 'moved' : 'homeless');
+  return p;
+}
+
+/**
+ * The radius a crate STACK needs, which is not the radius of a crate.
+ *
+ * `stackCrates` picks a different crate for every course, scales it by up to
+ * `STACK_SMAX` and jitters it `STACK_JIT` on both axes, so the pile's footprint
+ * is the widest crate in that vocabulary at its widest scale, offset by the
+ * corner of that jitter. Derived from the same three numbers the loop uses, so
+ * the two cannot drift apart.
+ */
+const STACK_IDS = ['crate_a', 'crate_b', 'crate_c', 'crate_flat'];
+const STACK_SMAX = 1.08;
+const STACK_JIT = 0.12;
+function stackR(A) {
+  let m = 0;
+  for (const id of STACK_IDS) m = Math.max(m, A.footprintR(id, STACK_SMAX));
+  return m + STACK_JIT * Math.SQRT2;
+}
+
+/** The widest footprint among a set of ids one of which is about to be picked. */
+function anyR(A, ids, s = 1) {
+  let m = 0;
+  for (const id of ids) m = Math.max(m, A.footprintR(id, s));
+  return m;
 }
 
 /**
@@ -125,7 +229,12 @@ function shiftClear(r, x, z, x0, z0, x1, z1, pad = 0) {
  * to its FACE and not to its centre line.
  */
 function clearSpan(r, alongZ, fixed, a, b, pad, minLen) {
-  if (!r.route) return [(a + b) / 2, b - a];
+  // …and off the DOORWAYS, the stair runs and the caches, which this used to
+  // skip entirely whenever a building declared no through-route: `!r.route`
+  // returned the full span without asking `blocksWay` anything. A shop with no
+  // authored corridor could therefore lay a 4.4 m counter straight across its
+  // own front door, and half the shops on the map have no authored corridor.
+  if (!r.route && !r.doorways) return [(a + b) / 2, b - a];
   const n = Math.max(8, Math.ceil((b - a) / 0.15));
   let bs = 0, be = -1, s = -1;
   for (let i = 0; i <= n; i++) {
@@ -367,9 +476,9 @@ function dressWalls(A, rng, r) {
      * of. `throughcheck` went from 21/21 exits to 17/21 on the strength of it:
      * the anchor cell just inside a door found itself in a three-cell pocket
      * with a drum across the threshold. Route them the way everything else in
-     * this file that can seal a room is routed, and drop the ones with nowhere
-     * to go — a shop with four sacks against the wall instead of five is not a
-     * worse shop.
+     * this file that can seal a room is routed — with the drum's OWN radius,
+     * which is 0.3 m and was tested as 0.4 m of pad on a point, so a drum whose
+     * centre sat 1.2 m from a door anchor passed while its skin sat at 0.9.
      */
     const nBase = rng.int(2, 5);
     for (let i = 0; i < nBase; i++) {
@@ -389,8 +498,9 @@ function dressWalls(A, rng, r) {
       const bry = rng.float() * 6.28;
       const bs = rng.range(0.8, 1.05);
       let px = bx, pz = bz;
-      if (A.isSolid(id)) {
-        const sp = shiftClear(r, bx, bz, x0 + 0.25, z0 + 0.25, x1 - 0.25, z1 - 0.25, 0.4);
+      const br = A.footprintR(id, bs);
+      if (br > 0) {
+        const sp = shiftClear(A, r, bx, bz, x0 + 0.25, z0 + 0.25, x1 - 0.25, z1 - 0.25, br);
         if (!sp) continue;
         px = sp[0];
         pz = sp[1];
@@ -533,16 +643,23 @@ function furnishShop(A, rng, r, cx, cz, w, d, m) {
     : frontZ ? cz - frontZ * (d * 0.5 - 1.3) : cz + d * 0.18;
   const ccFree = alongZ ? cz : cx;
   const wantLen = Math.min((alongZ ? d : w) - 1.4, 4.4);
+  /**
+   * How deep the counter is — the counter is the one solid in this file that is
+   * built here rather than instanced from a prototype, so its extent has to be
+   * named rather than asked for. Half of it is the clearance pad, because a
+   * counter is measured to its FACE like everything else.
+   */
+  const CDEPTH = 0.74;
   // Clip the run to whatever the through-route leaves. Below 1.4 m it is a
   // table, not a counter, and the room is better off with the space.
   const span = clearSpan(
-    r, alongZ, ccFixed, ccFree - wantLen / 2, ccFree + wantLen / 2, 0.37, 1.4
+    r, alongZ, ccFixed, ccFree - wantLen / 2, ccFree + wantLen / 2, CDEPTH / 2, 1.4
   );
   const clen = span ? span[1] : 0;
   const ccx = alongZ ? ccFixed : span ? span[0] : cx;
   const ccz = alongZ ? (span ? span[0] : cz) : ccFixed;
-  const cSX = alongZ ? 0.74 : clen;
-  const cSZ = alongZ ? clen : 0.74;
+  const cSX = alongZ ? CDEPTH : clen;
+  const cSZ = alongZ ? clen : CDEPTH;
   if (span) {
     A.add('wood_prop_dark', BOX(A), LL(IDENT, ccx, y + 0.9, ccz, 0, cSX, 0.06, cSZ), {
       masks: [0.9, 0.4, 0.1],
@@ -574,22 +691,28 @@ function furnishShop(A, rng, r, cx, cz, w, d, m) {
       }
     }
     // sacks and trays stacked on the customer side of the counter
+    const SACKS = ['sandbag_a', 'sandbag_b', 'tray', 'crate_b', 'crate_flat'];
     for (let i = 0; i < rng.int(3, 6); i++) {
       const t = rng.range(-clen / 2, clen / 2);
       const off = rng.range(0.55, 1.05);
       const px = ccx + (alongZ ? (r.street === 1 ? off : -off) : t);
       const pz = ccz + (alongZ ? t : frontZ ? frontZ * off : off);
       // A sack dropped on the customer side of a shortened counter can land in
-      // the corridor the counter was shortened to make; nudge it back in.
-      const sp = shiftClear(r, px, pz, x0 + 0.3, z0 + 0.3, x1 - 0.3, z1 - 0.3, 0.25);
+      // the corridor the counter was shortened to make; nudge it back in. The
+      // id is drawn BEFORE the spot so the spot is cleared for the thing that
+      // is actually going in it — two of the five are crates.
+      const sid = rng.pick(SACKS);
+      const ss = rng.range(0.9, 1.05);
+      const sp = shiftClear(A, r, px, pz, x0 + 0.3, z0 + 0.3, x1 - 0.3, z1 - 0.3,
+        A.footprintR(sid, ss));
       if (!sp) continue;
       A.put(
-        rng.pick(['sandbag_a', 'sandbag_b', 'tray', 'crate_b', 'crate_flat']),
+        sid,
         sp[0],
         y + 0.02 + (i % 2) * 0.16,
         sp[1],
         rng.float() * 6.28,
-        rng.range(0.9, 1.05),
+        ss,
         [1, rng.range(1.0, 1.3), 1]
       );
     }
@@ -605,11 +728,13 @@ function furnishShop(A, rng, r, cx, cz, w, d, m) {
       if (rng.float() < 0.25) continue;
       // A shelf unit is solid now, and a run of them down the side wall of a
       // shop stands across whatever door that wall has. Same treatment as the
-      // counter and the crate stack: it moves.
+      // counter and the crate stack: it moves — and by its own 1.1 x 0.35 m
+      // footprint, which is nearly three times the 0.4 m pad this used.
       const shx = cx + sx * (w / 2 - 0.22);
-      const sh = shiftClear(r, shx, sz, x0 + 0.3, z0 + 0.4, x1 - 0.3, z1 - 0.4, 0.4);
       const shScale = rng.range(0.92, 1.08);
       const shMask = rng.range(0.8, 1.4);
+      const sh = shiftClear(A, r, shx, sz, x0 + 0.3, z0 + 0.4, x1 - 0.3, z1 - 0.4,
+        A.footprintR('shelf', shScale));
       if (!sh) continue;
       A.put('shelf', sh[0], y, sh[1], sx > 0 ? -Math.PI / 2 : Math.PI / 2, shScale, [1, shMask, 1]);
       // goods on the shelves
@@ -626,9 +751,10 @@ function furnishShop(A, rng, r, cx, cz, w, d, m) {
       }
     }
   }
-  // crate stacks and sacks. The stack is 0.7 m of solid collision — it is the
-  // one piece of shop dressing that can seal a corridor on its own, so it moves.
-  const cs = shiftClear(r, x0 + 0.7, z1 - 0.9, x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, 0.35);
+  // crate stacks and sacks. The stack is the widest solid the shop dressing has
+  // — see `stackR` — and it is the one piece that can seal a corridor on its
+  // own, so it moves, by its real footprint and not by a 0.35 m pad.
+  const cs = shiftClear(A, r, x0 + 0.7, z1 - 0.9, x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, stackR(A));
   if (cs) stackCrates(A, rng, cs[0], y, cs[1], rng.int(3, 6));
   else rng.int(3, 6);
   for (let i = 0; i < rng.int(3, 6); i++) {
@@ -644,14 +770,26 @@ function furnishShop(A, rng, r, cx, cz, w, d, m) {
   }
   // Solid since props.js declared it so, therefore routed like everything else
   // in here that can stand in a doorway.
-  const bw = shiftClear(r, x1 - 0.6, z0 + 0.7, x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, 0.4);
+  const bw = shiftClear(A, r, x1 - 0.6, z0 + 0.7, x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5,
+    A.footprintR('barrel_wood'));
   const bwRy = rng.float() * 6.28;
   if (bw) A.put('barrel_wood', bw[0], y, bw[1], bwRy, 1, [1, 1.2, 1]);
-  // Table and chair — a 1.0 x 0.8 collision box, so it moves off the route too.
-  const tb = shiftClear(r, cx - w * 0.28, cz - d * 0.28, x0 + 0.7, z0 + 0.7, x1 - 0.7, z1 - 0.7, 0.5);
+  /**
+   * Table and chair. The chair used to be nailed 0.7 m off the table with no
+   * test of its own — it is solid to the seat, so a table that cleared a door
+   * anchor by a metre could still put its chair inside one. Two pieces, two
+   * footprints, two clearances; the chair keeps its offset when the offset is
+   * legal, which is nearly always, so the pair still reads as a pair.
+   */
+  const tb = shiftClear(A, r, cx - w * 0.28, cz - d * 0.28, x0 + 0.7, z0 + 0.7, x1 - 0.7, z1 - 0.7,
+    A.footprintR('table_small'));
+  const tbRy = rng.range(-0.4, 0.4);
+  const chRy = rng.range(2, 4);
   if (tb) {
-    A.put('table_small', tb[0], y, tb[1], rng.range(-0.4, 0.4), 1, [1, 1, 1]);
-    A.put('chair', tb[0] + 0.7, y, tb[1] + d * 0.08, rng.range(2, 4), 1, [1, 1.2, 1]);
+    A.put('table_small', tb[0], y, tb[1], tbRy, 1, [1, 1, 1]);
+    const ch = shiftClear(A, r, tb[0] + 0.7, tb[1] + d * 0.08,
+      x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, A.footprintR('chair'));
+    if (ch) A.put('chair', ch[0], y, ch[1], chRy, 1, [1, 1.2, 1]);
   }
 }
 
@@ -678,7 +816,8 @@ function furnishLiving(A, rng, r, cx, cz, w, d, m) {
   }
   // The cabinet stands against the +X wall — which is exactly where a corridor
   // running along that wall would be, so it slides along the wall to clear it.
-  const cab = shiftClear(r, x1 - 0.35, cz + rng.range(-0.6, 0.6), x1 - 0.55, z0 + 0.6, x1 - 0.3, z1 - 0.6, 0.5);
+  const cab = shiftClear(A, r, x1 - 0.35, cz + rng.range(-0.6, 0.6),
+    x1 - 0.55, z0 + 0.6, x1 - 0.3, z1 - 0.6, A.footprintR('cabinet'));
   if (cab) {
     A.put('cabinet', cab[0], y, cab[1], -Math.PI / 2, 1, [1, 1, 1]);
   }
@@ -690,30 +829,34 @@ function furnishLiving(A, rng, r, cx, cz, w, d, m) {
    * exactly what `shiftClear` exists for: `throughcheck` went from 21/21 exits
    * to 17/21 the moment this furniture started existing to physics, because a
    * living room whose corridor runs down the middle had a chair standing in it.
-   * Each piece is nudged off the route on its own, with its own half-depth as
-   * the pad, and the bottle and can follow the table rather than staying at
-   * coordinates the table has left.
+   * Each piece is nudged off the route on its own, with ITS OWN FOOTPRINT as the
+   * clearance — the 0.5 and 0.35 that used to be typed here were a guess at a
+   * table's half-depth and a chair's, and both were under the real thing — and
+   * the bottle and can follow the table rather than staying at coordinates the
+   * table has left.
    */
   const tRy = rng.range(0, 0.4);
   const c1Ry = rng.range(1.5, 2.5);
   const c2Ry = rng.range(-1.5, -0.5);
-  const tbl = shiftClear(r, cx + 0.4, cz - 0.8, x0 + 0.7, z0 + 0.7, x1 - 0.7, z1 - 0.7, 0.5);
+  const tbl = shiftClear(A, r, cx + 0.4, cz - 0.8, x0 + 0.7, z0 + 0.7, x1 - 0.7, z1 - 0.7,
+    A.footprintR('table_small'));
   if (tbl) {
     A.put('table_small', tbl[0], y, tbl[1], tRy, 1, [1, 1, 1]);
     // stuff on the small table
     A.put('bottle', tbl[0], y + 0.74, tbl[1], 0, 1, [1, 1, 1]);
     A.put('can', tbl[0] + 0.2, y + 0.74, tbl[1] + 0.1, 1, 1, [1, 1, 1]);
   }
-  const ch1 = shiftClear(r, cx - 0.8, cz - 1.2, x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, 0.35);
+  const chR = A.footprintR('chair');
+  const ch1 = shiftClear(A, r, cx - 0.8, cz - 1.2, x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, chR);
   if (ch1) A.put('chair', ch1[0], y, ch1[1], c1Ry, 1, [1, 1.2, 1]);
-  const ch2 = shiftClear(r, cx + 1.4, cz - 0.4, x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, 0.35);
+  const ch2 = shiftClear(A, r, cx + 1.4, cz - 0.4, x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, chR);
   if (ch2) A.put('chair', ch2[0], y, ch2[1], c2Ry, 1, [1, 1.2, 1]);
   // wall-hung rug / poster
   const wall = clothGeometry(1.7, 1.1, { segX: 8, segY: 7, sag: 0.04, wrinkle: 0.05, thickness: 0.0036, fray: 0.02, bow: -1, rng });
   A.addOnce('fabric_red', wall, LL(IDENT, cx - 0.4, y + 1.65, z0 + 0.09, 0, 1, 1, 1), {
     masks: [0.3, 0.4, 0.2],
   });
-  const lcs = shiftClear(r, x1 - 0.9, z0 + 0.8, x0 + 0.6, z0 + 0.6, x1 - 0.6, z1 - 0.6, 0.35);
+  const lcs = shiftClear(A, r, x1 - 0.9, z0 + 0.8, x0 + 0.6, z0 + 0.6, x1 - 0.6, z1 - 0.6, stackR(A));
   if (lcs) stackCrates(A, rng, lcs[0], y, lcs[1], rng.int(1, 3));
 }
 
@@ -721,20 +864,39 @@ function furnishLiving(A, rng, r, cx, cz, w, d, m) {
 function furnishStorage(A, rng, r, cx, cz, w, d, m) {
   const { x0, z0, x1, z1, y } = r;
   const spots = rng.int(4, 7);
+  /** The goods on a pallet, and how far off its centre they are scattered. */
+  const PAL_IDS = ['sandbag_a', 'sandbag_b', 'box_card_a'];
+  const PAL_JX = 0.3, PAL_JZ = 0.25;
+  const BARRELS = ['barrel_rust', 'barrel_blue', 'barrel_wood'];
   for (let i = 0; i < spots; i++) {
-    const spot = clearSpot(rng, r, x0 + 0.6, z0 + 0.6, x1 - 0.6, z1 - 0.6);
+    /**
+     * WHAT IS GOING HERE IS DECIDED BEFORE WHERE, because the where has to be
+     * cleared for the thing that is actually going in it. This loop used to ask
+     * `clearSpot` for a point with NO clearance at all and then drop a 1.1 m
+     * shelf unit or a crate stack on it, which is the plainest instance of the
+     * defect in the file: a shelf whose centre was 1.2 m from a stair's centre
+     * line had 0.6 m of itself on the treads.
+     */
+    const pick = rng.float();
+    let rad = 0;
+    let barrel = null;
+    if (pick < 0.35) rad = stackR(A);
+    else if (pick < 0.55) rad = Math.hypot(PAL_JX, PAL_JZ) + anyR(A, PAL_IDS);
+    else if (pick < 0.72) { barrel = rng.pick(BARRELS); rad = A.footprintR(barrel); }
+    else if (pick < 0.85) rad = A.footprintR('tyre');   // 0: stepped over
+    else rad = A.footprintR('shelf');
+    const spot = clearSpot(A, rng, r, x0 + 0.6, z0 + 0.6, x1 - 0.6, z1 - 0.6, rad);
     if (!spot) continue;
     const [sx, sz] = spot;
-    const pick = rng.float();
     if (pick < 0.35) stackCrates(A, rng, sx, y, sz, rng.int(2, 5));
     else if (pick < 0.55) {
       A.put('pallet', sx, y + 0.01, sz, rng.float() * 6.28, 1, [1, 1.3, 1]);
       for (let k = 0; k < rng.int(1, 4); k++) {
         A.put(
-          rng.pick(['sandbag_a', 'sandbag_b', 'box_card_a']),
-          sx + rng.range(-0.3, 0.3),
+          rng.pick(PAL_IDS),
+          sx + rng.range(-PAL_JX, PAL_JX),
           y + 0.11 + k * 0.2,
-          sz + rng.range(-0.25, 0.25),
+          sz + rng.range(-PAL_JZ, PAL_JZ),
           rng.float() * 6.28,
           1,
           [1, 1.2, 1]
@@ -742,9 +904,7 @@ function furnishStorage(A, rng, r, cx, cz, w, d, m) {
       }
       A.box('wood', sx, y + 0.1, sz, 1.2, 0.2, 1.0);
     } else if (pick < 0.72) {
-      A.put(rng.pick(['barrel_rust', 'barrel_blue', 'barrel_wood']), sx, y, sz, rng.float() * 6.28, 1, [
-        1, 1.2, 1,
-      ]);
+      A.put(barrel, sx, y, sz, rng.float() * 6.28, 1, [1, 1.2, 1]);
     } else if (pick < 0.85) {
       A.put('tyre', sx, y, sz, rng.float() * 6.28, 1, [1, 1.3, 1]);
       if (rng.float() < 0.6) {
@@ -791,9 +951,9 @@ function furnishRuin(A, rng, r, cx, cz, w, d, m) {
       1, 1.4, 1,
     ]);
   }
-  // Solid, and dropped anywhere in the room — so route it.
-  const rc = shiftClear(r, rng.range(x0 + 0.6, x1 - 0.6), rng.range(z0 + 0.6, z1 - 0.6),
-                        x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, 0.35);
+  // Solid, and dropped anywhere in the room — so route it, by its own extent.
+  const rc = shiftClear(A, r, rng.range(x0 + 0.6, x1 - 0.6), rng.range(z0 + 0.6, z1 - 0.6),
+                        x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5, A.footprintR('chair'));
   const rcRy = rng.float() * 6.28;
   if (rc) A.put('chair', rc[0], y + 0.05, rc[1], rcRy, 1, [1, 1.5, 1]);
   // dust sheet snagged on the rubble
@@ -830,14 +990,16 @@ export function stackCrates(A, rng, x, y, z, n) {
   const wasSkirt = A.skirts;
   for (let i = 0; i < n; i++) {
     A.skirts = wasSkirt && i === 0;
-    const id = rng.pick(['crate_a', 'crate_b', 'crate_c', 'crate_flat']);
-    const s = rng.range(0.92, 1.08);
+    // The vocabulary, the scale range and the jitter are shared with `stackR`,
+    // which is what tells the placement passes how wide the finished pile is.
+    const id = rng.pick(STACK_IDS);
+    const s = rng.range(2 - STACK_SMAX, STACK_SMAX);
     const hh = id === 'crate_c' ? 0.82 * 0.85 : id === 'crate_b' ? 0.48 * 0.85 : 0.62 * 0.85;
     A.put(
       id,
-      x + rng.range(-0.12, 0.12),
+      x + rng.range(-STACK_JIT, STACK_JIT),
       cy,
-      z + rng.range(-0.12, 0.12),
+      z + rng.range(-STACK_JIT, STACK_JIT),
       rng.range(-0.5, 0.5),
       s,
       [1, rng.range(0.7, 1.4), 1]
