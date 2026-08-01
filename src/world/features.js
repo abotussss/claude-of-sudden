@@ -116,8 +116,23 @@ const SPOTS = {
   K2: { floors: [['grenade', 0.72, 0.52]], roof: ['vantage', 0.50, 0.54] },
 };
 
-/** Keep-clear radius handed to the furnishing pass. */
-const CLEAR_R = 1.35;
+/**
+ * Keep-clear radius handed to the furnishing pass, AND IT IS NOT A TASTE
+ * NUMBER — it is the radius `tools/floorcheck.mjs` measures at.
+ *
+ * The gate asks one question of every cache: is there room to STAND at it. It
+ * asks it on a ring `RING` metres out, with the real player capsule, from step
+ * height up. A prop whose face is closer to the cache centre than the ring plus
+ * that capsule's radius is standing in the spot the gate measures, so the
+ * keep-clear the dressing is handed has to be at least the sum — 1.35 was
+ * short by 0.22 and short in a way nothing here could have noticed, because
+ * until now the dressing tested a prop's CENTRE against this circle and a
+ * wardrobe's centre is 0.45 m from its face. Two errors of the same size in
+ * opposite directions, one of which has now been fixed.
+ */
+const RING = 1.25;    // floorcheck: the ring a dump cache is measured on
+const CAPSULE = 0.32; // floorcheck: UNITS.playerRadius
+const CLEAR_R = RING + CAPSULE;
 
 /**
  * The spots for one building, resolved to LEVEL space. Pure: no geometry, no

@@ -127,22 +127,39 @@ function blocksWay(r, x, z, rad = 0) {
  * the assembler (`A.furnishStats`) so it can be read rather than guessed at.
  */
 const SWEEP = 0.3; // m between candidates; a quarter of the smallest room
+/**
+ * …AND IT ASKS TWICE, THE FIRST TIME WITH ITS ELBOWS OUT.
+ *
+ * "Nearest legal spot" left on its own hugs the boundary of whatever it was
+ * pushed out of, because the nearest legal point to an illegal one is always
+ * exactly on the edge of the keep-out. Displaced furniture then forms a shell
+ * around every doorway, stair and cache — each piece legal, the wall they make
+ * together not. Measured: with the sweep alone, E3's ground cache went from 8
+ * standable ring points to 2 while every individual prop cleared its circle.
+ * So the first pass asks for `BREATH` metres of daylight beyond the strict
+ * clearance and only the second pass settles for the edge.
+ */
+const BREATH = 0.35;
 function nearestLegal(r, x, z, x0, z0, x1, z1, rad) {
   if (x1 <= x0 || z1 <= z0) return null;
   const nx = Math.max(1, Math.ceil((x1 - x0) / SWEEP));
   const nz = Math.max(1, Math.ceil((z1 - z0) / SWEEP));
-  let bx = 0, bz = 0, bd = Infinity;
-  for (let iz = 0; iz <= nz; iz++) {
-    const pz = z0 + ((z1 - z0) * iz) / nz;
-    for (let ix = 0; ix <= nx; ix++) {
-      const px = x0 + ((x1 - x0) * ix) / nx;
-      const d = (px - x) * (px - x) + (pz - z) * (pz - z);
-      if (d >= bd) continue;
-      if (blocksWay(r, px, pz, rad)) continue;
-      bd = d; bx = px; bz = pz;
+  for (let pass = 0; pass < 2; pass++) {
+    const need = pass === 0 ? rad + BREATH : rad;
+    let bx = 0, bz = 0, bd = Infinity;
+    for (let iz = 0; iz <= nz; iz++) {
+      const pz = z0 + ((z1 - z0) * iz) / nz;
+      for (let ix = 0; ix <= nx; ix++) {
+        const px = x0 + ((x1 - x0) * ix) / nx;
+        const d = (px - x) * (px - x) + (pz - z) * (pz - z);
+        if (d >= bd) continue;
+        if (blocksWay(r, px, pz, need)) continue;
+        bd = d; bx = px; bz = pz;
+      }
     }
+    if (bd < Infinity) return [bx, bz];
   }
-  return bd === Infinity ? null : [bx, bz];
+  return null;
 }
 
 /** Tally of what the furnishing pass had to do to keep a room legal. */
@@ -176,12 +193,17 @@ function shiftClear(A, r, x, z, x0, z0, x1, z1, rad = 0) {
   if (!blocksWay(r, x, z, rad)) { tally(A, 'kept'); return [x, z]; }
   for (let ring = 1; ring <= 4; ring++) {
     const step = ring * 0.55;
-    for (let k = 0; k < 8; k++) {
-      const a = (k / 8) * Math.PI * 2;
-      const px = x + Math.cos(a) * step;
-      const pz = z + Math.sin(a) * step;
-      if (px < x0 || px > x1 || pz < z0 || pz > z1) continue;
-      if (!blocksWay(r, px, pz, rad)) { tally(A, 'nudged'); return [px, pz]; }
+    // Daylight first, THEN the edge — but only within this ring, so a piece
+    // still ends up as close to where it was authored as the room allows.
+    for (let pass = 0; pass < 2; pass++) {
+      const need = pass === 0 ? rad + BREATH : rad;
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        const px = x + Math.cos(a) * step;
+        const pz = z + Math.sin(a) * step;
+        if (px < x0 || px > x1 || pz < z0 || pz > z1) continue;
+        if (!blocksWay(r, px, pz, need)) { tally(A, 'nudged'); return [px, pz]; }
+      }
     }
   }
   const p = nearestLegal(r, x, z, x0, z0, x1, z1, rad);
