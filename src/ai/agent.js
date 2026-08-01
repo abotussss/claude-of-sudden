@@ -640,6 +640,8 @@ export class Agent {
     this.patrolIndex = 0;
     this.stuckTimer = 0;
     this.vaultCooldown = 0;
+    /** How high the vault arc humps. Raised for a parapet. @see `_stepOff`. */
+    this.vaultLift = 0.42;
     /** a path request the frame budget pushed to the next frame */
     this.pathPending = false;
     this._pendingDest = new THREE.Vector3();
@@ -1227,7 +1229,16 @@ export class Agent {
        * told to leave and only re-plans once he arrives.
        */
       const moved = this.hasMoveTarget && this.moveTarget.distanceToSquared(dest) > 2 * 2;
-      if (this.repathTimer <= 0 && !this.pathPending && this._detourTimer <= 0
+      /**
+       * NOT WHILE HE IS IN THE AIR. A man halfway down a six metre drop is off
+       * the height field by definition (@see `OFFGRID_TOL`), so `_goTo` refuses,
+       * `_advanceFallback` reads the refusal as "no route to your objective" and
+       * sets `objectiveBlocked` — on a man whose route is working perfectly and
+       * who lands two thirds of a second later. The route he is already on is
+       * the right answer until his feet are back down.
+       */
+      const airborne = !this.grounded && this.velocity.y < -1.2;
+      if (this.repathTimer <= 0 && !this.pathPending && this._detourTimer <= 0 && !airborne
         && (!this.hasMoveTarget || moved || this.stuckTimer > 0.6)) {
         this.repathTimer = this.rng.range(1.1, 2.2);
         if (!this._goTo(dest) && !this.pathPending) {
@@ -2329,9 +2340,10 @@ export class Agent {
       this.grounded = c.grounded;
       if (c.grounded && this.velocity.y < 0) this.velocity.y = 0;
 
-      // blocked by something low: vault it
+      // blocked by something low: get over it. A parapet with a route on the
+      // other side of it is a STEP OFF and not a vault — @see `_stepOff`.
       if (c.lastMoveBlocked && this.speed > 1.5 && this.vaultCooldown <= 0 && this.grounded) {
-        this._tryVault();
+        if (!this._stepOff()) this._tryVault();
       }
       /**
        * `lastMoveBlocked` CANNOT SAY WHETHER ANYBODY IS STUCK, and this branch
@@ -2371,6 +2383,66 @@ export class Agent {
     }
   }
 
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * OFF THE ROOF. "屋上だとかにリスポーンしても階段降りるなり、飛び降りるなりして
+   * 戦闘に参加しに行って"
+   * ──────────────────────────────────────────────────────────────────────────
+   * `NavGrid._measureDrops` is the half of this that says the fall is legal —
+   * it is a one-way edge, the landing is real ground, and nothing full-height
+   * is in the way. This is the half that gets the capsule over the lip, and it
+   * is needed because every roof on this map is KERBED: measured over the four
+   * biggest of them, 0 drop edges are blocked by a wall and 71/80/237/254 are
+   * blocked by a parapet under 1.1 m. Without this the man walks to the edge,
+   * leans on the kerb, and is exactly as stranded as he was before — the route
+   * would exist and he could not take its first step.
+   *
+   * It is deliberately NOT `_tryVault` with a bigger number. A vault is a move
+   * ONTO ground on the far side and its whole shape is "land 1.5 m away at the
+   * same height"; the landing test that refuses a six metre drop is the right
+   * test for a vault and the wrong one for this. So this is its own move, it
+   * only ever fires when THE ROUTE ITSELF says the next waypoint is below him,
+   * and it hands him to gravity rather than to a destination: he is lifted over
+   * the parapet and dropped, and `Agent._move`'s own integrator does the fall.
+   */
+  _stepOff() {
+    // the route has to be the thing asking. A man near a ledge with a route
+    // along it is not jumping off it.
+    const wp = this.hasMoveTarget && this.pathIndex < this.pathLen ? this.path[this.pathIndex] : null;
+    if (!wp) return false;
+    const drop = this.position.y - wp.y;
+    if (drop < 0.6 || drop > 7.5) return false;
+    const dx = wp.x - this.position.x, dz = wp.z - this.position.z;
+    const flat = Math.hypot(dx, dz);
+    if (flat > 2.6) return false;
+    const fx = flat > 1e-3 ? dx / flat : Math.sin(this.yaw);
+    const fz = flat > 1e-3 ? dz / flat : Math.cos(this.yaw);
+    const phys = this.phys;
+    const py = this.position.y;
+    // a lip, not a wall: something at shin height and nothing at chest height
+    const low = phys.raycast(this.position.x, py + 0.35, this.position.z, fx, 0, fz, 1.1, phys.MASK.WORLD);
+    if (!low.hit) return false;
+    if (phys.raycastAny(this.position.x, py + 1.25, this.position.z, fx, 0, fz, 1.3, phys.MASK.WORLD)) return false;
+    // how high is the thing he is putting a hand on
+    const capX = this.position.x + fx * (low.distance + 0.12);
+    const capZ = this.position.z + fz * (low.distance + 0.12);
+    const cap = phys.raycast(capX, py + 1.7, capZ, 0, -1, 0, 2.0, phys.MASK.WORLD);
+    const lipY = cap.hit ? cap.point.y : py + 0.9;
+    if (lipY - py > 1.3) return false;
+    this.vaultCooldown = 2.5;
+    this.animator.vault(0.8);
+    this.vaultFrom = (this.vaultFrom ?? new THREE.Vector3()).copy(this.position);
+    // Just past the parapet and no further. There is nothing under him there,
+    // which is the point: the vault ends and he falls the rest of the way.
+    this.vaultTo = (this.vaultTo ?? new THREE.Vector3())
+      .set(this.position.x + fx * (low.distance + 0.75), lipY + 0.04, this.position.z + fz * (low.distance + 0.75));
+    this.vaultLift = Math.max(0.42, lipY - py + 0.3);
+    this.vaultT = 0;
+    // he steps off with the fall already under him, not from a standing start
+    this.velocity.y = 0;
+    return true;
+  }
+
   _tryVault() {
     const phys = this.phys;
     const fwd = this._v.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
@@ -2393,6 +2465,7 @@ export class Agent {
     this.animator.vault(0.8);
     this.vaultFrom = (this.vaultFrom ?? new THREE.Vector3()).copy(this.position);
     this.vaultTo = (this.vaultTo ?? new THREE.Vector3()).set(lx, y, lz);
+    this.vaultLift = 0.42;
     this.vaultT = 0;
   }
 
@@ -2677,7 +2750,9 @@ export class Agent {
       this.vaultT += dt / 0.8;
       const t = Math.min(1, this.vaultT);
       this.position.lerpVectors(this.vaultFrom, this.vaultTo, t);
-      this.position.y += Math.sin(t * Math.PI) * 0.42;
+      // the hump has to clear whatever he put his hand on. @see `_stepOff`.
+      this.position.y += Math.sin(t * Math.PI) * (this.vaultLift ?? 0.42);
+      if (t >= 1) this.vaultLift = 0.42;
       this.controller?.teleport(this.position.x, this.position.y, this.position.z);
     }
 
