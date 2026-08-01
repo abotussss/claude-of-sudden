@@ -19,7 +19,7 @@ import { chromium } from 'playwright';
 const URL = process.argv[2] ?? 'http://127.0.0.1:4291/';
 const SEEDS = process.argv.slice(3).length ? process.argv.slice(3) : ['7', '12', '106'];
 const SCALE = 6;
-const WALL_MS = 165000; // per match, real time — the hull now stays to the end
+const WALL_MS = 280000; // per match, real time — wait out the cathedral trigger
 
 const browser = await chromium.launch({
   headless: true,
@@ -53,19 +53,26 @@ for (const seed of SEEDS) {
     m._checkWinConditions = () => {};
   });
 
-  /* Let the roster actually make contact before the armour rolls out. */
-  await page.waitForTimeout(30000);
-  await page.evaluate(() => window.__ENGINE__.ctx.peek('match').tank.fire());
-
-  /* Watch the whole sortie: both hulls parked or dead, or a hard cap. */
+  /**
+   * NO FORCED `fire()`. The armour is armed by the cathedral falling
+   * (`RULES.tankAfterCathedral`), which lands at t≈164-188 s — and the earlier
+   * runs of this probe fired it by hand at t=30 and then reported 0 kills,
+   * which measured the forcing rather than the feature: at t=30 every man is
+   * still on a flank and D does not exist yet. Wait for the real trigger.
+   *
+   * Only a DEAD hull ends the watch now. A parked one cannot happen unless the
+   * round reset, and `roundClock` is held open above precisely so that a
+   * permanent tank can be observed accumulating kills for as long as it likes —
+   * which is the "invincible object" question.
+   */
   const t0 = Date.now();
   while (Date.now() - t0 < WALL_MS) {
     const done = await page.evaluate(() => {
       const a = window.__ENGINE__.ctx.peek('match').tank;
-      return a.tanks.every((t) => t.state === 'parked' || t.state === 'dead');
+      return a.tanks.every((t) => t.state === 'dead');
     });
     if (done) break;
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(3000);
   }
 
   const out = await page.evaluate(() => {
