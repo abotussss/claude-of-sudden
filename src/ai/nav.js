@@ -232,10 +232,56 @@ export class NavGrid {
      */
     this.edge = new Uint8Array(n);
     /**
+     * ────────────────────────────────────────────────────────────────────────
+     * THE TWO EDGES THAT GET A MAN OFF A ROOF. Bit d set on the cell the step
+     * LEAVES FROM.
+     * ────────────────────────────────────────────────────────────────────────
+     * "屋上にリスポーンさせるとAIがどこにもいけなくなってる ちゃんと屋上だとかに
+     *  リスポーンしても階段降りるなり、飛び降りるなりして戦闘に参加しに行って"
+     *
+     * A height field with one floor per cell has exactly two ways to say
+     * "these two storeys are joined", and this file had neither:
+     *
+     *   `climb` — A STAIR, and it is a MEASUREMENT (@see `_measureClimbs`).
+     *     BIDIRECTIONAL, so it goes into `_label` with every other step and a
+     *     component that includes it still means "he can get back". A flight at
+     *     32° rises 0.50 m across an 0.8 m cell and 0.71 m across the diagonal —
+     *     both are over `maxStep` 0.45 and both were refused, which is the whole
+     *     reason "a stair is 0 waypoints" has been written down in this file
+     *     three times. The capsule's own `stepHeight` is 0.42 and the treads are
+     *     0.18, so the man could always WALK it; only A* could not see it.
+     *
+     *   `drop` — A FALL, and it is ONE-WAY. It is deliberately NOT in `_label`:
+     *     a component means "reachable both ways" and half this file depends on
+     *     that (cover scoring filters by it precisely so a marksman is never
+     *     aimed at a roof he cannot get back off). Directed reachability is
+     *     `escape` below instead.
+     */
+    this.climb = new Uint8Array(n);
+    this.drop = new Uint8Array(n);
+    /**
+     * …and of those, the ones with a PARAPET on the lip. MEASURED, and it is the
+     * whole of task two: swept over every roof on this map, the number of drop
+     * edges refused by a full-height wall is ZERO and the number refused by a
+     * lip under 1.1 m is 71, 80, 237 and 254 on the four biggest roofs. Not one
+     * roof is walled in. Every one of them is KERBED, and a kerb is a thing a
+     * soldier puts a hand on. @see `Agent._stepOff`, which is the other half:
+     * the grid may say the edge exists, but the capsule still has to get over
+     * the lip, and that is a mantle and not a walk.
+     */
+    this.dropLip = new Uint8Array(n);
+    /**
      * Which cells can reach which, as one label per cell. Filled by `_label` at
      * the end of `build()`; -1 until then and for every blocked cell.
      */
     this.comp = new Int32Array(n).fill(-1);
+    /**
+     * PER COMPONENT: the component a man can reach by FALLING, transitively, or
+     * -1. @see `_labelEscapes`. This is the directed half of reachability and it
+     * is the only thing `findPath` needs it for — "I am on a roof and the fight
+     * is down there" — so it is one label per component and not a closure.
+     */
+    this.escape = new Int32Array(0);
     /** Cell count per label, indexed by label. */
     this.compSize = [];
     this.components = 0;
@@ -318,6 +364,13 @@ export class NavGrid {
     /** …and how many steps the thin-blocker sweep shut. @see `_sealCrossings`. */
     this.sealedEdges = 0;
     this.sealMs = 0;
+    /** …how many stair steps the tread sweep re-opened. @see `_measureClimbs`. */
+    this.climbEdges = 0;
+    this.climbMs = 0;
+    /** …and how many one-way falls it found. @see `_measureDrops`. */
+    this.dropEdges = 0;
+    /** …and how many components can now get down to a big one. */
+    this.escapeComps = 0;
   }
 
   index(ix, iz) {
@@ -389,11 +442,232 @@ export class NavGrid {
     this.walkableCount = volumes && volumes.length ? this._carveInteriors(volumes) : walk;
     // …and then the walls the two rays above are the wrong shape to find.
     this._sealCrossings();
+    // …and then the stairs, which are a step one tread too tall and nothing
+    // else. This has to be BEFORE `_label`: a stair is a two-way step and the
+    // component it joins is a real one.
+    this._measureClimbs();
     // …and then which cells can actually reach which, which is a different
     // question from which cells are walkable and the one A* is really asked.
     this._label();
+    // …and then the falls, which are one-way and therefore come AFTER the
+    // labels (they must not join a component) and need them (a fall onto a
+    // one-cell island is a man stranded twice).
+    this._measureDrops();
+    this._labelEscapes();
     this.buildMs = performance.now() - t0;
     return this;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * A STAIR IS A STEP ONE TREAD TOO TALL. Measure it rather than guess it.
+   * ────────────────────────────────────────────────────────────────────────────
+   * "屋上にリスポーンさせるとAIがどこにもいけなくなってる"
+   *
+   * `maxStep` is 0.45 and it is the right number for a KERB. A staircase at 30-37°
+   * climbs 0.46-0.60 m across one 0.8 m cell and 0.65-0.85 m across the diagonal,
+   * so every stair on this map is refused by one or two tenths of a metre — which
+   * is why `_carveInteriors`' own header had to write down "a stair is still 0
+   * waypoints" as a permanent property of the grid. It is not one. Measured over
+   * the whole field there are 2858 refused steps in the 0.45-0.80 band alone.
+   *
+   * RAISING `maxStep` WOULD BE THE BUG, not the fix: 9073 more sit in 0.80-1.20
+   * and most of them are a jersey barrier, a plinth, a rubble mound or a window
+   * sill, and A* routing men up a 0.7 m wall they cannot walk up is the doorway
+   * epidemic again with a new cause. So each candidate step is asked of the
+   * collision directly: THREE rays down the segment between the two cell centres,
+   * from just above the higher floor — under any ceiling, so this works indoors
+   * where the sweep in `build()` can only see the roof — and the step is opened
+   * only if the surface climbs in treads the capsule's own 0.42 m `stepHeight`
+   * can take. A ramp passes. A stair passes. A 0.6 m ledge does not: its samples
+   * land on the ground beside it or on the ledge itself, so one gap in the ladder
+   * is the whole 0.6 m and the step stays shut.
+   *
+   * Cost: ~2000 candidate edges on this map, six rays each, once, at boot —
+   * against the ~1.4 M the passes above already spend.
+   */
+  _measureClimbs() {
+    const t0 = performance.now();
+    let found = 0;
+    for (let iz = 0; iz < this.nz; iz++) {
+      for (let ix = 0; ix < this.nx; ix++) {
+        const i = this.index(ix, iz);
+        if (!this.flags[i]) continue;
+        for (let k = 0; k < 4; k++) {
+          const d = FWD[k];
+          const jx = ix + DX[d], jz = iz + DZ[d];
+          if (!this.walkable(jx, jz)) continue;
+          const j = this.index(jx, jz);
+          const rise = Math.abs(this.floor[j] - this.floor[i]);
+          if (rise <= this.maxStep || rise > CLIMB_MAX) continue;
+          // the corner rule and the measured walls still stand: a stair that
+          // needs a diagonal through a jamb is not a stair a capsule walks.
+          if (!this._canStep(i, ix, iz, d)) continue;
+          if (!this._treadLadder(ix, iz, jx, jz, this.floor[i], this.floor[j])) continue;
+          this.climb[i] |= 1 << d;
+          this.climb[j] |= 1 << OPP[d];
+          found++;
+        }
+      }
+    }
+    this.climbEdges = found;
+    this.climbMs = performance.now() - t0;
+  }
+
+  /**
+   * Does the surface between these two cell centres climb in treads a capsule
+   * with a 0.42 m step offset can take? @see `_measureClimbs`.
+   */
+  _treadLadder(ix, iz, jx, jz, fi, fj) {
+    const phys = this.physics;
+    const MASK = phys.MASK.WORLD;
+    const x0 = this.worldX(ix), z0 = this.worldZ(iz);
+    const x1 = this.worldX(jx), z1 = this.worldZ(jz);
+    const lo = fi < fj ? fi : fj;
+    const hi = fi < fj ? fj : fi;
+    const top = hi + 0.75;
+    const len = (hi - lo) + 1.3;
+    let prev = fi;
+    for (let s = 1; s <= 3; s++) {
+      const t = s * 0.25;
+      const x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
+      const down = phys.raycast(x, top, z, 0, -1, 0, len, MASK);
+      if (!down.hit) return false;
+      const y = down.point.y;
+      // it has to be the ramp between the two floors, not the roof over it and
+      // not the ground under a bridge
+      if (y < lo - 0.08 || y > hi + 0.08) return false;
+      if (Math.abs(y - prev) > CLIMB_TREAD) return false;
+      // …and a man has to fit on it
+      if (phys.raycastAny(x, y + 0.22, z, 0, 1, 0, this.crouchHeight, MASK)) return false;
+      prev = y;
+    }
+    return Math.abs(fj - prev) <= CLIMB_TREAD;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * THE ONE-WAY FALL. "飛び降りるなりして戦闘に参加しに行って"
+   * ────────────────────────────────────────────────────────────────────────────
+   * A man on a roof with no stair is not stuck because the map is wrong; he is
+   * stuck because the only edge he needs is one this graph could not express. A
+   * drop is a legal move for a soldier and an illegal one for an undirected
+   * component label, so it lives here and NOT in `_label`.
+   *
+   * THREE THINGS ARE REQUIRED, and each one is a way this could have gone wrong:
+   *
+   *   IT MUST NOT ALREADY BE WALKABLE. `comp[i] === comp[j]` means he can get
+   *     there on his feet, and opening a fall beside it would let A* jump off
+   *     every kerb and berm on the map for a shortcut. Open ground therefore
+   *     behaves EXACTLY as it did — the only new edges in this grid are ones
+   *     that join two pieces which had no connection at all.
+   *
+   *   HE MUST BE ABLE TO GET TO THE LIP. `_sealCrossings` never measured these
+   *     pairs (it skips anything over `maxStep`), so a parapet between the roof
+   *     and the void is invisible to everything above. One ray at 0.35 m over
+   *     the roof surface asks the only question that matters: is there a wall in
+   *     the way? A parapet is, and a parapet has no drop edge.
+   *
+   *   HE MUST SURVIVE IT AND HE MUST NOT LAND SOMEWHERE WORSE. `DROP_MAX` is
+   *     the fall, and the landing has to be a real piece of ground rather than
+   *     another island — a man who jumps off a roof onto the top of a shipping
+   *     container has been stranded twice.
+   */
+  _measureDrops() {
+    const phys = this.physics;
+    const MASK = phys.MASK.WORLD;
+    let found = 0;
+    for (let iz = 0; iz < this.nz; iz++) {
+      for (let ix = 0; ix < this.nx; ix++) {
+        const i = this.index(ix, iz);
+        if (!this.flags[i]) continue;
+        for (let d = 0; d < 8; d++) {
+          const jx = ix + DX[d], jz = iz + DZ[d];
+          if (!this.walkable(jx, jz)) continue;
+          const j = this.index(jx, jz);
+          const fall = this.floor[i] - this.floor[j];
+          if (fall <= this.maxStep || fall > DROP_MAX) continue;
+          if (this.comp[i] === this.comp[j]) continue;
+          if (!this._canStep(i, ix, iz, d)) continue;
+          if (this.componentSize(j) < DROP_LAND_MIN) continue;
+          const dx = DX[d], dz = DZ[d];
+          const diagonal = dx !== 0 && dz !== 0;
+          const inv = diagonal ? 1 / SQRT2 : 1;
+          const dist = this.cell * (diagonal ? SQRT2 : 1);
+          const x = this.worldX(ix), z = this.worldZ(iz), fy = this.floor[i];
+          if (phys.raycastAny(x, fy + 0.35, z, dx * inv, 0, dz * inv, dist, MASK)) {
+            // A WALL IS A REFUSAL, A PARAPET IS NOT. If the same line is clear
+            // at chest height the blocker is under ~1.1 m, which is the shape
+            // `Agent._stepOff` mantles. @see `dropLip`.
+            if (phys.raycastAny(x, fy + 1.25, z, dx * inv, 0, dz * inv, dist, MASK)) continue;
+            this.dropLip[i] |= 1 << d;
+          }
+          this.drop[i] |= 1 << d;
+          found++;
+        }
+      }
+    }
+    this.dropEdges = found;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * WHICH SHELF CAN GET DOWN TO THE FLOOR: `escape`, one label per component.
+   * ────────────────────────────────────────────────────────────────────────────
+   * `comp` cannot answer this because a fall is one-way, and a full directed
+   * closure over 2618 components is a lot of machinery for a question with one
+   * shape: A MAN IS UP SOMEWHERE AND THE FIGHT IS DOWN THERE. So the graph is
+   * walked BACKWARDS from the components big enough to be the fight, biggest
+   * first, and every component that can drop its way into one is stamped with
+   * it. Multi-hop is free — roof to gallery to street is two edges of the same
+   * reverse walk — and the first (biggest) target to reach a component wins, so
+   * a roof over the middle of the map escapes to the main ground rather than
+   * onto whatever ledge happens to be nearest.
+   */
+  _labelEscapes() {
+    const C = this.components;
+    if (this.escape.length !== C) this.escape = new Int32Array(C);
+    this.escape.fill(-1);
+    this.escapeComps = 0;
+    if (!C) return;
+    /** to-component -> the components that can fall into it. Built once. */
+    const rev = new Map();
+    for (let i = 0; i < this.drop.length; i++) {
+      const bits = this.drop[i];
+      if (!bits) continue;
+      const ix = i % this.nx, iz = (i / this.nx) | 0;
+      for (let d = 0; d < 8; d++) {
+        if (!(bits & (1 << d))) continue;
+        const from = this.comp[i];
+        const to = this.comp[this.index(ix + DX[d], iz + DZ[d])];
+        if (from < 0 || to < 0 || from === to) continue;
+        let list = rev.get(to);
+        if (!list) rev.set(to, (list = []));
+        if (!list.includes(from)) list.push(from);
+      }
+    }
+    if (!rev.size) return;
+    const order = [];
+    for (let c = 0; c < C; c++) order.push(c);
+    order.sort((a, b) => this.compSize[b] - this.compSize[a]);
+    const floorSize = Math.max(DROP_LAND_MIN, this.biggestComponent * 0.01);
+    const stack = [];
+    for (const target of order) {
+      if (this.compSize[target] < floorSize) break;
+      stack.length = 0;
+      stack.push(target);
+      while (stack.length) {
+        const c = stack.pop();
+        const from = rev.get(c);
+        if (!from) continue;
+        for (const f of from) {
+          if (f === target || this.escape[f] >= 0) continue;
+          this.escape[f] = target;
+          this.escapeComps++;
+          stack.push(f);
+        }
+      }
+    }
   }
 
   /**
@@ -456,7 +730,10 @@ export class NavGrid {
           if (!this.walkable(ix, iz)) continue;
           const j = this.index(ix, iz);
           if (this.comp[j] >= 0) continue;
-          if (Math.abs(this.floor[j] - this.floor[c]) > this.maxStep) continue;
+          // a stair is a step like any other once it has been measured, and it
+          // is two-way, so it belongs in a label that means "and back"
+          if (Math.abs(this.floor[j] - this.floor[c]) > this.maxStep
+            && !(this.climb[c] & (1 << d))) continue;
           if (!this._canStep(c, cx, cz, d)) continue;
           this.comp[j] = id;
           stack.push(j);
@@ -855,7 +1132,21 @@ export class NavGrid {
      * were compared. So whichever end has fewer cells behind it is the end that
      * gives way, and the other is only tried if that finds nothing.
      */
-    if (this.comp && this.comp[start] !== this.comp[goal]) {
+    /**
+     * …UNLESS HE CAN GET THERE BY FALLING. @see `_labelEscapes`.
+     *
+     * The re-anchor below is the right answer for a man shoved onto a kerb and
+     * exactly the wrong one for a man ON A ROOF: `nearest` with the ground's
+     * component happily returns a square of street 9 m below him, A* then solves
+     * a route that starts where he is not, and he walks into the parapet for the
+     * rest of the round. That is the stranded bot, and it is why this test comes
+     * first — if the drop graph says his component can get down to the goal's,
+     * BOTH ENDS ARE LEFT ALONE and A* is allowed to find the edge itself.
+     */
+    const descends = this.escape.length > 0 && this.comp
+      && this.comp[start] >= 0 && this.comp[goal] >= 0
+      && this.escape[this.comp[start]] === this.comp[goal];
+    if (this.comp && this.comp[start] !== this.comp[goal] && !descends) {
       const reStart = () => {
         const s2 = this.nearest(from.x, from.z, from.y, ISLAND_RINGS, Infinity, this.comp[goal]);
         if (s2 >= 0) start = s2;
@@ -960,8 +1251,20 @@ export class NavGrid {
         // Already settled: its g is final and cannot be improved from here.
         if (this.closedStamp[ni] === stamp) continue;
         const dy = this.floor[ni] - cy;
-        if (Math.abs(dy) > this.maxStep) continue;
-        let cost = (dx && dz ? SQRT2 : 1) * cell;
+        /**
+         * A STEP, A STAIR OR A FALL — and the extra cost is what keeps the last
+         * one honest. A drop already pays `|dy| * 2.2` for its height, so a five
+         * metre jump costs eleven metres of walking; the flat addition on top is
+         * the commitment, because a fall he cannot climb back up is worth more
+         * than a corner he can turn round.
+         */
+        let extra = 0;
+        if (Math.abs(dy) > this.maxStep) {
+          if (this.climb[cur] & (1 << d)) extra = 0.8;
+          else if (dy < 0 && (this.drop[cur] & (1 << d))) extra = 1.6;
+          else continue;
+        }
+        let cost = (dx && dz ? SQRT2 : 1) * cell + extra;
         cost += Math.abs(dy) * 2.2; // prefer flat ground
         if (this.flags[ni] === 2) cost += cell * 1.6; // crouch-only squeeze
         cost += this.enclosure[ni] * cell * 0.25; // avoid scraping walls
@@ -1058,6 +1361,7 @@ export class NavGrid {
        * skipped the orthogonal ones would hand back the shortcut straight
        * through the wall that A* had just been made to refuse.
        */
+      let climbing = false;
       if (ix !== px || iz !== pz) {
         const ddx = ix - px, ddz = iz - pz;
         let d = -1;
@@ -1066,12 +1370,19 @@ export class NavGrid {
           else if (ddx) d = ddx > 0 ? 0 : 1;
           else d = ddz > 0 ? 2 : 3;
         }
-        if (d < 0 || !this._canStep(this.index(px, pz), px, pz, d)) return false;
+        const pi = this.index(px, pz);
+        if (d < 0 || !this._canStep(pi, px, pz, d)) return false;
+        // A measured stair is walkable in a straight line by definition — that
+        // is what the tread sweep proved. A FALL is not: a drop edge stays a
+        // waypoint so the man walks to the lip and steps off it, rather than
+        // being string-pulled along the face of the building.
+        climbing = (this.climb[pi] & (1 << d)) !== 0;
       }
       px = ix;
       pz = iz;
       const y = this.floor[this.index(ix, iz)];
-      if (Math.abs(y - prevY) > this.maxStep) return false;
+      if (!climbing && Math.abs(y - prevY) > this.maxStep) return false;
+      if (climbing && Math.abs(y - prevY) > CLIMB_MAX) return false;
       prevY = y;
     }
     return true;
@@ -1097,6 +1408,31 @@ const FWD = [0, 2, 4, 5];
  * @see `findPath`.
  */
 const ISLAND_RINGS = 14;
+/**
+ * THE THREE NUMBERS THE ROOFS COST. @see `_measureClimbs` / `_measureDrops`.
+ *
+ * `CLIMB_MAX` is the tallest step the tread sweep will even look at: 0.95 m is a
+ * 37° flight taken diagonally (0.85 m across 1.13 m) with a little room, and it
+ * is deliberately under the 1.2 m band where the plinths and the window sills
+ * live. `CLIMB_TREAD` is the gap between two consecutive samples the capsule can
+ * take for free — its own `stepHeight` is 0.42 (@see `Agent`'s controller), so
+ * 0.40 leaves the margin on the right side.
+ *
+ * `DROP_MAX` is the fall, and it is MEASURED off this map rather than chosen.
+ * The AI takes no fall damage (nothing in `Agent._move` applies any), so the
+ * only question is what looks like a soldier and what looks like a bot walking
+ * off a building. Five metres was the first answer and it was the wrong one:
+ * swept over every stranded high cell, 3726 of the refused edges are a fall of
+ * 6-7 m, which is this level's standard two-storey roof — the exact surface the
+ * complaint is about. Seven metres takes them and still refuses the 9.6 m
+ * roofs, which get down the way the map intends, one storey at a time, because
+ * `escape` is transitive.
+ */
+const CLIMB_MAX = 0.95;
+const CLIMB_TREAD = 0.40;
+const DROP_MAX = 7.0;
+/** A fall may not end on another island. 24 cells is 15 m² of real ground. */
+const DROP_LAND_MIN = 24;
 
 /* ------------------------------------------------------------------ */
 /* Cover                                                               */
