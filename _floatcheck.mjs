@@ -78,7 +78,8 @@
  *                  against `?cath=down` so the shell really is gone.
  *   --region=demo  every `world.demolitions` block's own footprint, against
  *                  `?demo=down`.
- *   --region=all   both.
+ *   --region=strike each authored strike site's own settled mound, fired.
+ *   --region=all   all three.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * --fire, AND WHY THE BOOT FLAGS ARE NOT ENOUGH ON THEIR OWN
@@ -129,6 +130,7 @@ const FIRE = args.fire === true ? 'cath' : (args.fire ?? '');
 const FLAGS = {
   cath: ['cath=down'],
   demo: ['demo=down'],
+  strike: [],
   all: ['cath=down', 'demo=down'],
 };
 
@@ -177,11 +179,21 @@ if (FIRE) {
     m._openCathedral();
     e.time.scale = 4;
   });
-  // 1.34 s of stagger + `SETTLE_AT` 6.5 s of match time, at 4x, with slack —
-  // `_bakeSettled` is what turns the mound's collision on, so a sweep run
-  // before it has fired measures a map the event has not finished happening to.
+  /**
+   * 1.34 s of stagger + `SETTLE_AT` 6.5 s of match time, at 4x, with slack —
+   * `_bakeSettled` is what turns the mound's collision on, so a sweep run
+   * before it has fired measures a map the event has not finished happening to.
+   *
+   * EVERY STRUCK SITE, NOT THREE OF THEM. `_razeCathedral` now brings a fourth
+   * site down with the shell — the building's own 2100-chunk mass — and a wait
+   * that counted to three returned while it was still in the air.
+   */
   await page.waitForFunction(
-    "window.__ENGINE__.ctx.peek('match').airstrike.sites.filter(s=>s.baked).length>=3",
+    () => {
+      const s = window.__ENGINE__.ctx.peek('match').airstrike.sites;
+      const struck = s.filter((x) => x.struck);
+      return struck.length >= 3 && struck.every((x) => x.baked);
+    },
     null,
     { timeout: 60000 }
   );
@@ -236,6 +248,26 @@ const result = await page.evaluate(
         hw: k.hw + APRON, hd: k.hd + APRON,
         floorY: k.floorY ?? 0,
       });
+    }
+    /**
+     * THE STRIKE MOUNDS. Eleven authored sites, each of which parks a solid
+     * proxy where its rubble ends up — and where that is depends on one boot
+     * probe over a street that is not always empty at the height the ray is
+     * fired from. Small regions, because the mound is small and the buildings
+     * either side of it are somebody else's balconies.
+     */
+    if (REGION === 'strike' || REGION === 'all') {
+      for (const s of (window.__ENGINE__.ctx.peek('match')?.airstrike?.sites ?? [])) {
+        if (s.demo) continue;
+        const yaw = w.levelYaw ?? 0;
+        regions.push({
+          id: s.id,
+          cx: s.mound.x, cz: s.mound.z,
+          c: Math.cos(yaw), s: Math.sin(yaw),
+          hw: s.moundR + 1.5, hd: s.moundR + 1.5,
+          floorY: 0,
+        });
+      }
     }
     if (REGION === 'demo' || REGION === 'all') {
       for (const d of w.demolitions ?? []) {
@@ -537,12 +569,105 @@ const result = await page.evaluate(
   { REGION, GRID, TOL, MIN_CELLS, GROUND, APRON, NEED_ATTACH }
 );
 
+/* -------------------------------------------------------------------------- */
+/* THE SECOND HALF OF THE QUESTION: WHAT THE PLAYER CAN SEE                    */
+/* -------------------------------------------------------------------------- */
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * A GATE THAT SAYS OK WHILE THE PLAYER IS LOOKING AT THE BUG
+ * ────────────────────────────────────────────────────────────────────────────
+ * Everything above reconstructs the PHYSICS world. That is exactly the right
+ * question for 「物理判定あるので戦車が空中に登ってしまいますよ？？？」 and it is
+ * only half of 「宙にうく物体はまだ大聖堂の上に残ってますよ」, because
+ * `Airstrike`'s rubble CHUNKS ARE NOT SOLID. The collision of a settled site is
+ * a handful of mound-proxy boxes (or, for a demolition, the ruin `world` owns);
+ * the several thousand chunks drawn round it are picture only. So a chunk that
+ * comes to rest ten metres up in clear air is INVISIBLE to the sweep above — it
+ * casts no ray, occupies no interval, and the run comes back "OK — every solid
+ * in the sweep is connected to the ground" with the thing the player is
+ * complaining about filling his screen.
+ *
+ * Measured on the build this note was written for: `--region=cath --fire=cath`
+ * reported 13 sky intervals, all of them legitimately attached to standing
+ * masonry, and passed — correctly, for what it was measuring. The drawn mass
+ * was never asked about at all.
+ *
+ * So the gate now asks both. Every struck site's SETTLED POSE — the same
+ * `mesh.userData.settled` matrices `_bakeSettled` hands back to
+ * `instanceMatrix` — is walked, and one ray is dropped from above each chunk to
+ * whatever it is resting on. The ray starts ABOVE the chunk and not under it:
+ * fired from a chunk's own underside it starts below the terrain for anything
+ * lying on the ground, which is a probe measuring its own start point (the
+ * first version of this pass did exactly that and reported 297 chunks with
+ * "60 m of air" at y = 0.4).
+ *
+ * `--chunks=0` turns it off; `--cair` is the metres of open air that make a
+ * chunk a bug rather than a chunk sat on the piece below it.
+ */
+const CHUNKS = args.chunks !== '0' && args.chunks !== false;
+/** Metres of open air under a drawn chunk before it is a floating object. */
+const CAIR = Number(args.cair ?? 1.5);
+/** Chunks in one site over CAIR before the site is reported rather than noted. */
+const CMIN = Number(args.cmin ?? 3);
+
+const drawn = CHUNKS
+  ? await page.evaluate(({ CAIR }) => {
+      const e = window.__ENGINE__;
+      const ph = e.ctx.peek('physics');
+      const sites = e.ctx.peek('match')?.airstrike?.sites ?? [];
+      if (!sites.length) return null;
+      const MASK = ph.MASK.WORLD;
+      const M4 = e.camera.matrixWorld.constructor;
+      const V3 = e.camera.position.constructor;
+      const mat = new M4();
+      const pos = new V3();
+      const sc = new V3();
+      const q = e.camera.quaternion.clone();
+      const rows = [];
+      let checked = 0;
+      for (const s of sites) {
+        if (!s.struck) continue;
+        let n = 0;
+        let worst = 0;
+        let hiY = -Infinity;
+        let at = null;
+        for (const mesh of s.meshes) {
+          const arr = mesh.userData.settled;
+          if (!arr) continue;
+          for (let i = 0; i < arr.length; i += 16) {
+            mat.fromArray(arr, i);
+            mat.decompose(pos, q, sc);
+            // The largest half-extent, so a rotated chunk's underside is never
+            // over-estimated: this can under-report air, never invent it.
+            const under = pos.y - Math.max(sc.x, sc.y, sc.z) * 0.5;
+            checked++;
+            if (under < 0.6) continue; // lying on the map
+            const h = ph.raycast(pos.x, pos.y + 0.15, pos.z, 0, -1, 0, 80, MASK);
+            const gap = h.hit ? under - h.point.y : under;
+            if (gap <= CAIR) continue;
+            n++;
+            if (gap > worst) worst = +gap.toFixed(2);
+            if (pos.y > hiY) {
+              hiY = pos.y;
+              at = [+pos.x.toFixed(1), +pos.y.toFixed(1), +pos.z.toFixed(1)];
+            }
+          }
+        }
+        if (n) rows.push({ id: s.id, kind: s.kind, chunks: s.chunkCount, n, worst, at });
+      }
+      return { rows, checked, struck: sites.filter((s) => s.struck).length };
+    }, { CAIR })
+  : null;
+
 await browser.close();
+
+/** Sites whose drawn mass is genuinely hanging, rather than one stray chunk. */
+const drawnBad = (drawn?.rows ?? []).filter((r) => r.n >= CMIN);
 
 /* -------------------------------------------------------------------------- */
 
 if (args.json) {
-  console.log(JSON.stringify({ levelSeed, ...result }, null, 2));
+  console.log(JSON.stringify({ levelSeed, ...result, drawn }, null, 2));
 } else {
   console.log(`\nFLOATCHECK  region=${REGION}  grid=${GRID}m  tol=${TOL}m  levelSeed=${levelSeed}`);
   console.log(`  ${url(REGION)}${FIRE ? `  --fire=${FIRE}` : ''}`);
@@ -583,9 +708,32 @@ if (args.json) {
       console.log('');
     }
   }
+  /* ---- and the drawn mass, which carries no collision at all ------------- */
+  if (drawn === null) {
+    console.log('  drawn mass: not swept (--chunks=0, or no strike has fired)');
+  } else if (!drawn.rows.length) {
+    console.log(
+      `  drawn mass: ${drawn.checked} settled chunks over ${drawn.struck} struck sites — ` +
+        `none with more than ${CAIR} m of air under it.\n`
+    );
+  } else {
+    console.log(
+      `\n  DRAWN MASS IN THE SKY — ${drawn.checked} settled chunks swept over ${drawn.struck} ` +
+        `struck sites (air > ${CAIR} m; a site is a FAILURE at ${CMIN}):\n`
+    );
+    console.log('    site        kind     chunks   in the sky   worst air   highest (x,y,z)');
+    for (const r of drawn.rows) {
+      console.log(
+        `    ${r.id.padEnd(10)} ${String(r.kind).padEnd(7)} ${String(r.chunks).padStart(7)}   ` +
+          `${String(r.n).padStart(10)}   ${String(r.worst).padStart(9)}   ${r.at.join(', ')}` +
+          (r.n < CMIN ? '   (noted, under the threshold)' : '')
+      );
+    }
+    console.log('');
+  }
 }
 if (errs.length) {
   console.log(`  ${errs.length} PAGE ERROR(S):`);
   for (const s of errs.slice(0, 5)) console.log(`    ${s}`);
 }
-process.exit(result?.floating?.length ? 1 : 0);
+process.exit(result?.floating?.length || drawnBad.length ? 1 : 0);

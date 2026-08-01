@@ -2267,17 +2267,27 @@ export function buildCathedral(A) {
      * between. `src/world/demolition.js` split the same pair for the same
      * reason; this is that split, on this building.
      *
-     * Neither of these touches `razed` or the `?cath=down` latch: they are the
-     * mechanism, `setRazed` is the state.
+     * Neither of these touches `razed` — that is `setRazed`'s, and these are the
+     * mechanism under it.
+     *
+     * THEY DO HONOUR `?cath=down`, AND THEY HAVE TO. The settle probe's restore
+     * is `setCollision(false)`, and under that flag an honest `false` would put
+     * the SHELL back on the BVH and take the ruin off it — at boot, after `ai`
+     * has already baked the ruin's cover table and before `physics.rebuildStatic`
+     * — so `boundcheck`, `solidcheck` and `navcheck` pointed at `?cath=down`
+     * would then measure a razed picture over standing collision. The latch is
+     * the same one `setRazed` reads, for the same reason.
      */
     setVisual(down) {
-      A.setScopeVisible(shell, !down);
-      A.setScopeVisible(ruin, !!down);
+      const want = bootDown && this._coverBaked ? true : !!down;
+      A.setScopeVisible(shell, !want);
+      A.setScopeVisible(ruin, want);
     },
     setCollision(down, physics) {
       if (!physics) return;
-      A.setScopeSolid(shell, physics, !down);
-      A.setScopeSolid(ruin, physics, !!down);
+      const want = bootDown && this._coverBaked ? true : !!down;
+      A.setScopeSolid(shell, physics, !want);
+      A.setScopeSolid(ruin, physics, want);
     },
 
     /**

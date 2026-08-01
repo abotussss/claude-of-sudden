@@ -39,6 +39,16 @@
 import { chromium } from 'playwright';
 const URL = process.argv[2] ?? 'http://127.0.0.1:4277/';
 const SEED = process.argv[3] ?? null;
+/**
+ * TIME SCALE, AND IT IS NOT A FREE PARAMETER. At 12x a headless frame is ~34 ms,
+ * so `dt` is 0.4 s and every bot moves in one metre and a half steps: the fight
+ * is coarse, capture flips are slow, and the SCORE RATE — which is what every
+ * threshold in `rules.js` is really measured against, since `_matchProgress` is
+ * score-dominated — comes out lower than a real match's. A schedule tuned at
+ * one scale and read at another will disagree about seconds, which is exactly
+ * the disagreement this argument exists to test. Default unchanged.
+ */
+const SCALE = Number(process.argv[4] ?? 12);
 const b = await chromium.launch({ headless: true, args: ['--use-angle=metal','--ignore-gpu-blocklist','--mute-audio'] });
 const page = await b.newPage({ viewport: { width: 900, height: 600 } });
 const errs = []; page.on('pageerror', (e) => errs.push(String(e.message)));
@@ -46,12 +56,12 @@ const q = `?capture=1${SEED != null ? `&seed=${SEED}` : ''}`;
 await page.goto(`${URL}${q}`, { waitUntil: 'domcontentloaded' });
 await page.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
 
-const res = await page.evaluate(async () => {
+const res = await page.evaluate(async (SCALE) => {
   const e = window.__ENGINE__, m = e.ctx.peek('match'), w = e.ctx.peek('world');
   const ai = e.ctx.peek('ai'), au = e.ctx.peek('audio');
   e.input.frozen = true; e.input.enabled = false;
   e.ctx.peek('player')?.setControlEnabled?.(false);
-  e.time.scale = 12; // NOT `e.timeScale`/`e.speed` — neither exists, so the old
+  e.time.scale = SCALE; // NOT `e.timeScale`/`e.speed` — neither exists, so the old
   // line was a no-op and every "12x" run in this file was real time.
 
   // Wait for the warm-up to hand over; my first run broke out of the loop on
@@ -146,7 +156,7 @@ const res = await page.evaluate(async () => {
     },
     curve,
   };
-});
+}, SCALE);
 
 const END = res.log.length ? res.log[res.log.length - 1][1] : 0;
 const TARGET = Math.max(res.finalScore?.[0] ?? 0, res.finalScore?.[1] ?? 0);
