@@ -197,6 +197,63 @@ writeFileSync(`${OUT}/frames.json`, JSON.stringify({ levelSeed, fireFrame, base,
  * chunk and photographed the inside of a box.
  */
 await pump(900);
+
+/**
+ * AND THE SAME QUESTION ANSWERED NUMERICALLY, off the LIVE pose rather than the
+ * baked one. `_floatcheck.mjs --fire=cath` sweeps `mesh.userData.settled`, which
+ * is the right array and only becomes what is on screen once `_bakeSettled` has
+ * handed it back — so a chunk that is still being driven by the vertex program,
+ * or a site the SCHEDULER fired while this probe was waiting for the dust to
+ * clear, is not in that answer. This reads `instanceMatrix` itself, which is
+ * exactly what the six photographs below are looking at.
+ */
+{
+  const air = await page.evaluate(() => {
+    const e = window.__ENGINE__;
+    const ph = e.ctx.peek('physics');
+    const MASK = ph.MASK.WORLD;
+    const M4 = e.camera.matrixWorld.constructor;
+    const V3 = e.camera.position.constructor;
+    const m = new M4();
+    const p = new V3();
+    const s = new V3();
+    const q = e.camera.quaternion.clone();
+    const out = [];
+    for (const site of e.ctx.peek('match').airstrike.sites) {
+      if (!site.struck) continue;
+      let n = 0;
+      let worst = 0;
+      let at = null;
+      for (const mesh of site.meshes) {
+        const arr = mesh.instanceMatrix.array;
+        for (let i = 0; i < arr.length; i += 16) {
+          m.fromArray(arr, i);
+          m.decompose(p, q, s);
+          const under = p.y - Math.max(s.x, s.y, s.z) * 0.5;
+          if (under < 0.6) continue;
+          const h = ph.raycast(p.x, p.y + 0.15, p.z, 0, -1, 0, 80, MASK);
+          const gap = h.hit ? under - h.point.y : under;
+          if (gap <= 1.5) continue;
+          n++;
+          if (gap > worst) {
+            worst = +gap.toFixed(2);
+            at = [+p.x.toFixed(1), +p.y.toFixed(1), +p.z.toFixed(1)];
+          }
+        }
+      }
+      out.push({ id: site.id, baked: !!site.baked, uT: +site.uniforms.uT.value.toFixed(1), n, worst, at });
+    }
+    return out;
+  });
+  const bad = air.filter((r) => r.n > 0);
+  console.log(
+    `[air] ${air.length} struck sites, live pose: ` +
+      (bad.length
+        ? bad.map((r) => `${r.id} ${r.n} chunks (worst ${r.worst} m at ${r.at})${r.baked ? '' : ' STILL FALLING'}`).join(' · ')
+        : 'nothing with more than 1.5 m of open air under it')
+  );
+}
+
 for (const [name, lz, ly, lift] of [
   ['up-nave', 6, 30, 4.2],
   ['up-parvis', 40, 34, 2.2],
