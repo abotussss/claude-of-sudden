@@ -41,6 +41,8 @@ const CFG = {
   fill: Number(args.fill ?? 0.62),
   variant: args.variant ?? 'vanguard',
   footIk: Number(args.footik ?? 1),
+  ph0: Number(args.ph0 ?? 0),
+  phSpan: Number(args.phspan ?? 1),
 };
 const OUT = resolve(args.out ?? `/tmp/gait-${MODE}.png`);
 
@@ -130,11 +132,26 @@ function analyse(rec, cfg, stats) {
   const PLANT = 0.088 + 0.025;
   const TOE_PLANT = 0.03 + 0.03;
 
+  /** Is this foot's sole touching? The one contact test everything below uses. */
+  const down = (s, f) => s[`heel${f}`][1] <= 0.02 || s[`toe${f}`][1] <= 0.02;
+
   const per = {};
   for (const foot of ['R', 'L']) {
     const key = `Foot${foot}`;
     const toe = `Toe${foot}`;
-    const contact = S.map((s) => s[key][1] <= PLANT || s[toe][1] <= TOE_PLANT);
+    // The contact POINT migrates heel -> flat -> toe across a stance, so the
+    // ankle is ALLOWED to move while the foot rolls over the sole. Slide is
+    // therefore measured on whichever end of the sole is on the ground, and
+    // "on the ground" is decided by that point's own height, not the ankle's.
+    const heel = `heel${foot}`;
+    const soleToe = `toe${foot}`;
+    const GROUND = 0.02;
+    const onHeel = S.map((s) => s[heel][1] <= GROUND);
+    const onToeS = S.map((s) => s[soleToe][1] <= GROUND);
+    const contact = S.map((s, i) => onHeel[i] || onToeS[i]);
+    const refOf = (i) => (onHeel[i] ? heel : soleToe);
+    void key;
+    void toe;
     // slide: world movement of the foot while it is planted
     let slideSum = 0;
     let slidePeak = 0;
@@ -149,8 +166,10 @@ function analyse(rec, cfg, stats) {
         }
         continue;
       }
-      const dx = S[i][key][0] - S[i - 1][key][0];
-      const dz = S[i][key][2] - S[i - 1][key][2];
+      const ref = refOf(i) === refOf(i - 1) ? refOf(i) : null;
+      if (!ref) continue;
+      const dx = S[i][ref][0] - S[i - 1][ref][0];
+      const dz = S[i][ref][2] - S[i - 1][ref][2];
       const d = Math.hypot(dx, dz);
       slideSum += d;
       n++;
@@ -181,15 +200,13 @@ function analyse(rec, cfg, stats) {
     };
   }
 
-  const bothOff = S.filter(
-    (s) =>
-      s.FootR[1] > PLANT && s.ToeR[1] > TOE_PLANT && s.FootL[1] > PLANT && s.ToeL[1] > TOE_PLANT
-  ).length;
-  const bothOn = S.filter(
-    (s) =>
-      (s.FootR[1] <= PLANT || s.ToeR[1] <= TOE_PLANT) &&
-      (s.FootL[1] <= PLANT || s.ToeL[1] <= TOE_PLANT)
-  ).length;
+  // Flight and double support have to be read off the same contact test the
+  // duty factors use — the SOLE, not the ankle bone, which is airborne through
+  // a perfectly good toe-off.
+  const bothOff = S.filter((s) => !down(s, 'R') && !down(s, 'L')).length;
+  const bothOn = S.filter((s) => down(s, 'R') && down(s, 'L')).length;
+  void PLANT;
+  void TOE_PLANT;
 
   const range = (f) => {
     let mn = Infinity;
@@ -212,24 +229,56 @@ function analyse(rec, cfg, stats) {
    */
   const BINS = 16;
   const bins = [];
-  for (let i = 0; i < BINS; i++) bins.push({ n: 0, y: 0, dz: 0, vz: 0 });
+  for (let i = 0; i < BINS; i++) bins.push({ n: 0, y: 0, dz: 0, vz: 0, hy: 0, ty: 0, cv: 0 });
   for (let i = 1; i < S.length; i++) {
     const b = bins[Math.min(BINS - 1, Math.floor(S[i].phase * BINS))];
     b.n++;
     b.y += S[i].FootR[1];
+    b.hy += S[i].heelR[1];
+    b.ty += S[i].toeR[1];
+    b.hip = (b.hip ?? 0) + S[i].Hips[1];
+    b.down = (b.down ?? 0) + (down(S[i], 'R') || down(S[i], 'L') ? 1 : 0);
     b.dz += S[i].FootR[2] - S[i].rootZ;
     b.vz += (S[i].FootR[2] - S[i - 1].FootR[2]) / dt;
+    const ref = S[i].heelR[1] < S[i].toeR[1] ? 'heelR' : 'toeR';
+    b.cv += Math.hypot(S[i][ref][0] - S[i - 1][ref][0], S[i][ref][2] - S[i - 1][ref][2]) / dt;
   }
   const table = bins.map((b, i) => ({
     ph: +(i / BINS).toFixed(2),
     y: +(b.y / b.n).toFixed(3),
+    heel: +(b.hy / b.n).toFixed(3),
+    toe: +(b.ty / b.n).toFixed(3),
     dz: +(b.dz / b.n).toFixed(3),
     vz: +(b.vz / b.n).toFixed(2),
+    cv: +(b.cv / b.n).toFixed(2),
+    hip: +(b.hip / b.n).toFixed(3),
+    onGround: +(b.down / b.n).toFixed(2),
   }));
+
+  // The two-bone solver silently clamps at full extension, and a clamped leg is
+  // a foot that did not go where the clip asked — i.e. it slides. Reach is the
+  // early-warning number for that: over 0.99 and the knee is locked straight.
+  const LEG = 0.857;
+  let reachMax = 0;
+  let sink = 0;
+  for (const s of S) {
+    for (const f of ['R', 'L']) {
+      const r = Math.hypot(
+        s[`Foot${f}`][0] - s[`UpLeg${f}`][0],
+        s[`Foot${f}`][1] - s[`UpLeg${f}`][1],
+        s[`Foot${f}`][2] - s[`UpLeg${f}`][2]
+      );
+      if (r > reachMax) reachMax = r;
+      const under = 0.088 - s[`Foot${f}`][1];
+      if (under > sink) sink = under;
+    }
+  }
 
   const expectedStride = cfg.speed / rec.strideHz;
   return {
     footRphaseTable: table,
+    legReachFrac: +(reachMax / LEG).toFixed(3),
+    ankleBelowPlant_m: +sink.toFixed(3),
     cfg,
     tris: stats?.triangles,
     strideHz: +rec.strideHz.toFixed(3),
@@ -241,6 +290,8 @@ function analyse(rec, cfg, stats) {
     headY: range((s) => s.Head[1]),
     headX: range((s) => s.Head[0]),
     footRy: range((s) => s.FootR[1]),
+    heelRy: range((s) => s.heelR[1]),
+    toeRy: range((s) => s.toeR[1]),
     handRy: range((s) => s.HandR[1]),
     hipLocalY: range((s) => s.hipLocalY),
   };

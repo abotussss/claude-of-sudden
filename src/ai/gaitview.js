@@ -195,10 +195,32 @@ function step(cfg) {
   group.updateMatrixWorld(true);
 }
 
+/**
+ * Sole contact points, in the Foot bone's own frame. The bone's +Y runs down
+ * the foot toward the toe and its +Z is the sole normal, so the sole plane is
+ * 0.088 m along -Z and the two ends of it are +0.142 (toe) and -0.075 (heel)
+ * along +Y. These are the points that must not move while the foot is down —
+ * the ankle itself is ALLOWED to move, because the foot rolls over them.
+ */
+const SOLE = {
+  heelR: [0, -0.075, -0.088],
+  toeR: [0, 0.1423, -0.088],
+  heelL: [0, -0.075, -0.088],
+  toeL: [0, 0.1423, -0.088],
+};
+const _s = new THREE.Vector3();
+
 /** One sample of everything the gait can be judged on numerically. */
 function sample(cfg) {
   const out = { t: simT, phase: animator.phase, rootZ: group.position.z, speed: cfg.speed };
-  for (const n of ['FootR', 'FootL', 'ToeR', 'ToeL', 'Hips', 'Head', 'HandR']) {
+  for (const n of ['heelR', 'toeR', 'heelL', 'toeL']) {
+    const b = bones[RIG.index(n.endsWith('R') ? 'FootR' : 'FootL')];
+    _s.fromArray(SOLE[n]).applyMatrix4(b.matrixWorld);
+    out[n] = [_s.x, _s.y, _s.z];
+  }
+  for (const n of [
+    'FootR', 'FootL', 'ToeR', 'ToeL', 'Hips', 'Head', 'HandR', 'UpLegR', 'UpLegL',
+  ]) {
     const p = bonePos(n);
     out[n] = [p.x, p.y, p.z];
   }
@@ -245,7 +267,7 @@ const VIEW = {
   side: { az: 90, height: 0.92, dist: 4.2, fit: 2.30 },
   three: { az: 42, height: 0.92, dist: 4.2, fit: 2.30 },
   front: { az: 0, height: 0.92, dist: 4.2, fit: 2.30 },
-  legs: { az: 90, height: 0.46, dist: 3.0, fit: 1.30 },
+  legs: { az: 90, height: 0.60, dist: 3.2, fit: 1.75 },
 };
 
 /**
@@ -269,11 +291,16 @@ function strip(cfg) {
 
   const V = VIEW[cfg.view] ?? VIEW.side;
   const strideHz = strideHzFor(cfg);
-  const perCol = Math.max(1, Math.round(1 / strideHz / SIM_DT / cols));
+  // `ph0` / `phSpan` window the strip onto part of the cycle, which is the only
+  // way to look hard at a stance that occupies a third of it.
+  const span = cfg.phSpan ?? 1;
+  const frames = 1 / strideHz / SIM_DT;
+  const perCol = Math.max(1, Math.round((frames * span) / cols));
 
   reset(cfg);
   for (let i = 0; i < 60; i++) step(cfg); // settle
   reset(cfg);
+  for (let i = 0, n = Math.round(frames * (cfg.ph0 ?? 0)); i < n; i++) step(cfg);
 
   camera.aspect = colW / H;
   camera.fov = (2 * Math.atan(V.fit / 2 / V.dist) * 180) / Math.PI;

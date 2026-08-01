@@ -36,6 +36,18 @@ class Poser {
     this.d3 = new Float32Array(rig.count * 3);
     this.hipOff = new THREE.Vector3();
     this.w = 1;
+    /**
+     * Locomotion clips do not pose the legs with euler deltas — they write the
+     * ankle's PATH, in the actor's own frame, and the leg IK reaches for it (see
+     * the header of clips.js). Accumulated weighted, exactly like `d3`, so a
+     * walk/run crossfade blends two foot paths rather than snapping between
+     * them. `w[k] == 0` means no clip claimed that foot this frame and the FK
+     * pose owns it, which is what idle, crouch-idle and the hurt stance want.
+     */
+    this.footT = new Float32Array(6); // R xyz, L xyz — actor-local metres
+    this.footW = new Float32Array(2); // how much of the foot the path owns
+    this.footPlant = new Float32Array(2); // 1 = down this frame
+    this.footPitch = new Float32Array(2); // sole pitch, degrees, toe-down +
     // name -> index cache for the clip helpers
     this._idx = new Map();
     for (let i = 0; i < rig.count; i++) this._idx.set(rig.names[i], i);
@@ -44,7 +56,22 @@ class Poser {
   reset() {
     this.d3.fill(0);
     this.hipOff.set(0, 0, 0);
+    this.footT.fill(0);
+    this.footW.fill(0);
+    this.footPlant.fill(0);
+    this.footPitch.fill(0);
     this.w = 1;
+  }
+
+  /** @param k 0 = right, 1 = left. `y` is height above the ground, not above 0. */
+  footPath(k, x, y, z, plant, pitch) {
+    const w = this.w;
+    this.footT[k * 3] += x * w;
+    this.footT[k * 3 + 1] += y * w;
+    this.footT[k * 3 + 2] += z * w;
+    this.footW[k] += w;
+    this.footPlant[k] += plant * w;
+    this.footPitch[k] += pitch * w;
   }
 
   /** additive euler delta in degrees */
@@ -160,6 +187,18 @@ export class Animator {
     this._probeOut = { y: 0, nx: 0, ny: 1, nz: 0, hit: false };
     this._footY = [0, 0];
     this._footN = [new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 1, 0)];
+    this._clipCtx = { stride: 0, cycle: 1, speed: 0 };
+    this._footWorld = [new THREE.Vector3(), new THREE.Vector3()];
+    this._footPathW = [0, 0];
+    this._footPlant = [0, 0];
+    this._footPitch = [0, 0];
+    this._v6 = new THREE.Vector3();
+    this._v7 = new THREE.Vector3();
+    this._qe = new THREE.Quaternion();
+    /** Hip -> ankle at full extension: the reach the pelvis has to respect. */
+    this._legReach =
+      rig.bindPos[rig.index('UpLegR')].distanceTo(rig.bindPos[rig.index('LegR')]) +
+      rig.bindPos[rig.index('LegR')].distanceTo(rig.bindPos[rig.index('FootR')]);
     this._aimApplied = 0;
     this.muzzleWorld = new THREE.Vector3();
     this.muzzleDir = new THREE.Vector3(0, 0, 1);
@@ -228,7 +267,13 @@ export class Animator {
     const st = this.state;
     const P = this.P;
 
-    /* --- phase advance: stride length keeps the feet stuck to the ground --- */
+    /* --- phase advance ---------------------------------------------------
+     * The rate alone never planted anything (see clips.js): what plants a foot
+     * is the clip knowing how far the actor travels in one cycle, so that is
+     * what gets handed down. `stride` is metres per full cycle — speed divided
+     * by this same rate — which means the foot path stays stride-locked even at
+     * the low-speed clamp, where the cycle no longer covers the nominal stride.
+     */
     const clip = st.clip;
     const strideHz =
       clip === 'run' ? Math.max(1.1, st.speed / 2.05)
@@ -237,6 +282,10 @@ export class Animator {
             : 0.19; // idle breathing rate
     this.phase = (this.phase + dt * strideHz) % 1;
     if (this.blend < 1) this.blend = Math.min(1, this.blend + dt / 0.18);
+    const ctx = this._clipCtx;
+    ctx.stride = st.speed / strideHz;
+    ctx.cycle = 1 / strideHz;
+    ctx.speed = st.speed;
 
     /* --- layer 1: locomotion, crossfaded --- */
     P.reset();
@@ -244,12 +293,12 @@ export class Animator {
     const prev = C.CLIPS[this.prevClip] ?? C.idle;
     if (this.blend < 1) {
       P.w = 1 - this.blend;
-      prev(P, this.phase);
+      prev(P, this.phase, ctx);
       P.w = this.blend;
-      fn(P, this.phase);
+      fn(P, this.phase, ctx);
     } else {
       P.w = 1;
-      fn(P, this.phase);
+      fn(P, this.phase, ctx);
     }
 
     /* --- layer 2: additives --- */
@@ -445,23 +494,87 @@ export class Animator {
 
   /* ---------------- D: feet ---------------- */
 
+  /**
+   * D: feet.
+   *
+   * Two jobs, and they used to be tangled into one.
+   *
+   * PLACEMENT. When a locomotion clip has written a foot path, the path IS the
+   * answer: it is the actor-frame position of an ankle whose sole is a fixed
+   * point of the world, so the leg simply reaches for it. When no clip claims
+   * the foot — idle, crouch-idle, hurt, a turn-in-place — the FK pose owns its
+   * x/z as before and only its height is adapted.
+   *
+   * GROUND ADAPTATION. The pelvis drops so a PLANTED foot can reach ground that
+   * is below it. That word is the whole fix: the old rule took the largest drop
+   * either foot asked for, and a foot in mid-swing 0.3 m above flat ground asks
+   * for 0.3 m. So every time a leg lifted, the pelvis was yanked down to meet
+   * it and the other foot was clamped back onto the floor — measured on the run
+   * at 4.2 m/s, both feet had a duty factor of 1.00, the pelvis sat between
+   * 0.574 and 0.793 m against a 0.98 m bind height, and the whole figure
+   * skated along in a squat at 4.4 m/s of foot slide. A swing foot is not
+   * evidence about where the ground is. Only a planted one is.
+   */
   _footIk() {
     if (!this.probe) return;
     const s = this.scale;
     const ankleH = 0.088 * s;
-    let drop = 0;
+    const P = this.P;
+    const rootM = this.bones[0].parent.matrixWorld;
+
     for (let k = 0; k < 2; k++) {
-      const ankle = this._wp(this.legs[k][2], this._v);
-      const ok = this.probe(ankle.x, ankle.z, ankle.y + 0.55 * s, this._probeOut);
-      if (!ok) {
-        this._footY[k] = ankle.y;
-        this._footN[k].set(0, 1, 0);
-        continue;
+      const pw = Math.min(1, P.footW[k]);
+      this._footPathW[k] = pw;
+      const leg = this.legs[k];
+      const ankle = this._wp(leg[2], this._v);
+      let wx = ankle.x;
+      let wz = ankle.z;
+      let lift = 0; // authored height above the ground, in actor-local metres
+      if (pw > 0.001) {
+        const inv = 1 / P.footW[k];
+        this._footPlant[k] = P.footPlant[k] * inv;
+        this._footPitch[k] = P.footPitch[k] * inv;
+        this._v2
+          .set(P.footT[k * 3] * inv, P.footT[k * 3 + 1] * inv, P.footT[k * 3 + 2] * inv)
+          .applyMatrix4(rootM);
+        wx = ankle.x + (this._v2.x - ankle.x) * pw;
+        wz = ankle.z + (this._v2.z - ankle.z) * pw;
+        lift = (P.footT[k * 3 + 1] * inv) * s - ankleH;
+      } else {
+        this._footPlant[k] = 1;
+        this._footPitch[k] = 0;
       }
-      const want = this._probeOut.y + ankleH;
-      this._footY[k] = want;
-      this._footN[k].set(this._probeOut.nx, this._probeOut.ny, this._probeOut.nz);
-      const d = want - ankle.y;
+      const ok = this.probe(wx, wz, ankle.y + 0.75 * s, this._probeOut);
+      const gy = ok ? this._probeOut.y : ankle.y - ankleH;
+      this._footN[k].set(
+        ok ? this._probeOut.nx : 0,
+        ok ? this._probeOut.ny : 1,
+        ok ? this._probeOut.nz : 0
+      );
+      // path mode knows the height it wants; FK mode only knows "not below".
+      // Crossfading between them has to interpolate the two ANSWERS, not fade
+      // the path's lift toward the floor, or an idle -> run transition slams the
+      // swing foot down for the first few frames of the blend.
+      const fkY = Math.max(gy + ankleH, ankle.y - 0.001);
+      const wy = fkY + (gy + ankleH + lift - fkY) * pw;
+      this._footWorld[k].set(wx, wy, wz);
+      this._footY[k] = gy + ankleH;
+    }
+
+    /* ---- pelvis: only a foot that is DOWN says anything about the ground --- */
+    let drop = 0;
+    const maxReach = this._legReach * s * 0.985;
+    const lowest = Math.min(this._footWorld[0].y, this._footWorld[1].y);
+    for (let k = 0; k < 2; k++) {
+      // "planted" = the clip says so, or (FK mode) this is the low foot
+      const planted = this._footPathW[k] > 0.001
+        ? this._footPlant[k] > 0.5
+        : this._footWorld[k].y <= lowest + 0.04 * s;
+      if (!planted) continue;
+      const hip = this._wp(this.legs[k][0], this._v6);
+      const need = hip.distanceTo(this._footWorld[k]);
+      if (need <= maxReach) continue;
+      const d = -(need - maxReach);
       if (d < drop) drop = d;
     }
     drop = Math.max(-0.32 * s, drop);
@@ -471,31 +584,51 @@ export class Animator {
       b.updateMatrix();
       b.updateMatrixWorld(true);
     }
+
     for (let k = 0; k < 2; k++) {
       const leg = this.legs[k];
-      const ankle = this._wp(leg[2], this._v);
-      const target = this._target.set(ankle.x, Math.max(this._footY[k], ankle.y - 0.001), ankle.z);
       // knee pole: forward, in the actor's facing
       this._pole
         .set(k === 0 ? -0.12 : 0.12, 0.05, 1)
         .applyQuaternion(this.bones[0].parent.getWorldQuaternion(this._q2));
-      this._twoBone(leg, target, this._pole);
-      // roll the sole onto the ground plane
-      const n = this._footN[k];
-      if (n.y < 0.999) {
-        const foot = leg[2];
-        const up = this._v2.set(0, 0, 1).applyQuaternion(this._wq(foot, this._q2));
-        const dot = Math.min(1, Math.max(-1, up.dot(n)));
-        let ang = Math.acos(dot);
-        if (ang > 0.35) ang = 0.35;
-        const axis = this._v4.crossVectors(up, n);
-        if (axis.lengthSq() > 1e-10) {
-          axis.normalize();
-          this._q3.setFromAxisAngle(axis, ang);
-          this._applyWorld(foot, this._q3);
-        }
-      }
+      this._twoBone(leg, this._footWorld[k], this._pole);
+      this._soleTo(leg[2], k);
     }
+  }
+
+  /**
+   * Put the sole where the clip says it is. The sole normal is the foot bone's
+   * local +Z; `footPitch` tips it back about the actor's lateral axis, which is
+   * a heel-strike when it is negative and a toe-off when it is positive. In FK
+   * mode this degrades to the old behaviour — roll the sole onto the ground
+   * normal, and do nothing at all on flat ground.
+   */
+  _soleTo(foot, k) {
+    const n = this._v7.copy(this._footN[k]);
+    const pw = this._footPathW[k];
+    if (pw > 0.001 && Math.abs(this._footPitch[k]) > 0.01) {
+      // Lateral axis = the actor's own +X (his LEFT), so the tip stays in the
+      // sagittal plane. Toe-down tips the sole normal FORWARD about that axis,
+      // which is +pitch: measured with the sign the other way the foot toed UP
+      // through the whole push-off and the sole slid 12 cm per contact.
+      const axis = this._v2.set(1, 0, 0).applyQuaternion(
+        this.bones[0].parent.getWorldQuaternion(this._q2)
+      );
+      n.applyQuaternion(this._qe.setFromAxisAngle(axis, this._footPitch[k] * DEG));
+    } else if (pw <= 0.001 && n.y > 0.999) {
+      return;
+    }
+    n.normalize();
+    const up = this._v2.set(0, 0, 1).applyQuaternion(this._wq(foot, this._q2));
+    const dot = Math.min(1, Math.max(-1, up.dot(n)));
+    let ang = Math.acos(dot) * (pw > 0.001 ? pw : 1);
+    if (ang < 1e-4) return;
+    if (ang > 1.2) ang = 1.2;
+    const axis2 = this._v4.crossVectors(up, n);
+    if (axis2.lengthSq() < 1e-10) return;
+    axis2.normalize();
+    this._q3.setFromAxisAngle(axis2, ang);
+    this._applyWorld(foot, this._q3);
   }
 
   /* ---------------- two-bone solver ---------------- */
