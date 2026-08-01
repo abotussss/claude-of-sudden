@@ -1,0 +1,54 @@
+/**
+ * A PHOTOGRAPH FROM AN ABSOLUTE POINT IN SCALED LEVEL SPACE.
+ *
+ *   node _holeshot.mjs out=shots/hole url=http://127.0.0.1:4280/ seed=12 \
+ *        id:fromX,fromY,fromZ,lookX,lookY,lookZ
+ *
+ * `_look.mjs` drops the eye onto whatever physics reports under the point, which
+ * inside a building is the ROOF. The hole this is aimed at is a gallery 3.45 m up
+ * behind a facade, so the eye height has to be stated rather than found.
+ */
+import { chromium } from 'playwright';
+import { mkdirSync } from 'node:fs';
+const args = process.argv.slice(2);
+const OUT = (args.find((a) => a.startsWith('out=')) ?? 'out=shots/hole').slice(4);
+const URL = (args.find((a) => a.startsWith('url=')) ?? 'url=http://127.0.0.1:4280/').slice(4);
+const SEED = (args.find((a) => a.startsWith('seed=')) ?? 'seed=12').slice(5);
+const POSES = args.filter((a) => a.includes(':')).map((a) => {
+  const [id, rest] = a.split(':');
+  const n = rest.split(',').map(Number);
+  return { id, from: [n[0], n[1], n[2]], look: [n[3], n[4], n[5]] };
+});
+mkdirSync(OUT, { recursive: true });
+const browser = await chromium.launch({ headless: true,
+  args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--mute-audio', '--force-color-profile=srgb'] });
+const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
+const errs = []; page.on('pageerror', (e) => errs.push(String(e.message)));
+await page.goto(`${URL}?capture=1&seed=${SEED}`, { waitUntil: 'domcontentloaded' });
+await page.waitForFunction('window.__READY__===true', null, { timeout: 300000 });
+await page.evaluate(() => {
+  const e = window.__ENGINE__;
+  e.input.frozen = true; e.input.enabled = false;
+  e.ctx.peek('player')?.setControlEnabled?.(false);
+  e.ctx.peek('ui')?.debugState?.('clean');
+  const m = e.ctx.peek('match'); if (m) m.update = () => {};
+  const ai = e.ctx.peek('ai'); if (ai) { ai.combatEnabled = false; try { ai.clearAgents(); } catch { /* ok */ } }
+});
+console.log('levelSeed', await page.evaluate(() => window.__ENGINE__.levelSeed));
+for (const p of POSES) {
+  await page.evaluate((pose) => {
+    const e = window.__ENGINE__;
+    const world = e.ctx.peek('world');
+    const V3 = e.camera.position.constructor;
+    const from = world.levelToWorld(pose.from[0], pose.from[1], pose.from[2], new V3());
+    const to = world.levelToWorld(pose.look[0], pose.look[1], pose.look[2], new V3());
+    e.camera.position.copy(from);
+    e.camera.lookAt(to);
+    e.ctx.peek('player')?.teleport?.(e.camera.position, e.camera.rotation);
+  }, p);
+  await page.waitForTimeout(2600);
+  await page.screenshot({ path: `${OUT}/${p.id}.png` });
+  console.log(`${OUT}/${p.id}.png`);
+}
+if (errs.length) console.log('PAGE ERRORS', errs.slice(0, 4));
+await browser.close();
