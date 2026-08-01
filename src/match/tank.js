@@ -214,10 +214,21 @@ const COAX_REST = 1.5;
  * A tank that dies to a magazine is a jeep and a tank that never dies is
  * scenery, so the answer is that it dies to the RIGHT rounds: the glacis eats
  * rifle fire (0.22), the turret is a little softer (0.4), and the engine deck
- * over the back is the shot that works (1.7). A grenade or an airstrike is
- * `EXPLOSION_MUL` of its own blast — two frags on the deck, or one strike
- * landing on it, kills it. Measured against `RULES.tankHealth`: ~28 rifle
- * rounds into the deck, ~110 into the front.
+ * over the back is the shot that works (1.7).
+ *
+ * MEASURED AGAINST THE WEAPONS THAT EXIST, not against a number in a comment.
+ * `src/weapons/defs.js` is 17 damage for the M4 (30-round magazine, 210
+ * reserve = 8 magazines carried) and 21 for the AKM. `physics` already applies
+ * `damageScale` per box (index.js:804), so one M4 round is worth:
+ *
+ *     deck    17 x 1.70 = 28.9   ->  2600 / 28.9 =  90 rounds = 3.0 magazines
+ *     turret  17 x 0.40 =  6.8   ->              = 382 rounds = 12.7 magazines
+ *     glacis  17 x 0.22 =  3.7   ->              = 695 rounds = 23.2 magazines
+ *
+ * A man carries 240 rounds, so the FRONT IS NOT A ROUTE TO A KILL and is not
+ * meant to be — you have to get behind it, and three magazines into the deck
+ * is a long time to stand behind a tank that is shooting back. Those are the
+ * numbers the header's "not easy" claim rests on.
  */
 const PART_MUL = { hull: 0.22, turret: 0.4, deck: 1.7 };
 const EXPLOSION_MUL = 1.35;
@@ -254,6 +265,44 @@ const AIR_ORDNANCE = new Set(['airstrike', 'bomber']);
  * further out.
  */
 const airMul = (damage) => (2 * RULES.tankHealth) / Math.max(1, damage);
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「グレネードや銃弾である程度ダメージ入れたら壊す（ただし簡単に壊れたら面白くない）」
+ * A FRAG DID EXACTLY NOTHING, AND IT WAS NOT A TUNING PROBLEM
+ * ────────────────────────────────────────────────────────────────────────────
+ * A thrown grenade reached this file as an `explosion` whose `damage` IS ZERO,
+ * and `_takeBlast` multiplied that zero by `EXPLOSION_MUL` and wounded the hull
+ * for nothing. Measured, not inferred: `src/weapons/grenades.js:191` sets
+ * `damage: 0` on the blast ON PURPOSE and says so in a twelve-line comment —
+ * `ai`'s own `explosion` listener has no team test, so a weapon the PLAYER
+ * throws cannot carry its wound on that event without killing his own side.
+ * The wound is dealt instead through `damage:dealt` from `_damageActors`, which
+ * walks `LAYER.ACTOR` colliders only — and this tank's three boxes are
+ * `LAYER.SHOOT_ONLY`. BOTH PATHS MISS THE TANK. Two frags on the engine deck
+ * took it from 2600 to 2600.
+ *
+ * So the frag's strength is read off the channel `grenades.js` does publish:
+ * `impulse`, which that file sets because "physics.explode derives its strength
+ * from `damage` when it is absent, and the debris still has to fly". It is the
+ * blast's own damage scaled by 0.9, so a 165-damage M67 arrives as 148.5 and
+ * this file reads a frag 10 % weaker than the thrower does. That is a KNOWN
+ * under-read and it is preferred to hard-coding another subsystem's 0.9.
+ *
+ * …AND THE MULTIPLIER IS DERIVED, exactly as `airMul` is. The rule wanted is
+ * "a frag that goes off ON the hull is worth a sixth of a full-health tank",
+ * so the multiplier that reaches it is `health / 6 / damage` and the tuning
+ * lives in ONE fraction rather than in a magic number. Six frags at contact,
+ * and the linear falloff below means a frag that lands 2 m short of a 7.5 m
+ * blast is worth two thirds of that. A man carries TWO (`defs.js: count: 2`,
+ * and `RULES.grenadeResupplyCooldown` is 60 s per player), so six frags on the
+ * hull is a SQUAD deciding to deal with the tank rather than one man doing it
+ * — which is the "簡単に壊れたら面白くない" half of the request.
+ */
+const FRAG_ORDNANCE = new Set(['grenade']);
+/** What one frag detonating ON the hull is worth, as a share of full health. */
+const FRAG_SHARE = 1 / 6;
+const fragMul = (damage) => (RULES.tankHealth * FRAG_SHARE) / Math.max(1, damage);
 
 /** Where the fracture ends up: the debris settles inside this radius, locally. */
 const WRECK_R = 4.2;
@@ -323,6 +372,7 @@ export class Armour {
 
     this._onExplosion = (e) => this._takeBlast(e);
     this._onDamage = (e) => this._takeRound(e);
+    this._onActorDeath = (e) => this._creditKill(e);
   }
 
   get busy() {
@@ -365,6 +415,7 @@ export class Armour {
 
     ctx.events.on('explosion', this._onExplosion);
     ctx.events.on('damage:dealt', this._onDamage);
+    ctx.events.on('actor:death', this._onActorDeath);
 
     this.ready = this.tanks.length > 0;
     this.buildMs = performance.now() - t0;
@@ -561,6 +612,18 @@ export class Armour {
       chunkCount: 0,
       wheelSpin: 0,
       uniforms: { uT: { value: -1 }, uAnim: { value: 1 } },
+      /**
+       * WHAT WAS ACTUALLY DONE TO IT, so "not easy" is a measurement rather
+       * than an opinion. Preallocated and reset per sortie — nothing here
+       * allocates in a frame. `_tankttk.mjs` reads it.
+       */
+      stats: {
+        rounds: 0, roundDmg: 0,
+        hull: 0, turret: 0, deck: 0,
+        blasts: 0, blastDmg: 0,
+        frags: 0, fragDmg: 0,
+        liveT: 0, kills: 0, sorties: 0, deaths: 0,
+      },
     };
 
     this._buildBody(tank);
@@ -1170,6 +1233,13 @@ export class Armour {
     tank.turretYaw = 0;
     tank.gunPitch = 0;
     tank.lastHitBy = null;
+    const st = tank.stats;
+    st.sorties++;
+    st.rounds = 0; st.roundDmg = 0;
+    st.hull = 0; st.turret = 0; st.deck = 0;
+    st.blasts = 0; st.blastDmg = 0;
+    st.frags = 0; st.fragDmg = 0;
+    st.liveT = 0;
     tank.root.visible = true;
     tank.wreck.visible = false;
     tank.uniforms.uT.value = -1;
@@ -1202,6 +1272,7 @@ export class Armour {
         }
         continue;
       }
+      tank.stats.liveT += dt;
       this._drive(tank, dt);
       this._fight(tank, dt);
       this._pose(tank);
@@ -1555,7 +1626,26 @@ export class Armour {
     if (!tank?.isTank || !tank.alive) return;
     if (e.source && e.source.team === tank.team && !RULES.friendlyFire) return;
     tank.lastHitBy = e.source ?? tank.lastHitBy;
-    this._wound(tank, e.amount ?? 0, e.source ?? null);
+    const amount = e.amount ?? 0;
+    tank.stats.rounds++;
+    tank.stats.roundDmg += amount;
+    // `part` is the collider's own, set in `_buildColliders` and carried
+    // through by `physics` — which box a shooter is actually finding is the
+    // whole content of the armour table, so it is counted rather than assumed.
+    if (e.part && tank.stats[e.part] !== undefined) tank.stats[e.part] += amount;
+    this._wound(tank, amount, e.source ?? null);
+  }
+
+  /**
+   * A man the tank killed. `actor:death` carries `by` (see ARCHITECTURE's kill
+   * credit note), so counting is a reference compare — this is the number that
+   * says whether the hull is a threat or an ornament, and it is reported per
+   * match by `_tankttk.mjs`.
+   */
+  _creditKill(e) {
+    const by = e?.by;
+    if (!by?.isTank) return;
+    for (const tank of this.tanks) if (tank === by) tank.stats.kills++;
   }
 
   /**
@@ -1570,6 +1660,7 @@ export class Armour {
   _takeBlast(e) {
     if (!e?.position) return;
     const air = typeof e.source === 'string' && AIR_ORDNANCE.has(e.source);
+    const frag = typeof e.source === 'string' && FRAG_ORDNANCE.has(e.source);
     for (const tank of this.tanks) {
       if (!tank.alive) continue;
       if (e.source === tank) continue; // our own shell going off down the street
@@ -1580,8 +1671,19 @@ export class Armour {
       );
       const r = e.radius ?? 5;
       if (d > r) continue;
-      const dmg = e.damage ?? 90;
-      const amount = dmg * (1 - d / r) * (air ? airMul(dmg) : EXPLOSION_MUL);
+      /**
+       * A BLAST THAT CARRIES NO `damage` IS NOT A BLAST THAT DOES NONE. The
+       * frag publishes its strength as `impulse`; see `fragMul` above. `?? 90`
+       * could never catch it, because 0 is not nullish.
+       */
+      const dmg = e.damage > 0 ? e.damage : e.impulse > 0 ? e.impulse : (e.damage ?? 90);
+      const amount = dmg * (1 - d / r) * (air ? airMul(dmg) : frag ? fragMul(dmg) : EXPLOSION_MUL);
+      tank.stats.blasts++;
+      tank.stats.blastDmg += amount;
+      if (frag) {
+        tank.stats.frags++;
+        tank.stats.fragDmg += amount;
+      }
       /**
        * A BOMB IS NOT AN ACTOR. `e.source` on air ordnance is the string that
        * named the system ('airstrike', 'bomber'), and `MatchSystem`'s own note
@@ -1590,8 +1692,17 @@ export class Armour {
        * and into the killfeed as an attacker called "airstrike". Passing null
        * leaves `lastHitBy` alone, so a hull somebody had already been shooting
        * still pays him and one nobody touched pays nobody.
+       *
+       * WIDENED FROM `air` TO EVERY STRING SOURCE, because the frag is a third
+       * one: `grenades.js` sets `source: 'grenade'`, and the old test only
+       * excused 'airstrike' and 'bomber', so the moment a frag started landing
+       * for real (above) it would have put an attacker called "grenade" through
+       * `ai.teamOf` and into the killfeed. A man who has been shooting the hull
+       * still gets paid for finishing it with a frag; one who only ever threw
+       * frags kills it for the environment, which is the same trade the bomb
+       * already makes and is why `lastHitBy` is left alone rather than cleared.
        */
-      this._wound(tank, amount, air ? null : e.source ?? null);
+      this._wound(tank, amount, typeof e.source === 'string' ? null : e.source ?? null);
     }
   }
 
@@ -1613,6 +1724,7 @@ export class Armour {
     tank.alive = false;
     tank.state = 'dead';
     tank.health = 0;
+    tank.stats.deaths++;
     tank.target = null;
     for (const c of tank.colliders) c.c.enabled = false;
     // The hull's own meshes go; the baked wreck takes over in the same frame.
@@ -1648,9 +1760,14 @@ export class Armour {
       audio.play('strike_tail', tank.position, { level: 1.3, dur: 3.4, maxDist: 380, gain: 2.4, occlusion: 0.1 });
       audio.play('strike_rubble', tank.position, { level: 0.9, dur: 2.6, extraDelay: 0.3, maxDist: 200 });
     }
+    const st = tank.stats;
     console.info(
       `[tank] DESTROYED ${tank.id} at t=${this.ctx.time.elapsed.toFixed(1)}s — ` +
-        `${tank.chunkCount} chunks, killed by ${by?.name ?? (by === undefined ? 'unknown' : 'the environment')}`
+        `${tank.chunkCount} chunks, killed by ${by?.name ?? (by === undefined ? 'unknown' : 'the environment')} · ` +
+        `alive ${st.liveT.toFixed(0)}s, ${st.rounds} rounds for ${st.roundDmg.toFixed(0)} ` +
+        `(hull ${st.hull.toFixed(0)} / turret ${st.turret.toFixed(0)} / deck ${st.deck.toFixed(0)}), ` +
+        `${st.frags} frags for ${st.fragDmg.toFixed(0)}, ${st.blasts} blasts for ${st.blastDmg.toFixed(0)}, ` +
+        `${st.kills} kills`
     );
     this._announce(this.onImpact, tank);
     this.onKill?.(tank, by ?? null);
@@ -1699,6 +1816,11 @@ export class Armour {
     this._sorties = 0;
     this._liveT = 0;
     this._ignoreCoBusy = false;
+    for (const t of this.tanks) {
+      t.stats.kills = 0;
+      t.stats.deaths = 0;
+      t.stats.sorties = 0;
+    }
   }
 
   /**
@@ -1759,6 +1881,7 @@ export class Armour {
   dispose() {
     this.ctx.events.off?.('explosion', this._onExplosion);
     this.ctx.events.off?.('damage:dealt', this._onDamage);
+    this.ctx.events.off?.('actor:death', this._onActorDeath);
     for (const tank of this.tanks) {
       for (const c of tank.colliders) this.physics?.removeCollider(c.c);
       for (const mesh of tank.meshes) mesh.geometry?.dispose();
