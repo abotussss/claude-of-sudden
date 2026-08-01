@@ -653,10 +653,19 @@ export class Assembler {
     });
   }
 
-  /** Axis-aligned (or Y-rotated) box collision proxy. */
-  box(surface, cx, cy, cz, sx, sy, sz, ry = 0) {
+  /**
+   * Axis-aligned (or rotated) box collision proxy.
+   *
+   * `rx`/`rz` TAKE THE RAKE, and they are not decoration. `A.add` has always
+   * taken all three angles, so a piece drawn on a slope — a flying buttress, a
+   * shore, a leaning slab — could be authored raking and proxied flat, and the
+   * cathedral's flyers were: seven struts drawn springing from a pier to the
+   * clerestory, each carrying a level 7.3 m shelf a metre over the aisle roof
+   * that touched neither end. The proxy takes the angle the art takes.
+   */
+  box(surface, cx, cy, cz, sx, sy, sz, ry = 0, rx = 0, rz = 0) {
     if (Assembler.TAG) this._tag('box', surface, cx, cy, cz, sx, sy, sz, ry);
-    trs(_m, cx, cy, cz, ry, sx, sy, sz);
+    trs(_m, cx, cy, cz, ry, sx, sy, sz, rx, rz);
     this._accum(surface, this._scope ?? this._claimFor(null, _m)).add(UNIT_BOX, this._x(_m));
     return this;
   }

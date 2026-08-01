@@ -399,8 +399,16 @@ export function buildCathedral(A) {
       A.add('concrete', box,
         LL(IDENT, X(side * (HW - span / 2 + 0.2)), (SEC.aisleRoof + SEC.clearSill + 1.6) / 2, Z(v + 2), 0,
           span * 1.28, 0.62, 0.72, 0, side * 0.62), { masks: [0.7, 0.55, 0.4] });
+      /**
+       * THE PROXY RAKES WITH IT. The same box, the same transform, the same
+       * `side * 0.62` — because without the last argument the flyer was drawn
+       * as a raking strut and FELT as a level shelf 7.3 m long, hanging 0.94 m
+       * over the aisle roof at the low end and 1.84 m over the pier it springs
+       * from, reachable by a mantle off the roof. Seven of them a side, and
+       * seven of `_floatcheck`'s nine standing warnings.
+       */
       A.box('concrete', X(side * (HW - span / 2 + 0.2)), (SEC.aisleRoof + SEC.clearSill + 1.6) / 2, Z(v + 2),
-        span * 1.28, 0.62, 0.72);
+        span * 1.28, 0.62, 0.72, 0, 0, side * 0.62);
     }
   }
 
@@ -788,7 +796,15 @@ export function buildCathedral(A) {
       trim('roof_screed', tu, SEC.towerTop + 0.7 + f * 3.0, tv,
         (tw + 0.4) * (1 - f * 0.85), 0.68, (td + 0.4) * (1 - f * 0.85), [0.6, 0.5, 0.3]);
     }
-    A.box('concrete', X(tu), SEC.towerTop + 2.2, Z(tv), tw, 3.2, td);
+    /**
+     * DOWN TO THE SHAFT, not to the foot of the pyramid. The cap's own art
+     * starts at `towerTop + 0.7` and the cornice course below it at
+     * `towerTop + 0.25` is a `trim`, which carries no proxy — so a proxy that
+     * started where the pyramid does left a 0.6 m void inside the head of the
+     * tower and a 10 x 10 m solid standing over it on nothing. Sealed, nobody
+     * can reach it, and it was the largest floating mass on the intact map.
+     */
+    A.box('concrete', X(tu), SEC.towerTop + 1.9, Z(tv), tw, 3.8, td);
     // the bell, hanging where the belfry openings show it
     const bell = tubeY(0.62, 1.1, { radial: 12, taper: 0.45 });
     A.addOnce('metal_rust', bell, LL(IDENT, X(tu), 24.6, Z(tv)), { masks: [0.9, 0.7, 0.4] });

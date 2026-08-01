@@ -128,6 +128,9 @@ const GROUND = Number(args.ground ?? 2.0);
 const NEED_ATTACH = Number(args.attach ?? 1);
 /** Metres of apron round a footprint, so the mound in the street is swept too. */
 const APRON = Number(args.apron ?? 6.0);
+/** Columns a truncated piece may be followed for, off the edge of its window.
+ *  0 turns the growth pass off and judges every piece on the frame it fell in. */
+const GROW = Number(args.grow ?? 2000);
 const SEED = args.seed;
 /** '' | 'cath' | 'all' — run the real event instead of the boot flag. */
 const FIRE = args.fire === true ? 'cath' : (args.fire ?? '');
@@ -241,7 +244,7 @@ if (FIRE) {
 /* -------------------------------------------------------------------------- */
 
 const result = await page.evaluate(
-  ({ REGION, GRID, TOL, MIN_CELLS, GROUND, APRON, NEED_ATTACH }) => {
+  ({ REGION, GRID, TOL, MIN_CELLS, GROUND, APRON, NEED_ATTACH, GROW }) => {
     const e = window.__ENGINE__;
     const ph = e.ctx.peek('physics');
     const w = e.ctx.peek('world');
@@ -448,35 +451,45 @@ const result = await page.evaluate(
     const index = new Map(); // `${r}:${ix}:${iz}` -> [nodeIds]
     /** `${r}:${ix}:${iz}` -> the top of the tallest GROUND interval there. */
     const stand = new Map();
+    /**
+     * WHERE A LATTICE CELL IS, AND IT IS JITTERED OFF THE LATTICE.
+     *
+     * A ray fired exactly down a shared edge between two boxes can hit one face
+     * and miss its partner, and the reconstruction then never closes — the piece
+     * fuses to the terrain and reads as standing on it. On a 0.5 m lattice over
+     * a map built out of boxes that alignment is not rare, it is systematic. A
+     * fixed hash of the cell index moves each column a fifth of a cell off the
+     * grid, which costs nothing and is still the same sweep on every run.
+     *
+     * Defined for ANY integer index, inside the window or outside it, because
+     * the growth pass below walks off the edge of the region on purpose.
+     */
+    const cellH = (b, ix, iz) => ((ix * 73856093) ^ (iz * 19349663) ^ (b * 83492791)) >>> 0;
+    const cellU = (rg, b, ix, iz) =>
+      -rg.hw + (ix + 0.5) * GRID + (((cellH(b, ix, iz) & 1023) / 1023) - 0.5) * GRID * 0.4;
+    const cellV = (rg, b, ix, iz) =>
+      -rg.hd + (iz + 0.5) * GRID + ((((cellH(b, ix, iz) >>> 10) & 1023) / 1023) - 0.5) * GRID * 0.4;
+    const cellX = (rg, b, ix, iz) =>
+      rg.cx + cellU(rg, b, ix, iz) * rg.c + cellV(rg, b, ix, iz) * rg.s;
+    const cellZ = (rg, b, ix, iz) =>
+      rg.cz - cellU(rg, b, ix, iz) * rg.s + cellV(rg, b, ix, iz) * rg.c;
     const tmp = [];
     let rays = 0;
     let intervals = 0;
     let groundNodes = 0;
+    /** Columns cut outside a window while following a piece off the edge. */
+    let grownColumns = 0;
     const t0 = performance.now();
 
     for (let b = 0; b < regions.length; b++) {
       const rg = regions[b];
       const groundY = rg.floorY + GROUND;
-      const nx = Math.max(1, Math.round((rg.hw * 2) / GRID));
-      const nz = Math.max(1, Math.round((rg.hd * 2) / GRID));
+      const nx = (rg.nx = Math.max(1, Math.round((rg.hw * 2) / GRID)));
+      const nz = (rg.nz = Math.max(1, Math.round((rg.hd * 2) / GRID)));
       for (let iz = 0; iz < nz; iz++) {
         for (let ix = 0; ix < nx; ix++) {
-          /**
-           * JITTERED OFF THE LATTICE, DETERMINISTICALLY.
-           *
-           * A ray fired exactly down a shared edge between two boxes can hit
-           * one face and miss its partner, and the depth count then never
-           * returns to zero — the piece fuses to the terrain and reads as
-           * standing on it. On a 0.5 m lattice over a map built out of boxes
-           * that alignment is not rare, it is systematic. A fixed hash of the
-           * cell index moves each column a fifth of a cell off the grid, which
-           * costs nothing and is still the same sweep on every run.
-           */
-          const h = ((ix * 73856093) ^ (iz * 19349663) ^ (b * 83492791)) >>> 0;
-          const u = -rg.hw + (ix + 0.5) * GRID + (((h & 1023) / 1023) - 0.5) * GRID * 0.4;
-          const v = -rg.hd + (iz + 0.5) * GRID + ((((h >>> 10) & 1023) / 1023) - 0.5) * GRID * 0.4;
-          const x = rg.cx + u * rg.c + v * rg.s;
-          const z = rg.cz - u * rg.s + v * rg.c;
+          const x = cellX(rg, b, ix, iz);
+          const z = cellZ(rg, b, ix, iz);
           column(x, z, tmp);
           if (!tmp.length) continue;
           rays += tmp.length;
@@ -556,12 +569,20 @@ const result = await page.evaluate(
           top: -Infinity, bot: Infinity, minGap: Infinity,
           x0: Infinity, x1: -Infinity, z0: Infinity, z1: -Infinity,
           region: nodes[i].b, at: null,
+          /** Node ids, so a truncated piece can be followed off the window. */
+          ids: [],
+          /** Set when the piece runs into the wall of its own sweep window. */
+          clipped: false,
+          grown: 0,
         };
         comp.set(r, c);
       }
       const n = nodes[i];
       c.n++;
+      c.ids.push(i);
       c.cells.add(`${n.ix}:${n.iz}`);
+      const rg0 = regions[n.b];
+      if (n.ix === 0 || n.iz === 0 || n.ix === rg0.nx - 1 || n.iz === rg0.nz - 1) c.clipped = true;
       // rests on the next solid down in its own column
       if (n.gap <= TOL) c.supported = true;
       /**
@@ -599,6 +620,112 @@ const result = await page.evaluate(
       if (c.attached >= NEED_ATTACH) c.supported = true;
     }
 
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * AND A PIECE THAT RUNS OUT OF THE WINDOW HAS NOT BEEN JUDGED YET
+     * ────────────────────────────────────────────────────────────────────────
+     * Every region above is a WINDOW ON THE MAP chosen to be small — a strike
+     * site is its mound plus 1.5 m, a razed block its plot plus two — because a
+     * bigger one takes in the neighbours' roofs. The support test then asks
+     * whether anything standing comes up beside the piece, and it asks it only
+     * of the columns INSIDE that window. For a piece that fits, that is the
+     * whole question. For a piece the window cuts in half it is not a question
+     * about the world at all: the three `CATH-*` mounds are 4.5 m squares
+     * dropped on the cathedral's flank, each of them catches the outer end of a
+     * flying buttress, and the pier the buttress is built into is a metre
+     * outside the frame. Five standing warnings, all of them the frame.
+     *
+     * So an unsupported piece that TOUCHES THE EDGE of its window is followed
+     * off it: a flood in the region's own lattice, columns cut on demand
+     * wherever it goes, joining a neighbouring solid on the same Y-overlap rule
+     * the sweep uses inside the window, and asking the same support question of
+     * every column it reaches. The mass is judged on its own extent instead of
+     * on the extent somebody chose to sample.
+     *
+     * NOT AN EXEMPTION, A CONTINUATION — the criterion is the one already
+     * written above, applied to the cells the window happened to leave out. A
+     * piece that ends in mid-air still ends in mid-air however far it is
+     * followed, and the growth stops the moment there is nothing left to join.
+     * `--grow=0` turns it off; the budget is per piece and a hit one is
+     * reported, because a runaway flood is a claim that wants looking at.
+     */
+    if (GROW > 0) {
+      /** Columns cut outside the window, `${b}:${ix}:${iz}` -> intervals. */
+      const outside = new Map();
+      const cut = (rg, b, ix, iz) => {
+        const key = `${b}:${ix}:${iz}`;
+        let e = outside.get(key);
+        if (e) return e;
+        const x = cellX(rg, b, ix, iz);
+        const z = cellZ(rg, b, ix, iz);
+        const iv = column(x, z, []);
+        const groundY = rg.floorY + GROUND;
+        let stands = -Infinity;
+        const sky = [];
+        for (let i = 0; i < iv.length; i += 2) {
+          if (iv[i + 1] <= groundY) { if (iv[i] > stands) stands = iv[i]; continue; }
+          sky.push(iv[i], iv[i + 1]);
+        }
+        outside.set(key, (e = { sky, stand: stands }));
+        grownColumns++;
+        return e;
+      };
+      for (const c of comp.values()) {
+        if (c.supported || !c.clipped || c.cells.size < MIN_CELLS) continue;
+        const rg = regions[c.region];
+        const b = c.region;
+        // The frontier is (cell, interval); the interval is what a neighbour
+        // has to overlap in Y to be the same piece.
+        const seen = new Set();
+        const q = [];
+        for (const id of c.ids) {
+          const n = nodes[id];
+          q.push(n.ix, n.iz, n.top, n.bot);
+          seen.add(`${n.ix}:${n.iz}:${Math.round(n.top * 4)}`);
+        }
+        let head = 0;
+        while (head < q.length && c.grown < GROW && !c.supported) {
+          const ix = q[head++];
+          const iz = q[head++];
+          const top = q[head++];
+          const bot = q[head++];
+          for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const jx = ix + dx;
+            const jz = iz + dz;
+            const inside = jx >= 0 && jz >= 0 && jx < rg.nx && jz < rg.nz;
+            let sky;
+            let st;
+            if (inside) {
+              // Already sampled: the sweep's own tables answer for this cell.
+              st = stand.get(`${b}:${jx}:${jz}`);
+              const ids = index.get(`${b}:${jx}:${jz}`);
+              sky = null;
+              if (ids) { sky = []; for (const j of ids) sky.push(nodes[j].top, nodes[j].bot); }
+            } else {
+              const e = cut(rg, b, jx, jz);
+              c.grown++;
+              sky = e.sky;
+              st = e.stand > -Infinity ? e.stand : undefined;
+            }
+            if (st !== undefined) {
+              const lift = st - bot;
+              if (lift > c.bestStand) c.bestStand = lift;
+              if (st >= bot - TOL) { c.attached++; c.supported = true; break; }
+            }
+            if (!sky) continue;
+            for (let k = 0; k < sky.length; k += 2) {
+              if (!(bot <= sky[k] + LINK && sky[k + 1] <= top + LINK)) continue;
+              const tag = `${jx}:${jz}:${Math.round(sky[k] * 4)}`;
+              if (seen.has(tag)) continue;
+              seen.add(tag);
+              q.push(jx, jz, sky[k], sky[k + 1]);
+            }
+          }
+        }
+        if (c.grown >= GROW) c.budget = true;
+      }
+    }
+
     const floating = [];
     for (const c of comp.values()) {
       if (c.supported) continue;
@@ -613,6 +740,8 @@ const result = await page.evaluate(
         spanX: +(c.x1 - c.x0 + GRID).toFixed(1),
         spanZ: +(c.z1 - c.z0 + GRID).toFixed(1),
         at: c.at,
+        grown: c.grown,
+        budget: !!c.budget,
       });
     }
     floating.sort((a, b2) => b2.cells * b2.air - a.cells * a.air);
@@ -642,6 +771,7 @@ const result = await page.evaluate(
       rays,
       intervals,
       groundNodes,
+      grownColumns,
       skyNodes: nodes.length,
       components: comp.size,
       anomalies,
@@ -649,7 +779,7 @@ const result = await page.evaluate(
       total: floating.reduce((s, f) => s + f.cells, 0),
     };
   },
-  { REGION, GRID, TOL, MIN_CELLS, GROUND, APRON, NEED_ATTACH }
+  { REGION, GRID, TOL, MIN_CELLS, GROUND, APRON, NEED_ATTACH, GROW }
 );
 
 /* -------------------------------------------------------------------------- */
@@ -766,6 +896,7 @@ if (args.json) {
       `  swept ${result.regions.join(', ')} — ${result.columns} columns with something off the ` +
         `ground, ${result.rays} rays, ${result.intervals} solid intervals ` +
         `(${result.groundNodes} standing on the map, ${result.skyNodes} not) in ${result.ms}ms` +
+        (result.grownColumns ? `  ·  ${result.grownColumns} more cut following pieces off the edge` : '') +
         (result.anomalies ? `  ·  ${result.anomalies} single-sided surfaces ignored` : '')
     );
     if (args.audit) {
@@ -784,7 +915,8 @@ if (args.json) {
           `    ${String(f.cells).padStart(5)}  ${f.top.toFixed(2).padStart(6)}  ` +
             `${f.bot.toFixed(2).padStart(6)}   ${f.air.toFixed(2).padStart(7)}m   ` +
             `${(f.spanX + 'x' + f.spanZ).padEnd(10)}  ` +
-            `${(f.at[0] + ',' + f.at[1]).padEnd(15)} ${f.owner ?? ''}`
+            `${(f.at[0] + ',' + f.at[1]).padEnd(15)} ${f.owner ?? ''}` +
+            (f.budget ? `  (--grow budget hit after ${f.grown} columns)` : '')
         );
       }
       if (result.floating.length > 40) console.log(`    … and ${result.floating.length - 40} more`);
