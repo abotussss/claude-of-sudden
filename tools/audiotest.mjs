@@ -158,6 +158,11 @@ if (args.burst) {
         dAmtF: +(m.buses.foley.duckAmount ?? 0).toFixed(3),
         dAmtA: +(m.buses.ambience.duckAmount ?? 0).toFixed(3),
         active: a.field.stats.active,
+        // The render thread's own books: how much of real time it is losing,
+        // how many audio-seconds it owes, and how many slots the field is
+        // filling because of it. @see SpatialField._trackRender
+        cap: a.field.stats.cap,
+        behind: a.field.stats.behind,
         dropped: a.field.stats.dropped,
         stolen: a.field.stats.stolen,
         errors: a.stats.errors,
@@ -165,6 +170,31 @@ if (args.burst) {
       });
     }, 50);
   });
+
+  /**
+   * `--legacy` is the A/B CONTROL, not a feature: it puts the two defences back
+   * the way they were at runtime — emitter and dry-voice lifetimes expiring on
+   * the audio clock ALONE, and no render governor on the pool — so the before
+   * and after can be measured minutes apart on the same machine under the same
+   * load instead of being compared across builds. (It cannot undo the third
+   * change, claiming the emitter before synthesising the voice; that one is
+   * structural. @see AudioSystem._playAt)
+   */
+  if (args.legacy) {
+    await page.evaluate(() => {
+      const a = window.__ENGINE__.ctx.peek('audio');
+      const f = a.field;
+      f._trackRender = () => {};
+      f.cap = f.emitters.length;
+      const up = f.update.bind(f);
+      f.update = (dt) => {
+        for (const e of f.emitters) e.wallEnd = Infinity;
+        for (const d of a._dry) d.wallEnd = Infinity;
+        return up(dt);
+      };
+    });
+    console.log('[audiotest] LEGACY control: wall-clock backstop and render governor disabled');
+  }
 
   const mark = (n) => page.evaluate((x) => window.__MARK__(x), n);
   const wait = (ms) => page.waitForTimeout(ms);
@@ -233,7 +263,7 @@ if (args.burst) {
   });
   const t0 = trace.find((r) => !r.mark)?.t ?? 0;
   const w0 = trace.find((r) => !r.mark)?.w ?? 0;
-  const hdr = '   t   wall  state     phase        outRms  outPk  worldR  muffR  wpnR   folR   mast  muffG    lp   deaf  duckA duckF  act drop stol err';
+  const hdr = '   t   wall  state     phase        outRms  outPk  worldR  muffR  wpnR   folR   mast  muffG    lp   deaf  duckA duckF  act cap behind drop stol err';
   console.log('\n[audiotest] BURST TRACE (levels are analyser RMS/peak; lp is the muffle low-pass Hz)');
   console.log(hdr);
   let phase = 'boot';
@@ -246,7 +276,7 @@ if (args.burst) {
       `${b.outRms.toExponential(2)} ${b.outPeak.toFixed(4)} ${b.worldRms.toExponential(2)} ${b.muffRms.toExponential(2)} ` +
       `${b.wpnRms.toExponential(1)} ${b.folRms.toExponential(1)} ` +
       `${b.master.toFixed(3)} ${b.muffG.toFixed(4)} ${String(b.lp).padStart(5)} ${b.deaf.toFixed(3)} ` +
-      `${b.duckA.toFixed(3)} ${b.duckF.toFixed(3)} ${String(b.active).padStart(4)} ${String(b.dropped).padStart(5)} ${String(b.stolen).padStart(5)} ${b.errors}`
+      `${b.duckA.toFixed(3)} ${b.duckF.toFixed(3)} ${String(b.active).padStart(4)} ${String(b.cap).padStart(3)} ${String(b.behind.toFixed(2)).padStart(6)} ${String(b.dropped).padStart(4)} ${String(b.stolen).padStart(5)} ${b.errors}`
     );
     bucket = null;
   };
@@ -271,6 +301,8 @@ if (args.burst) {
       bucket.active = Math.max(bucket.active, r.active);
       bucket.dropped = r.dropped; bucket.stolen = r.stolen; bucket.errors = r.errors;
       bucket.t = t; bucket.w = w; bucket.state = r.state;
+      bucket.cap = Math.min(bucket.cap, r.cap);
+      bucket.behind = Math.max(bucket.behind, r.behind);
     }
   }
   flush();

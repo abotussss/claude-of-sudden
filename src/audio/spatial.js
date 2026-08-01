@@ -73,6 +73,10 @@ const DEFICIT_SHRINK = 0.12;
 const DEFICIT_RELEASE = 0.03;
 /** Window the deficit is integrated over, seconds of WALL time. */
 const DEFICIT_WINDOW = 0.25;
+/** Audio seconds owed before the pool shrinks whatever the window says. */
+const BEHIND_SHRINK = 0.2;
+/** …and how nearly level the clocks must be before slots are handed back. */
+const BEHIND_LEVEL = 0.06;
 /**
  * Grace on the wall-clock backstop, seconds. Normal jitter between the two
  * clocks is microseconds; this only ever expires a voice that the audio clock
@@ -214,7 +218,7 @@ export class SpatialField {
       active: 0, stolen: 0, dropped: 0, occlusionRays: 0,
       // How far behind real time the audio thread is running, 0..1, and how
       // many slots the field is willing to fill because of it.
-      deficit: 0, cap: MAX_EMITTERS, expired: 0,
+      deficit: 0, behind: 0, cap: MAX_EMITTERS, expired: 0,
     };
     this.occlusionEnabled = true;
 
@@ -231,6 +235,15 @@ export class SpatialField {
     this._accAudio = 0;
     this._wallPrev = 0;
     this._audioPrev = 0;
+    /**
+     * The smallest gap ever seen between the two clocks — their epochs are
+     * unrelated, so only the CHANGE in the gap means anything. `behind` is that
+     * change: seconds of audio the thread owes and has not made. It is the
+     * honest "how much silence is queued" number, and unlike the per-window
+     * deficit it does not read healthy while the context is catching up.
+     */
+    this._lagMin = Infinity;
+    this.behind = 0;
   }
 
   /** Slots the field will fill right now. Falls with the render deficit. */
@@ -253,6 +266,9 @@ export class SpatialField {
    */
   _trackRender(audioNow) {
     const wall = nowWall();
+    const lag = wall - audioNow;
+    if (lag < this._lagMin) this._lagMin = lag;
+    this.behind = lag - this._lagMin;
     if (this._wallPrev) {
       this._accWall += Math.min(0.5, wall - this._wallPrev);
       this._accAudio += Math.max(0, audioNow - this._audioPrev);
@@ -264,10 +280,15 @@ export class SpatialField {
     this._accWall = 0;
     this._accAudio = 0;
     this.stats.deficit = deficit;
-    if (deficit > DEFICIT_SHRINK) {
+    this.stats.behind = +this.behind.toFixed(3);
+    if (deficit > DEFICIT_SHRINK || this.behind > BEHIND_SHRINK) {
       this.cap = Math.max(MIN_EMITTERS, Math.floor(this.cap * 0.55));
-    } else if (deficit < DEFICIT_RELEASE && this.cap < MAX_EMITTERS) {
-      this.cap = Math.min(MAX_EMITTERS, this.cap + 6);
+    } else if (deficit < DEFICIT_RELEASE && this.behind < BEHIND_LEVEL && this.cap < MAX_EMITTERS) {
+      // Slots come back only once the thread is LEVEL, not merely once it has
+      // stopped losing ground — a context that is catching up reads a deficit
+      // of zero while it still owes seconds of output, and handing the pool
+      // back then is what makes the failure oscillate instead of clear.
+      this.cap = Math.min(MAX_EMITTERS, this.cap + 4);
     }
     this.stats.cap = this.cap;
   }
@@ -440,6 +461,17 @@ export class SpatialField {
       for (let i = 0; i < this.emitters.length; i++) {
         const e = this.emitters[i];
         if (e.tracked) continue; // never steal a bed/loop
+        /**
+         * A FREE EMITTER IS A VALID VICTIM ONLY IF THE FIELD IS ALLOWED TO GROW.
+         *
+         * This loop has always scanned free emitters too, and under the bus
+         * quota that is correct — "cannibalise your own bus" is happy to reuse
+         * an idle slot of that bus. Under the RENDER cap it is not: taking a
+         * free slot is exactly the growth the cap exists to refuse, and it
+         * silently made the cap do nothing at all (MEASURED: 73 acquires in two
+         * seconds, 52 of them taking a free emitter, load 21 over a cap of 24).
+         */
+        if (overCap && e.free) continue;
         // Over quota: only cannibalise your own bus. @see _busCap
         if (overQuota && e.busName !== bus) continue;
         const score = e.priority * 4 + Math.max(0, e.endTime - now);

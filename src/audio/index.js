@@ -132,7 +132,7 @@ export class AudioSystem {
 
     /* dry (head-locked) voice bookkeeping */
     this._dry = [];
-    for (let i = 0; i < DRY_SLOTS; i++) this._dry.push({ node: null, send: null, end: 0 });
+    for (let i = 0; i < DRY_SLOTS; i++) this._dry.push({ node: null, send: null, end: 0, wallEnd: 0 });
     this._dryCursor = 0;
 
     /* per-frame rate limits */
@@ -342,10 +342,19 @@ export class AudioSystem {
       this.ambience.update(dt, this._ambienceApi);
 
       /* ---- head-locked voice teardown ---------------------------- */
+      /**
+       * TWO DEADLINES HERE TOO. Forty-eight of these — your own weapon, your
+       * own boots, every UI tick and grunt — and they were torn down against
+       * `actx.currentTime` alone, so when the render thread falls behind they
+       * all stay connected for as long as the clock is stalled. Same latch as
+       * the spatial field's (see SpatialField.update), same backstop: the wall
+       * clock, which cannot stall, with the same grace on it.
+       */
       const now = actx.currentTime;
+      const wall = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
       for (let i = 0; i < this._dry.length; i++) {
         const d = this._dry[i];
-        if (!d.node || now < d.end) continue;
+        if (!d.node || (now < d.end && wall < d.wallEnd)) continue;
         try { d.node.disconnect(); } catch { /* already gone */ }
         try { d.send?.disconnect(); } catch { /* already gone */ }
         d.node = null; d.send = null;
@@ -638,6 +647,8 @@ export class AudioSystem {
       slot.node = g;
       slot.send = sendNode;
       slot.end = voice.end + 0.05;
+      slot.wallEnd = ((typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000) +
+        (slot.end - this.actx.currentTime) + 0.3;
       this.stats.events++;
       return true;
     } catch (err) {
@@ -1389,6 +1400,7 @@ export class AudioSystem {
       // How much of real time the audio thread is losing, and how many slots
       // the field is filling because of it. @see SpatialField._trackRender
       renderDeficit: this.field?.stats.deficit ?? 0,
+      renderBehind: this.field?.stats.behind ?? 0,
       capacity: this.field?.stats.cap ?? 0,
       expired: this.field?.stats.expired ?? 0,
       occlusionRays: this.field?.stats.occlusionRays ?? 0,
