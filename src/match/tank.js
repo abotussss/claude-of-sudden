@@ -182,6 +182,53 @@ const STEP = 1.25;
 /** A route shorter than this is not a sortie. */
 const MIN_ROUTE = 16;
 
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「戦車は多少の壁や建物は破壊しながら進めるようにして 大きな建物を壊せないけど」
+ * WHAT THE HULL SHOVES ASIDE, AND WHAT STOPS IT
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE RULE IS THE GLACIS, NOT A LIST OF PROP NAMES. `_buildBody` puts this
+ * tank's glacis top edge at y 1.78 and its nose plate on the road at y 0.62;
+ * mass that stands no higher than the plate that would hit it is mass a 40 t
+ * tracked vehicle drives through, and mass that stands over it is a building.
+ * So `PLOUGH_TOP` is the hull's own geometry rounded to 1.8 m and nothing in
+ * this file names a jersey barrier, a sandbag wall or a crate.
+ *
+ * MEASURED ON THE BUILT MAP with `_ploughscan.mjs`, which marches this exact
+ * test along both baked corridors (seed 7):
+ *
+ *   RED    7 masses met, 0 ploughable — 3.39 m cathedral piers, a 4.30 m
+ *          plinth run and 8.99 / 10.69 m building shells. It is stopped by
+ *          every one of them, which is the 大きな建物を壊せない half.
+ *   BLUE  10 masses met, 9 ploughable at 0.56-1.01 m — the cover clusters of
+ *          sandbags, crates, barrels and a jersey barrier that the mid street
+ *          is dressed with. 8 of the 9 bind to a prop instance.
+ *
+ * AND IT ONLY PLOUGHS WHAT IT CAN ACTUALLY ERASE. `src/world` merges its static
+ * collision per SURFACE and `match` may not reach into it, so there is no
+ * "delete this wall" hook to call — but the level's props are `prop_*`
+ * InstancedMeshes, and one instance is hidden by zeroing sixteen floats, which
+ * is exactly what `Assembler.setScopeVisible` does to a demolition scope's
+ * slots. Mass with NO instance behind it is therefore treated as BLOCKING even
+ * when it is short (BLUE's ninth, at 0.56 m, binds nothing and is left alone),
+ * because a hull that drives through a wall which is still standing afterwards
+ * is worse than one that never tried. Nothing here adds collision or geometry
+ * to the world; it only ever takes some away.
+ */
+const PLOUGH_TOP = 1.8;
+/** Under this the hull simply drives over it — a kerb is not an event. */
+const PLOUGH_MIN = 0.3;
+/** Half the corridor the hull actually sweeps, with a little shoulder. */
+const PLOUGH_HALF = HULL_W * 0.5 + 0.25;
+/** Metres ahead of the hull origin that the glacis reaches. */
+const PLOUGH_NOSE = 3.3;
+/** Two obstructions closer together than this are one pile. */
+const PLOUGH_MERGE = 2.4;
+/** Seconds of drag on the hull while it shoves a pile aside. */
+const PLOUGH_DRAG = 0.7;
+/** How much of its speed the hull keeps while ploughing. */
+const PLOUGH_SLOW = 0.45;
+
 /** Metres/second. A tracked vehicle in a street, not a car. */
 const SPEED_ADVANCE = 4.6;
 /** It slows down to shoot — a hull-down halt is what makes the gun readable. */
@@ -422,10 +469,19 @@ export class Armour {
     this.physics = physics;
     this._lib = ctx.peek('materials');
 
+    // Built once for both hulls and dropped again below — @see `_buildPropIndex`.
+    let props = null;
+    try {
+      props = this._buildPropIndex();
+    } catch (err) {
+      console.warn('[tank] prop index failed — the plough is disabled', err);
+    }
     for (const spec of ROUTES) {
-      const tank = this._buildTank(spec, world, physics);
+      const tank = this._buildTank(spec, world, physics, props);
       if (tank) this.tanks.push(tank);
     }
+    props = null;
+    this._ploughClaimed = null;
     if (this.tanks.length) ctx.scene.add(this.group);
 
     ctx.events.on('explosion', this._onExplosion);
@@ -440,7 +496,10 @@ export class Armour {
           .map(
             (t) =>
               `${t.id} route ${t.path.length.toFixed(0)}m/${t.path.n} samples, ` +
-              `${t.chunkCount} wreck chunks, narrowest street ${t.path.narrowest.toFixed(1)}m`
+              `${t.chunkCount} wreck chunks, narrowest street ${t.path.narrowest.toFixed(1)}m, ` +
+              `${t.plough?.length ?? 0} piles to plough ` +
+              `(${(t.plough ?? []).reduce((a, q) => a + q.inst.length, 0)} instances, ` +
+              `${(t.plough ?? []).reduce((a, q) => a + (q.tris?.length ?? 0), 0)} triangles)`
           )
           .join(' · ')
     );
@@ -562,7 +621,7 @@ export class Armour {
 
   /* ---------------------------------------------------------- one tank --- */
 
-  _buildTank(spec, world, physics) {
+  _buildTank(spec, world, physics, props) {
     const rng = this.rng.fork();
     const path = this._bakePath(spec, world, physics);
     if (!path) {
@@ -626,6 +685,12 @@ export class Armour {
       lastHitBy: null,
       chunkCount: 0,
       wheelSpin: 0,
+      /** Piles the hull will meet, baked by `_bakePlough`. */
+      plough: null,
+      /** Their debris meshes — @see the note in `_bakePileDebris`. */
+      ploughMeshes: [],
+      /** Seconds of plough drag left on the throttle. */
+      ploughDrag: 0,
       uniforms: { uT: { value: -1 }, uAnim: { value: 1 } },
       /**
        * WHAT WAS ACTUALLY DONE TO IT, so "not easy" is a measurement rather
@@ -644,8 +709,354 @@ export class Armour {
     this._buildBody(tank);
     this._buildWreck(tank);
     this._buildColliders(tank, physics);
+    this.physics = physics;
+    this._bakePlough(tank, physics, props);
     this._logZones(tank);
     return tank;
+  }
+
+  /* ====================================================================== */
+  /* THE PLOUGH, BAKED AT BOOT                                              */
+  /* ====================================================================== */
+
+  /**
+   * EVERY `prop_*` INSTANCE IN THE LEVEL, IN WORLD SPACE. Built once, shared by
+   * both hulls, and dropped the moment the last route is baked — it is 27014
+   * records on this map and none of it is wanted after boot.
+   *
+   * `src/world` publishes no per-prop registry (there is no `world.props` the
+   * way there is a `world.demolitions`), so the geometry is read off the scene
+   * graph the renderer already holds. That is a READ of a public field, and
+   * nothing here writes to `world` — the only write this feature ever makes is
+   * to an instance matrix it has first proved belongs to a pile the hull drove
+   * through, and it puts every one of them back in `reset()`.
+   */
+  _buildPropIndex() {
+    const list = [];
+    const m = new THREE.Matrix4();
+    const w = new THREE.Matrix4();
+    // The world root carries `levelYaw`; without this the instances come back
+    // in the level's own frame and nothing binds.
+    this.ctx.scene.updateMatrixWorld(true);
+    this.ctx.scene.traverse((o) => {
+      if (!o.isInstancedMesh || !o.name.startsWith('prop_')) return;
+      for (let j = 0; j < o.count; j++) {
+        o.getMatrixAt(j, m);
+        w.multiplyMatrices(o.matrixWorld, m);
+        list.push({ mesh: o, slot: j, x: w.elements[12], y: w.elements[13], z: w.elements[14] });
+      }
+    });
+    return list;
+  }
+
+  /**
+   * MARCH THE CORRIDOR, CLASSIFY THE MASS, AND SOLVE ITS COLLAPSE.
+   *
+   * Four lanes across the hull's own width, one short forward ray per lane per
+   * path sample, at 0.55 m — under the glacis and over the kerb. Anything the
+   * ray finds is measured with a downward ray for its height over its own
+   * ground, and that height is the whole classifier (@see `PLOUGH_TOP`).
+   *
+   * Nothing here trims the route. The lateral span test in `_bakePath` still
+   * owns "the tank stops", and it already stops at exactly the mass this test
+   * calls blocking — so this pass is purely additive and no route gets shorter
+   * because of it. That is deliberate: a new trim rule is how you silently lose
+   * a sortie the map used to have.
+   */
+  _bakePlough(tank, physics, props) {
+    tank.plough = [];
+    if (!props?.length) return;
+    const p = tank.path;
+    const MASKW = physics.MASK.WORLD;
+    const o = new THREE.Vector3();
+    const d = new THREE.Vector3();
+    const down = new THREE.Vector3(0, -1, 0);
+    const piles = [];
+
+    for (let i = 0; i < p.n; i++) {
+      const yaw = p.YAW[i];
+      const fx = Math.sin(yaw);
+      const fz = Math.cos(yaw);
+      const sx = fz;
+      const sz = -fx;
+      for (const lane of [-0.8, -0.3, 0.3, 0.8]) {
+        const ox = p.X[i] + sx * lane * PLOUGH_HALF;
+        const oz = p.Z[i] + sz * lane * PLOUGH_HALF;
+        const g = physics.groundHeight(ox, oz, 30);
+        if (!Number.isFinite(g)) continue;
+        o.set(ox, g + 0.55, oz);
+        d.set(fx, 0, fz);
+        const h = physics.raycast(o, d, STEP * 1.3, MASKW);
+        if (!h?.hit) continue;
+        const hx = ox + fx * h.distance;
+        const hz = oz + fz * h.distance;
+        o.set(hx + fx * 0.12, g + 30, hz + fz * 0.12);
+        const t = physics.raycast(o, down, 45, MASKW);
+        if (!t?.hit) continue;
+        const top = g + 30 - t.distance - g;
+        // THE CLASSIFIER. Over the glacis is a building; under a kerb is not an
+        // event. Everything between is a pile the hull shoves aside.
+        if (top <= PLOUGH_MIN || top > PLOUGH_TOP) continue;
+        let pile = null;
+        for (const q of piles) {
+          if (Math.hypot(q.x - hx, q.z - hz) < PLOUGH_MERGE) { pile = q; break; }
+        }
+        if (pile) {
+          pile.top = Math.max(pile.top, top);
+          pile.s = Math.min(pile.s, p.S[i]);
+        } else {
+          piles.push({ s: p.S[i], x: hx, y: g, z: hz, top, fired: false });
+        }
+      }
+    }
+
+    /* ---- bind each pile to the instances that draw it ------------------ */
+    // Shared across BOTH hulls, so the two routes can never claim one instance.
+    const claimed = this._ploughClaimed ?? (this._ploughClaimed = new Set());
+    for (const pile of piles) {
+      const half = PLOUGH_MERGE * 0.75;
+      pile.minX = pile.x - half; pile.maxX = pile.x + half;
+      pile.minZ = pile.z - half; pile.maxZ = pile.z + half;
+      // The floor of the box sits ABOVE the road on purpose: a triangle whose
+      // centroid is on the carriageway is the carriageway, and a hole in the
+      // road is how men fall out of the level.
+      pile.minY = pile.y + 0.25;
+      pile.maxY = pile.y + pile.top + 0.9;
+      pile.inst = [];
+      /**
+       * AN INSTANCE BELONGS TO EXACTLY ONE PILE, and the alternative was a bug
+       * that only showed up in `reset()`. RED's two piles are 2.5 m apart on
+       * the arc and their binding boxes overlap, so two instances were bound to
+       * both: the first pile saved the real matrix and zeroed it, the second
+       * then saved THE ZEROED ONE, and restoring in order put the zero back.
+       * Measured before the fix as 19 of 21 and 12 of 14 instances coming back.
+       * The triangle sweep already claims exclusively (it `break`s on the first
+       * pile that owns a centroid); this is the same rule for the drawn half.
+       */
+      for (const q of props) {
+        if (q.x < pile.minX || q.x > pile.maxX) continue;
+        if (q.z < pile.minZ || q.z > pile.maxZ) continue;
+        if (q.y < pile.y - 0.9 || q.y > pile.y + pile.top + 1.2) continue;
+        const key = `${q.mesh.id}:${q.slot}`;
+        if (claimed.has(key)) continue;
+        claimed.add(key);
+        pile.inst.push({ mesh: q.mesh, slot: q.slot, m: null });
+      }
+      // NOTHING TO ERASE, NOTHING TO PLOUGH. @see the note on `PLOUGH_TOP`.
+      if (pile.inst.length) tank.plough.push(pile);
+    }
+
+    if (!tank.plough.length) return;
+    this._bindPloughCollision(tank, physics);
+    for (const pile of tank.plough) this._bakePileDebris(tank, pile);
+  }
+
+  /**
+   * The static triangles each pile is made of, found ONCE by a sweep of the
+   * packed BVH array rather than per pile. The mask write at fire time is the
+   * same move `Airstrike._setProxySolid` and `Assembler.setScopeSolid` both
+   * make — a fill over a cached range, no BVH rebuild, no stall.
+   *
+   * Collision is only ever REMOVED, never added, so the nav grid baked at boot
+   * can only become MORE walkable than it was measured to be and `stuckcheck`
+   * cannot regress. HONEST LIMIT: `ai.cover` was baked with these piles solid
+   * and there is no `ai` hook for a prop the way `syncCoverBlocks` is the hook
+   * for a demolition block, so a man may briefly crouch behind a sandbag line
+   * a tank has flattened. That is the same staleness class `_coverstale.mjs`
+   * already measures for the airstrike ruins, over a much smaller area.
+   */
+  _bindPloughCollision(tank, physics) {
+    const sw = physics.staticWorld;
+    const pos = sw?.pos;
+    const n = sw?.triCount ?? 0;
+    if (!pos || !n || !sw.mask) return;
+    const lists = tank.plough.map(() => []);
+    for (let t = 0; t < n; t++) {
+      const o = t * 9;
+      const cx = (pos[o] + pos[o + 3] + pos[o + 6]) / 3;
+      const cz = (pos[o + 2] + pos[o + 5] + pos[o + 8]) / 3;
+      const cy = (pos[o + 1] + pos[o + 4] + pos[o + 7]) / 3;
+      for (let k = 0; k < tank.plough.length; k++) {
+        const q = tank.plough[k];
+        if (cx < q.minX || cx > q.maxX) continue;
+        if (cz < q.minZ || cz > q.maxZ) continue;
+        if (cy < q.minY || cy > q.maxY) continue;
+        lists[k].push(t);
+        break;
+      }
+    }
+    for (let k = 0; k < tank.plough.length; k++) {
+      tank.plough[k].tris = Int32Array.from(lists[k]);
+    }
+  }
+
+  /**
+   * The pile's own collapse, cut and solved at boot exactly the way the wreck
+   * is — trajectories into four instanced attributes, one uniform to fire it.
+   * The debris is VISUAL ONLY: it never becomes collision, so `_floatcheck.mjs`
+   * cannot find a floating solid piece that came from a plough.
+   */
+  _bakePileDebris(tank, pile) {
+    const rng = tank.rng.fork();
+    const w = (pile.maxX - pile.minX) * 0.85;
+    const dp = (pile.maxZ - pile.minZ) * 0.85;
+    const chunks = [];
+    fracture(
+      { id: 'pile', size: [w, pile.top, dp], at: [pile.x, pile.y + pile.top * 0.5, pile.z], cut: [3, 2, 3] },
+      0, rng, (c) => chunks.push(c)
+    );
+    const n = chunks.length;
+    const geo = chunkGeometry();
+    const uniforms = { uT: { value: -1 }, uAnim: { value: 1 } };
+    const mat = makeChunkMaterial(this.ctx, this._lib, 'concrete', uniforms);
+    mat.color.setHex(0x9c9482);
+    const mesh = new THREE.InstancedMesh(geo, mat, n);
+    mesh.name = `match_tank_${tank.id}_plough`;
+    mesh.frustumCulled = false;
+    mesh.matrixAutoUpdate = false;
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    mesh.visible = false;
+    mesh.userData.owNoShadow = true;
+    mesh.userData.owNoPrepass = true;
+    mesh.updateMatrix();
+    this.group.add(mesh);
+
+    const mot = new Float32Array(n * 4);
+    const off = new Float32Array(n * 3);
+    const axis = new Float32Array(n * 3);
+    const uv = new Float32Array(n * 3);
+    const colour = new Float32Array(n * 3);
+    const posv = new THREE.Vector3();
+    const q = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    const m4 = new THREE.Matrix4();
+    const ax = new THREE.Vector3();
+    const dir = new THREE.Vector3();
+    // The shove comes from the hull, so the pile goes FORWARD and outward.
+    const blast = new THREE.Vector3(pile.x, pile.y + 0.2, pile.z);
+
+    for (let i = 0; i < n; i++) {
+      const c = chunks[i];
+      posv.set(c.cx, c.cy, c.cz);
+      q.setFromAxisAngle(ax.set(rng.signed(), rng.signed(), rng.signed()).normalize(), rng.range(-0.05, 0.05));
+      scale.set(c.hx * 2, c.hy * 2, c.hz * 2);
+      m4.compose(posv, q, scale);
+      m4.toArray(mesh.instanceMatrix.array, i * 16);
+
+      dir.copy(posv).sub(blast);
+      dir.y = 0;
+      if (dir.lengthSq() < 1e-4) dir.set(1, 0, 0);
+      dir.normalize();
+      const r = rng.range(0.5, 2.6);
+      const sy = Math.max(c.hy, 0.08) + rng.range(0, 0.14);
+      off[i * 3] = dir.x * r;
+      off[i * 3 + 1] = pile.y + sy - posv.y;
+      off[i * 3 + 2] = dir.z * r;
+      mot[i * 4] = rng.range(0, 0.08);
+      mot[i * 4 + 1] = clamp(rng.range(0.5, 1.1), 0.4, 1.6);
+      mot[i * 4 + 2] = rng.range(0.2, 1.1);
+      mot[i * 4 + 3] = rng.range(2.0, 8.0) * (rng.float() < 0.5 ? -1 : 1);
+      ax.set(rng.signed(), rng.signed() * 0.5, rng.signed()).normalize();
+      axis[i * 3] = ax.x;
+      axis[i * 3 + 1] = ax.y;
+      axis[i * 3 + 2] = ax.z;
+      uv[i * 3] = rng.float();
+      uv[i * 3 + 1] = rng.float();
+      uv[i * 3 + 2] = rng.range(0.6, 1.4);
+      const k = rng.range(0.5, 1.0);
+      colour[i * 3] = 0.42 * k;
+      colour[i * 3 + 1] = 0.39 * k;
+      colour[i * 3 + 2] = 0.33 * k;
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.instanceColor = new THREE.InstancedBufferAttribute(colour, 3);
+    mesh.instanceColor.needsUpdate = true;
+    geo.setAttribute('aMot', new THREE.InstancedBufferAttribute(mot, 4));
+    geo.setAttribute('aOff', new THREE.InstancedBufferAttribute(off, 3));
+    geo.setAttribute('aAxis', new THREE.InstancedBufferAttribute(axis, 3));
+    geo.setAttribute('aUv', new THREE.InstancedBufferAttribute(uv, 3));
+    pile.mesh = mesh;
+    pile.uniforms = uniforms;
+    pile.chunks = n;
+    tank.materials.push(mat);
+    /**
+     * ITS OWN LIST, NOT `tank.meshes`. `_destroy` and `reset` both sweep
+     * `tank.meshes` to swap the hull for the wreck — `mesh.visible = mesh ===
+     * tank.wreck` and its inverse — so a plough mesh parked in there would be
+     * shown by every round reset and hidden mid-fall by every brew-up.
+     */
+    tank.ploughMeshes.push(mesh);
+  }
+
+  /**
+   * THE HULL REACHED A PILE. Sixteen floats to zero per instance, one mask fill
+   * per pile, one uniform write, and the `fx` calls that all write into
+   * preallocated rings. Nothing is cut, solved or searched for on this frame.
+   */
+  _firePlough(tank, pile) {
+    if (pile.fired) return;
+    pile.fired = true;
+
+    // 1. it stops being drawn
+    for (const r of pile.inst) {
+      const arr = r.mesh.instanceMatrix.array;
+      const o = r.slot * 16;
+      if (!r.m) r.m = arr.slice(o, o + 16);
+      arr.fill(0, o, o + 16);
+      r.mesh.instanceMatrix.addUpdateRange(o, 16);
+      r.mesh.instanceMatrix.needsUpdate = true;
+    }
+    // 2. it stops being solid
+    const sw = this.physics?.staticWorld;
+    if (sw?.mask && pile.tris) {
+      for (let i = 0; i < pile.tris.length; i++) sw.mask[pile.tris[i]] = 0;
+    }
+    // 3. it comes apart
+    if (pile.uniforms) {
+      pile.mesh.visible = true;
+      pile.uniforms.uT.value = 0;
+      pile.uniforms.uAnim.value = 1;
+    }
+    // 4. and the hull feels it
+    tank.ploughDrag = PLOUGH_DRAG;
+
+    const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
+    if (fx) {
+      fx.hazeRing?.(pile.x, pile.y + 0.3, pile.z, 1.4, 10, 0.35, 1.3);
+      fx.dust?.(pile.x, pile.y + 0.4, pile.z, 1.8);
+    }
+    const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+    audio?.play?.('strike_rubble', this._v.set(pile.x, pile.y + 0.5, pile.z), {
+      level: 0.55, dur: 1.4, maxDist: 120, gain: 1.1, occlusion: 0.5,
+    });
+  }
+
+  /** Put every pile back the way the level built it. */
+  _restorePlough(tank) {
+    if (!tank.plough) return;
+    const sw = this.physics?.staticWorld;
+    for (const pile of tank.plough) {
+      if (pile.fired) {
+        for (const r of pile.inst) {
+          if (!r.m) continue;
+          const arr = r.mesh.instanceMatrix.array;
+          const o = r.slot * 16;
+          arr.set(r.m, o);
+          r.mesh.instanceMatrix.addUpdateRange(o, 16);
+          r.mesh.instanceMatrix.needsUpdate = true;
+        }
+        if (sw?.mask && pile.tris) {
+          // LAYER.STATIC is what these triangles were registered with; the
+          // Assembler puts every world box in on that bit.
+          const L = this.physics.LAYER.STATIC;
+          for (let i = 0; i < pile.tris.length; i++) sw.mask[pile.tris[i]] = L;
+        }
+      }
+      pile.fired = false;
+      if (pile.mesh) pile.mesh.visible = false;
+      if (pile.uniforms) pile.uniforms.uT.value = -1;
+    }
   }
 
   /**
@@ -1248,6 +1659,7 @@ export class Armour {
     tank.turretYaw = 0;
     tank.gunPitch = 0;
     tank.lastHitBy = null;
+    tank.ploughDrag = 0;
     const st = tank.stats;
     st.sorties++;
     st.rounds = 0; st.roundDmg = 0;
@@ -1293,6 +1705,21 @@ export class Armour {
       this._pose(tank);
     }
 
+    /**
+     * The plough debris runs its own clock, because a pile keeps falling after
+     * the hull has driven past it and after the hull has been knocked out.
+     */
+    for (const tank of this.tanks) {
+      const list = tank.plough;
+      if (!list) continue;
+      for (let i = 0; i < list.length; i++) {
+        const u = list[i].uniforms;
+        if (list[i].fired && u && u.uT.value >= 0 && u.uT.value < 30) {
+          u.uT.value = Math.min(30, u.uT.value + dt);
+        }
+      }
+    }
+
     if (!live || !this.enabled) return;
     this._liveT += dt;
     this._next -= dt;
@@ -1327,8 +1754,18 @@ export class Armour {
   _drive(tank, dt) {
     const p = tank.path;
     if (tank.state === 'advance') {
-      const speed = tank.target ? SPEED_FIGHT : SPEED_ADVANCE;
+      let speed = tank.target ? SPEED_FIGHT : SPEED_ADVANCE;
+      /**
+       * SHOVING A WALL COSTS MOMENTUM. Without this the hull crosses a pile at
+       * exactly the speed it crosses open road and the destruction reads as
+       * scenery going off beside it rather than as something it did.
+       */
+      if (tank.ploughDrag > 0) {
+        tank.ploughDrag -= dt;
+        speed *= PLOUGH_SLOW;
+      }
       tank.s += speed * dt;
+      this._checkPlough(tank);
       tank.wheelSpin -= (speed * dt) / 0.44;
       if (tank.s >= p.length) {
         tank.s = p.length;
@@ -1344,6 +1781,17 @@ export class Armour {
         tank.s = 0;
         this._park(tank);
       }
+    }
+  }
+
+  /** Has the glacis reached a pile this sortie has not already flattened? */
+  _checkPlough(tank) {
+    const list = tank.plough;
+    if (!list || !list.length) return;
+    const reach = tank.s + PLOUGH_NOSE;
+    for (let i = 0; i < list.length; i++) {
+      const pile = list[i];
+      if (!pile.fired && reach >= pile.s) this._firePlough(tank, pile);
     }
   }
 
@@ -1878,6 +2326,9 @@ export class Armour {
   reset() {
     this.disarm();
     for (const tank of this.tanks) {
+      // Every pile the last round flattened goes back up before the next one.
+      this._restorePlough(tank);
+      tank.ploughDrag = 0;
       tank.state = 'parked';
       tank.alive = false;
       tank.s = 0;
@@ -1900,6 +2351,7 @@ export class Armour {
     for (const tank of this.tanks) {
       for (const c of tank.colliders) this.physics?.removeCollider(c.c);
       for (const mesh of tank.meshes) mesh.geometry?.dispose();
+      for (const mesh of tank.ploughMeshes) mesh.geometry?.dispose();
       for (const m of tank.materials) m.dispose();
     }
     this.group.parent?.remove(this.group);
