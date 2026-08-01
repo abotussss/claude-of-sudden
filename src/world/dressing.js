@@ -1807,25 +1807,73 @@ function dressBuilding(A, rng, info) {
   const kx1 = rh ? rh.x1 + 1.3 + (rex > 0 ? WALK : 0) : 0;
   const kz0 = rh ? rh.z0 - 1.3 - (rez < 0 ? WALK : 0) : 0;
   const kz1 = rh ? rh.z1 + 1.3 + (rez > 0 ? WALK : 0) : 0;
-  const nudge = (out) => {
+  /**
+   * …and it is pushed to where its SKIN clears the keep-out, not its centre —
+   * the same correction `src/world/interiors.js` carries indoors. `rad` is the
+   * prop's own footprint radius from `Assembler.footprintR`.
+   *
+   * THE CLAMP WAS PUTTING IT BACK ON THE HATCH. The old last two lines pushed
+   * the spot to the nearest edge of the keep-out and then clamped it into the
+   * roof plate — so when the stairwell is against a parapet and that edge is
+   * off the plate, the clamp walked the prop straight back over the hole. A
+   * water tank standing over the void blocks the top flight from below, which
+   * `floorcheck` reports as a sealed ceiling and no standing room on the last
+   * treads. Try all four ways out, nearest first, and take the first that is
+   * on the plate; none of them draws a random number, so the stream is still
+   * byte-identical to the one this map was tuned against.
+   */
+  const OUTS = [0, 0, 0, 0];
+  const nudge = (out, rad) => {
     if (!rh) return;
-    let x = out[0], z = out[1];
-    if (x <= kx0 || x >= kx1 || z <= kz0 || z >= kz1) return;
-    const dxL = x - kx0, dxR = kx1 - x, dzL = z - kz0, dzR = kz1 - z;
-    const m = Math.min(dxL, dxR, dzL, dzR);
-    if (m === dxL) x = kx0; else if (m === dxR) x = kx1;
-    else if (m === dzL) z = kz0; else z = kz1;
-    out[0] = Math.max(rx0, Math.min(rx1, x));
-    out[1] = Math.max(rz0, Math.min(rz1, z));
+    const x = out[0], z = out[1];
+    const ax0 = kx0 - rad, ax1 = kx1 + rad, az0 = kz0 - rad, az1 = kz1 + rad;
+    if (x <= ax0 || x >= ax1 || z <= az0 || z >= az1) return;
+    OUTS[0] = x - ax0; OUTS[1] = ax1 - x; OUTS[2] = z - az0; OUTS[3] = az1 - z;
+    let fx = x, fz = z, first = true;
+    for (let pass = 0; pass < 4; pass++) {
+      let best = -1, bd = Infinity;
+      for (let k = 0; k < 4; k++) if (OUTS[k] < bd) { bd = OUTS[k]; best = k; }
+      OUTS[best] = Infinity;
+      const px = best === 0 ? ax0 : best === 1 ? ax1 : x;
+      const pz = best === 2 ? az0 : best === 3 ? az1 : z;
+      if (first) { fx = px; fz = pz; first = false; }
+      if (px < rx0 || px > rx1 || pz < rz0 || pz > rz1) continue;
+      out[0] = px; out[1] = pz;
+      return;
+    }
+    // The keep-out spans the whole plate on both axes — a stairwell in a shed
+    // of a roof. Nothing can be legal, so fall back to what this did before:
+    // nearest edge, clamped on. No prop is dropped and no number is drawn.
+    out[0] = Math.max(rx0, Math.min(rx1, fx));
+    out[1] = Math.max(rz0, Math.min(rz1, fz));
   };
+  /** The crate stack this loop builds, as `stackR` derives it indoors. */
+  const RCRATES = ['crate_a', 'crate_b', 'crate_flat'];
+  const RJIT = 0.15;
+  const RLOOSE = ['stool', 'chair', 'tyre', 'barrel_rust', 'pallet', 'gas_bottle'];
   const _rs = [0, 0];
   for (let i = 0; i < rp; i++) {
     _rs[0] = rng.range(rx0, rx1);
     _rs[1] = rng.range(rz0, rz1);
-    nudge(_rs);
+    /**
+     * WHAT is going here is drawn before WHERE it ends up, because the push out
+     * of the keep-out has to know how wide the thing is. `nudge` draws nothing,
+     * so moving it after this call leaves the rng sequence exactly as it was.
+     */
+    const pick = rng.float();
+    let rad = 0;
+    if (pick < 0.22) rad = A.footprintR('water_tank', 1.15);
+    else if (pick < 0.45) rad = A.footprintR('sat_dish', 1.15);
+    else if (pick < 0.6) rad = A.footprintR('roof_vent');
+    else if (pick < 0.78) {
+      rad = RJIT * Math.SQRT2;
+      for (const id of RCRATES) rad = Math.max(rad, RJIT * Math.SQRT2 + A.footprintR(id));
+    } else {
+      for (const id of RLOOSE) rad = Math.max(rad, A.footprintR(id));
+    }
+    if (!nudge(_rs, rad)) continue;
     const px = _rs[0];
     const pz = _rs[1];
-    const pick = rng.float();
     if (pick < 0.22) {
       A.put('water_tank', px, roofY, pz, rng.float() * 6.28, rng.range(0.9, 1.15), [1, rng.range(0.9, 1.3), 1]);
     } else if (pick < 0.45) {

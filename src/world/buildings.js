@@ -1015,6 +1015,14 @@ function stairGeometry(spec, info, fl, t, groundH, upperH, floors) {
   return {
     floor: f, ox, oz, ry, sw, run, rise, steps, base, climb,
     top: base + climb, D, landing,
+    /**
+     * Where the soffit ends and the shaft begins, along the climb axis. The
+     * void rectangle below is the same thing in level coordinates; this is the
+     * scalar, published because the FURNISHING of the floor above needs it —
+     * everything from here to the head of the flight is a hole, and a wardrobe
+     * standing in a hole is over a climber's head. @see `buildInterior`.
+     */
+    open: openAt,
     void: {
       x0: Math.min(cx[0], cx[1]) - px - Math.abs(ax) * 0,
       x1: Math.max(cx[0], cx[1]) + px,
@@ -1151,10 +1159,24 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
       chain(floorClear[g.floor], g.ox - ax * 1.5, g.oz - az * 1.5,
         g.ox + ax * (g.D + 0.3), g.oz + az * (g.D + 0.3), r);
     }
-    // the floor it ARRIVES at: the landing, and the walk-off in front of it
+    /**
+     * The floor it ARRIVES at: THE WHOLE SHAFT, then the landing, then the
+     * walk-off in front of it.
+     *
+     * This used to start at `D - 0.6`, three quarters of the way up the flight,
+     * on the reading that what has to be kept clear upstairs is the landing. It
+     * is not: from `g.open` forward there is NO FLOOR — that is where the soffit
+     * ends and the slab is cut (@see `stairGeometry`) — and the furnishing pass
+     * was free to drop a shelf unit or a crate stack anywhere in the first three
+     * quarters of it. The prop then hangs in mid-air over the stairwell with its
+     * collision box across the shaft, and `floorcheck` reports it from BELOW, as
+     * a flight with no headroom and no standing room on its top treads. Measured
+     * on the 14 pinned seeds: E1-f0 on seed 10 and W1-f1 on seed 2 were both a
+     * prop on the floor above, sitting over the hole, over a climber's head.
+     */
     const up = floorClear[g.floor + 1];
     if (up) {
-      chain(up, g.ox + ax * (g.D - 0.6), g.oz + az * (g.D - 0.6),
+      chain(up, g.ox + ax * g.open, g.oz + az * g.open,
         g.ox + ax * (g.D + g.landing + 1.4), g.oz + az * (g.D + g.landing + 1.4), r);
     }
   }
