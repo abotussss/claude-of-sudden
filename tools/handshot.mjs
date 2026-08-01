@@ -15,8 +15,17 @@ import { chromium } from 'playwright';
 
 const args = Object.fromEntries(
   process.argv.slice(2).map((a) => {
-    const [k, v] = a.replace(/^--/, '').split('=');
-    return [k, v ?? true];
+    /**
+     * SPLIT ON THE FIRST `=` ONLY. `split('=')` destructured to `[k, v]` threw
+     * away everything after the second one, so `--url=…/?seed=12` reached the
+     * page as `…/?seed`, `Number('')` became 0, and this gate measured seed 0
+     * while reporting the seed it was asked for. It "passed" on the seed a
+     * sweep failed 8 boots out of 8. A tool that silently measures something
+     * other than what it was pointed at is worse than a tool that crashes.
+     */
+    const s = a.replace(/^--/, '');
+    const i = s.indexOf('=');
+    return i < 0 ? [s, true] : [s.slice(0, i), s.slice(i + 1)];
   })
 );
 const URL = args.url ?? 'http://127.0.0.1:4173/';

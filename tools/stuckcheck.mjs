@@ -11,7 +11,12 @@
  * the longest window in which he wanted to move and travelled less than a metre.
  */
 import { chromium } from 'playwright';
-const args = Object.fromEntries(process.argv.slice(2).map((a)=>{const [k,v]=a.replace(/^--/,'').split('=');return [k,v??true];}));
+// Split on the FIRST `=` only: the destructured `split('=')` truncated any
+// value holding a second one, so `--url=…/?seed=12` measured `…/?seed`.
+const args = Object.fromEntries(process.argv.slice(2).map((a)=>{
+  const s=a.replace(/^--/,''), i=s.indexOf('=');
+  return i<0 ? [s,true] : [s.slice(0,i), s.slice(i+1)];
+}));
 const URL = args.url ?? 'http://127.0.0.1:4188/';
 const b = await chromium.launch({ headless: true, args: ['--use-angle=metal','--ignore-gpu-blocklist','--mute-audio'] });
 const p = await b.newPage({ viewport: { width: 900, height: 520 } });

@@ -43,7 +43,10 @@
 import { chromium } from 'playwright';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => {
-  const [k, v] = a.replace(/^--/, '').split('='); return [k, v ?? true];
+  /** Split on the FIRST `=`: `--url=…/?seed=12` was truncated to `…/?seed`, so
+   *  the gate measured seed 0 while reporting the seed it was given. */
+  const s = a.replace(/^--/, ''), i = s.indexOf('=');
+  return i < 0 ? [s, true] : [s.slice(0, i), s.slice(i + 1)];
 }));
 const URL = args.url ?? 'http://127.0.0.1:4173/';
 const ONLY = typeof args.only === 'string' ? args.only.split(',') : null;
