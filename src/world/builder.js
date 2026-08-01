@@ -558,9 +558,19 @@ export class Assembler {
     this._accum(c.surface).add(UNIT_BOX, _cm);
   }
 
-  /** The collision accumulator for a surface, created on demand. */
-  _accum(surface) {
-    const s = this._scope;
+  /**
+   * The collision accumulator for a surface, created on demand.
+   *
+   * `s` DEFAULTS TO THE LEXICAL SCOPE AND THE CALLERS PASS THE SPATIAL ONE.
+   * `add()` has always resolved `this._scope ?? this._claimFor(...)`, and this
+   * did not — so a claimed footprint filed the ART of a piece of roof dressing
+   * under the building's shell and left its COLLISION in the global batch. The
+   * two then had different fates: `?demo=down` took the mound's rocks away and
+   * left `rubbleMound`'s solid box hanging nine metres up over an empty plot,
+   * which is three of the floating masses `_floatcheck` reports on every seed.
+   * A claim is a claim on the whole piece or it is nothing.
+   */
+  _accum(surface, s = this._scope) {
     if (s) {
       let sa = s.collide.get(surface);
       if (!sa) s.collide.set(surface, (sa = new Accum(`collide:${s.id}:${surface}`)));
@@ -646,7 +656,8 @@ export class Assembler {
   /** Axis-aligned (or Y-rotated) box collision proxy. */
   box(surface, cx, cy, cz, sx, sy, sz, ry = 0) {
     if (Assembler.TAG) this._tag('box', surface, cx, cy, cz, sx, sy, sz, ry);
-    this._accum(surface).add(UNIT_BOX, this._x(trs(_m, cx, cy, cz, ry, sx, sy, sz)));
+    trs(_m, cx, cy, cz, ry, sx, sy, sz);
+    this._accum(surface, this._scope ?? this._claimFor(null, _m)).add(UNIT_BOX, this._x(_m));
     return this;
   }
 
@@ -674,18 +685,19 @@ export class Assembler {
    */
   clipBox(surface, cx, cy, cz, sx, sy, sz, ry = 0, rx = 0) {
     if (Assembler.TAG) this._tag('clip', surface, cx, cy, cz, sx, sy, sz, ry);
-    this._clipAccum(surface).add(UNIT_BOX, this._x(trs(_m, cx, cy, cz, ry, sx, sy, sz, rx)));
+    trs(_m, cx, cy, cz, ry, sx, sy, sz, rx);
+    this._clipAccum(surface, this._scope ?? this._claimFor(null, _m)).add(UNIT_BOX, this._x(_m));
     return this;
   }
 
   /** Arbitrary triangles as CLIP collision — a sloped gangway, a ramp. */
   clipGeo(surface, geo, matrix = null) {
-    this._clipAccum(surface).add(geo, this._x(matrix));
+    this._clipAccum(surface, this._scope ?? this._claimFor(geo, matrix)).add(geo, this._x(matrix));
     return this;
   }
 
-  _clipAccum(surface) {
-    const s = this._scope;
+  /** @see `_accum` — the spatial claim binds clip collision the same way. */
+  _clipAccum(surface, s = this._scope) {
     if (s) {
       let sa = s.clip.get(surface);
       if (!sa) s.clip.set(surface, (sa = new Accum(`clip:${s.id}:${surface}`)));
@@ -698,7 +710,7 @@ export class Assembler {
 
   /** Register real triangles as collision (ramps, terrain, odd shapes). */
   collideGeo(surface, geo, matrix = null) {
-    this._accum(surface).add(geo, this._x(matrix));
+    this._accum(surface, this._scope ?? this._claimFor(geo, matrix)).add(geo, this._x(matrix));
     return this;
   }
 
@@ -706,7 +718,7 @@ export class Assembler {
   slabBox(surface, panelMatrix, x, y, w, h, t) {
     trs(_m, x, y, t * 0.5, 0, w, h, t);
     _m.premultiply(panelMatrix);
-    this._accum(surface).add(UNIT_BOX, this._x(_m));
+    this._accum(surface, this._scope ?? this._claimFor(null, _m)).add(UNIT_BOX, this._x(_m));
     return this;
   }
 
