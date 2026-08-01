@@ -831,9 +831,12 @@ const QUARTER = [[0, 1], [1, 0], [0, -1], [-1, 0]];
  * so a flight lands the same distance off the masonry in a 12.8 m bay as in a
  * 26.3 m one and a setback storey gets the same stair as a full one.
  *
- * WHY NOT A SWITCHBACK. A dog-leg is the other real answer and it was measured
- * and rejected: it moves the flight about 1.4 m, which is a quarter-turn's worth
- * of nothing against a complaint that the flights are in the same place.
+ * WHY NOT A SWITCHBACK. A dog-leg is the other real answer and it was rejected
+ * on arithmetic, not on a build: a half-turn back alongside the flight below
+ * offsets it by one stair width plus a wall, about 1.4 m, against a complaint
+ * that the flights are in the same place. The quarter-turn moves 9.4-21.9 m,
+ * measured. If a future plan wants the tighter core, the switchback is `turn`
+ * applied twice with the same `hug`, and it belongs here rather than in a table.
  *
  * WHAT THIS DOES NOT TOUCH. `NavGrid._carveInteriors` keeps the GROUND storey of
  * every footprint and nothing else — a bot cannot use a stair at all on a 2.5D
