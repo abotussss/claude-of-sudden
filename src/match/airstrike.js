@@ -244,8 +244,45 @@ const STRIKE_SITES = [
    * a building — and none is on the west flank south of authored z -10, because
    * that is the campanile and its cap is 32.8 m up.
    */
-  { id: 'CATH-W', name: 'CATHEDRAL NAVE', level: LC(10.0, -12.0), face: [1, 0], reach: 4.6, kind: 'vault', probe: CATH_PROBE },
-  { id: 'CATH-X', name: 'CATHEDRAL CHOIR', level: LC(-10.0, 7.0), face: [-1, 0], reach: 4.6, kind: 'vault', probe: CATH_PROBE },
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * `host: 'cathedral'` — THE BUILDING UNDER THIS MASS DOES NOT SURVIVE IT
+   * ────────────────────────────────────────────────────────────────────────────
+   * 「大聖堂爆破すると空中に瓦礫が浮いてます しかも物理判定あるので戦車が空中に登って
+   *  しまいますよ？？？」
+   *
+   * Every other authored site is a mass ADDED ON TOP OF a building that is still
+   * standing afterwards, so a downward ray at boot finds the ground the rubble
+   * will really come to rest on. These three do not: `MatchSystem._razeCathedral`
+   * takes the shell away `RULES.cathedralRazeDelay` after the ordnance lands,
+   * inside the same event — so a boot probe that finds the aisle roof is finding
+   * a plane that WILL NOT EXIST when the dust settles.
+   *
+   * Measured at ?seed=7 before this flag existed, and it is not subtle:
+   *
+   *     CATH-E   lane 5.0 m -> `maxOut` clamps to 1.4 -> the mound centre sits
+   *              0.50 m out from the anchor, i.e. STILL OVER THE AISLE ROOF, so
+   *              `groundHeight` answered 10.56 m and the mound proxy — solid,
+   *              1.45 m of it, and 489 chunks drawn round it — settled 10.3 to
+   *              11.9 m up with 7.6 m of open air underneath.
+   *
+   * (CATH-W and CATH-X measured an 8.2 m lane, so their mounds cleared the wall
+   * and landed in the street: the bug needs the narrow lane AND the doomed roof,
+   * which is exactly the kind of thing a screenshot of two of the three misses.)
+   *
+   * `src/match/airstrike.js` already knew this failure — it is why
+   * `_buildDemoSite` runs its settle probe with `rec.setCollision(true)`, "A ray
+   * dropped from over a building that is still standing finds its roof, and
+   * every chunk would come to rest ten metres up in the air on the roof of the
+   * thing it is falling off." A demolition IS its building; these three sit on
+   * one. Same defect, same fix: `_buildSite` swaps the shell for the ruin around
+   * the two probes that decide where mass COMES TO REST, and only those two.
+   * `_findRoof`, the lane ray and the facade ray all still measure the church
+   * standing, because that is what the mass is cut off. @see `_withHostRazed`.
+   * `_floatcheck.mjs --fire=cath` is the gate.
+   */
+  { id: 'CATH-W', name: 'CATHEDRAL NAVE', level: LC(10.0, -12.0), face: [1, 0], reach: 4.6, kind: 'vault', probe: CATH_PROBE, host: 'cathedral' },
+  { id: 'CATH-X', name: 'CATHEDRAL CHOIR', level: LC(-10.0, 7.0), face: [-1, 0], reach: 4.6, kind: 'vault', probe: CATH_PROBE, host: 'cathedral' },
   /**
    * MOVED FROM z 2 TO z 6.5, AND THE REASON IS ON THE GROUND RATHER THAN ON THE
    * ROOF. `src/world/layout.js` now stands a 1.7 m screen in each flank street
@@ -257,7 +294,7 @@ const STRIKE_SITES = [
    * E2 (level z -1..9) rather than a connector mouth, and it is 5.5 units clear
    * of the screen. IF THAT SCREEN MOVES, RE-CHECK THIS.
    */
-  { id: 'CATH-E', name: 'CATHEDRAL CHOIR EAST', level: LC(10.0, 6.5), face: [1, 0], reach: 4.6, kind: 'vault', probe: CATH_PROBE },
+  { id: 'CATH-E', name: 'CATHEDRAL CHOIR EAST', level: LC(10.0, 6.5), face: [1, 0], reach: 4.6, kind: 'vault', probe: CATH_PROBE, host: 'cathedral' },
 ];
 
 /**
@@ -514,6 +551,9 @@ export class Airstrike {
     this.salvos = [];
     this.ready = false;
     this.buildMs = 0;
+    /** Boot-only: what swapping a `host` building for its ruin cost. @see `_host`. */
+    this._hostMs = 0;
+    this._hostSwaps = 0;
 
     /** Live strikes, indexed the same as `sites`. */
     this._live = [];
@@ -674,7 +714,9 @@ export class Airstrike {
     const demos = this.sites.length - authored;
     console.info(
       `[airstrike] ${authored}/${STRIKE_SITES.length} authored sites + ${demos} whole buildings ` +
-        `baked in ${this.buildMs.toFixed(0)}ms — ${chunks} chunks, ${cells} nav cells patched, ` +
+        `baked in ${this.buildMs.toFixed(0)}ms ` +
+        `(${this._hostSwaps} host swaps ${this._hostMs.toFixed(0)}ms) — ` +
+        `${chunks} chunks, ${cells} nav cells patched, ` +
         this.sites.map((s) => `${s.id}@${s.roofY.toFixed(1)}m`).join(' ')
     );
     if (authored < STRIKE_SITES.length) {
@@ -1177,37 +1219,17 @@ export class Airstrike {
       return 40;
     })();
 
-    /* ---- where the rubble ends up ------------------------------------ */
-    let moundR = spec.reach * 0.92;
-    let moundOut = spec.reach * 0.52;
-    {
-      const maxOut = Math.max(1.4, lane - LANE_CLEAR);
-      const span = moundOut + moundR;
-      if (span > maxOut) {
-        const k = maxOut / span;
-        moundR *= k;
-        moundOut *= k;
-      }
-    }
-    const moundC = new THREE.Vector3().copy(base).addScaledVector(u, moundOut);
-    const streetY = physics.groundHeight(moundC.x, moundC.z, roofY + 2);
-    moundC.y = Number.isFinite(streetY) ? streetY : world.groundHeight(moundC.x, moundC.z);
-    const moundH = MOUND_H[kind];
-    logLane(spec.id, lane, moundOut + moundR);
-
-    /** Where the bomb goes off — at the roof line on the lane side. */
-    const blast = new THREE.Vector3().copy(base).addScaledVector(u, 1.2);
-    blast.y = roofY + 1.4;
-    /** Where the DAMAGE is centred: street level, or a strike is a roof event. */
-    const ground = new THREE.Vector3().copy(moundC);
-    ground.y += 0.6;
-
     /* ---- where the real wall is --------------------------------------- */
     /**
      * The authored `level` point is the building LINE, and the kit does not put
      * every facade exactly on it — a shopfront is recessed, a pilaster is proud.
      * One horizontal ray finds the plane the skin and the balcony have to be
      * flush with, so they never hang in mid air. Measured at boot, once.
+     *
+     * IT IS MEASURED HERE, BEFORE THE MOUND, because everything from the mound
+     * down is probed against the ruin on a `host` site and this ray is not: it
+     * is looking for the wall the falling mass is FLUSH WITH, which is the wall
+     * that is still standing when the bomb hits it. @see `_withHostRazed`.
      */
     let facadeU = 0;
     {
@@ -1229,6 +1251,42 @@ export class Airstrike {
       if (Math.abs(facadeU) > 1.5) facadeU = 0;
       logFacade(spec.id, roofY, facadeU);
     }
+
+    /* ---- everything below settles on the map the event LEAVES --------- */
+    const host = this._host(spec, world);
+    if (host) this._swapHost(host, true, physics);
+
+    /* ---- where the rubble ends up ------------------------------------ */
+    let moundR = spec.reach * 0.92;
+    let moundOut = spec.reach * 0.52;
+    {
+      const maxOut = Math.max(1.4, lane - LANE_CLEAR);
+      const span = moundOut + moundR;
+      if (span > maxOut) {
+        const k = maxOut / span;
+        moundR *= k;
+        moundOut *= k;
+      }
+    }
+    const moundC = new THREE.Vector3().copy(base).addScaledVector(u, moundOut);
+    /**
+     * The plane the pile rests on. On a `host` site this ray is fired with the
+     * shell already swapped for the ruin, which is the whole fix: measured on
+     * the standing church, CATH-E's mound centre — 0.50 m out from a wall that
+     * `LANE_CLEAR` would not let it clear — answered 10.56 m, the aisle roof,
+     * and the mound was still there in mid air after the aisle roof was not.
+     */
+    const streetY = physics.groundHeight(moundC.x, moundC.z, roofY + 2);
+    moundC.y = Number.isFinite(streetY) ? streetY : world.groundHeight(moundC.x, moundC.z);
+    const moundH = MOUND_H[kind];
+    logLane(spec.id, lane, moundOut + moundR);
+
+    /** Where the bomb goes off — at the roof line on the lane side. */
+    const blast = new THREE.Vector3().copy(base).addScaledVector(u, 1.2);
+    blast.y = roofY + 1.4;
+    /** Where the DAMAGE is centred: street level, or a strike is a roof event. */
+    const ground = new THREE.Vector3().copy(moundC);
+    ground.y += 0.6;
 
     /* ---- cut the mass ------------------------------------------------- */
     const surfaces = SURFACE_FOR[kind];
@@ -1295,7 +1353,45 @@ export class Airstrike {
     site.proxyMesh = proxy;
     site.proxyId = physics.addStatic(proxy, 'concrete', { mask: 0 });
 
+    // Put the church back up. Nothing has been drawn between the two calls.
+    if (host) this._swapHost(host, false, physics);
+
     return site;
+  }
+
+  /** One host swap, timed, so the boot log says what it costs. @see `_host`. */
+  _swapHost(host, down, physics) {
+    const t = performance.now();
+    host.setRazed(down, physics);
+    this._hostMs += performance.now() - t;
+    this._hostSwaps++;
+  }
+
+  /**
+   * THE BUILDING UNDER THIS SITE, IF IT IS ONE THE EVENT TAKES AWAY.
+   *
+   * `_buildDemoSite` has the same problem and solves it with
+   * `rec.setCollision(true/false)` round its own probes; a `host` site is the
+   * other case — a mass standing ON a building that will be gone — and there is
+   * exactly one host on this map, so this is a lookup rather than a registry.
+   *
+   * `world.cathedral.setRazed(down, physics)` is two index-range fills and two
+   * collision-mask writes over ranges cached at boot, which is the same swap
+   * `AiSystem._bakeCover` already makes three times inside `ai.init`. It runs
+   * here at BOOT ONLY, twice per host site, with no frame drawn between them and
+   * the shell restored before `_buildSite` returns — nothing about the state the
+   * player boots into changes. `match` may not reach past this: `_setCathedralRazed`
+   * is still the only path that touches the cover tables and the HUD.
+   *
+   * Under `?cath=down` the restore is a documented no-op (`setRazed` latches
+   * down once the ruin cover table is baked) and it costs nothing: the three
+   * cathedral sites are already DROPPED under that flag, because `_findRoof`
+   * runs before this and finds no aisle roof to cut a mass off.
+   */
+  _host(spec, world) {
+    if (spec.host !== 'cathedral') return null;
+    const k = world?.cathedral;
+    return typeof k?.setRazed === 'function' ? k : null;
   }
 
   /**

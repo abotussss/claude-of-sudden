@@ -47,10 +47,13 @@
  *      rubble on the tile. It is a seed and it is never anything else.
  *   3. A GRAPH OVER WHAT IS LEFT. One node per interval that is entirely ABOVE
  *      that plane. Lateral edges join two of them in neighbouring columns whose
- *      Y ranges overlap — the same piece, sampled twice. A vertical edge makes a
- *      node SUPPORTED when the next solid down in its own column is within
- *      `--tol` of its underside, whatever that solid is.
- *   4. A component with no supported node in it is standing on nothing. That is
+ *      Y ranges overlap — the same piece, sampled twice.
+ *   4. SUPPORT. A node is supported when the next solid down in its own column
+ *      is within `--tol` of its underside, OR when a neighbouring column's
+ *      GROUND-standing mass comes up to at least that underside. The second
+ *      clause is what tells a roof or a balcony — nothing under it at all, held
+ *      up perfectly well by the wall beside it — from a mass in the sky.
+ *   5. A component with no supported node in it is standing on nothing. That is
  *      the bug, and it is reported with its extent, its height and the metres of
  *      open air under it.
  *
@@ -114,6 +117,8 @@ const TOL = Number(args.tol ?? 0.6);
 const MIN_CELLS = Number(args.min ?? 2);
 /** Metres over a region's own floor under which a solid IS the ground. */
 const GROUND = Number(args.ground ?? 2.0);
+/** Column-neighbours that must carry standing mass up to a piece's underside. */
+const NEED_ATTACH = Number(args.attach ?? 1);
 /** Metres of apron round a footprint, so the mound in the street is swept too. */
 const APRON = Number(args.apron ?? 6.0);
 const SEED = args.seed;
@@ -204,7 +209,7 @@ if (FIRE) {
 /* -------------------------------------------------------------------------- */
 
 const result = await page.evaluate(
-  ({ REGION, GRID, TOL, MIN_CELLS, GROUND, APRON }) => {
+  ({ REGION, GRID, TOL, MIN_CELLS, GROUND, APRON, NEED_ATTACH }) => {
     const e = window.__ENGINE__;
     const ph = e.ctx.peek('physics');
     const w = e.ctx.peek('world');
@@ -239,7 +244,13 @@ const result = await page.evaluate(
           id: d.id,
           cx: d.position.x, cz: d.position.z,
           c: Math.cos(yaw), s: Math.sin(yaw),
-          hw: d.halfW + APRON * 0.5, hd: d.halfD + APRON * 0.5,
+          /**
+           * A TIGHTER APRON THAN THE CATHEDRAL'S, because a razed block has an
+           * intact one next door. The cathedral needs six metres — its mounds
+           * land in the flank street — and a district block's rubble stays on
+           * its own plot, so anything further out is somebody's balcony.
+           */
+          hw: d.halfW + 2.0, hd: d.halfD + 2.0,
           floorY: 0,
         });
       }
@@ -251,13 +262,39 @@ const result = await page.evaluate(
     /** Well under any floor on this map, so "the world" is unbounded below. */
     const BOTTOM = -6;
     /** Two hits closer than this are one surface seen twice; the ray has to be
-     *  nudged past a hit to make progress and the nudge must not skip a face. */
+     *  nudged past a hit to make progress. @see the note on closure below. */
     const NUDGE = 2e-3;
 
     let anomalies = 0;
 
     const ys = [];
     const fs = [];
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * CLOSURE IS THE FIRST BACK FACE, NOT A DEPTH COUNT — COINCIDENT FACES
+     * ────────────────────────────────────────────────────────────────────────
+     * Counting depth (+1 per front face, -1 per back) reconstructs overlapping
+     * boxes exactly, and it was the first thing this file did. It is wrong here,
+     * and the reason is that a closest-hit ray has to be RESTARTED past each hit
+     * to find the next one — so every face sharing a plane with the one that was
+     * returned is behind the new origin and is never seen at all.
+     *
+     * `Airstrike._buildMoundProxy` builds ten boxes ALL SUNK TO THE SAME
+     * `mound.y - 0.25`: three tops at three heights, ten undersides on one
+     * plane. Depth counts three entries and one exit, never returns to zero, and
+     * the mound is reported as a single solid running from its own crown down
+     * into the terrain ten metres below — i.e. as standing on the ground. That
+     * is a FALSE NEGATIVE on exactly the bug this file exists for, and no size
+     * of nudge fixes it: below the plane the partners are behind you and above
+     * it you have not moved.
+     *
+     * So a solid is opened by a front face while outside and closed by the FIRST
+     * back face after it, whatever happens in between. Coincident undersides
+     * close correctly (the first one is the underside). Overlapping boxes with
+     * staggered undersides close early — the remainder is then measured as the
+     * next thing down and reads as a joint rather than as air, which is the safe
+     * direction: it can under-report a piece's thickness, never invent daylight.
+     */
     const column = (x, z, out) => {
       out.length = 0;
       ys.length = 0;
@@ -272,32 +309,30 @@ const result = await page.evaluate(
         if (ny >= y) break;
         y = ny;
       }
-      let depth = 0;
+      let inside = false;
       let top = 0;
       for (let i = 0; i < ys.length; i++) {
         if (fs[i]) {
-          if (depth === 0) top = ys[i];
-          depth++;
+          if (!inside) { top = ys[i]; inside = true; }
+        } else if (inside) {
+          out.push(top, ys[i]);
+          inside = false;
         } else {
-          depth--;
-          if (depth < 0) {
-            // an open (single-sided) surface: it was left without being entered
-            anomalies++;
-            depth = 0;
-            continue;
-          }
-          if (depth === 0) out.push(top, ys[i]);
+          // a back face while outside: a single-sided surface, or the partner
+          // of a front face that shared a plane with an earlier hit
+          anomalies++;
         }
       }
-      // Depth still positive at the floor of the sweep: whatever this is, it
-      // reaches the bottom of the world and is standing on it.
-      if (depth > 0) out.push(top, BOTTOM);
+      // Never closed: whatever this is, it reaches the bottom of the sweep.
+      if (inside) out.push(top, BOTTOM);
       return out;
     };
 
     /* ---- sweep every region, keeping only what is off the ground ----- */
     const nodes = []; // one per solid interval ENTIRELY above the ground plane
     const index = new Map(); // `${r}:${ix}:${iz}` -> [nodeIds]
+    /** `${r}:${ix}:${iz}` -> the top of the tallest GROUND interval there. */
+    const stand = new Map();
     const tmp = [];
     let rays = 0;
     let intervals = 0;
@@ -311,8 +346,20 @@ const result = await page.evaluate(
       const nz = Math.max(1, Math.round((rg.hd * 2) / GRID));
       for (let iz = 0; iz < nz; iz++) {
         for (let ix = 0; ix < nx; ix++) {
-          const u = -rg.hw + (ix + 0.5) * GRID;
-          const v = -rg.hd + (iz + 0.5) * GRID;
+          /**
+           * JITTERED OFF THE LATTICE, DETERMINISTICALLY.
+           *
+           * A ray fired exactly down a shared edge between two boxes can hit
+           * one face and miss its partner, and the depth count then never
+           * returns to zero — the piece fuses to the terrain and reads as
+           * standing on it. On a 0.5 m lattice over a map built out of boxes
+           * that alignment is not rare, it is systematic. A fixed hash of the
+           * cell index moves each column a fifth of a cell off the grid, which
+           * costs nothing and is still the same sweep on every run.
+           */
+          const h = ((ix * 73856093) ^ (iz * 19349663) ^ (b * 83492791)) >>> 0;
+          const u = -rg.hw + (ix + 0.5) * GRID + (((h & 1023) / 1023) - 0.5) * GRID * 0.4;
+          const v = -rg.hd + (iz + 0.5) * GRID + ((((h >>> 10) & 1023) / 1023) - 0.5) * GRID * 0.4;
           const x = rg.cx + u * rg.c + v * rg.s;
           const z = rg.cz - u * rg.s + v * rg.c;
           column(x, z, tmp);
@@ -320,13 +367,19 @@ const result = await page.evaluate(
           rays += tmp.length;
           intervals += tmp.length / 2;
           const ids = [];
+          /** The highest thing in this column that IS standing on the map. */
+          let stands = -Infinity;
           for (let i = 0; i < tmp.length; i += 2) {
             const top = tmp[i];
             const bot = tmp[i + 1];
             // THE WORLD. Anything whose underside reaches the ground plane is
             // standing on the map and is never a candidate — and, critically,
             // is never a lateral neighbour either. @see the note in the header.
-            if (bot <= groundY) { groundNodes++; continue; }
+            if (bot <= groundY) {
+              groundNodes++;
+              if (top > stands) stands = top;
+              continue;
+            }
             const below = i + 2 < tmp.length ? tmp[i + 2] : BOTTOM;
             ids.push(nodes.length);
             nodes.push({
@@ -337,6 +390,7 @@ const result = await page.evaluate(
             });
           }
           if (ids.length) index.set(`${b}:${ix}:${iz}`, ids);
+          if (stands > -Infinity) stand.set(`${b}:${ix}:${iz}`, stands);
         }
       }
     }
@@ -381,6 +435,9 @@ const result = await page.evaluate(
       if (!c) {
         c = {
           n: 0, cells: new Set(), supported: false,
+          /** How many column-neighbours have ground-standing mass up to it. */
+          attached: 0,
+          bestStand: -Infinity,
           top: -Infinity, bot: Infinity, minGap: Infinity,
           x0: Infinity, x1: -Infinity, z0: Infinity, z1: -Infinity,
           region: nodes[i].b, at: null,
@@ -390,12 +447,41 @@ const result = await page.evaluate(
       const n = nodes[i];
       c.n++;
       c.cells.add(`${n.ix}:${n.iz}`);
+      // rests on the next solid down in its own column
       if (n.gap <= TOL) c.supported = true;
+      /**
+       * …OR IS ATTACHED TO SOMETHING STANDING RIGHT BESIDE IT, and this is the
+       * clause that tells a roof from a mass in the sky. A roof has nothing at
+       * all underneath it and is held up perfectly well: the test is that the
+       * mass beside it which DOES reach the ground comes up to at least its own
+       * underside. A balcony's wall does. The rubble of a razed block does not
+       * reach ten metres, which is why the bug this file was written for is
+       * still caught with this clause in.
+       */
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const s = stand.get(`${n.b}:${n.ix + dx}:${n.iz + dz}`);
+        if (s === undefined) continue;
+        const lift = s - n.bot;
+        if (lift > c.bestStand) c.bestStand = lift;
+        if (s >= n.bot - TOL) c.attached++;
+      }
       if (n.top > c.top) { c.top = n.top; c.at = [+n.x.toFixed(2), +n.z.toFixed(2)]; }
       if (n.bot < c.bot) c.bot = n.bot;
       if (n.gap < c.minGap) c.minGap = n.gap;
       c.x0 = Math.min(c.x0, n.x); c.x1 = Math.max(c.x1, n.x);
       c.z0 = Math.min(c.z0, n.z); c.z1 = Math.max(c.z1, n.z);
+    }
+
+    /**
+     * ATTACHED TO SOMETHING STANDING. A roof, a balcony and a gangway deck all
+     * have nothing whatever underneath them and are held up perfectly well by
+     * the mass beside them; `--attach` is how many column-neighbours have to
+     * carry ground-standing mass up to the piece's own underside before that
+     * counts. One is enough now that a single freak column cannot manufacture a
+     * ten-metre "ground" interval. @see the coincident-faces note above.
+     */
+    for (const c of comp.values()) {
+      if (c.attached >= NEED_ATTACH) c.supported = true;
     }
 
     const floating = [];
@@ -428,7 +514,9 @@ const result = await page.evaluate(
       .slice(0, 10)
       .map((c) => ({
         top: +c.top.toFixed(2), bot: +c.bot.toFixed(2), cells: c.cells.size,
-        supported: c.supported, air: +c.minGap.toFixed(2), at: c.at,
+        supported: c.supported, air: +c.minGap.toFixed(2),
+        attached: c.attached, lift: c.bestStand === -Infinity ? null : +c.bestStand.toFixed(2),
+        at: c.at,
       }));
 
     return {
@@ -446,7 +534,7 @@ const result = await page.evaluate(
       total: floating.reduce((s, f) => s + f.cells, 0),
     };
   },
-  { REGION, GRID, TOL, MIN_CELLS, GROUND, APRON }
+  { REGION, GRID, TOL, MIN_CELLS, GROUND, APRON, NEED_ATTACH }
 );
 
 await browser.close();
