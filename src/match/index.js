@@ -2970,7 +2970,16 @@ export class MatchSystem {
       const endgame = RULES.scoreTarget - theirs <= RULES.reinforceEndgame;
       if (!behind && !endgame) continue;
       this.reinforceStats.windows[team]++;
-      if (!this.rng.chance(RULES.reinforceChance)) continue;
+      /**
+       * `Rng` HAS NO `chance()`. It has `float()`, `range`, `int`, `signed`,
+       * `gauss`, `pick`, `disc` and `fork` — and the first version of this line
+       * called a method that does not exist, which threw inside the poll every
+       * eight seconds for a whole match and meant the drop could never fire.
+       * Measured: seed 11 opened SEVEN qualifying windows for RED and produced
+       * zero drops and three page errors. A feature guarded by a throw is a
+       * feature that is off.
+       */
+      if (this.rng.float() >= RULES.reinforceChance) continue;
       if (this._callReinforcement(team, t, behind, endgame)) return;
     }
   }
