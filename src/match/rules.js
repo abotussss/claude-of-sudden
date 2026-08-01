@@ -842,37 +842,52 @@ export const RULES = {
    * so it moved, and the window exists. @see `RULES.scoreTarget`.
    *
    * ──────────────────────────────────────────────────────────────────────────
-   * AND 0.44 DID NOT HAVE TO MOVE WITH IT — MEASURED, NOT ASSUMED
+   * 0.44 -> 0.40, AND THE REASON IS THE SPREAD RATHER THAN THE MEAN
    * ──────────────────────────────────────────────────────────────────────────
-   * The reflex is to re-tune the fraction the moment the match doubles in
-   * length, and it is the wrong reflex here, for a reason that falls out of the
-   * arithmetic: a fraction of the SCORE converts to seconds-before-the-end at
-   * `(1 - p) * scoreTarget / rate`, so doubling `scoreTarget` at an unchanged
-   * scoring rate doubles the seconds any fixed threshold buys. 0.44 bought
-   * 92-128 s of remaining match at 250. It buys twice that at 500, which is the
-   * window. MEASURED over three matches at 20v20 / 500 run to a natural end
+   * MOST OF THE WORK WAS DONE BY `scoreTarget` AND NOT BY THIS NUMBER, which is
+   * worth saying first because it is the non-obvious half. A fraction of the
+   * SCORE converts to seconds-before-the-end at `(1 - p) * scoreTarget / rate`,
+   * so doubling the target at an unchanged scoring rate DOUBLES the seconds any
+   * fixed threshold buys. 0.44 bought 92-128 s of remaining match at 250; at 500
+   * it bought 170-251 s without being touched.
+   *
+   * BUT THE WINDOW IS 180..300 AND 170 IS OUTSIDE IT. Six matches at 500 (two
+   * builds, seeds 11/22/33) put D at T-226, 210, 214, 242, 202 and 170: five
+   * inside, one out, and the miss is at the near edge — the collapse arriving
+   * too LATE, with under three minutes left to fight over the point it opens.
+   * A threshold whose distribution touches an edge is mistuned even when its
+   * mean is fine, and the mean was fine (T-210).
+   *
+   * 0.40 RE-CENTRES IT. Measured over three matches run to a natural end
    * (`_events.mjs`, seeds 11/22/33), stamped in the column the ask is actually
    * about — SECONDS BEFORE THE END:
    *
-   *                     collapse            D live            match
-   *   seed 11    t=228.4 49 % T-235.8   t=238.2 T-226.0     464.2 s
-   *   seed 33    t=236.2 52 % T-220.0   t=246.0 T-210.2     456.2 s
-   *   seed 22    t=256.2 53 % T-224.0   t=266.0 T-214.2     480.2 s
+   *                   collapse             D live          final    match
+   *   seed 11   t=228.4 47 % T-255.8   t=238.2 T-246.0   T-72.2   484.2 s
+   *   seed 22   t=228.4 49 % T-235.8   t=238.2 T-226.0   T-60.2   464.2 s
+   *   seed 33   t=240.2 51 % T-232.0   t=250.0 T-222.2   T-80.2   472.2 s
    *
-   * — the collapse at T-220..236 and D at T-210..226, i.e. inside the last five
-   * minutes and outside the last three, in all three, with a spread of 16 s. The
-   * fourth point now gets 210-226 s of life against the 85-120 s the paragraph
-   * above promised it, which is the fight over D the brief asked for and not a
-   * flourish. Changing the fraction as well would have moved a schedule that the
-   * measurement says is already where it was asked to be.
+   * — the collapse at T-232..256 and D at T-222..246, every one of them inside
+   * the last five minutes and clear of the last three by 42-66 s, with the whole
+   * spread down from 72 s to 24 s. The fourth point gets 222-246 s of life
+   * against the 85-120 s the paragraph above promised it, which is the fight
+   * over D the brief asked for and not a flourish.
+   *
+   * THE TWO THINGS THAT SET THE FLOOR UNDER 0.40, so nobody lowers it further by
+   * the same reasoning: the second district salvo lands at t = 150-168, and
+   * `MatchSystem._updateMapEvents` now holds the cathedral to `districtSalvoGap`
+   * of clear air behind it as well as to `airstrike.busy` — at 0.40 the gap
+   * measures 49-66 s, and a threshold much below this starts being decided by
+   * that guard instead of by the schedule. Below it the collapse would also pass
+   * the halfway mark of the match, and D is a second act, not the map.
    *
    * THE ONE CASE THAT IS STILL OUTSIDE THE WINDOW, NAMED RATHER THAN HIDDEN: a
    * match that goes to `matchTime` instead of to `scoreTarget`. Progress is then
-   * carried by the clock term, 0.44 resolves to t = 264 of 600, and the collapse
-   * lands at T-336 — early, not unreachable. It needs a leader printing under
-   * 0.83 pt/s for ten minutes; the three measured matches print 1.05-1.10 and
-   * end on points with 120-144 s of clock to spare. It is a deadlock case, and
-   * the fix for it is `matchTime`, not this number.
+   * carried by the clock term, 0.40 resolves to t = 240 of 600, and the collapse
+   * lands at T-360 — early, not unreachable. It needs a leader printing under
+   * 0.83 pt/s for ten minutes; the measured matches print 1.03-1.13 and end on
+   * points with 116-156 s of clock to spare. It is a deadlock case, and the fix
+   * for it is `matchTime`, not this number.
    *
    * IT ALSO WAITS FOR CLEAR AIR. `_updateMapEvents` holds this off while a
    * district salvo is still in the air or settling; progress is monotone, so the
@@ -904,7 +919,7 @@ export const RULES = {
    * moved to 500 on its own account, and 0.44 was re-measured against it and
    * kept — @see the AND 0.44 DID NOT HAVE TO MOVE WITH IT block above.
    */
-  cathedralOpenProgress: 0.44,
+  cathedralOpenProgress: 0.40,
 
   /**
    * ──────────────────────────────────────────────────────────────────────────

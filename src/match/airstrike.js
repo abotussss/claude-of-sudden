@@ -409,6 +409,27 @@ const ROOF_INSET = 3.0;
 const LANE_CLEAR = 3.6;
 
 /**
+ * How high over the LOCAL TERRAIN the mound's rest probe starts.
+ *
+ * `ground` is documented two hundred lines below as "street level, or a strike
+ * is a roof event", and a downward ray fired from over the roof cannot promise
+ * that: it stops at the FIRST thing under it, and over a street that is not
+ * always the street. Measured, on two different level seeds, the same defect at
+ * two different sites — MID's mound centre landed on a 0.16 m balcony slab and
+ * the proxy, a 4.8 m disc of SOLID, was baked at 6.66 m with 6.35 m of open air
+ * under it; R1's on another at 3.61 m. To a player that is the cathedral bug
+ * again: a mass in the sky he can drive a tank up.
+ *
+ * Starting the ray at head height over the terrain makes finding a balcony
+ * impossible rather than unlikely, and it is the same move the lane measurement
+ * two hundred lines above already makes for the same reason ("the ray has to
+ * START IN THE STREET"). 3.4 m still finds everything a pile can rest on — a
+ * kerb, a street screen, the 2.74 m of torn flank wall CATH-E's mound stands on
+ * — and cannot reach the lowest balcony on the map.
+ */
+const STREET_HEAD = 3.4;
+
+/**
  * The mass that comes down, in the site's own frame:
  *   +u  out over the lane      +v  along the facade      +y  up from the roof
  *
@@ -1270,14 +1291,44 @@ export class Airstrike {
     }
     const moundC = new THREE.Vector3().copy(base).addScaledVector(u, moundOut);
     /**
-     * The plane the pile rests on. On a `host` site this ray is fired with the
-     * shell already swapped for the ruin, which is the whole fix: measured on
-     * the standing church, CATH-E's mound centre — 0.50 m out from a wall that
-     * `LANE_CLEAR` would not let it clear — answered 10.56 m, the aisle roof,
-     * and the mound was still there in mid air after the aisle roof was not.
+     * ────────────────────────────────────────────────────────────────────────
+     * THE PLANE THE PILE RESTS ON — NINE PROBES, AND THE MIDDLE ONE WINS
+     * ────────────────────────────────────────────────────────────────────────
+     * On a `host` site these rays are fired with the shell already swapped for
+     * the ruin, which is half the fix: measured on the standing church, CATH-E's
+     * mound centre — 0.50 m out from a wall `LANE_CLEAR` would not let it clear
+     * — answered 10.56 m, the aisle roof, and the mound was still sitting there
+     * in mid air after the aisle roof had stopped existing.
+     *
+     * THE OTHER HALF IS THAT THIS RAY MAY NOT START ON THE ROOF, and that cost
+     * two more sites on two more seeds. @see `STREET_HEAD`.
+     *
+     * And the plane is the MEDIAN of the centre and eight points round the disc
+     * the mound actually covers rather than one sample of it, because a ledge
+     * under part of a pile is a ledge: a street answers the same everywhere and
+     * gets it, and a pile that genuinely stands on a wall ruin still finds the
+     * wall because there it is most of the disc rather than a corner of it.
+     * `_floatcheck.mjs --region=strike` is the gate.
      */
-    const streetY = physics.groundHeight(moundC.x, moundC.z, roofY + 2);
-    moundC.y = Number.isFinite(streetY) ? streetY : world.groundHeight(moundC.x, moundC.z);
+    const restY = (() => {
+      const ys = [];
+      const p = this._v;
+      for (let i = -1; i < 8; i++) {
+        p.copy(moundC);
+        if (i >= 0) {
+          const a = (i / 8) * Math.PI * 2;
+          p.addScaledVector(u, Math.cos(a) * moundR * 0.75).addScaledVector(v, Math.sin(a) * moundR * 0.75);
+        }
+        const terrain = world.groundHeight(p.x, p.z);
+        const from = (Number.isFinite(terrain) ? terrain : 0) + STREET_HEAD;
+        const g = physics.groundHeight(p.x, p.z, from);
+        if (Number.isFinite(g)) ys.push(g);
+      }
+      if (!ys.length) return NaN;
+      ys.sort((a, b) => a - b);
+      return ys[ys.length >> 1];
+    })();
+    moundC.y = Number.isFinite(restY) ? restY : world.groundHeight(moundC.x, moundC.z);
     const moundH = MOUND_H[kind];
     logLane(spec.id, lane, moundOut + moundR);
 

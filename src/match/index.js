@@ -2587,15 +2587,29 @@ export class MatchSystem {
      */
     if (this._cath.t >= 0) {
       this._updateCathedralEvent(dt);
-      // NOT ON TOP OF A DISTRICT. `busy` is a salvo in the air or still settling,
-      // so this waits out the ~9 s a district takes rather than firing the two
-      // biggest events of the match into the same ten seconds. It only ever
-      // DELAYS: `p` is monotone, so the branch is still taken on the next frame
-      // the sky is clear. @see `RULES.districtSalvoGap`.
+      /**
+       * NOT ON TOP OF A DISTRICT, AND `busy` ALONE WAS NOT ENOUGH FOR THAT.
+       *
+       * `busy` is a salvo in the air or still settling — about nine seconds —
+       * so it stopped the two biggest events of the match from literally
+       * overlapping and nothing more. `_districtGap` is the same 25 s floor the
+       * two district salvos hold each other to (@see `RULES.districtSalvoGap`),
+       * and the cathedral is now held to it as well, because the argument that
+       * set it applies here with more force rather than less: "three big events
+       * inside twenty seconds is one big event". It became reachable when
+       * `cathedralOpenProgress` came down to 0.40 — measured, the cathedral then
+       * wants to fire 18 s after the second district in the fastest of three
+       * matches, which `busy` would have allowed.
+       *
+       * IT ONLY EVER DELAYS. `p` is monotone and `_districtGap` counts down, so
+       * the branch is still taken on the first frame the sky is clear; it can
+       * postpone the collapse by seconds and can never skip it.
+       */
     } else if (
       !this._cathedralCalled &&
       this.lockedZone &&
       p >= RULES.cathedralOpenProgress &&
+      this._districtGap <= 0 &&
       !this.airstrike?.busy
     ) {
       this._beginCathedralEvent(t, p);
