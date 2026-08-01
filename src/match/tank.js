@@ -62,9 +62,12 @@
  *     the "blocks a zone permanently" failure by another name.
  *   • ITS ROUTE NEVER ENTERS A ZONE. Measured at boot and printed: the closest
  *     approach of either route to any capture circle is reported in the boot
- *     log, and both routes are authored ~27 m off A and B on the far side of
- *     the street. A sortie is finite anyway — it advances, holds, and reverses
- *     back out — so nothing of it is standing anywhere when it is over.
+ *     log, and both routes now stop 24 m off D — sixteen metres outside the 8 m
+ *     circle they are shelling, and 58 m or further from every other point. A
+ *     sortie is finite anyway — it advances, holds, and reverses back out — so
+ *     nothing of it is standing anywhere when it is over. The number in this
+ *     paragraph was 27 m for six commits after the map had moved it to 55-77;
+ *     believe the boot log, not this comment. @see `ROUTES`.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * NOTHING IS COMPUTED IN THE FRAME IT DIES
@@ -110,36 +113,59 @@ const SCALE = 1.5;
 const L = (x, z) => [x * SCALE, z * SCALE];
 
 /**
- * THE TWO ROUTES, and why they are where they are.
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE TWO ROUTES, RE-AIMED AT THE CATHEDRAL — "まだ戦車が登場したの一回も見て
+ * いないです"
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE OLD ROUTES WORKED PERFECTLY AND THAT WAS THE PROBLEM. Measured over three
+ * matches by `_tankdiag.mjs`: both hulls baked, both rolled at t = 91 s, both
+ * drove their whole 57 m route, both reversed out ~60 s later — and the hull was
+ * ON SCREEN for 0 of 4058 frames, finished on 2600/2600 health with not one
+ * round from either side on it, and its closest approach to any capture circle
+ * was 55 m (BLUE) and 77 m (RED). The header of this file still claimed "~27 m,
+ * measured and printed at boot"; the map had grown out from under the authored
+ * polyline (`SPAWNS` went out to level z ∓90, `widenX` prised the mid street
+ * open to x ∓23, A and B moved to the flank districts) and nobody re-measured.
  *
- * The mid street is 31 authored units across (46.5 m) between the W5/E5 and
- * W4/E4 building rows, and the CATHEDRAL stands in the middle of it — level
- * x -10..10, z -16..14. So each side has a clear run of about 35 m of open
- * street from its own base down to the cathedral's end wall, and that is the
- * whole route: out of the north pocket heading south (RED), out of the south
- * pocket heading north (BLUE), stopping short of the building.
+ * So the polyline is authored against the map that exists, and it is aimed at
+ * the one place the match is guaranteed to be: the CATHEDRAL. Each route leaves
+ * its own side's spawn street six metres in front of the front rank — so the
+ * first thing you see on foot is your own armour pulling out ahead of you —
+ * converges on the mid street's centreline and stops in the square at the
+ * cathedral's end wall. Both hulls arrive as D opens in the wreckage, which is
+ * what makes them the collapse's consequence rather than a timer.
+ * @see `RULES.tankAfterCathedral`.
  *
- * They are on OPPOSITE sides of the centreline (x +8 and x -8) so the two tanks
- * are not nose to nose down a 200 m firing line — they end up in echelon with
- * the cathedral between them, which is what makes them a threat to the infantry
- * in the plazas rather than to each other.
+ * MEASURED WITH `_tankroute.mjs`, which re-runs `_bakePath` against the built
+ * map without a rebuild, and re-printed at boot by `_logZones`:
  *
- * Capture zone A is at level (-10, 40) and B at (10, -42): each route's closest
- * approach is ~18 authored units — 27 m, against an 8 m circle — measured and
- * printed at boot by `_zoneClearance`.
+ *     RED    67.0 m of route, narrowest street 5.7 m, ends 24.1 m off D
+ *     BLUE   75.7 m of route, narrowest street 10.0 m, ends 23.8 m off D
+ *
+ * ITS ROUTE STILL NEVER ENTERS A ZONE. 24 m against an 8 m circle, so the hull
+ * stops sixteen metres outside the point it is shelling — close enough that the
+ * gun and the coax cover the ruin, far enough that a wreck is never standing on
+ * the capture circle. Every other capture point is 58 m or further from either
+ * route; the boot log prints the true closest approach and the zone it is to,
+ * so this claim is a measurement and stays one when the map moves again.
+ *
+ * The two converge on the centreline from opposite ends rather than staying in
+ * echelon, because the thing that keeps them from being nose to nose down a
+ * firing line is now the RUIN between them — 3.1 m of rubble against a muzzle
+ * 2.6 m off the road, which `MASK.SIGHT` stops dead in `_acquire`.
  */
 const ROUTES = [
   {
     id: 'RED',
     team: 0,
     name: 'RED ARMOUR',
-    points: [L(8, 56), L(8, 46), L(6.5, 36), L(7, 28), L(8, 21)],
+    points: [L(8, 56), L(7, 46), L(5, 36), L(2.5, 28), L(1, 20), L(0.5, 15)],
   },
   {
     id: 'BLUE',
     team: 1,
     name: 'BLUE ARMOUR',
-    points: [L(-8, -56), L(-8, -46), L(-6.5, -36), L(-7, -28), L(-8, -23)],
+    points: [L(-8, -56), L(-7, -46), L(-5, -36), L(-2.5, -28), L(-1, -22), L(-0.5, -17)],
   },
 ];
 
@@ -515,7 +541,14 @@ export class Armour {
    */
   _logZones(tank) {
     const m = this.ctx.peek('match');
-    const zones = m?.sites;
+    /**
+     * `allZones`, NOT `sites`, AND THAT IS THE WHOLE VALUE OF THE LINE. D is
+     * `locked` at boot and therefore not in `sites`, so the old measurement
+     * silently omitted the one capture point the route now drives at: it
+     * reported 55 m and 77 m to zone C while the true closest approach was
+     * 35 m to D. A guarantee that skips a point does not guarantee anything.
+     */
+    const zones = m?.allZones ?? m?.sites;
     if (!zones?.length) return;
     let best = Infinity;
     let which = '';
@@ -1595,10 +1628,33 @@ export class Armour {
     /* The routes are fixed and both fire, so there is nothing to bias. */
   }
 
+  /**
+   * A round has gone live. NOTHING IS SCHEDULED YET, and that is the change.
+   *
+   * There is no first-sortie timer any more: armour is the cathedral's
+   * consequence, so `match` calls `armAfter` when the bombardment stops.
+   * @see `RULES.tankAfterCathedral` and `MatchSystem._updateCathedralEvent`.
+   */
   armRound() {
-    this._next = RULES.tankFirstDelay;
+    this._next = Infinity;
     this._sorties = 0;
     this._liveT = 0;
+  }
+
+  /**
+   * ARM THE FIRST SORTIE, `seconds` from now. One line, called by `match` from
+   * the cathedral event's beat sheet; everything after it is the interval
+   * scheduler this class already had (`RULES.tankInterval`, both hulls parked
+   * first, never under an inbound salvo). Idempotent — a second call while the
+   * armour is already armed or out does nothing.
+   */
+  armAfter(seconds) {
+    if (!this.ready || this.busy) return false;
+    if (this._next !== Infinity) return false;
+    if (this._sorties >= RULES.tankMaxPerMatch) return false;
+    this._next = Math.max(0, seconds);
+    console.info(`[tank] armed — first sortie in ${this._next.toFixed(1)}s`);
+    return true;
   }
 
   disarm() {

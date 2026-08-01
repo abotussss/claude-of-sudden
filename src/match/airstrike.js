@@ -308,12 +308,25 @@ const SALVOS = [
    * that draw: this group fires from `callCathedralCollapse` and nowhere else,
    * which is what makes "後半" true of it. @see `_pickSalvo`.
    */
+  /**
+   * ITS STAGGER IS FOUR TIMES THE OTHER TWO, AND ITS DUST WALL OUTLIVES THEM.
+   *
+   * A block salvo wants to read as ONE event — a fifth of a second apart, three
+   * detonations are a single crump to the ear. The cathedral wants the opposite:
+   * "大聖堂崩壊イベントは過激にそして激しく破壊し、大イベントにしてください", and
+   * a building that comes apart over a second and a half reads as a COLLAPSE
+   * where one that comes apart over half a second reads as a bang. 0/0.62/1.34
+   * is still inside the barrage that is landing round it and still well inside
+   * `cathedralRazeDelay`, so the shell still goes while masonry is in the air.
+   */
   {
     id: 'CATHEDRAL',
     name: 'THE CATHEDRAL',
     members: ['CATH-W', 'CATH-X', 'CATH-E'],
-    stagger: [0, 0.23, 0.46],
+    stagger: [0, 0.62, 1.34],
     scheduled: true,
+    /** Twice the frontage of a block, so the wall is longer and lasts longer. */
+    dust: { count: 7, duration: 16, life: 12, radius: 6.4, rate: 10, rise: 1.7, growth: 7.8, dark: 0.26 },
   },
 ];
 
@@ -462,8 +475,18 @@ const MOUND_H = { block: 1.55, route: 1.05, vault: 1.45, demo: 0.3 };
  */
 const FACADE_PARTS = new Set(['skin', 'balcony', 'rail', 'flyer']);
 
-/** Seconds of telegraph: jet first, then the whistle, then it lands. */
-const JET_LEAD = 4.4;
+/**
+ * Seconds of telegraph: jet first, then the whistle, then it lands.
+ *
+ * EXPORTED because `MatchSystem` has to place `callSalvo` on a beat sheet whose
+ * other entries are its own — the cathedral event calls the salvo `JET_LEAD`
+ * before the second it wants the masonry to arrive, so the strike's own
+ * telegraph lands inside the event's rather than after it. Reading it off a
+ * shared constant is the only way that stays true if the telegraph is retuned;
+ * the old code hard-coded the ordering and got it backwards by 2.2 s.
+ * @see `RULES.cathedralRazeDelay`.
+ */
+export const JET_LEAD = 4.4;
 const WHISTLE_LEAD = 2.6;
 /** When the pile has stopped moving and the settled pose is baked in. */
 const SETTLE_AT = 6.5;
@@ -705,6 +728,8 @@ export class Airstrike {
         chunkCount: chunks,
         /** Fired by `match` on a progress threshold, not by the draw. @see `_pickSalvo`. */
         scheduled: !!spec.scheduled,
+        /** Per-group override of `SALVO_DUST`, or null for the default wall. */
+        dust: spec.dust ?? null,
         /** Where the telegraph and the HUD arrow point: the middle of the block. */
         position: centre,
       });
@@ -2045,18 +2070,43 @@ export class Airstrike {
     return left.length;
   }
 
+  /**
+   * THE CATHEDRAL SALVO, AND NOTHING ELSE.
+   *
+   * It used to fire the bomber as well. It does not any more, because the run
+   * down the mid street is now one beat of a scored event that `match` owns end
+   * to end — the warning, the barrage, the salvo, the shell going, the aircraft,
+   * the strafing run, the aftermath and the armour — and a second caller putting
+   * the aeroplane up on its own clock is how a beat sheet stops being one.
+   * @see `MatchSystem._updateCathedralEvent` and `RULES.cathedralLead`.
+   */
   callCathedralCollapse() {
     if (!this.ready || !this.enabled) return false;
-    if (!this.callSalvo('CATHEDRAL')) return false;
-    /** The aeroplane. Optional on purpose — see the note above. */
-    this.ctx.peek?.('match')?.bomber?.fire?.('MAIN');
-    return true;
+    return this.callSalvo('CATHEDRAL');
   }
 
   /**
    * A flank beacon has just been lit. One call per PLANT — the key is the square
    * plus the moment it expires, so re-lighting the same square after its 30 s is
    * a new event and holding one is not.
+   *
+   * ────────────────────────────────────────────────────────────────────────────
+   * IT CALLS THE AEROPLANE, NOT THE CATHEDRAL, AND THE REQUEST ASKED FOR THE
+   * AEROPLANE
+   * ────────────────────────────────────────────────────────────────────────────
+   * "左右にもっとメリットを与えて、例えば爆撃機を呼べるとか" — a BOMBER. This
+   * used to call `callCathedralCollapse`, which meant the flanks could spend the
+   * one scheduled headline of the match at any moment from the first beacon
+   * onwards: `match` would then arrive at `cathedralOpenProgress` and log "salvo
+   * declined — already down", the shell would swap with nothing in the air, and
+   * the event the player calls 「しょぼい」 is exactly that outcome. Two callers
+   * on one irreplaceable event is a race, and the loser is the headline.
+   *
+   * A bomber stick plus a strafing run is a real reward and it is what the
+   * sentence asks for. `fire()` declines a run that has already flown this
+   * round, so the beacon walks the four lines and takes the first one still in
+   * the hangar — four bomber runs and four strafing runs a match, rather than
+   * one irreplaceable event that can be spent at t = 40 s.
    */
   _pollFlankCall(live) {
     if (!live) return;
@@ -2066,7 +2116,11 @@ export class Airstrike {
     if (key === this._flankKey) return;
     this._flankKey = key;
     if (!b.at.startsWith('FLANK-')) return;
-    this.callCathedralCollapse();
+    const m = this.ctx.peek?.('match');
+    let called = false;
+    for (let i = 0; i < (m?.bomber?.runs?.length ?? 0) && !called; i++) called = m.bomber.fire(i) === true;
+    for (let i = 0; i < (m?.strafe?.runs?.length ?? 0); i++) if (m.strafe.fire(i) === true) break;
+    if (called) console.info('[airstrike] FLANK BEACON — a bomber run and a strafing run called in');
   }
 
   struck(which = 0) {
@@ -2180,7 +2234,8 @@ export class Airstrike {
   _salvoDust(group) {
     const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
     if (!fx?.addSmokeSource) return;
-    const d = SALVO_DUST;
+    // The cathedral carries its own, longer wall. @see `SALVOS`.
+    const d = group.dust ?? SALVO_DUST;
     const n = Math.max(2, d.count);
     const a = group.sites[0].mound;
     const b = group.sites[group.sites.length - 1].mound;

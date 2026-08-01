@@ -509,16 +509,51 @@ export const RULES = {
    */
   tankKillScore: 30,
   /**
-   * Seconds into a LIVE round before the first sortie. Longer than any of the
-   * air weapons: the tank takes ~40 s to drive its route, and it must not be in
-   * the street before the two sides have met.
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE TANK IS THE CATHEDRAL'S CONSEQUENCE, NOT A TIMER
+   * ──────────────────────────────────────────────────────────────────────────
+   * "大聖堂破壊イベントの後には戦車も登場させて" — and before that,
+   * "まだ戦車が登場したの一回も見ていないです".
+   *
+   * BOTH SENTENCES HAVE THE SAME CAUSE AND IT WAS MEASURED, NOT GUESSED
+   * (`_tankdiag.mjs`, three matches). The tank was never broken: 2/2 hulls baked
+   * at boot in 8 ms, the first sortie rolled at t = 91 s, both hulls drove their
+   * full 57 m route, and both reversed out again 59 and 66 s later. What the
+   * measurement also says is why nobody has ever seen one:
+   *
+   *   • the hull was ON SCREEN for 0 of 4058 frames it was alive;
+   *   • it finished the sortie on 2600/2600 health — not one round from either
+   *     side ever touched it;
+   *   • its route's CLOSEST approach to a capture circle was 55-77 m.
+   *
+   * The map grew under the authored route (`SPAWNS` went out to level z ∓90,
+   * the mid street was prised open to x ∓23, A and B went to the flank
+   * districts) and the tank was left driving an empty street at a moment when
+   * every man on the map was 60 m away on a flank. An event nobody is near did
+   * not happen, exactly as `ui.airAlert`'s own header says of the airstrike.
+   *
+   * So the trigger is the one the player asked for. There is no first-sortie
+   * timer any more: `MatchSystem` arms the armour `tankAfterCathedral` seconds
+   * after the cathedral bombardment stops, which is the same moment D opens in
+   * the wreckage — the fourth capture point and both tanks arrive together, and
+   * the routes now END 24 m off the ruin instead of 35 m short of it. @see
+   * `ROUTES` in src/match/tank.js.
    */
-  tankFirstDelay: 55,
-  /** Gap between sorties, seconds. Both hulls have to be parked first. */
-  tankInterval: [95, 140],
+  tankAfterCathedral: 3.0,
   /**
-   * Ceiling per match. Three sorties over a ten-minute match, each lasting about
-   * a minute — so armour is on the map for roughly a fifth of it.
+   * Gap between sorties, seconds. Both hulls have to be parked first.
+   *
+   * WAS [95, 140], WHICH IS ONE SORTIE PER MATCH NOW THAT THE FIRST ONE IS THE
+   * CATHEDRAL'S. Measured: the collapse lands at t = 164-188 of a 276-316 s
+   * match and a sortie runs ~70 s end to end, so the next window opened at
+   * t = 330+ — after every measured match had already ended. 40-60 puts a
+   * second sortie inside the endgame, which is where a tank belongs.
+   */
+  tankInterval: [40, 60],
+  /**
+   * Ceiling per match. Three sorties, each lasting about seventy seconds — but
+   * the first cannot be called before the cathedral is down, so in practice a
+   * match sees one or two and the ceiling is a guard rather than a schedule.
    */
   tankMaxPerMatch: 3,
   /**
@@ -707,36 +742,123 @@ export const RULES = {
    * guard delays the branch by a few seconds and never skips it.
    * @see `RULES.districtSalvoGap`.
    *
-   * The collapse telegraphs for 4.4 s and the wreckage takes `cathedralOpenDelay`
-   * more to stop moving, so D goes live about eleven seconds after the first
-   * thing the player hears.
+   * The event telegraphs for `cathedralLead` and the wreckage takes
+   * `cathedralOpenDelay` more to stop moving, so D goes live about half a
+   * minute after the first thing the player hears. @see `cathedralLead`.
    */
   cathedralOpenProgress: 0.50,
+
   /**
-   * Seconds after the collapse FIRES before D is contestable. It is the salvo's
-   * own settle time (6.5 s) plus a beat — the point opens when the dust has a
-   * floor under it, not while masonry is still in the air. @see Airstrike.
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE CATHEDRAL EVENT — "大聖堂崩壊イベントは過激にそして激しく破壊し、大イベ
+   * ントにしてください". The player's word for the old aftermath was 「しょぼい」.
+   * ──────────────────────────────────────────────────────────────────────────
+   * WHAT MADE IT SMALL WAS AN ORDERING BUG, AND IT IS MEASURABLE. `_razeIn` was
+   * started when the collapse was CALLED, and the salvo does not land for
+   * `Airstrike.JET_LEAD` = 4.4 s after that. Measured on a live match
+   * (`_events.mjs`): collapse called at t = 164.0, `world.cathedral.razed` true
+   * at t = 166.2, first `CATH-*` impact at t = 168.4. So the 30 x 45 m building
+   * vanished TWO AND A HALF SECONDS BEFORE the first bomb arrived, and what the
+   * bombs then did was drop three bays of roof off a church that was no longer
+   * there. Every word of the paragraph this comment replaces — "the salvo goes
+   * first and the swap happens inside it", "at 2.2 s the three CATH-* sites have
+   * ~2100 chunks in the air" — described an event that had never once run in
+   * that order.
+   *
+   * So `cathedralRazeDelay` is now measured FROM THE ORDNANCE ARRIVING and the
+   * whole thing is a scored beat sheet rather than three independent countdowns.
+   * @see `MatchSystem._updateCathedralEvent`, which owns the choreography:
+   *
+   *     t = 0.0            the WARNING: the alert strip with a `cathedralLead`
+   *                        countdown, a danger reticle on each aiming point, the
+   *                        banner and the siren. Long enough to get out, or to
+   *                        find somewhere to watch it from.
+   *     t = LEAD - 4.4     the salvo is called, so its own jet + whistle
+   *                        telegraph lands exactly on the beat
+   *     t = LEAD - 3.0     the barrage opens — `cathedralBarrageShells` heavy
+   *                        shells walking the length of the nave
+   *     t = LEAD           the salvo detonates: three bays, 1467 chunks
+   *     t = LEAD + 0.3     the bomber runs the length of the mid street
+   *     t = LEAD + 2.2     THE SHELL GOES, inside the ordnance this time
+   *     t = LEAD + 3.4     the strafing run rakes the square
+   *     t = LEAD + 8.0     the barrage's last shell
+   *     t = LEAD + 9.0     the aftermath: "THE CATHEDRAL IS GONE"
+   *     t = LEAD + 12.0    D opens in the wreckage (`cathedralOpenDelay`)
+   *     t = LEAD + 15.0    both tanks roll (`tankAfterCathedral`)
+   *
+   * NOTHING IN ANY OF THOSE BEATS IS COMPUTED WHEN IT FIRES. The salvo, its
+   * fracture, its trajectories, its settled pose and its nav patch were baked at
+   * boot; the two aircraft are the runs `Bomber` and `Strafe` already baked; the
+   * barrage's aiming points are solved once in `MatchSystem.init` into two
+   * Float32Arrays and every shell is one reused `explosion` payload. The
+   * heaviest frame in the whole event is the salvo's, which is the frame the old
+   * event already had.
    */
-  cathedralOpenDelay: 7.4,
   /**
-   * SECONDS AFTER THE SALVO BEFORE THE SHELL STOPS BEING DRAWN, AND WHY IT IS
-   * NOT ZERO.
+   * Seconds of warning before the first thing lands. The salvo's own telegraph
+   * is 4.4 s, which is right for "a strike is coming at that building" and far
+   * too short for "the middle of the map is about to stop existing" — you cannot
+   * cross the square in 4.4 s, so the only available reaction was to already be
+   * elsewhere. Ten seconds is two hundred metres of sprint, or long enough to
+   * turn round and watch.
+   */
+  cathedralLead: 10.0,
+  /**
+   * THE BARRAGE. Heavy shells walking the length of the nave and out into both
+   * flanking streets, opening three seconds before the salvo and still landing
+   * eight seconds after it.
+   *
+   * This is where "過激にそして激しく" is actually paid for. The salvo is 1467
+   * chunks over ~0.5 s and then it is over; twenty shells over eleven seconds is
+   * what makes it a BOMBARDMENT — a continuous rhythm of blast, dust, scorch and
+   * concussion across a 30 x 45 m footprint, with the building coming apart in
+   * the middle of it. Each shell is the canonical `explosion` event, so the
+   * shake (`player._onExplosion`), the deafening (`Mixer.concuss`, which scales
+   * with radius and reaches `radius * 1.3`), the fireball, the crater and the
+   * damage are all the ones the game already has.
+   */
+  cathedralBarrageShells: 20,
+  /** Seconds the walk takes, from the first shell to the last. */
+  cathedralBarrageSpan: 11.0,
+  /**
+   * Per shell. Smaller than the zone bombardment's 10 m / 210 on purpose: there
+   * are twenty of them rather than five, they are aimed at a BUILDING rather
+   * than at a circle men are standing in, and ten seconds of warning is the
+   * bargain. Lethal inside ~4 m, survivable at the rim.
+   */
+  cathedralBarrageRadius: 9,
+  cathedralBarrageDamage: 175,
+  /**
+   * Half-extents of the beaten zone, in metres, on the cathedral's own axes —
+   * across the nave and along it. The building measures 30 x 45 m, so this walks
+   * the shells over the whole footprint and a few metres into each flank street.
+   */
+  cathedralBarrageHalfW: 17.0,
+  cathedralBarrageHalfD: 24.0,
+  /**
+   * SECONDS AFTER THE ORDNANCE ARRIVES BEFORE THE SHELL STOPS BEING DRAWN, AND
+   * WHY IT IS NOT ZERO.
    *
    * Swapping `cath:shell` for `cath:ruin` is one frame by construction — that is
    * the whole point of baking both states, and it is what makes a 30 x 45 m
    * building disappear without a hitch. But one frame is a POP, and the brief
    * asks for "大爆破と崩壊": an explosion and a COLLAPSE.
    *
-   * So the salvo goes first and the swap happens inside it. At 2.2 s the three
-   * `CATH-*` sites have ~2100 chunks in the air, three fireballs lit and the
-   * dust wall at its densest, and the church going away happens behind all of
-   * it. What the player sees is masonry coming off the building, dust, and then
-   * no building — which is the order those things happen in.
-   *
-   * It is well inside `cathedralOpenDelay`, so the ground is settled and static
-   * long before D is contestable.
+   * At `cathedralLead + 2.2` the three `CATH-*` sites really do have ~1400
+   * chunks in the air, three fireballs lit, the dust wall at its densest and
+   * five barrage shells already down inside the footprint — so the church going
+   * away happens BEHIND all of it. What the player sees is masonry coming off
+   * the building, dust, and then no building, which is the order those things
+   * happen in. Which is what the old comment claimed and the old code did not do.
    */
   cathedralRazeDelay: 2.2,
+  /**
+   * Seconds after the ordnance ARRIVES before D is contestable — the salvo's own
+   * settle time (6.5 s) plus the tail of the barrage. The point opens when the
+   * dust has a floor under it and nothing is still landing on it, not while
+   * masonry is in the air. @see Airstrike.
+   */
+  cathedralOpenDelay: 12.0,
   /**
    * D is worth the same tick as any other zone, on purpose. A fourth point that
    * printed double would decide the match by itself and the answer to it would

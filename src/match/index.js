@@ -83,7 +83,7 @@ import { CaptureZones } from './capture.js';
 import { Bomb, BOMB } from './bomb.js';
 import { Spectator } from './spectate.js';
 import { SiteMarks } from './sitemark.js';
-import { Airstrike } from './airstrike.js';
+import { Airstrike, JET_LEAD } from './airstrike.js';
 import { Bomber } from './bomber.js';
 import { Strafe } from './strafe.js';
 import { Armour } from './tank.js';
@@ -91,6 +91,42 @@ import { AmmoDrops } from './ammo.js';
 import { Caches } from './caches.js';
 
 const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', MATCH_OVER: 'matchover' };
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE CATHEDRAL EVENT'S BEAT SHEET — "大聖堂崩壊イベントは過激にそして激しく破壊
+ * し、大イベントにしてください"
+ * ────────────────────────────────────────────────────────────────────────────
+ * `[seconds relative to the moment the ordnance ARRIVES, what happens]`, in
+ * ascending order, played by `MatchSystem._updateCathedralEvent` off one clock.
+ * Zero is `RULES.cathedralLead` seconds after the warning goes up.
+ *
+ * IT IS RELATIVE TO THE ARRIVAL AND NOT TO THE CALL, and that one word is the
+ * bug it replaces. The old code started the raze countdown when the collapse was
+ * CALLED, and `Airstrike` does not drop anything for `JET_LEAD` = 4.4 s after a
+ * call — so the 30 x 45 m building vanished 2.2 s BEFORE the first bomb landed,
+ * measured on a live match at t = 166.2 against a first impact at t = 168.4.
+ * The salvo entry below is at `-JET_LEAD` for exactly that reason: it is CALLED
+ * early so that it LANDS on the beat, and if the telegraph is ever retuned the
+ * arithmetic follows it because the constant is imported rather than copied.
+ *
+ * The barrage is not in this table — it is a continuous walk on its own count
+ * from `-3.0` to `+8.0`, so the salvo, the aeroplanes and the building going
+ * all happen INSIDE a bombardment rather than in the gaps between events.
+ * @see `RULES.cathedralLead` for the whole sheet written out in one place.
+ */
+const CATH_BEATS = [
+  [-JET_LEAD, 'salvo'],
+  // The aeroplane is its own telegraph: 2.4 s on screen before it releases and
+  // 1.7 s of fall after, so firing it here puts its stick down just behind the
+  // salvo and puts the airframe over the square while the warning is still up.
+  [-3.0, 'bomber'],
+  [RULES.cathedralRazeDelay, 'raze'],
+  [3.4, 'strafe'],
+  [9.0, 'aftermath'],
+  [RULES.cathedralOpenDelay, 'open'],
+  [RULES.cathedralOpenDelay, 'armour'],
+];
 
 /**
  * THE `role` HANDED TO `ai.spawn` IN DOMINATION, AND WHY IT IS NOT 'defend'.
@@ -588,9 +624,34 @@ export class MatchSystem {
     /** The one authored `locked` zone (D), or null. It never leaves `allZones`. */
     this.lockedZone = this.allZones.find((z) => z.locked) ?? null;
     this._cathedralCalled = false;
-    this._cathedralPending = -1;
-    /** Countdown to the shell swap, inside the salvo. @see RULES.cathedralRazeDelay */
-    this._razeIn = -1;
+    /**
+     * ───────────────────────────────────────────────────────────────────────
+     * THE CATHEDRAL EVENT'S OWN CLOCK. `t` counts UP from the warning; `beat`
+     * is how many entries of the beat sheet have been played; `shot` is how many
+     * barrage shells have landed. -1 is "not running".
+     * ───────────────────────────────────────────────────────────────────────
+     * ONE CLOCK, NOT THREE COUNTDOWNS, and that is the fix rather than a
+     * refactor. `_cathedralPending` and `_razeIn` were independent and both
+     * started when the salvo was CALLED, so the shell swapped 2.2 s after the
+     * call and the salvo landed 4.4 s after it — the building came down two and
+     * a half seconds BEFORE the first bomb. @see `RULES.cathedralRazeDelay`.
+     */
+    this._cath = { t: -1, beat: 0, shot: 0 };
+    /**
+     * THE BARRAGE'S AIMING POINTS, SOLVED ONCE AT BOOT.
+     *
+     * Twenty shells walking the nave is twenty world positions, and not one of
+     * them may be computed in the frame it is fired — the same discipline the
+     * salvo's fracture is baked under. They are stored as OFFSETS on the
+     * cathedral's own two axes rather than as world points, because the zone
+     * record they are relative to is resolved after this and the axes are two
+     * `levelToWorld` calls. `_cathAim` writes the world point into `_bombPos`.
+     */
+    this._cathU = new Float32Array(RULES.cathedralBarrageShells);
+    this._cathV = new Float32Array(RULES.cathedralBarrageShells);
+    /** The level's +x and +z as world directions. Filled in `_bakeCathedralBarrage`. */
+    this._cathAxisU = new THREE.Vector3(1, 0, 0);
+    this._cathAxisV = new THREE.Vector3(0, 0, 1);
     /** How many of `RULES.districtSalvoProgress` have been spent. @see `_updateMapEvents` */
     this._districtsFired = 0;
     /** Seconds still owed before the next big event may be called. */
@@ -613,6 +674,7 @@ export class MatchSystem {
       z: 0,
       lead: 0,
     };
+    this._bakeCathedralBarrage();
 
     /* ---- events -------------------------------------------------------- */
     this._offs = [];
@@ -763,8 +825,9 @@ export class MatchSystem {
       // `_setCathedralRazed`.
       this._setCathedralRazed(false);
       this._cathedralCalled = false;
-      this._cathedralPending = -1;
-      this._razeIn = -1;
+      this._cath.t = -1;
+      this._cath.beat = 0;
+      this._cath.shot = 0;
       this._districtsFired = 0;
       this._districtGap = 0;
       this._finalCalled = false;
@@ -2478,22 +2541,11 @@ export class MatchSystem {
 
     /* ---- D ------------------------------------------------------------ */
     /**
-     * THREE BEATS ON ONE COUNTDOWN: the salvo, then the building going, then
-     * the point opening. `_razeIn` is inside `_cathedralPending` on purpose —
-     * @see `RULES.cathedralRazeDelay` for why the swap is not on the same frame
-     * as the explosion.
+     * ONE SCORED EVENT, ON ONE CLOCK. @see `_updateCathedralEvent`, and
+     * `RULES.cathedralLead` for the beat sheet and what it replaced.
      */
-    if (this._razeIn > 0) {
-      this._razeIn -= dt;
-      if (this._razeIn <= 0) {
-        this._razeIn = -1;
-        const razed = this._razeCathedral();
-        console.info(`[match] cathedral SHELL DOWN (${razed ? 'levelled' : 'no ruin state available'})`);
-      }
-    }
-    if (this._cathedralPending > 0) {
-      this._cathedralPending -= dt;
-      if (this._cathedralPending <= 0) this._openCathedral();
+    if (this._cath.t >= 0) {
+      this._updateCathedralEvent(dt);
       // NOT ON TOP OF A DISTRICT. `busy` is a salvo in the air or still settling,
       // so this waits out the ~9 s a district takes rather than firing the two
       // biggest events of the match into the same ten seconds. It only ever
@@ -2505,22 +2557,7 @@ export class MatchSystem {
       p >= RULES.cathedralOpenProgress &&
       !this.airstrike?.busy
     ) {
-      this._cathedralCalled = true;
-      // `callCathedralCollapse` is the salvo plus a bomber run; it declines if
-      // the sites are already struck or the system is disarmed, and D opens on
-      // the delay either way — a cathedral that is already rubble is still a
-      // ruin to fight in.
-      const fired = this.airstrike?.callCathedralCollapse?.() ?? false;
-      // …and THE BUILDING ITSELF goes, `cathedralRazeDelay` into the salvo. The
-      // salvo alone is three bays of aisle roof and leaves a church with a hole
-      // in it; "更地にする" is the whole superstructure. @see `_razeCathedral`.
-      this._razeIn = RULES.cathedralRazeDelay;
-      this._cathedralPending = RULES.cathedralOpenDelay;
-      console.info(
-        `[match] cathedral collapse called at t=${t.toFixed(0)}s p=${p.toFixed(2)} ` +
-          `(salvo ${fired ? 'fired' : 'declined — already down'}) — shell down in ` +
-          `${RULES.cathedralRazeDelay}s, D opens in ${RULES.cathedralOpenDelay}s`
-      );
+      this._beginCathedralEvent(t, p);
     }
 
     /* ---- the bombardment of A and B ----------------------------------- */
@@ -2602,6 +2639,247 @@ export class MatchSystem {
    */
   _razeCathedral() {
     return this._setCathedralRazed(true);
+  }
+
+  /* ==================================================================== */
+  /* THE CATHEDRAL EVENT                                                  */
+  /* ==================================================================== */
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * WHERE THE SHELLS GO, SOLVED ONCE AT BOOT
+   * ────────────────────────────────────────────────────────────────────────
+   * "大聖堂崩壊イベントは過激にそして激しく破壊し、大イベントにしてください."
+   *
+   * `RULES.cathedralBarrageShells` heavy shells walking the length of the nave
+   * and out into both flanking streets. Every aiming point is a pair of offsets
+   * on the cathedral's OWN axes — across the nave and along it — drawn here from
+   * `this.rng` and stored in two Float32Arrays, so the frame a shell fires does
+   * one multiply-add per axis into a preallocated vector and nothing else.
+   *
+   * A CREEPING BARRAGE, NOT A SCATTER. `i` walks `along` monotonically from one
+   * end of the building to the other with a jittered `across`, so what the
+   * player sees is a line of fire coming up the nave at them rather than twenty
+   * unrelated bangs — which is the difference between a bombardment and a noise
+   * floor. Every fourth shell is thrown wide into a flank street, because a
+   * building being levelled takes its pavements with it.
+   *
+   * The axes are two `levelToWorld` calls: `world` owns the level's rotation,
+   * `match` may not assume it, and the cathedral is authored square to the plan.
+   */
+  _bakeCathedralBarrage() {
+    const n = RULES.cathedralBarrageShells;
+    const world = this.ctx.peek('world');
+    if (world?.levelToWorld) {
+      const o = world.levelToWorld(0, 0, 0, this._v);
+      const ox = o.x;
+      const oz = o.z;
+      const a = world.levelToWorld(10, 0, 0, this._v2);
+      this._cathAxisU.set(a.x - ox, 0, a.z - oz).normalize();
+      const b = world.levelToWorld(0, 0, 10, this._v2);
+      this._cathAxisV.set(b.x - ox, 0, b.z - oz).normalize();
+    }
+    const hw = RULES.cathedralBarrageHalfW;
+    const hd = RULES.cathedralBarrageHalfD;
+    const rng = this.rng.fork();
+    for (let i = 0; i < n; i++) {
+      const t = n > 1 ? i / (n - 1) : 0.5;
+      // Along the nave, end to end, with enough jitter that the walk is not a
+      // metronome. Alternating the direction of the sweep would read as a
+      // pendulum; one pass in one direction reads as a barrage being walked.
+      const along = (-1 + 2 * t) * hd + rng.range(-2.2, 2.2);
+      // Every fourth round goes wide, into the flank street on alternate sides.
+      const wide = i % 4 === 3;
+      const across = wide
+        ? (i % 8 === 3 ? 1 : -1) * rng.range(hw * 0.72, hw)
+        : rng.range(-hw * 0.62, hw * 0.62);
+      this._cathU[i] = across;
+      this._cathV[i] = along;
+    }
+  }
+
+  /**
+   * Aiming point `i`, in world space, written into the reused `_bombPos`. Every
+   * caller (`ui.airDanger` and the `explosion` payload) copies out of it
+   * synchronously, exactly as `_bombardPoint`'s callers do.
+   */
+  _cathAim(i) {
+    const c = this.lockedZone?.position;
+    const p = this._bombPos;
+    if (!c) return p.set(0, 0.4, 0);
+    p.copy(c);
+    p.y += 0.4;
+    p.addScaledVector(this._cathAxisU, this._cathU[i]);
+    p.addScaledVector(this._cathAxisV, this._cathV[i]);
+    return p;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE WARNING — beat 0 of the beat sheet in `RULES.cathedralLead`
+   * ────────────────────────────────────────────────────────────────────────
+   * Ten seconds before anything lands, and it is the half of the event the old
+   * one did not have at all: the only telegraph was the salvo's own 4.4 s of
+   * jet and whistle, which is not enough time to cross the square it is aimed
+   * at, so the only available reaction was to already be somewhere else.
+   *
+   * Three channels, all of them ones the HUD already speaks: the alert strip
+   * with a live bearing and a countdown bar (`ui.airAlert`), a world-space
+   * danger reticle on every sixth aiming point so the beaten zone reads as an
+   * AREA rather than a dot, and the banner. Plus the siren — the jet note this
+   * file's other events use, held for the whole lead and mixed loud, over a map
+   * whose middle is about to stop existing.
+   */
+  _beginCathedralEvent(t, p) {
+    this._cathedralCalled = true;
+    this._cath.t = 0;
+    this._cath.beat = 0;
+    this._cath.shot = 0;
+
+    const z = this.lockedZone;
+    const h = this._airHud;
+    h.kind = 'SALVO';
+    h.title = 'THE CATHEDRAL IS BEING LEVELLED';
+    h.impactTitle = 'THE CATHEDRAL IS GONE';
+    h.name = z?.name ?? 'THE CATHEDRAL';
+    h.lead = RULES.cathedralLead;
+    h.x = z?.position.x ?? 0;
+    h.y = z?.position.y ?? 0;
+    h.z = z?.position.z ?? 0;
+    this.ui.airAlert(h);
+    // Six reticles across the footprint: the whole building is the target.
+    for (let i = 0; i < RULES.cathedralBarrageShells; i += 3) {
+      this.ui.airDanger(this._cathAim(i), RULES.cathedralLead, 'BOMBARDMENT');
+    }
+    this.ui.banner.show(
+      'THE CATHEDRAL IS BEING LEVELLED',
+      `${RULES.cathedralLead | 0} SECONDS · GET OUT OF THE MIDDLE`,
+      4.2
+    );
+    const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+    audio?.play?.('strike_jet', z?.position ?? null, {
+      level: 1.2, dur: RULES.cathedralLead, maxDist: 500, gain: 3.6, occlusion: 0.15,
+    });
+    console.info(
+      `[match] CATHEDRAL EVENT called at t=${t.toFixed(0)}s p=${p.toFixed(2)} — ` +
+        `${RULES.cathedralLead}s warning, ${RULES.cathedralBarrageShells} shells over ` +
+        `${RULES.cathedralBarrageSpan}s, salvo at +${RULES.cathedralLead}s, shell down at ` +
+        `+${(RULES.cathedralLead + RULES.cathedralRazeDelay).toFixed(1)}s, D opens at ` +
+        `+${(RULES.cathedralLead + RULES.cathedralOpenDelay).toFixed(1)}s`
+    );
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE BEAT SHEET, PLAYED
+   * ────────────────────────────────────────────────────────────────────────
+   * `_cath.beat` is a monotone index into `CATH_BEATS` below, so every beat
+   * fires exactly once and a long frame plays the ones it skipped rather than
+   * dropping them. The barrage runs alongside on its own count, the same shape
+   * `_updateBombard` uses for the zone shelling.
+   *
+   * NOTHING HERE BUILDS ANYTHING. The salvo, its 1467 chunks, their closed-form
+   * trajectories, the settled pose and the nav patch were baked at boot; the two
+   * aircraft are the runs `Bomber` and `Strafe` baked at boot; the shell swap is
+   * `mask.fill()` plus a memcpy'd pose in `world`; the barrage's aiming points
+   * were solved in `_bakeCathedralBarrage`. The heaviest frame in the event is
+   * the salvo's own, which is the frame the old event already had.
+   */
+  _updateCathedralEvent(dt) {
+    const c = this._cath;
+    c.t += dt;
+    const LEAD = RULES.cathedralLead;
+
+    /* ---- the scored beats --------------------------------------------- */
+    while (c.beat < CATH_BEATS.length && c.t >= LEAD + CATH_BEATS[c.beat][0]) {
+      const beat = CATH_BEATS[c.beat++];
+      this._cathBeat(beat[1]);
+    }
+
+    /* ---- the barrage, walking ----------------------------------------- */
+    // It opens BEFORE the salvo — the first rounds are what makes the salvo the
+    // second thing that happens rather than the first.
+    const n = RULES.cathedralBarrageShells;
+    const t0 = LEAD - 3.0;
+    if (c.shot < n && c.t >= t0) {
+      const step = RULES.cathedralBarrageSpan / n;
+      const due = Math.min(n, Math.floor((c.t - t0) / step) + 1);
+      while (c.shot < due) this._cathShell(c.shot++);
+    }
+
+    /* ---- and it is over ----------------------------------------------- */
+    // The last beat is D opening; the barrage's tail lands four seconds before
+    // it. Both have to be spent, so a frame long enough to swallow either one
+    // still leaves the other to be played rather than dropping it.
+    if (c.beat >= CATH_BEATS.length && c.shot >= n) c.t = -1;
+  }
+
+  /** One named beat. Kept apart from the clock so the sheet reads as a sheet. */
+  _cathBeat(kind) {
+    switch (kind) {
+      case 'salvo': {
+        // Called `JET_LEAD` BEFORE the beat it is scheduled on, so the strike's
+        // own jet-and-whistle telegraph lands inside this event's warning
+        // instead of after it. That ordering is the whole bug this replaces.
+        const fired = this.airstrike?.callCathedralCollapse?.() ?? false;
+        console.info(`[match] cathedral salvo ${fired ? 'fired' : 'declined — already down'}`);
+        break;
+      }
+      case 'bomber':
+        this.bomber?.fire?.('MAIN');
+        break;
+      case 'raze': {
+        const razed = this._razeCathedral();
+        console.info(
+          `[match] cathedral SHELL DOWN at +${(RULES.cathedralLead + RULES.cathedralRazeDelay).toFixed(1)}s ` +
+            `(${razed ? 'levelled' : 'no ruin state available'})`
+        );
+        break;
+      }
+      case 'strafe':
+        this.strafe?.fire?.('MAIN');
+        break;
+      case 'aftermath': {
+        this.ui.airImpact('THE CATHEDRAL IS GONE');
+        this.ui.banner.show('THE CATHEDRAL IS GONE', 'THE MIDDLE OF THE MAP IS RUBBLE', 3.6);
+        const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+        audio?.play?.('strike_rubble', this.lockedZone?.position ?? null, {
+          level: 1.2, dur: 5.0, maxDist: 420, gain: 2.4, occlusion: 0.2,
+        });
+        break;
+      }
+      case 'open':
+        this._openCathedral();
+        break;
+      case 'armour':
+        // THE CONSEQUENCE — "大聖堂破壊イベントの後には戦車も登場させて". One line;
+        // everything after it is the sortie scheduler `Armour` already had.
+        // @see `RULES.tankAfterCathedral`.
+        this.tank?.armAfter?.(RULES.tankAfterCathedral);
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** Shell `i` of the barrage. Same shape as `_updateBombard`, aimed at a building. */
+  _cathShell(i) {
+    const at = this._cathAim(i);
+    const p = this._blast;
+    p.position = at;
+    p.radius = RULES.cathedralBarrageRadius;
+    p.damage = RULES.cathedralBarrageDamage;
+    p.source = null;
+    this.ctx.events.emit('explosion', p);
+    const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
+    if (fx) {
+      fx.explosion?.({ position: at, radius: RULES.cathedralBarrageRadius * 0.65 });
+      fx.scorch?.(at.x, at.y - 0.3, at.z, RULES.cathedralBarrageRadius * 0.55);
+      fx.hazeRing?.(at.x, at.y, at.z, 3.4, 18, 0.5, 2.0);
+      if (fx.lights) fx.lights.flash(at.x, at.y + 1, at.z, 1, 0.66, 0.34, 1300, 0.6, 8, 52, 4);
+    }
+    const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+    audio?.play?.('strike_tail', at, { level: 1.0, dur: 2.6, maxDist: 340, gain: 2.0, occlusion: 0.2 });
   }
 
   /**
