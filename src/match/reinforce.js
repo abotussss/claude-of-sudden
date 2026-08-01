@@ -79,7 +79,30 @@ const PARKED_Y = -400;
  * event read as a spawn effect.
  */
 const RUN_IN = 150;
-const RUN_OUT = 130;
+/**
+ * 130 -> 170, AND IT IS AN ANTI-CROWDING NUMBER RATHER THAN A CINEMATIC ONE.
+ *
+ * `_runPoint` CLAMPS at the end of the run, so a man released after the
+ * aircraft has finished crossing steps out of a helicopter parked at `run.end`
+ * — and the men after him step out of the same square, which is exactly the
+ * "ten men landing in one place" this file exists to avoid, reintroduced at the
+ * tail of the stick. The arithmetic, worked rather than eyeballed:
+ *
+ *   start behind the zone  = max(RUN_IN, speed*lead + DROP_LEAD) = 182.5 m
+ *   first man out          = (182.5 - 34) / 33            =  4.50 s
+ *   last man out           = 4.50 + 9 * 0.62              = 10.08 s
+ *   run duration at 130    = (182.5 + 130) / 33           =  9.47 s   <- SHORT
+ *   run duration at 170    = (182.5 + 170) / 33           = 10.68 s
+ *
+ * At 130 the last man overshot by 0.61 s, i.e. 20 m of run that never happened,
+ * and he and the man before him shared a release point. 170 leaves 0.6 s of
+ * margin, so every one of the ten leaves the door somewhere different.
+ *
+ * IT IS DERIVED, SO IT MUST BE RE-DERIVED. Anything that changes
+ * `reinforceSpeed`, `reinforceLead`, `reinforceDropGap` or `reinforceCount`
+ * changes `last man out`; this has to stay above it.
+ */
+const RUN_OUT = 170;
 /** Metres before the zone the first man steps out. @see `_release`. */
 const DROP_LEAD = 34;
 
