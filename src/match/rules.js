@@ -58,21 +58,35 @@ export const RULES = {
    *   • Corpses are reaped (`ai.corpseLimit`) — with respawns on, a five minute
    *     round produces far more bodies than ragdoll solving can carry.
    *
-   * WHAT 15 -> 20 ACTUALLY COST, MEASURED (three headless matches to a natural
-   * end each side of the change, `_events.mjs`, seeds 11/22/33):
+   * WHAT 15 -> 20 ACTUALLY COST, MEASURED, and it is NOT free. Six headless
+   * matches run to a natural end (`_events.mjs`, seeds 11/22/33), all six on the
+   * SAME tree and the SAME 500-point match, with only `teamSize` moved — an A/B
+   * against the old 250-point baseline would have charged the roster for the
+   * longer match as well, which is the mistake this table exists to avoid:
    *
-   *              live bots   frame mean   frame p95   A* deferred/frame
-   *   15v15         29         30.7 ms      51.4 ms         0.98
-   *   20v20         39         31.6 ms      52.5 ms         2.34
+   *              live bots   frame mean   frame p95   A* deferred/frame   ration
+   *   15v15         29         38.6 ms      73.2 ms         1.20           6.98
+   *   20v20         39         49.1 ms      86.8 ms         5.19           6.11
    *
-   * Frame time is flat — the roster is not what this renderer spends its time
-   * on. What the ten extra men buy is A* WAITING: the ration is round-robin, so
-   * a man is served every `agents.length / ration` frames, and that went from
-   * ~4 frames to ~6. `tools/stuckcheck.mjs`, the gate that matters, reports
-   * 0 stuck of 39 — the crowding epidemic that once wedged 22 of 29 men on nav
-   * islands at doorways did NOT come back at forty. @see the SPAWNS note in
-   * src/match/sites.js for the other half of the roster's cost: fifteen stand
-   * points for twenty men stacks bodies, so the cluster is seven ranks now.
+   * Read those milliseconds as a RATIO and not as a frame rate: the probe runs
+   * at `time.scale` 12, so one rendered frame carries twelve seconds' worth of
+   * spawns, deaths, ragdolls and events. +27 % of mean and +19 % of p95 is the
+   * honest cost of ten more men; the absolute numbers are a stress rig.
+   *
+   * WHERE IT REALLY LANDS IS A* WAITING, and that is the number to watch. The
+   * ration is round-robin, so a man is served every `agents.length / ration`
+   * frames: 4.2 frames at 29 actors, 6.4 at 39, and deferred requests went 1.20
+   * -> 5.19 a frame. `pathMsBudget` was deliberately NOT raised to buy that
+   * back, because the symptom starvation produces is measurable and did not
+   * appear — `tools/stuckcheck.mjs` reports 0 stuck of 39 (the crowding epidemic
+   * that once wedged 22 of 29 men on nav islands at doorways did NOT come back
+   * at forty) and distance travelled per bot is 142-525 m over the sample
+   * against 65-390 m at fifteen a side. A budget raised against a problem
+   * nobody can measure is just frame time spent.
+   *
+   * @see the SPAWNS note in src/match/sites.js for the other half of the
+   * roster's cost: fifteen stand points for twenty men stacks bodies, so the
+   * cluster is seven ranks now.
    *
    * Raise this further only with `matchprobe`-style numbers in hand.
    */
@@ -701,6 +715,37 @@ export const RULES = {
    * accumulates it, and `districtSalvoGap` is the floor under that if a runaway
    * scoreline compresses it. Which district is first is still decided by where
    * the fighting is — @see `Airstrike.callDistrictSalvo`.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * AT `scoreTarget` 500 THESE TWO ARE WALL-CLOCK TIMES, NOT FRACTIONS ANY MORE
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE VALUES DID NOT MOVE AND THEIR MEANING DID, which is exactly the trap the
+   * paragraph above warns about, arriving from the other direction. Progress is
+   * `max(elapsed/600, leader/scoreTarget)`. At 250 the score term overtook the
+   * clock term at t ≈ 45 s, so everything here was score-bound. At 500 it does
+   * not overtake until t ≈ 150-160 s — so BOTH district thresholds are now
+   * resolved by the CLOCK term, and 0.20 and 0.28 are simply t = 120 s and
+   * t = 168 s. Measured over three matches at 20v20 / 500 (`_events.mjs`, seeds
+   * 11/22/33), first district / second district, as t and as seconds before the
+   * end of the match that actually happened:
+   *
+   *   464.2 s match   A t = 129.2 (28 %, T-335)   B t = 167.6 (36 %, T-297)
+   *   456.2 s match   A t = 122.2 (27 %, T-334)   B t = 168.0 (37 %, T-288)
+   *   480.2 s match   A t = 125.2 (26 %, T-355)   B t = 164.8 (34 %, T-315)
+   *
+   * `districtSalvoGap` HAS STOPPED BEING THE BINDING CONSTRAINT. It used to set
+   * the spacing exactly — 25.0 s in all three of the older matches — and the
+   * pair is now 36-43 s apart because the clock, not a runaway scoreline, is
+   * what carries progress between the two thresholds. The floor is still right
+   * and still does nothing, which is what a floor should do.
+   *
+   * AND THEY STAY IN THE FIRST THIRD ON PURPOSE, while the cathedral moved into
+   * the last five minutes. "後半3〜5分" is about the events that END the match;
+   * a district salvo is a ROUTE-OPENER and the whole argument above is that a
+   * bearing needs 120-180 s of match after it to be fought over rather than
+   * admired. These now leave 288-355 s, against the 158-216 s that argument was
+   * settled on. Moving them into the window would hand the players six new
+   * approaches and no time to walk them.
    */
   districtSalvoProgress: [0.20, 0.28],
   /**
@@ -788,13 +833,46 @@ export const RULES = {
    * reads the LEADER, so a match nobody is running away with reaches 0.50 later
    * in its own life.
    *
-   * "後半3〜5分" IS NOT SATISFIABLE AND SAYING SO IS PART OF THE ANSWER. A match
-   * runs 272-316 s, so no instant in it is five minutes from the end and only
-   * the first thirty seconds are three. The knob that would make that window
-   * exist is `scoreTarget` — the match is score-bound — and it is deliberately
-   * NOT touched here, because a five-minute fight is the other thing that was
-   * asked for. What is delivered instead is the SHAPE: the districts open in the
-   * first half, the cathedral is the second half, the city comes down at the end.
+   * "後半3〜5分" WAS NOT SATISFIABLE, AND THE SENTENCE THAT USED TO STAND HERE
+   * SAID SO AND NAMED THE KNOB. A match ran 272-316 s, so no instant in it was
+   * five minutes from the end and only the first thirty seconds were three; the
+   * knob that would make the window exist was `scoreTarget`, and it was left
+   * alone because a five-minute FIGHT was the other thing that had been asked
+   * for. It has now been asked for directly — "ポイントも５００ポイントにして" —
+   * so it moved, and the window exists. @see `RULES.scoreTarget`.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * AND 0.44 DID NOT HAVE TO MOVE WITH IT — MEASURED, NOT ASSUMED
+   * ──────────────────────────────────────────────────────────────────────────
+   * The reflex is to re-tune the fraction the moment the match doubles in
+   * length, and it is the wrong reflex here, for a reason that falls out of the
+   * arithmetic: a fraction of the SCORE converts to seconds-before-the-end at
+   * `(1 - p) * scoreTarget / rate`, so doubling `scoreTarget` at an unchanged
+   * scoring rate doubles the seconds any fixed threshold buys. 0.44 bought
+   * 92-128 s of remaining match at 250. It buys twice that at 500, which is the
+   * window. MEASURED over three matches at 20v20 / 500 run to a natural end
+   * (`_events.mjs`, seeds 11/22/33), stamped in the column the ask is actually
+   * about — SECONDS BEFORE THE END:
+   *
+   *                     collapse            D live            match
+   *   seed 11    t=228.4 49 % T-235.8   t=238.2 T-226.0     464.2 s
+   *   seed 33    t=236.2 52 % T-220.0   t=246.0 T-210.2     456.2 s
+   *   seed 22    t=256.2 53 % T-224.0   t=266.0 T-214.2     480.2 s
+   *
+   * — the collapse at T-220..236 and D at T-210..226, i.e. inside the last five
+   * minutes and outside the last three, in all three, with a spread of 16 s. The
+   * fourth point now gets 210-226 s of life against the 85-120 s the paragraph
+   * above promised it, which is the fight over D the brief asked for and not a
+   * flourish. Changing the fraction as well would have moved a schedule that the
+   * measurement says is already where it was asked to be.
+   *
+   * THE ONE CASE THAT IS STILL OUTSIDE THE WINDOW, NAMED RATHER THAN HIDDEN: a
+   * match that goes to `matchTime` instead of to `scoreTarget`. Progress is then
+   * carried by the clock term, 0.44 resolves to t = 264 of 600, and the collapse
+   * lands at T-336 — early, not unreachable. It needs a leader printing under
+   * 0.83 pt/s for ten minutes; the three measured matches print 1.05-1.10 and
+   * end on points with 120-144 s of clock to spare. It is a deadlock case, and
+   * the fix for it is `matchTime`, not this number.
    *
    * IT ALSO WAITS FOR CLEAR AIR. `_updateMapEvents` holds this off while a
    * district salvo is still in the air or settling; progress is monotone, so the
@@ -820,9 +898,11 @@ export const RULES = {
    * against the 85-120 s the paragraph above promises it.
    *
    * MEASURED AT 0.44 over three matches run to their natural end (`_tankdiag.mjs`,
-   * `_events.mjs`) — see the commit message for the table. Nothing else moved:
-   * `scoreTarget` is deliberately untouched, because a five minute fight is the
-   * other thing that was asked for and this may not be paid for out of it.
+   * `_events.mjs`) — see the commit message for the table. `scoreTarget` was
+   * untouched at the time, because a five minute fight was the other thing that
+   * had been asked for and this could not be paid for out of it. It has since
+   * moved to 500 on its own account, and 0.44 was re-measured against it and
+   * kept — @see the AND 0.44 DID NOT HAVE TO MOVE WITH IT block above.
    */
   cathedralOpenProgress: 0.44,
 
@@ -957,6 +1037,13 @@ export const RULES = {
    * `finalCollapseStagger`, 6.5 s to settle — about 17 s end to end) enough room
    * to finish and still be fought over rather than being the last thing anybody
    * sees. @see `cathedralOpenProgress` for why these are fractions.
+   *
+   * AT `scoreTarget` 500 IT GETS THE ROOM THE PARAGRAPH ABOVE ONLY ASKED FOR.
+   * The same 0.82, measured over three matches at 20v20 / 500 (`_events.mjs`,
+   * seeds 11/22/33): t = 380.0 / 376.0 / 420.0, which is T-84.2, T-80.2 and
+   * T-60.2 before the end. At 250 the same fraction left 20-40 s — barely the
+   * 17 s the event takes to roll — so the city came down and the match ended on
+   * top of it. A minute to a minute and a half is a last act.
    */
   finalCollapseProgress: 0.82,
   /** Seconds between the members of the final collapse. Eleven sites, rolling. */
