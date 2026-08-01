@@ -705,9 +705,10 @@ export const ZONES = [
  *
  * The closest attack/defence pair is 68.4 m, still comfortably outside the 58 m
  * view range, so the opening frame is still two teams walking. These are also
- * the RESPAWN points — `MatchSystem._safeSpawn` picks whichever of the fifteen
+ * the RESPAWN points — `MatchSystem._safeSpawn` picks whichever of the cluster
  * has the most empty ground around it, which only works if there are enough of
- * them to choose between.
+ * them to choose between. That is why the list is sized to `RULES.teamSize` and
+ * has had to grow twice; @see the SEVEN RANKS note below.
  */
 /**
  * ────────────────────────────────────────────────────────────────────────────
@@ -729,6 +730,42 @@ export const ZONES = [
  * cluster centre, which is what stops the dressing dropping a crate on a
  * respawn.
  *
+ * ────────────────────────────────────────────────────────────────────────────
+ * SEVEN RANKS, BECAUSE THE ROSTER WENT TO 20 A SIDE
+ * ────────────────────────────────────────────────────────────────────────────
+ * "あと２０VS20にしてください". The paragraph above is the exact argument for why
+ * this list has to grow with `RULES.teamSize`, and it applies again one size up:
+ * `_spawnTeam` indexes modulo the list, so fifteen points for twenty men stands
+ * five pairs of bodies inside each other on the opening frame, and `_safeSpawn`
+ * — whose whole tier 3 is "pick the emptiest of the cluster" — chooses between
+ * fifteen points that are never all free. One rank is added at each END of the
+ * cluster rather than a fourth column or a tighter pitch:
+ *
+ *   z  57.9 .. 71.1   attack       21 points, seven ranks of three
+ *   z -59.9 .. -73.1  defence      pitch unchanged at 2.2 units in z, 6 in x
+ *
+ * DENSITY IS THE THING THAT MUST NOT GO UP, and this is why it is two ranks and
+ * not two more columns. The original stuck epidemic — 22 of 29 men wedged and
+ * going nowhere — was CROWDING, men shoved on to one-cell nav islands, and a
+ * spawn cluster is the most crowded ground on the map for the first ten seconds
+ * of a match and for six seconds after every wave of deaths. Adding ranks keeps
+ * the 2.2 x 6.0 unit pitch exactly as it was and grows the pocket instead:
+ * ~8.7 m² per stand point before, ~9.3 m² after. A fourth column at x ∓3 would
+ * have put 21 men in the same ground at 6.2 m² each.
+ *
+ * IT STILL FITS INSIDE THE KEEPOUT CIRCLE, which is the constraint that decides
+ * how far the ranks can go and it lives in a file this one may not edit.
+ * `KEEPOUT` (src/world/layout.js) reserves 9.5 units on (0, ∓64.5/66.5); the new
+ * corner man stands at (6, 71.1), which is |(6, 6.6)| = 8.9 units from the
+ * centre. Inside, with 0.6 units to spare — so the dressing still cannot drop a
+ * crate on any of the twenty-one, and layout.js needed no change.
+ *
+ * THE TWO NEW RANKS ARE 1.2 UNITS OFF THE N2/S2 SHEDS at their inner end
+ * (N2 is z 51.3..56.7 and its steps run out to 59.65 at x 1.3..2.85; S2 mirrors
+ * it), which is tight enough that it was not assumed: `resolveLayout` runs
+ * `walkable()` over every one of the forty-two points at boot and each of them
+ * resolves on to a nav cell within the 3 m search without being relocated.
+ *
  * THE SEPARATION IS STILL LOAD-BEARING, and it is now enormous: the closest
  * attack/defence pair is 131 units = 197 m against an `Agent.viewRange` of 58 m,
  * so the round still opens with two teams walking. What changed is that neither
@@ -741,18 +778,22 @@ export const ZONES = [
  */
 export const SPAWNS = {
   attack: spawnRow([
+    [-6.0, 71.1, Math.PI], [0.0, 71.1, Math.PI], [6.0, 71.1, Math.PI],
     [-6.0, 68.9, Math.PI], [0.0, 68.9, Math.PI], [6.0, 68.9, Math.PI],
     [-6.0, 66.7, Math.PI], [0.0, 66.7, Math.PI], [6.0, 66.7, Math.PI],
     [-6.0, 64.5, Math.PI], [0.0, 64.5, Math.PI], [6.0, 64.5, Math.PI],
     [-6.0, 62.3, Math.PI], [0.0, 62.3, Math.PI], [6.0, 62.3, Math.PI],
     [-6.0, 60.1, Math.PI], [0.0, 60.1, Math.PI], [6.0, 60.1, Math.PI],
+    [-6.0, 57.9, Math.PI], [0.0, 57.9, Math.PI], [6.0, 57.9, Math.PI],
   ]),
   defend: spawnRow([
+    [-6.0, -73.1, 0], [0.0, -73.1, 0], [6.0, -73.1, 0],
     [-6.0, -70.9, 0], [0.0, -70.9, 0], [6.0, -70.9, 0],
     [-6.0, -68.7, 0], [0.0, -68.7, 0], [6.0, -68.7, 0],
     [-6.0, -66.5, 0], [0.0, -66.5, 0], [6.0, -66.5, 0],
     [-6.0, -64.3, 0], [0.0, -64.3, 0], [6.0, -64.3, 0],
     [-6.0, -62.1, 0], [0.0, -62.1, 0], [6.0, -62.1, 0],
+    [-6.0, -59.9, 0], [0.0, -59.9, 0], [6.0, -59.9, 0],
   ]),
 };
 

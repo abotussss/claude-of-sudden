@@ -15,8 +15,8 @@
  * touch it.
  *
  * WHAT CHANGED FROM THE ONE-LIFE VERSION, and why each number is what it is:
- *   teamSize 7 -> 15      thirty actors on the map; see the LOD notes in src/ai
- *   roundTime 120 -> 300  a 15v15 execute needs minutes, not seconds
+ *   teamSize 7 -> 20      forty actors on the map; see the LOD notes in src/ai
+ *   roundTime 120 -> 300  a 20v20 execute needs minutes, not seconds
  *   respawns  off -> on   a death is a 6 second penalty, not the end of a round
  *
  * Everything a designer would want to turn is here. Nothing else in `src/match`
@@ -44,20 +44,39 @@ export const RULES = {
   /**
    * Players per side, INCLUDING the human on their team.
    *
-   * 15, not the 7 SA runs: the brief was "敵も15-15で戦いたい / もっと戦争的に" —
-   * make it read as a war. Thirty actors is more than double the thirteen this
-   * mode was tuned at, and it is NOT free. What pays for it, measured in
+   * 20, not the 7 SA runs and not the 15 that came after them: "あと２０VS20に
+   * してください、キャラを増やして欲しい". Forty actors is three times the thirteen
+   * this mode was tuned at, and it is NOT free. What pays for it, measured in
    * `src/ai`:
-   *   • A* is rationed per frame (`ai.pathsPerFrame`), scaled with the roster.
+   *   • A* is rationed per frame — and the ration is a MILLISECOND budget
+   *     (`ai.pathMsBudget`) turned into a solve count, so a bigger roster does
+   *     not silently cost more frame time; it costs each man a longer wait.
    *   • Line of sight is two rays per actor per frame on a rotating cursor, so
    *     perception is O(actors), not O(actors²).
    *   • An actor that cannot reach a pixel this frame animates at a third rate
    *     and leaves the shadow cascades (`ai._updateRelevance`).
    *   • Corpses are reaped (`ai.corpseLimit`) — with respawns on, a five minute
    *     round produces far more bodies than ragdoll solving can carry.
+   *
+   * WHAT 15 -> 20 ACTUALLY COST, MEASURED (three headless matches to a natural
+   * end each side of the change, `_events.mjs`, seeds 11/22/33):
+   *
+   *              live bots   frame mean   frame p95   A* deferred/frame
+   *   15v15         29         30.7 ms      51.4 ms         0.98
+   *   20v20         39         31.6 ms      52.5 ms         2.34
+   *
+   * Frame time is flat — the roster is not what this renderer spends its time
+   * on. What the ten extra men buy is A* WAITING: the ration is round-robin, so
+   * a man is served every `agents.length / ration` frames, and that went from
+   * ~4 frames to ~6. `tools/stuckcheck.mjs`, the gate that matters, reports
+   * 0 stuck of 39 — the crowding epidemic that once wedged 22 of 29 men on nav
+   * islands at doorways did NOT come back at forty. @see the SPAWNS note in
+   * src/match/sites.js for the other half of the roster's cost: fifteen stand
+   * points for twenty men stacks bodies, so the cluster is seven ranks now.
+   *
    * Raise this further only with `matchprobe`-style numbers in hand.
    */
-  teamSize: 15,
+  teamSize: 20,
   /** The human's team. The other side is bots either way. */
   playerTeam: TEAM.RED,
 
@@ -131,17 +150,51 @@ export const RULES = {
   /** Points per zone owned, per tick. Two zones ⇒ 1 point/second. */
   scorePerZone: 2,
   /**
-   * First side to this wins. At the two-zone hold that a competent side settles
-   * into that is 250 s of holding; a 3-0 lockout takes 167 s and a 1-1-1 split
-   * runs the clock. Tuned so a full match is 5-8 minutes, which is what
-   * `matchTime` then has to cover.
+   * ──────────────────────────────────────────────────────────────────────────
+   * FIRST SIDE TO THIS WINS — AND IT IS THE KNOB THE WHOLE SCHEDULE HANGS OFF
+   * ──────────────────────────────────────────────────────────────────────────
+   * "ポイントも５００ポイントにして占領の ２５０は終わるの早い" — and he is right,
+   * measured: three matches at 250 ran to a natural end in 244, 268 and 212 s
+   * (`_events.mjs`, seeds 11/22/33). Four minutes is not a match.
+   *
+   * IT IS ALSO WHAT MAKES "後半3〜5分" A REACHABLE WINDOW AT ALL. The note on
+   * `cathedralOpenProgress` used to end by declaring that ask UNSATISFIABLE, and
+   * the reasoning was sound: at 250 a match runs 212-268 s, so no instant in it
+   * is five minutes from the end and only its first thirty seconds are three.
+   * That note deliberately refused to touch this number because a five minute
+   * FIGHT was the other thing that had been asked for. Both are now asked for,
+   * and at 500 both exist: measured 448-520 s of match, of which the last five
+   * minutes are a real 300 s of playable time.
+   *
+   * WHY 500 IS NOT SIMPLY "TWICE AS LONG", AND WHY IT NEEDED MEASURING. There
+   * are FIVE zones now (A, C, E, B, and D on the cathedral collapse) and every
+   * held zone pays every `scoreInterval`, so income is far higher than when 250
+   * was set: the leader accumulates 1.0-1.4 pt/s once the map has settled, not
+   * the ~1 pt/s two zones pay. Doubling the target therefore roughly doubles the
+   * match rather than more than doubling it — 448-520 s against 212-268.
+   *
+   * AND IT CHANGES WHICH TERM OF `_matchProgress` BINDS, WHICH IS THE PART A
+   * RE-TUNE MUST NOT MISS. Progress is `max(elapsed/matchTime, leader/500)`.
+   * The score term no longer overtakes the clock term in the first minute: it
+   * crosses at t ≈ 100-155 s depending on how fast the leader is printing, so
+   * the first two minutes of the match are CLOCK-bound (progress linear in time)
+   * and everything after is SCORE-bound (progress convex in time). Every
+   * threshold below 0.20 is therefore now a wall-clock time in disguise. @see
+   * the `bind` column `_events.mjs` prints.
    */
-  scoreTarget: 250,
+  scoreTarget: 500,
   /**
    * Match clock, seconds. Runs out ⇒ the higher score wins, equal ⇒ a draw.
    * Replaces demolition's per-round `roundTime` (which is still used by that
-   * mode). Ten minutes is roughly 1.5x the length of a decisive score race, so
-   * the clock only decides genuinely deadlocked matches.
+   * mode).
+   *
+   * TEN MINUTES IS NOW ONLY 1.15-1.34x THE LENGTH OF A DECISIVE SCORE RACE, not
+   * the 2.2-2.8x it was at `scoreTarget` 250, and that margin is deliberately
+   * left alone: a match that goes the distance because neither side can hold
+   * anything SHOULD end on the clock, and at 448-520 s of measured race there is
+   * still 80-150 s of headroom before it does. Raise `scoreTarget` again and
+   * this has to move with it, or the clock silently becomes the ending and every
+   * progress threshold below becomes a plain wall-clock time.
    */
   matchTime: 600,
   /**
@@ -503,9 +556,15 @@ export const RULES = {
   /**
    * What killing one is worth to the side that did it, in DOMINATION points.
    *
-   * 30 against a `scoreTarget` of 250 — 12 %, which is fifteen seconds of
-   * holding two zones. Enough that a squad turning to deal with the tank is not
-   * throwing the match away, small enough that it is a play and not a trophy.
+   * 30. It was picked against a `scoreTarget` of 250, where it was 12 % of the
+   * match; at 500 it is 6 %, or about twenty-five seconds of holding two zones.
+   * LEFT AT 30 ON PURPOSE AND THE DROP IS THE POINT: the reason for the number
+   * was "enough that a squad turning to deal with the tank is not throwing the
+   * match away, small enough that it is a play and not a trophy", and in
+   * SECONDS OF HOLDING — which is what a side actually trades away to go and
+   * kill it — 30 points is worth more now, not less, because the match it is
+   * being traded against is twice as long. Scaling it to 60 would have made one
+   * hull worth a fifth of the whole `districtSalvoProgress` window.
    */
   tankKillScore: 30,
   /**
@@ -1016,13 +1075,17 @@ export function roleOf(team, round) {
  *
  * There must be at least `RULES.teamSize` of them per side or two men share a
  * name and the killfeed stops being readable — `_spawnTeam` indexes this modulo
- * its length. Sixteen each, which covers 15 plus the slot the human occupies.
+ * its length. TWENTY-ONE each, which covers a `teamSize` of 20 plus the slot the
+ * human occupies on his own side; it was sixteen for the 15v15 and the modulo
+ * would silently have wrapped five callsigns onto a second man each.
  */
 export const BOT_NAMES = [
   ['HAWK', 'VIPER', 'RONIN', 'SABLE', 'KILO', 'ORCA', 'ZENITH', 'DRIFT', 'CINDER',
-   'BASALT', 'QUARRY', 'TINDER', 'HALYARD', 'OBSIDIAN', 'RAMPART', 'JACKAL'],
+   'BASALT', 'QUARRY', 'TINDER', 'HALYARD', 'OBSIDIAN', 'RAMPART', 'JACKAL',
+   'FLINT', 'GANTRY', 'MARROW', 'PIKE', 'SCORIA'],
   ['FROST', 'TALON', 'NOMAD', 'AZURE', 'ECHO', 'MAKO', 'VECTOR', 'SPARK', 'GLACIER',
-   'COBALT', 'MERIDIAN', 'HALCYON', 'TUNDRA', 'PELAGIC', 'BOREAL', 'KESTREL'],
+   'COBALT', 'MERIDIAN', 'HALCYON', 'TUNDRA', 'PELAGIC', 'BOREAL', 'KESTREL',
+   'SIROCCO', 'LANTERN', 'THRESHER', 'WEIR', 'ZEPHYR'],
 ];
 
 /**

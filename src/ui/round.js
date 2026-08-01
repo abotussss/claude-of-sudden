@@ -3,12 +3,19 @@ import { el, setText, setStyle, setClass, clamp01, damp, ease, mmss } from './ut
 /**
  * Pip and scoreboard-row capacity. Both are hard caps: `_pips` hides the
  * surplus and the scoreboard hides surplus rows, so a roster larger than these
- * is silently truncated on screen. `RULES.teamSize` is 15, so at 8 the strip
- * drew half a team and the scoreboard eight of fifteen men — the count is the
- * most decision-relevant number on the HUD and it was wrong.
+ * is silently truncated on screen. At 8 the strip drew half a team and the
+ * scoreboard eight of fifteen men — the count is the most decision-relevant
+ * number on the HUD and it was wrong.
+ *
+ * TWENTY AND FORTY, because `RULES.teamSize` is 20 ("あと２０VS20にしてください").
+ * These two constants are the one place in `src/ui` that has to know the roster
+ * size, and the failure mode when they lag behind it is SILENT — twenty men
+ * alive and sixteen pips lit reads as a side that has lost four, which is worse
+ * than no pips at all. `MAX_ROWS` is per BOTH sides (`MAX_ROWS / 2` rows are
+ * built per column), so it is twice `MAX_TEAM` by construction.
  */
-const MAX_TEAM = 16;
-const MAX_ROWS = 32;
+const MAX_TEAM = 20;
+const MAX_ROWS = 40;
 
 /**
  * ROUND STRIP — who is left, and how long you have.

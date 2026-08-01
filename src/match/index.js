@@ -1182,8 +1182,12 @@ export class MatchSystem {
 
     /**
      * TIER 3 — THE BASE CLUSTER, and the reason nothing above needs a guard.
-     * With fifteen points spread over a 13 x 10 m pocket the emptiest-point
-     * choice is a real one rather than a formality.
+     * With twenty-one points spread over a 13 x 15 m pocket the emptiest-point
+     * choice is a real one rather than a formality. It was fifteen points in
+     * 13 x 10 m for the 15v15 and it grew with `RULES.teamSize`, at the SAME
+     * points-per-square-metre — a cluster that has fewer stand points than the
+     * side has men is a cluster with no empty point to find. @see `SPAWNS` in
+     * src/match/sites.js.
      */
     if (!best) {
       const spawns = role === ROLE.ATTACK ? this.spawns.attack : this.spawns.defend;
