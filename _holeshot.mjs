@@ -14,25 +14,31 @@ const args = process.argv.slice(2);
 const OUT = (args.find((a) => a.startsWith('out=')) ?? 'out=shots/hole').slice(4);
 const URL = (args.find((a) => a.startsWith('url=')) ?? 'url=http://127.0.0.1:4280/').slice(4);
 const SEED = (args.find((a) => a.startsWith('seed=')) ?? 'seed=12').slice(5);
-const POSES = args.filter((a) => a.includes(':')).map((a) => {
+/**
+ * A pose is `id:x,y,z,x,y,z`. The `!a.includes('=')` is NOT tidiness: `url=http://…`
+ * contains a colon, so without it the URL parses as a pose whose numbers are all
+ * NaN, `camera.lookAt` writes a NaN matrix — and the camera never recovers, so
+ * EVERY frame after it comes back black. Four rounds of this probe were spent
+ * looking for the reason a lit map photographed as a black rectangle.
+ */
+const POSES = args.filter((a) => a.includes(':') && !a.includes('=')).map((a) => {
   const [id, rest] = a.split(':');
   const n = rest.split(',').map(Number);
   return { id, from: [n[0], n[1], n[2]], look: [n[3], n[4], n[5]] };
 });
 mkdirSync(OUT, { recursive: true });
 const browser = await chromium.launch({ headless: true,
-  args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--mute-audio', '--force-color-profile=srgb'] });
+  args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--enable-gpu-rasterization',
+    '--force-color-profile=srgb', '--force-device-scale-factor=1', '--hide-scrollbars', '--mute-audio'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
 const errs = []; page.on('pageerror', (e) => errs.push(String(e.message)));
-await page.goto(`${URL}?capture=1&seed=${SEED}`, { waitUntil: 'domcontentloaded' });
+await page.goto(SEED === 'off' ? `${URL}?capture=1` : `${URL}?capture=1&seed=${SEED}`, { waitUntil: 'domcontentloaded' });
 await page.waitForFunction('window.__READY__===true', null, { timeout: 300000 });
 await page.evaluate(() => {
   const e = window.__ENGINE__;
   e.input.frozen = true; e.input.enabled = false;
   e.ctx.peek('player')?.setControlEnabled?.(false);
   e.ctx.peek('ui')?.debugState?.('clean');
-  const m = e.ctx.peek('match'); if (m) m.update = () => {};
-  const ai = e.ctx.peek('ai'); if (ai) { ai.combatEnabled = false; try { ai.clearAgents(); } catch { /* ok */ } }
 });
 console.log('levelSeed', await page.evaluate(() => window.__ENGINE__.levelSeed));
 for (const p of POSES) {
@@ -46,8 +52,15 @@ for (const p of POSES) {
     e.camera.lookAt(to);
     e.ctx.peek('player')?.teleport?.(e.camera.position, e.camera.rotation);
   }, p);
-  await page.waitForTimeout(2600);
-  await page.screenshot({ path: `${OUT}/${p.id}.png` });
+  // 60 REAL FRAMES, not 2.6 s of wall clock. Headless throttles rAF when nothing
+  // commits, so a timer-based settle screenshots a canvas that never redrew — it
+  // comes back black with the DOM HUD on top of it, which is exactly what the
+  // first four frames out of this probe were.
+  await page.evaluate(
+    (n) => new Promise((done) => { let i = 0; const t = () => (++i >= n ? done() : requestAnimationFrame(t)); requestAnimationFrame(t); }),
+    60
+  );
+  await page.screenshot({ path: `${OUT}/${p.id}.png`, type: 'png' });
   console.log(`${OUT}/${p.id}.png`);
 }
 if (errs.length) console.log('PAGE ERRORS', errs.slice(0, 4));
