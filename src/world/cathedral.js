@@ -1,6 +1,6 @@
 import { Rng } from '../core/rng.js';
 import { BOX, BOX_FINE, BOX_SOFT, BOX_THIN, PANE, IDENT, LL } from './kit.js';
-import { fillMasks, patchGeometry, rockGeometry, tubeY } from './util.js';
+import { fbm3, fillMasks, patchGeometry, rockGeometry, tubeY } from './util.js';
 import { CATHEDRAL } from './layout.js';
 
 /**
@@ -937,239 +937,1023 @@ export function buildCathedral(A) {
    * ────────────────────────────────────────────────────────────────────────
    * The second scope. It is the mirror of `cath:shell` and the two are never
    * drawn at once: `setRazed` hides one and shows the other, which is two index
-   * fills and two mask writes. Nothing here is generated, fractured or solved
-   * when the event fires.
-   *
-   * WHAT IT HAS TO READ AS. "大聖堂周りを瓦礫の山にして、大聖堂自体を破壊して更地に" —
-   * mounds of rubble around the outside, and the building itself flattened. So
-   * the mass goes where the mass WAS: a broken heap along each wall line, a
-   * bigger one where the campanile stood, a stump where each arcade pier stood,
-   * and a field of fallen render and shattered slab across the floor between
-   * them. Nothing new stands up; the tallest thing left is a 2.8 m heap where a
-   * 29 m tower was.
+   * fills and two mask writes. Nothing here is generated, fractured, relaxed or
+   * solved when the event fires — the height field below is solved HERE, at
+   * boot, and what the event does with it is flip an index range.
    *
    * ────────────────────────────────────────────────────────────────────────
-   * WHY THE RUIN'S COLLISION SITS ON THE SHELL'S FOOTPRINT, AND NOT ANYWHERE
-   * ELSE. THIS IS THE PART THAT WOULD OTHERWISE ORPHAN THE MAP.
+   * WHY THIS WAS REBUILT: "大聖堂の破壊なのに跡地がしょぼい"
    * ────────────────────────────────────────────────────────────────────────
-   * `src/ai/nav.js` is a height field baked at boot. Changing collision in the
-   * middle of a match does NOT change it, and `MatchSystem._reprobeZoneNav`
-   * re-probes only D's own circle when the point opens. So any new solid I put
-   * on ground the grid currently calls WALKABLE becomes a wall that A* cannot
-   * see, and thirty men walk into it — which is exactly the failure
-   * `tools/stuckcheck.mjs` exists to catch.
+   * The first ruin read the brief ("更地にする") literally and levelled the site:
+   * measured over the footprint on a 0.5 m lattice, the highest solid went
+   * 32.8 m → 3.45 m, the MEAN surface stood 0.33 m over the floor and 82 % of
+   * the plan was bare tile. Standing in the nave you saw a tiled floor, open
+   * sky, a few chest-height blocks and two pier stumps. That is not what is left
+   * when a 29 m building the width of the map centre comes down, and site D sits
+   * in that footprint.
    *
-   * Every collider below therefore stands on ground that was ALREADY blocked by
-   * the shell: on the outer wall lines, and on the arcade piers. The grid's
-   * answer for those cells is "blocked" before the raze and "blocked" after it,
-   * so the raze needs no nav patch outside D at all. Two consequences that are
-   * deliberate rather than tolerated:
+   * A masonry church leaves four things and the old ruin had one of them:
    *
-   *   - THE PORTALS STAY OPEN. Every doorway in the shell — the three south
-   *     portals, both transept portals, the apse door — is a gap in the mound
-   *     runs below, because those cells ARE walkable in the grid and closing one
-   *     would cut the ruin off from the street it opens onto.
-   *   - THE CROSSING IS THE ONE PLACE NEW SOLIDS ARE ALLOWED, and it is allowed
-   *     for the opposite reason: `_reprobeZoneNav` re-probes D's OWN circle when
-   *     the point opens, so mass inside 8 m of the crossing is the only mass on
-   *     this site the grid does learn about. `KEEP` (9.4 m — D's `captureRadius`
-   *     plus a body's width) is the band the WALL AND PIER runs stay out of;
-   *     `KEEP_STAND` (5.0 m) is what the fallen dome stays out of, because
-   *     `standRing` proves its eight points on a 4.0 m ring
-   *     (`zone.radius * 0.5`) at BOOT and never re-proves them. Between the two
-   *     is where the cover goes.
+   *   1. THE FILL. The vault webbing, the roof, the render and the floor screed
+   *      end up ON THE PLAN, everywhere, a metre deep. `RUBBLE FIELD` below.
+   *   2. THE WALLS, HALF DOWN. A wall does not vanish, it TEARS: bays that
+   *      survive to six or eight metres beside bays that are a heap.
+   *      `tornWall` below, and it is what puts a silhouette back on the site.
+   *   3. THE ARCH OVER A DOOR, standing on its jambs after everything either
+   *      side of it has gone. `brokenArch` below.
+   *   4. THE DOME AND THE TOWER, which are the two biggest single masses on the
+   *      plan and land where they stood.
    *
-   *     THAT COVER IS NOT DECORATION. `tools/sitecheck.mjs` cannot see D at all
-   *     — the zone is authored `locked` and does not exist on the intact map it
-   *     measures — so its assertion is re-run by `_dmass.mjs`, and the first
-   *     answer was 7.8 m² of 0.9-2.8 m mass inside the circle against a
-   *     requirement of 12. A capture point levelled to a bare tiled floor is a
-   *     killing field, not an objective.
+   * ────────────────────────────────────────────────────────────────────────
+   * THE CONSTRAINT EVERY EXTRA TONNE HAS TO LIVE INSIDE, MEASURED NOT ASSUMED
+   * ────────────────────────────────────────────────────────────────────────
+   * `AiSystem._buildNav` runs `grid.build()` BEFORE `_bakeCover`, and
+   * `_bakeCover` is the first thing on this map that ever calls `setRazed` — so
+   * THE ONE HEIGHT FIELD THE WHOLE MATCH NAVIGATES ON WAS BAKED WITH BOTH
+   * `cath:shell` AND `cath:ruin` SOLID. `_cathgrid.mjs` measures it: the eight
+   * fallen-dome blocks stand on bare nave floor the shell never touches and
+   * every one of their cells comes back `flags = 0`.
    *
-   * `_postcheck.mjs` re-runs navcheck's own assertion with this scope live, and
-   * `tools/sitecheck.mjs` is run against the razed map rather than the intact
-   * one, because measuring only the intact map is how this ships broken.
+   * That cuts both ways and the good half is the surprising one:
+   *
+   *   - NOTHING HERE CAN BECOME AN INVISIBLE WALL. The grid is the INTERSECTION
+   *     of the two states, so a cell this scope blocks is a cell A* already
+   *     refuses to route through with the church still standing. `stuckcheck`
+   *     cannot be failed by adding mass here; that is what makes a 14 m tower
+   *     stump affordable at all.
+   *   - WHAT IT COSTS IS WALKABLE INTERIOR, IN BOTH STATES. Every cell this
+   *     scope blocks is a cell the bots lose inside the STANDING cathedral too,
+   *     and that building exists because "屋内のエリアを作ってそこにもAIがいく利点や
+   *     メリットを与えて". So the mass is a BUDGET, spent where it buys the most
+   *     silhouette per cell.
+   *
+   * And it fixes the ceiling on rubble that is meant to stay walkable.
+   * `NavGrid._carveInteriors` re-samples this footprint from `probeY` and
+   * REJECTS any cell whose surface stands more than 0.9 m over the volume's
+   * `floorY`, so 1.06 m is the entire budget for ground a bot may cross. That is
+   * an ABSOLUTE ceiling, not a per-step one, which is why
+   * `src/world/demolition.js`'s treatment only half applies here:
+   *
+   *   - ITS RELAXATION DOES APPLY, and the field below is relaxed exactly as
+   *     `_relax` relaxes the district debris — no two neighbouring cells differ
+   *     by more than `STEP_MAX`, so the walkable tier is a landscape a man walks
+   *     over rather than a set of ledges he mantles.
+   *   - ITS CONCLUSION DOES NOT. There, height and walkability trade against
+   *     each other smoothly and the answer was a low wide pile. Here they do
+   *     not: 1.06 m is walkable and 1.07 m is a wall, however gently it got
+   *     there. So the ruin is TWO TIERS on purpose — a relaxed rubble FIELD at
+   *     0.15-1.00 m that is ground, and discrete MASSES at 1.5-14 m that are
+   *     not, standing where the building's own mass stood.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * WHERE THE BUDGET IS SPENT, AND WHY THE LANES ARE AUTHORED
+   * ────────────────────────────────────────────────────────────────────────
+   * Almost all of the tall mass is FREE, because it stands on ground the SHELL
+   * already blocked: the four wall lines, the ten buttress footings on each
+   * flank, the twenty arcade piers and the campanile's own plan (its stair fills
+   * it). Everything else is charged, so the field keeps a cruciform of LANES
+   * open — the nave and choir axis, the transept axis, a run down each aisle and
+   * a spur in from each of the two side portals — held under the 1.06 m ceiling
+   * and joined to every doorway in the shell. That is the circulation the church
+   * itself had, and it is what `_postcheck.mjs` walks.
+   *
+   * `KEEP_STAND` is what the fallen dome stays outside, because `standRing`
+   * proves D's eight standing points on a 4.0 m ring at BOOT and never re-proves
+   * them, and the crossing is authored as a BOWL — the dome fell INTO it — so
+   * D's cover mass comes from cover you fight behind rather than from a plinth
+   * the whole zone stands on. `_dmass.mjs` re-runs `sitecheck`'s two assertions
+   * there (12 m² of 0.9-2.8 m mass, 6 standing cover points) because the zone is
+   * authored `locked` and `sitecheck` structurally cannot see it.
+   *
+   * `_postcheck.mjs` re-runs navcheck's own assertion with this scope live,
+   * `_razestuck.mjs` re-runs stuckcheck on it, `_cathruin.mjs` measures the
+   * silhouette, and `?cath=down` boots straight into it so the gates in `tools/`
+   * can be pointed at the ruin without a match. @see `setRazed`.
    */
   const ruin = A.beginScope('cath:ruin');
   {
-    /** The wall and pier runs stay outside this. @see D's captureRadius. */
-    const KEEP = 9.4;
-    /** The fallen dome stays outside this — `standRing`'s ring is at 4.0 m. */
-    const KEEP_STAND = 5.0;
+    /**
+     * The band the discrete masses keep out of. `standRing` puts D's eight
+     * standing points — which are also its forward spawns — on a 4.0 m ring.
+     */
+    const KEEP_STAND = 4.75;
+    /**
+     * The tallest rubble a cell may carry and still be ground.
+     * `_carveInteriors` rejects `fy > floorY + 0.9`; this leaves 6 cm of margin.
+     */
+    const WALK_CAP = SEC.floor + 0.84;
     /** Grey rubble, ash and broken render — the palette the shell was built in. */
-    const RUBBLE = ['concrete_dark', 'concrete', 'plaster_white'];
-    const rubbleKey = () => RUBBLE[(rng.float() * RUBBLE.length) | 0];
-
-    /**
-     * One heap: a cluster of faceted lumps with a single box under it. The box
-     * is the only thing physics and the player ever touch, so it is a little
-     * tighter than the silhouette — a heap you can shoot over the top of but
-     * not walk through, which is what a collapsed wall should be.
-     */
-    const mound = (u, v, r, h) => {
-      const lumps = 4 + ((r * 1.6) | 0);
-      for (let i = 0; i < lumps; i++) {
-        const a = rng.float() * 6.283;
-        const rr = rng.range(0, r * 0.66);
-        const g = rockGeometry(rng, rng.range(r * 0.62, r * 1.15), 1, rng.range(0.38, 0.68));
-        fillMasks(g, 0.92, rng.range(0.35, 0.95), 0.3);
-        A.addOnce(rubbleKey(), g,
-          LL(IDENT, X(u + Math.cos(a) * rr), SEC.floor + rng.range(-0.05, h * 0.42),
-            Z(v + Math.sin(a) * rr), rng.float() * 6.283));
+    const RUBBLE = ['concrete_dark', 'concrete', 'plaster_white', 'plaster_cream', 'plaster_sand', 'roof_screed'];
+    const RUB_W = [0.2, 0.2, 0.16, 0.16, 0.16, 0.12];
+    const rubbleKey = () => {
+      let r = rng.float();
+      for (let i = 0; i < RUBBLE.length; i++) {
+        r -= RUB_W[i];
+        if (r <= 0) return RUBBLE[i];
       }
-      A.box('concrete', X(u), SEC.floor + h * 0.5, Z(v), r * 1.45, h, r * 1.45);
+      return RUBBLE[0];
+    };
+    const clamp01 = (t) => (t < 0 ? 0 : t > 1 ? 1 : t);
+
+    /** A one-off faceted lump, merged and freed. The eye's unit of debris. */
+    const lump = (key, u, y, v, size, squash = 0.6, w = 0.9) => {
+      const g = rockGeometry(rng, size, 1, squash);
+      fillMasks(g, w, rng.range(0.3, 0.95), 0.3);
+      A.addOnce(key, g, LL(IDENT, X(u), y, Z(v), rng.float() * 6.283));
     };
 
+    /* ================================================================== */
+    /* 8a. THE RUBBLE FIELD — the tier that is ground                     */
+    /* ================================================================== */
     /**
-     * A run of heaps down one wall line, skipping the openings. `gaps` are
-     * intervals of the along-axis coordinate that MUST stay clear — every one of
-     * them is a portal the grid has walkable cells in.
+     * A height field on a 1.7 m lattice over the whole plan and 2.6 m of apron
+     * past it, authored from WHERE THE MASS WAS and then relaxed, exactly as
+     * `_debrisField` authors and relaxes a district block:
+     *
+     *   - deepest against the four walls, which is where a wall lands;
+     *   - a second ridge under the arcade, which carried the clerestory and the
+     *     nave vault as well as itself;
+     *   - a swell over the campanile's corner, which had four times the mass of
+     *     anything else on the plan;
+     *   - a BOWL at the crossing, because the dome fell into it and because D
+     *     has to stay a point you fight over rather than a plinth;
+     *   - and pulled back down along the LANES, so the doorways of the shell
+     *     still lead somewhere.
+     *
+     * Then clamped to `WALK_CAP` and relaxed to `STEP_MAX`, so the whole tier is
+     * ground in the baked grid AND a surface a man walks rather than mantles.
+     * The relaxation is the load-bearing line here for the same reason it is in
+     * `demolition.js`: two octaves of noise on a dome makes cliffs, and a cliff
+     * in a height field is a cell nobody can cross.
      */
-    const wallRun = (axis, fixed, from, to, gaps, r, h) => {
-      const step = r * 1.55;
-      for (let s = from + r; s <= to - r; s += step) {
-        const c = s + rng.range(-0.3, 0.3);
+    const CELL = 1.7;
+    const APRON = 2.6;
+    /** 0.45 is `NavGrid.maxStep` and the two lattices do not line up; 0.34 is
+     *  under it however a 0.8 m nav cell falls inside a 1.7 m debris cell. */
+    const STEP_MAX = 0.34;
+    const FHW = HW + APRON;
+    const FHD = HD + APRON;
+    const NX = Math.round((FHW * 2) / CELL);
+    const NZ = Math.round((FHD * 2) / CELL);
+    const DXC = (FHW * 2) / NX;
+    const DZC = (FHD * 2) / NZ;
+
+    /**
+     * Metres to the nearest lane the ruin keeps open. The cruciform is the
+     * church's own circulation: nave and choir on the axis, the transept across
+     * it, a run down each aisle just clear of the arcade, and a spur in from
+     * each of the two side portals of the south front.
+     */
+    const laneDist = (u, v) => {
+      let d = Math.min(Math.abs(u), Math.abs(v));
+      d = Math.min(d, Math.abs(Math.abs(u) - 10.9));
+      if (v < -16.0) d = Math.min(d, Math.abs(Math.abs(u) - 5.6));
+      /**
+       * …AND THE CROSSING IS A PLAZA, NOT A JUNCTION OF TWO LANES. D's circle
+       * and a metre of rim outside it are all lane, so a capture point in the
+       * middle of a rubble field is somewhere fifteen men can actually work.
+       */
+      d = Math.min(d, Math.max(0, Math.hypot(u, v) - 8.6));
+      return d;
+    };
+
+    const TCU = (TOW.u0 + TOW.u1) / 2;
+    const TCV = (TOW.v0 + TOW.v1) / 2;
+
+    const fieldAt = (u, v) => {
+      const n = fbm3(u * 0.21 + 6.7, 3.3, v * 0.21 + 2.9, 2) - 0.5;
+      const outside = Math.max(Math.abs(u) - HW, Math.abs(v) - HD);
+      if (outside > 0) {
+        /**
+         * THE SPILL ON TO THE PARVIS — "大聖堂周りを瓦礫の山に" — and it is capped
+         * hard on purpose. These cells are STREET: the open-air sweep bakes them
+         * with this scope solid, and a knee-high pile round a building in the
+         * middle of the map is a kerb every route past it has to climb.
+         */
+        return Math.max(0, (0.30 + n * 0.14) * clamp01(1 - outside / APRON));
+      }
+      let h = 0.32 + n * 0.30;
+      // the walls fell inward
+      h += 0.66 * clamp01(1 - Math.min(HW - Math.abs(u), HD - Math.abs(v)) / 4.6);
+      // the arcade, and the clerestory and the nave vault it carried
+      h += 0.38 * clamp01(1 - Math.abs(Math.abs(u) - ARC) / 3.2);
+      // the campanile's corner
+      h += 0.50 * clamp01(1 - Math.hypot(u - TCU, v - TCV) / 10.0);
+      // …and the crossing is a bowl the dome fell into
+      h -= 0.40 * clamp01(1 - Math.hypot(u, v) / 6.2);
+      // the lanes, pulled back down and blended out over ~2 m
+      const ld = laneDist(u, v);
+      h = Math.min(h, 0.26 + n * 0.22 + Math.max(0, ld - 2.2) * 0.5);
+      return Math.max(0.12, h);
+    };
+
+    const fh = new Float32Array(NX * NZ);
+    const fjx = new Float32Array(NX * NZ);
+    const fjz = new Float32Array(NX * NZ);
+    for (let iz = 0; iz < NZ; iz++) {
+      for (let ix = 0; ix < NX; ix++) {
+        const i = iz * NX + ix;
+        const u = -FHW + (ix + 0.5) * DXC;
+        const v = -FHD + (iz + 0.5) * DZC;
+        fh[i] = Math.min(WALK_CAP - SEC.floor, fieldAt(u, v));
+        fjx[i] = rng.range(-0.24, 0.24);
+        fjz[i] = rng.range(-0.24, 0.24);
+      }
+    }
+    /** `_relax`, on this field. Only ever lowers, so it converges from above. */
+    for (let pass = 0; pass < 12; pass++) {
+      let moved = 0;
+      for (let k = 0; k < 2; k++) {
+        const fwd = k === 0;
+        for (let s = 0; s < NX * NZ; s++) {
+          const i = fwd ? s : NX * NZ - 1 - s;
+          const ix = i % NX;
+          const iz = (i / NX) | 0;
+          for (let d = 0; d < 4; d++) {
+            const jx = ix + (d === 0 ? 1 : d === 1 ? -1 : 0);
+            const jz = iz + (d === 2 ? 1 : d === 3 ? -1 : 0);
+            if (jx < 0 || jz < 0 || jx >= NX || jz >= NZ) continue;
+            const j = jz * NX + jx;
+            if (fh[i] - fh[j] > STEP_MAX) {
+              fh[i] = fh[j] + STEP_MAX;
+              moved++;
+            }
+          }
+        }
+      }
+      if (!moved) break;
+    }
+
+    /**
+     * The field, drawn — the `_debris` recipe, in this building's palette. One
+     * piece carries the height the proxy promises and two or three smaller ones
+     * are jammed against it at steeper angles in different materials, because a
+     * cell drawn as a single slab of exactly `h` reads as plywood sheeting from
+     * anywhere above it. The COLLISION is the axis-aligned box under it with a
+     * flat top at exactly `h`, which is what both height fields sample.
+     */
+    for (let iz = 0; iz < NZ; iz++) {
+      for (let ix = 0; ix < NX; ix++) {
+        const i = iz * NX + ix;
+        const h = fh[i];
+        if (h < 0.06) continue;
+        const cu = -FHW + (ix + 0.5) * DXC;
+        const cv = -FHD + (iz + 0.5) * DZC;
+        const u = cu + fjx[i];
+        const v = cv + fjz[i];
+        const heap = 2 + ((rng.float() * 3) | 0);
+        for (let k = 0; k < heap; k++) {
+          const main = k === 0;
+          const su = DXC * (main ? rng.range(0.8, 0.98) : rng.range(0.28, 0.6));
+          const sv = DZC * (main ? rng.range(0.8, 0.98) : rng.range(0.28, 0.6));
+          const sy = main ? h * rng.range(1.0, 1.2) : h * rng.range(0.35, 0.95);
+          A.add(rubbleKey(), soft,
+            LL(IDENT,
+              X(u + (main ? 0 : rng.range(-DXC * 0.36, DXC * 0.36))),
+              SEC.floor + sy * 0.5 + (main ? 0 : rng.range(0, h * 0.5)),
+              Z(v + (main ? 0 : rng.range(-DZC * 0.36, DZC * 0.36))),
+              rng.range(-0.9, 0.9), su, sy, sv,
+              rng.range(main ? -0.1 : -0.4, main ? 0.1 : 0.4),
+              rng.range(main ? -0.1 : -0.4, main ? 0.1 : 0.4)),
+            { masks: [rng.range(0.5, 0.98), rng.range(0.55, 1.0), rng.range(0.4, 0.85)] });
+        }
+        // Loose lumps on top: no collision by design, all of them well under the
+        // 0.42 m the controller steps over, and this is where the pile's own
+        // silhouette comes from.
+        const lumps = 1 + ((rng.float() * 3) | 0);
+        for (let k = 0; k < lumps; k++) {
+          const s = rng.range(0.18, 0.6);
+          lump(rng.float() < 0.5 ? 'concrete' : 'brick_fine',
+            u + rng.range(-0.7, 0.7), SEC.floor + h + s * 0.2, v + rng.range(-0.7, 0.7), s, 0.72, 0.35);
+        }
+        /**
+         * EVERY CELL GETS A PROXY, AND THE THRESHOLD IS THE WHOLE POINT.
+         *
+         * `demolition.js` only gives a cell a box at 0.42 m, on the argument
+         * that the controller steps over anything lower and a box there is a
+         * bump in the height field for nothing. That argument is wrong for a
+         * RELAXED field and it cost a measurable amount here. The relaxation
+         * guarantees neighbours differ by at most `STEP_MAX`, but a cell under
+         * the threshold reports the TILE FLOOR rather than its own top — so the
+         * step the grid sees across that boundary is `threshold + STEP_MAX`,
+         * which at 0.3 is 0.64 against a `NavGrid.maxStep` of 0.45. The lanes
+         * came back walkable and NOT CONNECTED along their own edges, and
+         * `_postcheck.mjs` measured it as bots in the ruin: 64.6 % of frames
+         * with a man inside D before this change, 14-27 % after.
+         *
+         * At 0.08 the worst boundary step is 0.42, inside the limit whichever
+         * way the two lattices fall. It is 630-odd extra boxes at boot.
+         */
+        if (h >= 0.08) {
+          A.box('concrete', X(cu), SEC.floor + h * 0.5, Z(cv), DXC * 1.06, h, DZC * 1.06);
+        }
+      }
+    }
+    /** The rubble surface at a plan position, for anything that sits ON it. */
+    const groundAt = (u, v) => {
+      const ix = Math.min(NX - 1, Math.max(0, Math.floor((u + FHW) / DXC)));
+      const iz = Math.min(NZ - 1, Math.max(0, Math.floor((v + FHD) / DZC)));
+      return SEC.floor + fh[iz * NX + ix];
+    };
+
+    /* ================================================================== */
+    /* 8b. THE WALLS, HALF DOWN — the tier that is not ground             */
+    /* ================================================================== */
+    /**
+     * A wall does not level, it TEARS. `tornWall` lays one elevation as columns
+     * of masonry roughly a metre wide, each standing to its own height off a
+     * profile that is mostly a 1.5-3 m heap with AUTHORED SURVIVORS in it —
+     * bays that are still four, six or eight metres of wall, with a torn top,
+     * exposed rubble core and lumps of the course that came off resting on the
+     * break. Those survivors are the silhouette: they are what makes the site
+     * read as the remains of a building rather than as a levelled plot, and they
+     * are what breaks the 45 m sightline down the nave.
+     *
+     * COLLISION SITS ON THE WALL'S OWN STRIP plus `SPILL` metres of the aisle,
+     * which is a metre of already-cheap cells buying the whole elevation depth.
+     * `gaps` are the shell's doorways and stay clear at any height.
+     */
+    const SPILL = 0.9;
+    const tornWall = (axis, fixed, from, to, gaps, opts) => {
+      const { key, base, survivors = [], sign } = opts;
+      const step = 0.98;
+      const t = T + SPILL;
+      const off = -sign * (SPILL / 2);
+      for (let s = from; s < to - 0.2; s += step) {
+        const c = s + step / 2;
         let blocked = false;
-        for (const [g0, g1] of gaps) if (c > g0 - r && c < g1 + r) blocked = true;
+        for (const [g0, g1] of gaps) if (c > g0 - 0.55 && c < g1 + 0.55) blocked = true;
         if (blocked) continue;
-        const u = axis === 'u' ? c : fixed;
-        const v = axis === 'u' ? fixed : c;
-        if (Math.hypot(u, v) < KEEP) continue;
-        mound(u, v, rng.range(r * 0.8, r * 1.15), rng.range(h * 0.72, h * 1.12));
+        const wid = Math.min(step * 1.06, to - s);
+        let h = base * rng.range(0.72, 1.18) +
+          (fbm3(c * 0.28 + 3.1, 5.7, axis === 'u' ? 1.3 : 8.9, 2) - 0.5) * base * 0.9;
+        for (const [sc, half, sh] of survivors) {
+          const f = clamp01(1 - Math.abs(c - sc) / half);
+          // a squared shoulder, so a survivor is a TOWER of wall and not a dune
+          h = Math.max(h, base + (sh - base) * Math.sqrt(f) * rng.range(0.86, 1.0));
+        }
+        h = Math.max(1.05, h);
+        const u = axis === 'u' ? c : fixed + off;
+        const v = axis === 'u' ? fixed + off : c;
+        const su = axis === 'u' ? wid : t;
+        const sv = axis === 'u' ? t : wid;
+        const gy = SEC.floor;
+        // the wall itself, in courses so the tear has thickness in it
+        A.add(key, box, LL(IDENT, X(u), gy + h * 0.5, Z(v), rng.range(-0.02, 0.02), su, h, sv),
+          { masks: [rng.range(0.4, 0.9), rng.range(0.3, 0.8), rng.range(0.25, 0.6)] });
+        // the exposed core, a little proud and a little short of the face
+        A.add('concrete_dark', box,
+          LL(IDENT, X(u), gy + h * rng.range(0.45, 0.62), Z(v),
+            0, su * 0.62, h * rng.range(0.3, 0.55), sv * 0.72),
+          { masks: [0.95, rng.range(0.5, 1.0), 0.4] });
+        // the torn top: two or three lumps of the course that came off
+        for (let k = 0; k < 3; k++) {
+          const s2 = rng.range(0.22, 0.5);
+          lump(rng.float() < 0.5 ? 'concrete' : key,
+            u + (axis === 'u' ? rng.range(-0.4, 0.4) : rng.range(-0.5, 0.5)),
+            gy + h + s2 * rng.range(-0.1, 0.25),
+            v + (axis === 'u' ? rng.range(-0.5, 0.5) : rng.range(-0.4, 0.4)), s2, 0.62, 0.95);
+        }
+        // and a string course surviving on the taller bays, for scale
+        if (h > 3.2 && rng.float() < 0.6) {
+          A.add('concrete_dark', soft,
+            LL(IDENT, X(u), gy + h * rng.range(0.35, 0.7), Z(v), 0, su + 0.12, 0.24, sv + 0.12),
+            { masks: [0.95, 0.4, 0.18] });
+        }
+        A.box('concrete', X(u), gy + h * 0.5, Z(v), su, h, sv);
+        // the spill INTO the church off the face of it, resting on the field —
+        // drawn only, because the aisle beyond `SPILL` is a lane a bot walks
+        for (let k = 0; k < 2; k++) {
+          const d = rng.range(SPILL * 0.5, SPILL + 1.5);
+          const lu = axis === 'u' ? c + rng.range(-0.5, 0.5) : fixed - sign * d;
+          const lv = axis === 'u' ? fixed - sign * d : c + rng.range(-0.5, 0.5);
+          const s2 = rng.range(0.24, 0.66);
+          lump(rubbleKey(), lu, groundAt(lu, lv) + s2 * 0.22, lv, s2, 0.55, 0.9);
+        }
       }
     };
 
-    /** The wall lines, exactly where `runWall` put the walls. */
+    /**
+     * The arch over a doorway, standing on its jambs after the wall either side
+     * of it has gone. Drawn only — every voussoir of it is over four metres up —
+     * and the one image on this site that says CATHEDRAL rather than BUILDING.
+     * Two quadrants on the shell's own Levantine profile, cut short on one side
+     * so it reads as a survivor rather than as a doorway somebody built here.
+     */
+    const brokenArch = (key, u, ySpring, v, wid, rise, alongX, t, cut) => {
+      const n = 9;
+      const r = wid / 2;
+      for (const side of [-1, 1]) {
+        const upto = side === cut ? Math.round(n * rng.range(0.45, 0.7)) : n;
+        for (let i = 0; i < upto; i++) {
+          const a = ((i + 0.5) / n) * (Math.PI / 2);
+          const px = side * r * Math.cos(a) * (1 + 0.16 * Math.sin(a));
+          const py = rise * Math.sin(a);
+          const bw = (r / n) * 1.5;
+          A.add(key, box,
+            LL(IDENT, X(u + (alongX ? px : 0)), ySpring + py, Z(v + (alongX ? 0 : px)), 0,
+              alongX ? bw : t, 0.42, alongX ? t : bw,
+              alongX ? 0 : -side * a, alongX ? -side * a : 0),
+            { masks: [rng.range(0.5, 0.95), rng.range(0.4, 0.9), 0.3] });
+        }
+      }
+      if (cut === 0) {
+        A.add(key, soft, LL(IDENT, X(u), ySpring + rise + 0.16, Z(v), 0,
+          alongX ? 0.46 : t + 0.1, 0.5, alongX ? t + 0.1 : 0.46), { masks: [0.85, 0.4, 0.2] });
+      }
+    };
+
+    /**
+     * A DOORWAY THAT SURVIVED: two jambs and the head they carry.
+     *
+     * The arch has to STAND ON something. Laid on its own over a gap in the wall
+     * run it hangs in the sky with three metres of daylight under each springing
+     * — photographed off the parvis, the great portal read as a hoop somebody
+     * had thrown at the site. So the jambs are laid first, on the same wall line
+     * and up to the springing, and the arch springs off their heads.
+     *
+     * The jambs stand on the shell's own reveal, which is masonry either side of
+     * every opening in section 2 and therefore blocked ground in the baked grid;
+     * the DOORWAY between them is untouched, because those cells are the only
+     * way into the ruin from the street.
+     */
+    const portal = (axis, fixed, c, wid, springY, rise, key, sign, cut) => {
+      const t = T + 0.55;
+      for (const s of [-1, 1]) {
+        const off = s * (wid / 2 + 0.75);
+        const h = springY + rng.range(0.15, 0.6);
+        const u = axis === 'u' ? c + off : fixed - sign * 0.1;
+        const v = axis === 'u' ? fixed - sign * 0.1 : c + off;
+        const su = axis === 'u' ? 1.5 : t;
+        const sv = axis === 'u' ? t : 1.5;
+        A.add(key, box, LL(IDENT, X(u), SEC.floor + h / 2, Z(v), 0, su, h, sv),
+          { masks: [rng.range(0.45, 0.9), rng.range(0.35, 0.85), 0.35] });
+        A.box('concrete', X(u), SEC.floor + h / 2, Z(v), su, h, sv);
+        // the shafts down the reveal, which is the detail that says DOORWAY
+        for (const q of [-1, 1]) {
+          const g = tubeY(0.13, h - 0.6, { radial: 7 });
+          A.addOnce(key, g, LL(IDENT,
+            X(u - (axis === 'u' ? q * 0.55 : 0)), SEC.floor,
+            Z(v - (axis === 'u' ? 0 : q * 0.55))), { masks: [0.8, 0.4, 0.5] });
+        }
+        A.add('concrete_dark', soft, LL(IDENT, X(u), SEC.floor + springY - 0.2, Z(v), 0,
+          su + 0.24, 0.34, sv + 0.24), { masks: [0.95, 0.4, 0.18] });
+        for (let k = 0; k < 3; k++) {
+          const s2 = rng.range(0.2, 0.46);
+          lump(rng.float() < 0.5 ? 'concrete' : key,
+            u + rng.range(-0.5, 0.5), SEC.floor + h + s2 * rng.range(-0.1, 0.25), v + rng.range(-0.5, 0.5), s2, 0.62, 0.95);
+        }
+      }
+      brokenArch(key, axis === 'u' ? c : fixed, SEC.floor + springY,
+        axis === 'u' ? fixed : c, wid + 1.5, rise, axis === 'u', t, cut);
+    };
+
     const WU = HW - T / 2;
     const WV = HD - T / 2;
-    // South front: the great portal and the two side portals.
-    wallRun('u', -WV, -HW, HW, [[-2.6, 2.6], [-7.1, -4.1], [4.1, 7.1]], 1.7, 2.1);
-    // The apse end, with its door on the axis.
-    wallRun('u', WV, -HW, HW, [[-2.4, 2.4]], 1.7, 2.1);
-    // Both flanks, each with a transept portal dead centre at the crossing.
-    for (const side of [-1, 1]) wallRun('v', side * WU, -HD, HD, [[-2.4, 2.4]], 1.7, 2.2);
-
     /**
-     * THE CAMPANILE. Twenty-nine metres of tower does not leave the same heap a
-     * nine metre aisle wall does, so its corner gets the biggest mass on the
-     * site — and it lands on the tower's own footprint, which was solid.
+     * SOUTH FRONT. This is the elevation the defence's base looks straight up
+     * the street at, so it carries the great portal and the two survivors that
+     * frame it. The campanile end of it is the tower's.
      */
-    for (let i = 0; i < 7; i++) {
-      const u = rng.range(TOW.u0 + 1.4, TOW.u1 - 1.4);
-      const v = rng.range(TOW.v0 + 1.4, TOW.v1 - 1.4);
-      if (Math.hypot(u, v) < KEEP) continue;
-      mound(u, v, rng.range(1.9, 2.9), rng.range(2.1, 2.9));
-    }
+    tornWall('u', -WV, -HW, HW, [[-3.9, 3.9], [-8.1, -3.1], [3.1, 8.1]], {
+      key: 'plaster_cream', base: 2.3, sign: -1,
+      survivors: [[9.9, 3.0, 5.4], [-11.0, 2.8, 7.8], [13.2, 1.8, 4.2]],
+    });
+    portal('u', -WV, 0, 4.0, 6.1, 1.8, 'plaster_cream', -1, 0);
+    // the two side portals kept their heads too, lower and half gone
+    portal('u', -WV, -5.6, 2.2, 4.4, 1.2, 'plaster_cream', -1, -1);
+    portal('u', -WV, 5.6, 2.2, 4.4, 1.2, 'plaster_cream', -1, 1);
+    /** THE APSE END, with its door on the axis and two facets still standing. */
+    tornWall('u', WV, -HW, HW, [[-3.5, 3.5]], {
+      key: 'plaster_sand', base: 2.2, sign: 1,
+      survivors: [[-7.6, 2.4, 6.2], [7.0, 2.2, 5.2], [12.4, 2.4, 4.3]],
+    });
+    portal('u', WV, 0, 2.8, 4.6, 1.4, 'plaster_sand', 1, -1);
+    /** BOTH FLANKS. The transept portal is dead centre of each and keeps its
+     *  head; the tower owns the south end of the west one. */
+    tornWall('v', -WU, TOW.v1 - 0.6, HD, [[-3.6, 3.6]], {
+      key: 'plaster_sand', base: 2.4, sign: -1,
+      survivors: [[-9.0, 2.6, 6.4], [5.4, 2.0, 5.0], [13.4, 3.0, 7.2]],
+    });
+    tornWall('v', WU, -HD, HD, [[-3.6, 3.6]], {
+      key: 'plaster_cream', base: 2.4, sign: 1,
+      survivors: [[-16.4, 3.0, 7.6], [-7.0, 2.2, 5.4], [8.4, 2.6, 6.8], [18.4, 2.6, 4.6]],
+    });
+    portal('v', -WU, 0, 3.4, 5.0, 1.5, 'plaster_sand', -1, 1);
+    portal('v', WU, 0, 3.4, 5.0, 1.5, 'plaster_cream', 1, -1);
 
     /**
-     * THE ARCADE, AS STUMPS. One per pier, on the pier's own square, so the
-     * colonnade still reads as a plan on the ground and the grid's blocked cells
-     * stay honest. Waist high — cover to fight from, not a building.
+     * THE BUTTRESSES, BROKEN — free height, and the only part of the ruin the
+     * player meets before he is inside it. Every one of these stands on the
+     * shell's own buttress footing, which is blocked ground in the baked grid
+     * whichever state the church is in, so they cost the street nothing.
      */
     for (const side of [-1, 1]) {
-      for (const v of [...NAVE_V, ...CHOIR_V]) {
-        const u = side * ARC;
-        if (Math.hypot(u, v) < KEEP) continue;
-        const h = rng.range(0.85, 1.45);
-        A.add('concrete_dark', box, LL(IDENT, X(u), SEC.floor + h / 2, Z(v),
-          rng.range(-0.05, 0.05), PW, h, PW), { masks: [0.95, rng.range(0.4, 0.9), 0.35] });
-        A.box('concrete', X(u), SEC.floor + h / 2, Z(v), PW, h, PW);
-        // the drum that came off the top of it, lying beside it
-        const g = rockGeometry(rng, rng.range(0.9, 1.4), 1, rng.range(0.5, 0.8));
-        fillMasks(g, 0.9, rng.range(0.4, 0.9), 0.3);
-        A.addOnce('concrete', g, LL(IDENT, X(u + rng.range(-1.6, 1.6)), SEC.floor + 0.35,
-          Z(v + rng.range(-1.9, 1.9)), rng.float() * 6.283));
-      }
-      for (const v of CROSS_V) {
-        const u = side * ARC;
-        if (Math.hypot(u, v) < KEEP) continue;
-        const h = rng.range(1.1, 1.7);
-        A.add('concrete_dark', box, LL(IDENT, X(u), SEC.floor + h / 2, Z(v), 0, CPW, h, CPW),
-          { masks: [0.95, rng.range(0.4, 0.9), 0.35] });
-        A.box('concrete', X(u), SEC.floor + h * 0.5, Z(v), CPW, h, CPW);
+      for (const v of [...NAVE_V, ...CHOIR_V, -HD + 0.9, HD - 0.9]) {
+        const u = side * (HW + BUTT / 2 - 0.1);
+        const h = rng.range(1.6, 4.6);
+        A.add('concrete', box, LL(IDENT, X(u), SEC.floor + h / 2, Z(v + 2), rng.range(-0.03, 0.03),
+          BUTT, h, 1.3), { masks: [rng.range(0.5, 0.95), rng.range(0.4, 0.9), 0.4] });
+        A.box('concrete', X(u), SEC.floor + h / 2, Z(v + 2), BUTT, h, 1.3);
+        for (let k = 0; k < 2; k++) {
+          const s = rng.range(0.24, 0.55);
+          lump('concrete_dark', u + rng.range(-0.5, 0.5), SEC.floor + h + s * 0.2, v + 2 + rng.range(-0.7, 0.7), s, 0.6);
+        }
+        // the flyer that used to spring off it, now lying against the wall
+        if (rng.float() < 0.45) {
+          A.add('concrete', box,
+            LL(IDENT, X(u - side * 0.9), SEC.floor + rng.range(1.0, 2.2), Z(v + 2 + rng.range(-0.6, 0.6)),
+              rng.range(-0.2, 0.2), rng.range(2.4, 3.6), 0.58, 0.68,
+              0, side * rng.range(0.5, 1.0)),
+            { masks: [0.7, 0.6, 0.4] });
+        }
       }
     }
 
+    /* ================================================================== */
+    /* 8c. THE CAMPANILE — 29 m of tower, and the only skyline left       */
+    /* ================================================================== */
     /**
-     * ────────────────────────────────────────────────────────────────────────
-     * THE DOME CAME DOWN ON THE CROSSING, AND THAT IS WHAT YOU FIGHT BEHIND
-     * ────────────────────────────────────────────────────────────────────────
-     * Eight pieces of the drum and the lantern on a ring between `KEEP_STAND`
-     * and 7.4 m — inside D's circle, outside the standing ring, and the only new
-     * solids on this site the nav grid is ever told about (`_reprobeZoneNav`
-     * covers exactly this circle and nothing else).
+     * The biggest single mass on the plan and the reason the razed site now has
+     * a silhouette at all. Its two OUTER walls are on the west flank and the
+     * south front, so they are the same already-blocked lines every other wall
+     * ruin stands on; the inner one closes the corner. The shaft is torn
+     * diagonally — tallest where the two outer walls meet, falling away from the
+     * corner — which is how a tower with a stair in one corner actually breaks.
      *
-     * It is the one part of the ruin with a gameplay requirement attached: a
-     * capture point has to be worth standing on, and `sitecheck`'s bar is 12 m²
-     * of 0.9-2.8 m mass inside the circle. Heights are chosen to sit in that
-     * band — waist to chest, cover you fight from rather than a wall you hide
-     * behind — and eight pieces on a ~40 m circumference leave three quarters of
-     * the ring open, so the point is coverable without being a fortress.
+     * Its plan is filled by the shell's own stair, so the debris cone inside it
+     * is free ground too, and the RAMP off the north face is deliberate: three
+     * ledges a player mantles, so the biggest heap on the site is a place you
+     * can get up rather than a wall with a view painted on it. No bot climbs it
+     * — a mantle is not in the height field, the same bargain every stair and
+     * every roof on this map makes.
      */
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * 6.283 + rng.range(-0.16, 0.16);
-      const rr = rng.range(KEEP_STAND + 0.4, 7.4);
-      const u = Math.cos(a) * rr;
-      const v = Math.sin(a) * rr;
-      const h = rng.range(1.25, 2.3);
-      const w = rng.range(1.35, 1.85);
-      const d = rng.range(1.35, 1.85);
-      const ry = rng.range(-0.5, 0.5);
-      A.add('concrete_dark', box, LL(IDENT, X(u), SEC.floor + h / 2, Z(v), ry, w, h, d),
-        { masks: [0.95, rng.range(0.45, 0.95), 0.4] });
-      A.box('concrete', X(u), SEC.floor + h * 0.5, Z(v), w, h, d, ry);
-      // the lump of vault that broke off it, drawn only
-      const g = rockGeometry(rng, rng.range(0.7, 1.3), 1, rng.range(0.45, 0.75));
-      fillMasks(g, 0.9, rng.range(0.4, 0.95), 0.3);
-      A.addOnce('plaster_white', g,
-        LL(IDENT, X(u + rng.range(-1.3, 1.3)), SEC.floor + 0.3, Z(v + rng.range(-1.3, 1.3)), rng.float() * 6.283));
+    {
+      const tu = (TOW.u0 + TOW.u1) / 2;
+      const tv = (TOW.v0 + TOW.v1) / 2;
+      const tw = TOW.u1 - TOW.u0;
+      const td = TOW.v1 - TOW.v0;
+      /**
+       * Height falls off from the SW corner, where the two outer walls meet —
+       * but NOT smoothly. A smooth fall-off drew a flight of stairs: measured
+       * off the parvis, the stump read as a ziggurat, every course a tread. A
+       * tower SHEARS: one diagonal plane takes a run of courses at once, the
+       * rest is noise, and the shaft ends in a broken edge rather than a slope.
+       */
+      const towerH = (u, v) => {
+        const f = clamp01(1 - Math.hypot((u - TOW.u0) / 9.6, (v - TOW.v0) / 10.6));
+        const n = fbm3(u * 0.62 + 12.3, 7.1, v * 0.62 + 3.7, 3) - 0.5;
+        const shear = (u - TOW.u0) * 0.62 + (v - TOW.v0) * 0.44;
+        return Math.max(1.7,
+          Math.min(3.0 + 11.4 * f * f + n * 4.4, 14.6 - shear * 0.95 + n * 3.0));
+      };
+      // west wall, on the flank line; south wall, on the front line; and the
+      // inner return that closes the corner into the aisle
+      for (const [au, av, su0, sv0] of [
+        [tu - (tw / 2 - T / 2), tv, T + SPILL, td],
+        [tu, tv - (td / 2 - T / 2), tw, T + SPILL],
+        [tu + (tw / 2 - T / 2), tv + 1.4, T + 0.7, td - 2.8],
+      ]) {
+        const along = su0 > sv0 ? 'u' : 'v';
+        const len = along === 'u' ? su0 : sv0;
+        const n = Math.max(3, Math.round(len / 1.05));
+        for (let i = 0; i < n; i++) {
+          const f = (i + 0.5) / n;
+          const cu = along === 'u' ? au - su0 / 2 + f * su0 : au;
+          const cv = along === 'u' ? av : av - sv0 / 2 + f * sv0;
+          const h = towerH(cu, cv);
+          const wid = (len / n) * 1.06;
+          A.add('plaster_sand', box,
+            LL(IDENT, X(cu), SEC.floor + h / 2, Z(cv), rng.range(-0.02, 0.02),
+              along === 'u' ? wid : su0, h, along === 'u' ? sv0 : wid),
+            { masks: [rng.range(0.45, 0.9), rng.range(0.35, 0.85), rng.range(0.3, 0.6)] });
+          A.add('concrete_dark', box,
+            LL(IDENT, X(cu), SEC.floor + h * rng.range(0.4, 0.6), Z(cv), 0,
+              (along === 'u' ? wid : su0) * 0.6, h * 0.4, (along === 'u' ? sv0 : wid) * 0.6),
+            { masks: [0.95, rng.range(0.5, 1.0), 0.4] });
+          A.box('concrete', X(cu), SEC.floor + h / 2, Z(cv), along === 'u' ? wid : su0, h, along === 'u' ? sv0 : wid);
+          // string courses survive on the shaft, which is what gives it scale
+          for (let y = 5.6; y < h - 0.8; y += 5.6) {
+            A.add('concrete_dark', soft,
+              LL(IDENT, X(cu), SEC.floor + y, Z(cv), 0,
+                (along === 'u' ? wid : su0) + 0.2, 0.3, (along === 'u' ? sv0 : wid) + 0.2),
+              { masks: [0.95, 0.45, 0.18] });
+          }
+          for (let k = 0; k < 3; k++) {
+            const s = rng.range(0.24, 0.55);
+            lump(rng.float() < 0.5 ? 'plaster_sand' : 'concrete',
+              cu + rng.range(-0.5, 0.5), SEC.floor + h + s * rng.range(-0.1, 0.3), cv + rng.range(-0.5, 0.5), s, 0.6, 0.95);
+          }
+        }
+      }
+      // the cone of tower inside its own plan, on the stair's blocked ground
+      for (let i = 0; i < 11; i++) {
+        const u = rng.range(TOW.u0 + 1.6, TOW.u1 - 1.6);
+        const v = rng.range(TOW.v0 + 1.6, TOW.v1 - 2.6);
+        const h = rng.range(1.8, 4.2);
+        const w = rng.range(1.3, 2.1);
+        const d = rng.range(1.3, 2.1);
+        const ry = rng.range(-0.6, 0.6);
+        A.add(rubbleKey(), box, LL(IDENT, X(u), SEC.floor + h / 2, Z(v), ry, w, h, d,
+          rng.range(-0.14, 0.14), rng.range(-0.14, 0.14)),
+          { masks: [rng.range(0.5, 0.95), rng.range(0.5, 1.0), 0.4] });
+        A.box('concrete', X(u), SEC.floor + h / 2, Z(v), w, h, d, ry);
+        // BLOCKS JAMMED AGAINST ITS FACES. A 2 m box presents a 2 m flat face
+        // and the quality bar forbids one; a collapse is blocks resting on each
+        // other, so every mass on this site gets two or three off its own faces.
+        for (let k = 0; k < 3; k++) {
+          const a = rng.float() * 6.283;
+          A.add(rubbleKey(), box,
+            LL(IDENT, X(u + Math.cos(a) * w * 0.55), SEC.floor + h * rng.range(0.2, 0.7),
+              Z(v + Math.sin(a) * d * 0.55), rng.range(-1.0, 1.0),
+              rng.range(0.5, 1.1), rng.range(0.4, 1.2), rng.range(0.5, 1.1),
+              rng.range(-0.5, 0.5), rng.range(-0.5, 0.5)),
+            { masks: [rng.range(0.5, 1.0), rng.range(0.5, 1.0), 0.45] });
+        }
+        for (let k = 0; k < 3; k++) {
+          const s = rng.range(0.3, 0.7);
+          lump(rubbleKey(), u + rng.range(-1.1, 1.1), SEC.floor + h + s * 0.2, v + rng.range(-1.1, 1.1), s, 0.55);
+        }
+      }
+      /**
+       * THE RAMP. Three ledges off the north face, each inside the 1.85 m the
+       * controller mantles, so the tower heap is a position and not a wall.
+       * Broken up hard: three clean risers of one width read as a STAIRCASE
+       * somebody built, and nothing on this site was built after it fell.
+       */
+      for (let i = 0; i < 3; i++) {
+        const h = 1.05 + i * 1.0;
+        const v = TOW.v1 - 0.4 + i * 1.25;
+        const cu = TOW.u0 + 3.2 + rng.range(-0.6, 0.6);
+        const wd = rng.range(3.8, 5.2);
+        const ry = rng.range(-0.14, 0.14);
+        A.add(rubbleKey(), box, LL(IDENT, X(cu), SEC.floor + h / 2, Z(v), ry, wd, h, 1.35,
+          rng.range(-0.06, 0.06), 0), { masks: [0.9, rng.range(0.5, 1.0), 0.4] });
+        A.box('concrete', X(cu), SEC.floor + h / 2, Z(v), wd, h, 1.35, ry);
+        // blocks off its face and its ends, so the tread is masonry and not a step
+        for (let k = 0; k < 4; k++) {
+          A.add(rubbleKey(), box,
+            LL(IDENT, X(cu + rng.range(-wd / 2, wd / 2)), SEC.floor + h * rng.range(0.3, 0.95),
+              Z(v + rng.range(-0.9, 0.9)), rng.range(-1.0, 1.0),
+              rng.range(0.6, 1.4), rng.range(0.4, 1.0), rng.range(0.6, 1.2),
+              rng.range(-0.4, 0.4), rng.range(-0.4, 0.4)),
+            { masks: [rng.range(0.5, 1.0), rng.range(0.5, 1.0), 0.45] });
+        }
+        for (let k = 0; k < 4; k++) {
+          const s = rng.range(0.22, 0.55);
+          lump(rubbleKey(), cu + rng.range(-wd / 2, wd / 2), SEC.floor + h + s * 0.2, v + rng.range(-0.6, 0.6), s, 0.6);
+        }
+      }
+      // the bell, out of the belfry and lying in the aisle beside it
+      const bell = tubeY(0.62, 1.1, { radial: 12, taper: 0.45 });
+      A.addOnce('metal_rust', bell,
+        LL(IDENT, X(TOW.u1 + 1.9), groundAt(TOW.u1 + 1.9, TOW.v1 + 2.6) + 0.55, Z(TOW.v1 + 2.6),
+          0.9, 1, 1, 1, 1.42, 0.2), { masks: [0.95, 0.85, 0.4] });
+      A.box('metal', X(TOW.u1 + 1.9), groundAt(TOW.u1 + 1.9, TOW.v1 + 2.6) + 0.3, Z(TOW.v1 + 2.6), 1.3, 0.9, 1.2);
     }
 
+    /* ================================================================== */
+    /* 8d. THE ARCADE — piers that survived, and the bays between them    */
+    /* ================================================================== */
     /**
-     * THE FLOOR OF THE RUIN — fallen render, shattered slab and ash, and NONE of
-     * it collidable. It is what makes the bare ground read as a building that
-     * was destroyed rather than a car park, and because it is only drawn it can
-     * lie anywhere, including across the capture point.
+     * Every pier square was solid in the shell, so all of this is free height.
+     * Roughly a third of them are still SHAFTS — three to seven metres of pier
+     * with the capital broken off — and the rest are stumps you fight from;
+     * between them the arcade, the triforium and the clerestory came down on
+     * their own line. The bays either side of the crossing stay clear of
+     * `KEEP_STAND`, and the crossing itself never had an arcade across it.
      */
-    for (let i = 0; i < 260; i++) {
-      const u = rng.range(-HW + 0.6, HW - 0.6);
-      const v = rng.range(-HD + 0.6, HD - 0.6);
-      const g = rockGeometry(rng, rng.range(0.12, 0.62), 1, rng.range(0.3, 0.6));
-      fillMasks(g, 0.9, rng.range(0.3, 0.95), 0.25);
-      A.addOnce(rubbleKey(), g,
-        LL(IDENT, X(u), SEC.floor + rng.range(0.01, 0.16), Z(v), rng.float() * 6.283));
+    for (const side of [-1, 1]) {
+      const u = side * ARC;
+      const all = [...NAVE_V, ...CHOIR_V];
+      for (const v of all) {
+        const tall = rng.float() < 0.34;
+        const h = tall ? rng.range(3.4, 6.9) : rng.range(1.15, 2.4);
+        const w = PW * (tall ? 1.0 : rng.range(1.05, 1.3));
+        A.add(tall ? 'plaster_cream' : 'concrete_dark', box,
+          LL(IDENT, X(u), SEC.floor + h / 2, Z(v), rng.range(-0.05, 0.05), w, h, w),
+          { masks: [rng.range(0.5, 0.95), rng.range(0.4, 0.9), 0.35] });
+        A.box('concrete', X(u), SEC.floor + h / 2, Z(v), w, h, w);
+        // the base moulding survives on nearly all of them
+        A.add('concrete', soft, LL(IDENT, X(u), SEC.floor + 0.28, Z(v), 0, w + 0.42, 0.56, w + 0.42),
+          { masks: [0.9, 0.8, 0.55] });
+        if (tall) {
+          // the springer of the arch it carried, snapped off both ways
+          for (const s of [-1, 1]) {
+            if (rng.float() < 0.45) continue;
+            A.add('plaster_cream', box,
+              LL(IDENT, X(u), SEC.floor + h - 0.5, Z(v + s * rng.range(0.9, 1.5)), 0,
+                w * 0.8, 0.8, rng.range(1.2, 2.2), 0, s * rng.range(0.35, 0.7)),
+              { masks: [0.6, 0.5, 0.4] });
+          }
+        }
+        for (let k = 0; k < 3; k++) {
+          const s = rng.range(0.24, 0.6);
+          lump(rng.float() < 0.5 ? 'concrete' : 'plaster_white',
+            u + rng.range(-1.5, 1.5), groundAt(u, v) + s * 0.25 + (k ? 0 : h * 0.02),
+            v + rng.range(-1.8, 1.8), s, 0.55);
+        }
+        // a drum or two off the shaft, lying where it rolled
+        const g = tubeY(rng.range(0.5, 0.75), rng.range(0.9, 1.6), { radial: 9 });
+        const lu = u + rng.range(-2.2, 2.2);
+        const lv = v + rng.range(-2.4, 2.4);
+        A.addOnce('plaster_cream', g,
+          LL(IDENT, X(lu), groundAt(lu, lv) + 0.5, Z(lv), rng.float() * 6.28, 1, 1, 1, 1.5, rng.range(-0.2, 0.2)),
+          { masks: [0.75, rng.range(0.4, 0.9), 0.5] });
+      }
+      /**
+       * The bays between the piers, fallen on the arcade's own line — and NEVER
+       * the whole bay. The arcade is the only thing between the nave and its
+       * aisles, and the shell left 4 m of open floor between every pair of
+       * piers; close those and the ruin is three corridors that meet once, at
+       * the transept. Measured as bots inside D, that alone is worth points, so
+       * half the bays are open and the rest keep a gap at each end.
+       */
+      for (let i = 0; i < all.length - 1; i++) {
+        const a = all[i];
+        const b = all[i + 1];
+        if (b - a > 6.5) continue; // the crossing: there was no arcade across it
+        if (rng.float() < 0.5) continue; // …and half the bays are just gone
+        const mid = (a + b) / 2;
+        const h = rng.range(1.35, 2.85);
+        const d = (b - a) * rng.range(0.34, 0.58);
+        const ry = rng.range(-0.08, 0.08);
+        A.add(rubbleKey(), box, LL(IDENT, X(u), SEC.floor + h / 2, Z(mid), ry, 1.5, h, d,
+          rng.range(-0.1, 0.1), 0), { masks: [rng.range(0.5, 0.95), rng.range(0.5, 1.0), 0.4] });
+        A.box('concrete', X(u), SEC.floor + h / 2, Z(mid), 1.5, h, d, ry);
+        for (let k = 0; k < 4; k++) {
+          const s = rng.range(0.2, 0.62);
+          lump(rubbleKey(), u + rng.range(-1.0, 1.0), SEC.floor + h + s * 0.2, mid + rng.range(-d / 2, d / 2), s, 0.6);
+        }
+      }
     }
-    // broken slabs, lying flat and half buried
-    for (let i = 0; i < 70; i++) {
+
+    /* ================================================================== */
+    /* 8e. THE VAULT, ON THE FLOOR — what breaks the 45 m sightline        */
+    /* ================================================================== */
+    /**
+     * Six pieces of nave vault, each a raft of webbing that came down in one
+     * piece and is now leaning on whatever it landed on. They are the only
+     * charged mass in the middle of the plan, and they buy the thing the old
+     * ruin could not do at any price: from the great portal you could see the
+     * apse door 45 m away over everything. They stand clear of the lanes and
+     * clear of D.
+     */
+    for (const [u, v, ry] of [
+      [-5.4, -18.6, 0.5], [5.8, -12.4, -0.35], [-6.0, -8.6, 0.22],
+      [5.2, 9.6, 0.44], [-5.6, 14.8, -0.5], [6.2, 19.4, 0.16],
+    ]) {
+      const h = rng.range(2.1, 3.3);
+      const w = rng.range(3.4, 4.8);
+      const d = rng.range(2.6, 4.2);
+      A.add('plaster_white', box, LL(IDENT, X(u), SEC.floor + h / 2, Z(v), ry, w, h, d,
+        rng.range(-0.16, 0.16), rng.range(-0.16, 0.16)),
+        { masks: [rng.range(0.35, 0.7), rng.range(0.5, 1.0), 0.55] });
+      A.box('concrete', X(u), SEC.floor + h * 0.5, Z(v), w * 0.94, h, d * 0.94, ry);
+      // slabs of the same raft, sheared off it and leaning on its faces: a 4.8 m
+      // box otherwise presents a 4.8 m flat face and the quality bar forbids one
+      for (let k = 0; k < 3; k++) {
+        const a = rng.float() * 6.283;
+        A.add(rng.float() < 0.5 ? 'plaster_white' : 'concrete', box,
+          LL(IDENT, X(u + Math.cos(a) * w * 0.5), SEC.floor + h * rng.range(0.25, 0.75),
+            Z(v + Math.sin(a) * d * 0.5), ry + rng.range(-0.9, 0.9),
+            rng.range(1.0, 2.4), rng.range(0.5, 1.4), rng.range(0.9, 1.8),
+            rng.range(-0.5, 0.5), rng.range(-0.5, 0.5)),
+          { masks: [rng.range(0.4, 0.9), rng.range(0.5, 1.0), 0.5] });
+      }
+      // the ribs that were on its underside, now sticking out of it
+      for (let k = 0; k < 3; k++) {
+        A.add('concrete', soft,
+          LL(IDENT, X(u + rng.range(-1.4, 1.4)), SEC.floor + h * rng.range(0.55, 1.0), Z(v + rng.range(-1.4, 1.4)),
+            ry + rng.range(-0.5, 0.5), rng.range(2.2, 3.8), 0.4, 0.42,
+            0, rng.range(-0.5, 0.5)), { masks: [0.85, rng.range(0.4, 0.9), 0.3] });
+      }
+      for (let k = 0; k < 5; k++) {
+        const s = rng.range(0.24, 0.7);
+        lump(rubbleKey(), u + rng.range(-2.6, 2.6), groundAt(u, v) + s * 0.25, v + rng.range(-2.4, 2.4), s, 0.55);
+      }
+    }
+
+    /* ================================================================== */
+    /* 8f. THE DOME, ON THE CROSSING — and it is D's cover                */
+    /* ================================================================== */
+    /**
+     * "大聖堂周りを瓦礫の山に" ends at the crossing, because the crossing is a
+     * capture point. Everything here is between `KEEP_STAND` and 7.6 m: inside
+     * D's circle so `_reprobeZoneNav` learns it, outside the ring `standRing`
+     * proved at boot, and heights chosen to sit in the 0.9-2.8 m band
+     * `sitecheck` counts — cover you fight FROM, not a wall you hide behind.
+     *
+     * What is different from the old eight boxes is the READ. The drum was an
+     * octagon of piers and the shell above it was thirteen courses of ring, so
+     * what lands is CURVED: six arcs of drum, each two or three blocks following
+     * its own radius, three rafts of dome shell tipped on edge, and the lantern
+     * — 2.6 m square and the last thing standing 26 m up — lying broken on one
+     * bearing with its finial still in it. Eight bearings of the ring are still
+     * open, so the point is coverable without being a fort.
+     */
+    {
+      const RING = [];
+      /**
+       * SEVEN ARCS, AND ONLY FOUR OF THEM ARE INSIDE THE CIRCLE.
+       *
+       * The first version put all of them on a 5.2-7.2 m ring, which is an
+       * ANNULUS round the point rather than cover on it: nineteen separate
+       * masses between a man on the rim and the middle. Measured over four
+       * `_postcheck.mjs` runs a side, that halved how much of the round D had
+       * somebody standing in it. Most of the drum landed OUTSIDE the circle
+       * anyway — it fell off an 18 m wall — so three of the seven go out on to
+       * the 8.8-11.5 m rim, where they are cover on the APPROACH and cost the
+       * point nothing.
+       */
+      for (let i = 0; i < 7; i++) {
+        const a = (i / 7) * 6.283 + rng.range(-0.2, 0.2);
+        RING.push(a);
+        const out = i >= 4;
+        const rr = out ? rng.range(8.8, 11.5) : rng.range(KEEP_STAND + 0.5, 7.2);
+        const h = rng.range(1.3, 2.35);
+        const seg = rng.range(2.2, 3.4);
+        // an arc of drum: blocks following the ring, not one box across it
+        for (let k = out ? -1 : 0; k <= 1; k++) {
+          const aa = a + (k * seg) / (2.2 * rr);
+          const u = Math.cos(aa) * rr;
+          const v = Math.sin(aa) * rr;
+          const hh = h * (k === 0 ? 1 : rng.range(0.62, 0.92));
+          const ry = -aa + rng.range(-0.12, 0.12);
+          A.add(k === 0 ? 'plaster_sand' : 'concrete_dark', box,
+            LL(IDENT, X(u), SEC.floor + hh / 2, Z(v), ry, seg / 3.0, hh, rng.range(0.6, 0.95),
+              0, rng.range(-0.12, 0.12)),
+            { masks: [rng.range(0.5, 0.95), rng.range(0.5, 1.0), 0.4] });
+          A.box('concrete', X(u), SEC.floor + hh / 2, Z(v), seg / 3.0, hh, rng.range(0.6, 0.9), ry);
+          for (let q = 0; q < 2; q++) {
+            const s = rng.range(0.22, 0.55);
+            lump(rubbleKey(), u + rng.range(-0.9, 0.9), SEC.floor + hh + s * 0.2, v + rng.range(-0.9, 0.9), s, 0.6);
+          }
+        }
+      }
+      /** Three rafts of the shell itself, tipped on edge where they landed —
+       *  two on the point, one out past it for the same reason as the arcs. */
+      for (let i = 0; i < 3; i++) {
+        const a = RING[i * 2] + rng.range(0.4, 0.8);
+        const rr = i === 2 ? rng.range(9.2, 11.8) : rng.range(KEEP_STAND + 0.7, 7.4);
+        const u = Math.cos(a) * rr;
+        const v = Math.sin(a) * rr;
+        const h = rng.range(1.9, 2.7);
+        const ry = rng.range(-1.2, 1.2);
+        A.add('roof_screed', box,
+          LL(IDENT, X(u), SEC.floor + h / 2, Z(v), ry, rng.range(2.6, 3.6), h, rng.range(0.6, 0.9),
+            0, rng.range(0.25, 0.55)), { masks: [0.6, rng.range(0.5, 1.0), 0.35] });
+        A.box('concrete', X(u), SEC.floor + h * 0.5, Z(v), rng.range(2.2, 3.0), h, 0.95, ry);
+        // the ribs that ran over the shell, snapped and still on it
+        for (let k = 0; k < 2; k++) {
+          A.add('concrete', soft,
+            LL(IDENT, X(u + rng.range(-1.2, 1.2)), SEC.floor + h * rng.range(0.6, 1.05), Z(v + rng.range(-0.8, 0.8)),
+              ry + rng.range(-0.3, 0.3), rng.range(1.8, 3.0), 0.4, 0.5, 0, rng.range(-0.7, 0.7)),
+            { masks: [0.9, 0.45, 0.25] });
+        }
+      }
+      /** THE LANTERN, down. 26 m up when the shell was standing. */
+      {
+        const a = RING[3] + 0.55;
+        const rr = 6.6;
+        const u = Math.cos(a) * rr;
+        const v = Math.sin(a) * rr;
+        const ry = a + 0.4;
+        A.add('plaster_cream', box, LL(IDENT, X(u), SEC.floor + 1.05, Z(v), ry, 3.2, 2.1, 2.5,
+          0.16, 0.1), { masks: [0.5, 0.6, 0.45] });
+        A.box('concrete', X(u), SEC.floor + 1.05, Z(v), 3.0, 2.1, 2.4, ry);
+        A.add('concrete_dark', soft, LL(IDENT, X(u + Math.cos(ry) * 1.7), SEC.floor + 1.5, Z(v - Math.sin(ry) * 1.7),
+          ry, 0.5, 3.5, 3.5, 0.2, 0), { masks: [0.95, 0.35, 0.12] });
+        const fin = tubeY(0.12, 2.2, { radial: 6 });
+        A.addOnce('metal_rust', fin, LL(IDENT, X(u + 1.1), SEC.floor + 1.9, Z(v + 0.7), ry, 1, 1, 1, 1.2, 0.3),
+          { masks: [1, 0.8, 0.1] });
+        for (let k = 0; k < 6; k++) {
+          const s = rng.range(0.25, 0.65);
+          lump(rubbleKey(), u + rng.range(-2.4, 2.4), SEC.floor + rng.range(0.1, 0.5), v + rng.range(-2.4, 2.4), s, 0.55);
+        }
+      }
+      /**
+       * THE TOMB CHESTS, SMASHED — and they are the cheapest cover on the map.
+       *
+       * Section 7 stands six of them on a 5.2-6.5 m ring round the crossing, so
+       * those cells are ALREADY blocked in the baked grid whether the church is
+       * up or down: a broken chest on the same square costs the point not one
+       * walkable cell, and it is what a crossing full of tombs leaves when the
+       * dome comes through it. Four of the six, with the lid slid off one end.
+       */
+      for (const [tu, tv, ry] of [
+        [-4.9, -4.9, 0.78], [4.9, -4.9, -0.78], [-4.9, 4.9, -0.78], [0, 6.1, 0],
+      ]) {
+        const h = rng.range(1.0, 1.3);
+        A.add('concrete', box, LL(IDENT, X(tu), SEC.floor + h / 2, Z(tv), ry + rng.range(-0.1, 0.1),
+          2.4, h, 1.1, rng.range(-0.06, 0.06), rng.range(-0.06, 0.06)),
+          { masks: [rng.range(0.5, 0.9), rng.range(0.55, 1.0), 0.45] });
+        A.box('concrete', X(tu), SEC.floor + h / 2, Z(tv), 2.4, h, 1.1, ry);
+        // the lid, slid off one end and now leaning against the chest
+        const cs = Math.cos(ry);
+        const sn = Math.sin(ry);
+        A.add('concrete_dark', box,
+          LL(IDENT, X(tu + cs * rng.range(0.9, 1.5)), SEC.floor + h * rng.range(0.55, 0.9), Z(tv - sn * rng.range(0.9, 1.5)),
+            ry + rng.range(-0.3, 0.3), 2.0, 0.22, 1.25, 0, rng.range(0.4, 0.9)),
+          { masks: [0.95, rng.range(0.4, 0.9), 0.2] });
+        // and the effigy off the top of it, in pieces
+        for (let k = 0; k < 4; k++) {
+          const s = rng.range(0.22, 0.55);
+          lump(rng.float() < 0.5 ? 'plaster_white' : 'concrete',
+            tu + rng.range(-1.6, 1.6), SEC.floor + (k ? rng.range(0.05, 0.3) : h + s * 0.2), tv + rng.range(-1.2, 1.2), s, 0.55);
+        }
+      }
+    }
+
+    /* ================================================================== */
+    /* 8g. WHAT BURNED — "大聖堂を焼き尽くす大爆撃"                          */
+    /* ================================================================== */
+    /**
+     * The roof was timber and lead over a stone vault, and it is the one part of
+     * this building that leaves something other than masonry. Charred principals
+     * and purlins, driven into the heaps and leaning off the wall ruins at the
+     * angles a truss falls at, plus the lead itself peeled off in sheets. Drawn
+     * only and deliberately: every one of them is either over head height or
+     * thinner than the 0.42 m the controller steps across.
+     */
+    for (let i = 0; i < 17; i++) {
+      const u = rng.range(-HW + 1.4, HW - 1.4);
+      const v = rng.range(-HD + 1.4, HD - 1.4);
+      if (Math.hypot(u, v) < KEEP_STAND) continue;
+      const len = rng.range(3.0, 6.4);
+      // shallow: a principal that fell is LEANING on the pile, not planted in it
+      const tilt = rng.range(0.18, 0.72) * (rng.float() < 0.5 ? 1 : -1);
+      const gy = groundAt(u, v);
+      A.add('wood_dark', box,
+        LL(IDENT, X(u), gy + Math.abs(Math.sin(tilt)) * len * 0.5 + 0.28, Z(v),
+          rng.float() * 6.283, len, rng.range(0.22, 0.4), rng.range(0.2, 0.36), 0, tilt),
+        { masks: [rng.range(0.6, 1.0), rng.range(0.7, 1.0), 0.2] });
+      // …and the rubble heaped round the end of it, so it is resting on something
+      for (let k = 0; k < 3; k++) {
+        const s = rng.range(0.22, 0.6);
+        lump(rubbleKey(), u + rng.range(-1.0, 1.0), gy + s * 0.25, v + rng.range(-1.0, 1.0), s, 0.5);
+      }
+      if (rng.float() < 0.4) {
+        A.add('wood_dark', thin,
+          LL(IDENT, X(u + rng.range(-1.2, 1.2)), gy + rng.range(0.3, 1.2), Z(v + rng.range(-1.2, 1.2)),
+            rng.float() * 6.283, rng.range(1.6, 3.0), 0.16, 0.22, 0, rng.range(-0.5, 0.5)),
+          { masks: [0.9, 0.9, 0.15] });
+      }
+    }
+    // sheets of the lead roof, peeled off and folded where they landed
+    for (let i = 0; i < 22; i++) {
+      const u = rng.range(-HW + 1, HW - 1);
+      const v = rng.range(-HD + 1, HD - 1);
+      A.add('metal_dark', thin,
+        LL(IDENT, X(u), groundAt(u, v) + rng.range(0.05, 0.45), Z(v), rng.float() * 6.283,
+          rng.range(1.2, 3.0), 0.07, rng.range(0.9, 2.2), rng.range(-0.5, 0.5), rng.range(-0.5, 0.5)),
+        { masks: [0.85, rng.range(0.6, 1.0), 0.25] });
+    }
+
+    /* ================================================================== */
+    /* 8h. THE FINE STUFF — and none of it is collidable                  */
+    /* ================================================================== */
+    /**
+     * Shattered slab, fallen render, ash and scorch. It is what makes the field
+     * read as a building that came down rather than as terrain, and because it
+     * is only drawn it can lie anywhere, including across the capture point.
+     */
+    for (let i = 0; i < 300; i++) {
+      const u = rng.range(-HW + 0.5, HW - 0.5);
+      const v = rng.range(-HD + 0.5, HD - 0.5);
       A.add(rng.float() < 0.45 ? 'concrete_dark' : 'concrete', fine,
-        LL(IDENT, X(rng.range(-HW + 1, HW - 1)), SEC.floor + rng.range(0.04, 0.2),
-          Z(rng.range(-HD + 1, HD - 1)), rng.range(-1.2, 1.2),
-          rng.range(0.7, 2.2), rng.range(0.08, 0.22), rng.range(0.9, 2.6)),
+        LL(IDENT, X(u), groundAt(u, v) + rng.range(0.03, 0.2), Z(v), rng.range(-1.4, 1.4),
+          rng.range(0.7, 2.4), rng.range(0.07, 0.2), rng.range(0.9, 2.8),
+          rng.range(-0.3, 0.3), rng.range(-0.3, 0.3)),
         { masks: [rng.range(0.7, 1.0), rng.range(0.4, 0.95), 0.3] });
     }
-    // ash and dust, pooled where the mass came down
-    for (let i = 0; i < 90; i++) {
-      const g = patchGeometry(rng, rng.range(0.7, 2.6), { lobes: 10, wobble: 0.55 });
-      A.addOnce(rng.float() < 0.5 ? 'dirt' : 'concrete_dark', g,
-        LL(IDENT, X(rng.range(-HW + 0.5, HW - 0.5)), SEC.floor + 0.022,
-          Z(rng.range(-HD + 0.5, HD - 0.5)), rng.float() * 6.283, 1, 1, rng.range(0.6, 1.0)),
-        { masks: [0.15, rng.range(0.7, 1.0), 0.55] });
+    for (let i = 0; i < 150; i++) {
+      const u = rng.range(-HW + 0.6, HW - 0.6);
+      const v = rng.range(-HD + 0.6, HD - 0.6);
+      lump(rubbleKey(), u, groundAt(u, v) + rng.range(0.02, 0.2), v, rng.range(0.12, 0.6), 0.5, 0.9);
+    }
+    // ash, dust and scorch, pooled where the mass came down and where it burned
+    for (let i = 0; i < 120; i++) {
+      const u = rng.range(-HW - 1.5, HW + 1.5);
+      const v = rng.range(-HD - 1.5, HD + 1.5);
+      const g = patchGeometry(rng, rng.range(0.8, 3.0), { lobes: 10, wobble: 0.55 });
+      A.addOnce(rng.float() < 0.45 ? 'dirt' : 'concrete_dark', g,
+        LL(IDENT, X(u), groundAt(u, v) + 0.024, Z(v), rng.float() * 6.283, 1, 1, rng.range(0.6, 1.0)),
+        { masks: [0.12, rng.range(0.75, 1.0), rng.range(0.5, 0.85)] });
     }
     /**
-     * AND THE SPILL OUTSIDE THE WALLS — "大聖堂周りを瓦礫の山に". A wall that falls
-     * outward lands on the parvis, so the heaps continue a little way into the
-     * street on all four sides. These are drawn only: the parvis and the street
-     * around it are walkable ground in the height field and a solid here WOULD
-     * be the invisible wall the note above is about.
+     * AND THE SPILL OUTSIDE THE WALLS. The field already carries a low apron out
+     * to `APRON`; these are the pieces big enough to see from the street, and
+     * they are drawn only — the parvis and the road round it are walkable ground
+     * in the height field and a solid out here is a kerb every route has to
+     * climb. @see the note in `fieldAt`.
      */
-    for (let i = 0; i < 150; i++) {
+    for (let i = 0; i < 190; i++) {
       const edge = (rng.float() * 4) | 0;
-      const out = rng.range(0.4, 4.2);
-      const u = edge === 0 ? rng.range(-HW, HW) : edge === 1 ? rng.range(-HW, HW) : (edge === 2 ? -HW - out : HW + out);
-      const v = edge === 0 ? -HD - out : edge === 1 ? HD + out : rng.range(-HD, HD);
-      const g = rockGeometry(rng, rng.range(0.14, 0.68), 1, rng.range(0.32, 0.62));
-      fillMasks(g, 0.92, rng.range(0.3, 0.95), 0.25);
-      A.addOnce(rubbleKey(), g, LL(IDENT, X(u), rng.range(0.02, 0.24), Z(v), rng.float() * 6.283));
+      const out = rng.range(0.4, 5.0);
+      const u = edge === 0 || edge === 1 ? rng.range(-HW - 2, HW + 2) : edge === 2 ? -HW - out : HW + out;
+      const v = edge === 0 ? -HD - out : edge === 1 ? HD + out : rng.range(-HD - 2, HD + 2);
+      lump(rubbleKey(), u, groundAt(u, v) + rng.range(0.02, 0.3), v, rng.range(0.14, 0.72), 0.5, 0.92);
     }
   }
   A.endScope();
@@ -1177,6 +1961,36 @@ export function buildCathedral(A) {
   /* ====================================================================== */
   /* 9. WHAT THE ENGINE NEEDS BACK                                          */
   /* ====================================================================== */
+  /**
+   * `?cath=down` — BOOT STRAIGHT INTO THE RUIN, so the gates in `tools/` can be
+   * pointed at it.
+   *
+   * Every one of them boots the level, measures it and exits, so all of them
+   * only ever see the church STANDING — and a state that is only ever gated in
+   * one of its two forms is exactly how this ruin shipped as a bare plate. It is
+   * the cathedral's answer to `?demo=down` and it reads the same way:
+   * `node tools/boundcheck.mjs --url=…/?cath=down`.
+   *
+   * IT CANNOT SIMPLY FORCE THE FIRST CALL. `AiSystem._bakeCover` drives three
+   * synchronous swaps through `setRazed` at boot — intact, ruin, restore — and
+   * forcing the first would bake `ai.coverIntact` against the rubble. So the
+   * latch arms on the RUIN pass (the only call anybody makes with `down = true`
+   * before a match exists) and from then on the church may not stand back up.
+   *
+   * HONEST LIMIT: `match._setCathedralRazed` also drives `ai.setCoverRazed`, and
+   * under this flag its boot call says "intact" while the map is the ruin — so
+   * the COVER TABLE is stale until the real event fires. Geometry, collision and
+   * the nav grid are exactly the ruin, which is what `boundcheck`, `solidcheck`,
+   * `navcheck` and `sitecheck` measure; anything that grades cover selection
+   * (`fightcheck`) must use the real path — `_razestuck.mjs`, `_postcheck.mjs`.
+   */
+  let bootDown = false;
+  try {
+    bootDown = new URLSearchParams(globalThis.location?.search ?? '').get('cath') === 'down';
+  } catch {
+    bootDown = false;
+  }
+
   /**
    * `probeY` is where a downward ray must START to find this floor: above every
    * ledger slab and every piece of fallen render, well below the gallery deck at
@@ -1194,9 +2008,13 @@ export function buildCathedral(A) {
 
     /** True once the shell has been taken down. Read by `match` for the HUD. */
     razed: false,
-    /** Standing height before and after, so a caller can say what changed. */
+    /**
+     * Standing height before and after, so a caller can say what changed.
+     * `ruinTopY` is the campanile stump — the tallest thing section 8c leaves
+     * standing. `_cathruin.mjs` measures the real surface over the whole plan.
+     */
     intactTopY: SEC.towerTop,
-    ruinTopY: SEC.floor + 2.9,
+    ruinTopY: SEC.floor + 14.0,
 
     /**
      * ──────────────────────────────────────────────────────────────────────
@@ -1225,7 +2043,17 @@ export function buildCathedral(A) {
      * is a bug worth seeing, and one that throws mid-match is not.
      */
     setRazed(down, physics) {
-      const want = !!down;
+      let want = !!down;
+      if (want) this._coverBaked = true;
+      // @see the `?cath=down` note above — armed only once the ruin cover table
+      // has been baked, and from then on the church stays down.
+      if (bootDown && this._coverBaked) {
+        if (!want && !this._announced) {
+          this._announced = true;
+          console.info('[world] ?cath=down — the cathedral boots RAZED (cover table stays intact-side)');
+        }
+        want = true;
+      }
       if (this.razed === want && this._primed) return false;
       this._primed = true;
       this.razed = want;
@@ -1245,6 +2073,10 @@ export function buildCathedral(A) {
 
     /** @private has `setRazed` ever run? The boot state is "never". */
     _primed: false,
+    /** @private has the RUIN cover table been baked? @see `?cath=down`. */
+    _coverBaked: false,
+    /** @private has the boot flag said so once? */
+    _announced: false,
   };
 }
 
