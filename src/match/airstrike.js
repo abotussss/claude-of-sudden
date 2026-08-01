@@ -2233,8 +2233,11 @@ export class Airstrike {
          * masonry-tear or a sub-bass thump of its own, that is `src/audio`'s to
          * author and this is where it would be played.
          */
+        // 1.8 is the top of the range anything else in this engine asks for
+        // (`src/audio/index.js` clamps its own loudest cue there); past it the
+        // master compressor is doing the work and "louder" stops being louder.
         audio.play('strike_tail', site.position, {
-          level: 2.0, dur: 5.0, maxDist: 640, gain: 4.2, occlusion: 0,
+          level: 1.8, dur: 5.0, maxDist: 640, gain: 4.2, occlusion: 0,
         });
         for (const [k, d] of [[-0.6, 0.18], [0.6, 0.36]]) {
           this._v.copy(site.mound).addScaledVector(site.u, k * site.demo.halfD);
