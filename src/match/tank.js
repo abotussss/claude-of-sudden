@@ -871,6 +871,22 @@ export class Armour {
    *
    * `STEP[i]` is then what stands on the road at that sample, and the ride adds
    * it back unless the plough has taken it away.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * AND A RISE OVER `PASS_TOP` IS NOT A STEP, IT IS A ROOF
+   * ────────────────────────────────────────────────────────────────────────
+   * `groundHeight` casts DOWN FROM 30 m and takes the first thing it meets, so
+   * a sample that passes under a balcony, an awning or a rooftop gangway comes
+   * back with the BALCONY's height, not the road's. Measured on the built map
+   * the biggest rise this envelope found was 14.43 m, and the ride obediently
+   * lifted the hull by the `CLIMB_TOP` clamp — a metre in the air, under a
+   * balcony, for as long as the overhang lasted. A rise a tracked vehicle
+   * plainly cannot climb is not a thing to climb: it is overhead structure the
+   * ray caught, and the road is what the envelope already found.
+   *
+   * The envelope window is +-20 m rather than the hull's own length for the
+   * same reason. A window shorter than the overhang would take the BALCONY as
+   * the road and drive the tank along it.
    */
   _bakeRide(p) {
     const n = p.n;
@@ -879,7 +895,7 @@ export class Armour {
     // local shadowing it made `W` NaN and the envelope a no-op, silently.
     const RISE = new Float32Array(n);
     const PILE = new Int16Array(n).fill(-1);
-    const W = Math.ceil((SUPPORT + PLOUGH_MERGE) / STEP);
+    const W = Math.ceil(20 / STEP);
     for (let i = 0; i < n; i++) {
       let lo = p.Y[i];
       for (let j = Math.max(0, i - W); j <= Math.min(n - 1, i + W); j++) {
@@ -887,7 +903,8 @@ export class Armour {
         if (v < lo) lo = v;
       }
       ROAD[i] = lo;
-      RISE[i] = Math.max(0, p.Y[i] - lo);
+      const rise = p.Y[i] - lo;
+      RISE[i] = rise > PASS_TOP ? 0 : Math.max(0, Math.min(rise, CLIMB_TOP));
     }
     p.ROAD = ROAD;
     p.STEP = RISE;
@@ -2594,7 +2611,7 @@ export class Armour {
     for (let k = i; k <= Math.min(p.n - 1, i + 1); k++) {
       const pile = p.PILE[k];
       const gone = pile >= 0 && tank.plough && tank.plough[pile]?.fired;
-      const step = gone ? 0 : Math.min(p.STEP[k], CLIMB_TOP);
+      const step = gone ? 0 : p.STEP[k]; // already clamped in `_bakeRide`
       const v = p.ROAD[k] + step;
       if (v > y) y = v;
     }
