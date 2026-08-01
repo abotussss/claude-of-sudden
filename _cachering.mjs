@@ -41,6 +41,7 @@ const out = await page.evaluate((WANT) => {
   c.scene.traverse((o) => {
     if (!o.isInstancedMesh || !o.name.startsWith('prop_')) return;
     const id = o.name.slice(5);
+    if (!w.A.isSolid(id)) return;   // only things a capsule can hit
     for (let i = 0; i < o.count; i++) {
       o.getMatrixAt(i, _m);
       props.push({ id, x: _m.elements[12], y: _m.elements[13], z: _m.elements[14] });

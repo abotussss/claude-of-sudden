@@ -950,7 +950,38 @@ function furnishStorage(A, rng, r, cx, cz, w, d, m) {
 // ------------------------------------------------------------------- ruin --
 function furnishRuin(A, rng, r, cx, cz, w, d, m) {
   const { x0, z0, x1, z1, y } = r;
-  rubbleMound(A, rng, cx + rng.range(-1, 1), y, cz + rng.range(-1, 1), rng.range(1.4, 2.2), 22);
+  /**
+   * THE RUBBLE MOUND IS THE BIGGEST SOLID THIS FILE PLACES AND IT WAS THE ONLY
+   * ONE PLACED BLIND.
+   *
+   * `rubbleMound` lays a collision box 1.5 r on each plan axis and 0.34 r tall
+   * (@see kit.js) — at the authored 1.4-2.2 m radius that is a slab up to
+   * 3.3 m across and 0.75 m high, which is well over the 0.42 m the controller
+   * steps and therefore a wall to anything that measures standing room. It was
+   * dropped within a metre of the room centre with no test of any kind: not the
+   * doorways, not the stairs, not the caches, not the route.
+   *
+   * Measured: E3's ground-floor ammo cache scored 1-7 of its eight standing
+   * spots depending only on where the dice put this one mound, and `floorcheck`
+   * called it BURIED whenever that came out under three. It is the last of the
+   * four "the centre cleared and the body did not" bugs in this pass and the
+   * biggest body of the four.
+   *
+   * A ruin without rubble in it is not a ruin, so this SHRINKS before it moves
+   * and moves before it gives up: the same heap, smaller, is still the thing the
+   * room is for.
+   */
+  const mjx = rng.range(-1, 1);
+  const mjz = rng.range(-1, 1);
+  const mr0 = rng.range(1.4, 2.2);
+  let mr = mr0, mp = null;
+  for (const f of [1, 0.75, 0.55]) {
+    mr = mr0 * f;
+    mp = shiftClear(A, r, cx + mjx, cz + mjz, x0 + 0.5, z0 + 0.5, x1 - 0.5, z1 - 0.5,
+      mr * 1.5 * Math.SQRT1_2);
+    if (mp) break;
+  }
+  if (mp) rubbleMound(A, rng, mp[0], y, mp[1], mr, 22);
   for (let i = 0; i < rng.int(3, 6); i++) {
     A.put('slab_shard', rng.range(x0 + 0.5, x1 - 0.5), y + 0.05, rng.range(z0 + 0.5, z1 - 0.5), rng.float() * 6.28, 1, [
       1, 1.4, 1,

@@ -2327,11 +2327,36 @@ pairBuilding({ id: 'WC7', x: -80.25, z: 57.75, w: 5.5, d: 5.5, floors: 1, ground
  *
  * THE EAST TWIN'S INTERIOR IS ρ'd TOO, element by element, because the plan is
  * not symmetric and a half-rotated one is a new configuration nothing has
- * proved. A face carries three bays over 8.1 m of scaled frontage, so ρ sends
- * bay b to bay 2-b and swaps 's0' with 's2'; the route's polyline reverses and
- * every normalised coordinate becomes 1-x; the counter that must stand clear of
- * both thresholds runs 0.62..1.0 on one side of the map and 0.0..0.38 on the
- * other. `throughcheck` proves both.
+ * proved. ρ swaps 's0' with 's2'; the route's polyline reverses and every
+ * normalised coordinate becomes 1-x; the counter that must stand clear of both
+ * thresholds runs 0.62..1.0 on one side of the map and 0.0..0.38 on the other.
+ * `throughcheck` proves both.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * …AND ρ DOES NOT SEND BAY b TO BAY 2-b. IT SENDS IT TO ITSELF.
+ * ────────────────────────────────────────────────────────────────────────────
+ * That line was written and never measured, and it reflected the bay index a
+ * SECOND time: `buildFacade` numbers bays along the panel's own local axis, and
+ * side 2's local axis already runs opposite to side 0's, so swapping the faces
+ * mirrors the bay order for free. Measured, with the reflection applied on top:
+ * WC8's side-0 door sits at fraction 0.167 of its face and EC8's side-2 door at
+ * 0.167 of its — the SAME end of the map's east-west axis, not mirrored ends.
+ *
+ * Two things then say so independently. EC8's own route runs to `s2` along
+ * x = 0.79, the +X side, and its door was at 0.17: the declared corridor and the
+ * opening it is drawn to were at opposite ends of a 5.4 m shed. And the mantle
+ * chain onto EC8's roof — 'EC8 step 1-3', which IS a correct ρ image of WC8's —
+ * stands at level x 72.5..74.4, which is exactly where the door was: the probe
+ * `_thresh.mjs` finds `collide_metal` at every height from 0.5 to 1.7 m across
+ * the whole outside approach. EC8 has had one usable door since the chain went
+ * in, `floorcheck` called its ground floor ONE WAY OUT on 7 of the 14 pinned
+ * seeds, and which seeds depended on whether the dice happened to leave
+ * something climbable somewhere else.
+ *
+ * Keeping the index is the mirror. WC8 {0:0, 2:1} therefore pairs with EC8
+ * {2:0, 0:1}, which puts EC8's side-2 door at fraction 0.833 — the ρ image of
+ * WC8's 0.167, on the far side of the shed from its own container stack, and at
+ * the end its own route was already drawn to.
  *
  * BOTH DOOR FACES MUST BE `streetSide` OR `secondarySide`. A door bay is only
  * cut on an OPEN face (`buildFacade`), so a shed whose route names 's2' while
@@ -2363,7 +2388,7 @@ BUILDINGS.push(
     route: [['s0', [0.21, 0.25], [0.21, 0.75], 's2']],
     rooms: [{ walls: [], furnish: [{ kind: 'shop', x0: 0.62, z0: 0.0, x1: 1.0, z1: 1.0 }] }] },
   { id: 'EC8', x: 74.2, z: -30.7, wallKey: 'plaster_blue', streetSide: 2, secondarySide: 0, ...SHED,
-    doorBays: { 2: 2, 0: 1 },
+    doorBays: { 2: 0, 0: 1 },
     route: [['s2', [0.79, 0.75], [0.79, 0.25], 's0']],
     rooms: [{ walls: [], furnish: [{ kind: 'shop', x0: 0.0, z0: 0.0, x1: 0.38, z1: 1.0 }] }] }
 );
