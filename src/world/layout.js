@@ -1280,12 +1280,78 @@ export const BUILDINGS = [
    *     prove and a solid block is honest cover rather than another room.
    *
    * `navcheck` is the gate: every spawn must still reach every site.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * …AND THE EAST TWO WERE NOT THE ρ IMAGES OF THE WEST TWO, WHICH BURIED A
+   * MEDICAL POST. THEY ARE DERIVED NOW.
+   * ──────────────────────────────────────────────────────────────────────────
+   * These four were authored as an X-MIRROR pair — same z either side of the
+   * street, a face index mirrored about x — and this map's symmetry is ρ, the
+   * 180° rotation about the cathedral (`RHO` below). Under ρ a west block at
+   * z 24 belongs at z -26 on the east, not at 23. Measured on the built level:
+   * NONE of the four had a ρ image among the other three.
+   *
+   * That is not a cosmetic asymmetry, because DOMINATION NEVER SWAPS ENDS. It
+   * put 3.0 m of `collide_concrete` over `FLANK-W-beacon` at level
+   * (-52.13, -30) — CA2's shell, and CA2 is `enterable: false`, so it was also
+   * a bot-reachability claim `_carveInteriors` cannot honour — while its exact
+   * ρ image `FLANK-E-beacon` at (52.13, 27) stood in open sky. Those two are a
+   * CORRECT ρ pair (`BEACON_SPOTS` at the foot of this file) and are the map's
+   * two MEDICAL POSTS, used by both sides, so one team's dressing station was
+   * roofed and the other's was in the open for the whole match.
+   *
+   * THE BLOCKS MOVED AND THE BEACONS DID NOT, and that is the cheaper of the
+   * two repairs by some distance:
+   *
+   *   - the beacon pair is already correct, and it is stated in three places —
+   *     `BEACON_SPOTS`, its `KEEPOUT` circle, and the note over `MEDIC_FEATURES`
+   *     in src/match/caches.js, which is not this subsystem's file to edit;
+   *   - the only z band of these lanes that is clear of BOTH the west blocks and
+   *     the east ones (they are not ρ, so a ρ beacon pair has to dodge four
+   *     footprints, not two) runs from z -21.75 to 20.25, i.e. up against the
+   *     C and E courtyards — which destroys the depots' entire justification,
+   *     "the flank areas that have NO capture point on them";
+   *   - a block here is generic in-lane cover. Its authored reason is the lane
+   *     width it leaves and `navcheck`, neither of which cares about its z.
+   *
+   * WEST IS THE MASTER AND EAST IS DERIVED, and that direction is measured too:
+   * ρ(CB2) lands a footprint on x -55.13..-52.5, z 23.25..30.75, which is inside
+   * the A-LANE TERRACE (`RELIEF.terraces`, x -60..-52.5, z 13.5..25.5) — a
+   * building standing half on raised ground. Deriving the other way is clear of
+   * both terraces.
+   *
+   * ONLY CA2 MOVED, from z -19 to -25. The beacon is at z -20 and its own
+   * `KEEPOUT` circle is 2.2 units; a face at -21.5 stood 1.5 units away, inside
+   * that circle. At -25 the face is at -22.5, 2.5 units (3.75 m of ground) off
+   * the crate — and by construction the east post now has exactly the same
+   * 3.75 m, which is more than the 3.0 m it had while it was the lucky one.
    */
   { id: 'CA1', x: -25.5, z: 24, w: 4.5, d: 6, floors: 1, groundH: 3.6, wallKey: 'plaster_sand', streetSide: 1, damage: 0.35, parapetH: 0.7, roofProps: 2 },
-  { id: 'CA2', x: -25.5, z: -19, w: 4.5, d: 5, floors: 1, groundH: 3.3, wallKey: 'plaster_blue', streetSide: 1, damage: 0.45, parapetH: 0.6, roofProps: 2 },
-  { id: 'CB1', x: 25.5, z: 23, w: 4.5, d: 6, floors: 1, groundH: 3.6, wallKey: 'plaster_cream', streetSide: 3, damage: 0.35, parapetH: 0.7, roofProps: 2 },
-  { id: 'CB2', x: 25.5, z: -20, w: 4.5, d: 5, floors: 1, groundH: 3.3, wallKey: 'plaster_pink', streetSide: 3, damage: 0.45, parapetH: 0.6, roofProps: 2 },
+  { id: 'CA2', x: -25.5, z: -25, w: 4.5, d: 5, floors: 1, groundH: 3.3, wallKey: 'plaster_blue', streetSide: 1, damage: 0.45, parapetH: 0.6, roofProps: 2 },
 ];
+/**
+ * The east twins, DERIVED rather than typed, for the reason `pairBuilding` at
+ * the foot of this file gives: "a block whose twin is derived cannot drift".
+ * They are pushed here rather than authored above so they keep their old
+ * position at the end of `BUILDINGS` — the array's order is the dressing dice's
+ * order, and re-ordering it re-rolls every interior after the insertion point.
+ *
+ * `wallKey` is the one thing that is NOT derived. ρ pairs the geometry; the two
+ * lanes keeping four different plasters between them is the quality bar's
+ * "nothing perfectly repeated", and each east block keeps the colour that stood
+ * at ITS end of the east lane before this pass.
+ *
+ * @see `RHO` / `rhoSide`, both hoisted function declarations so this call site
+ * can reach them from above.
+ */
+for (const [westId, id, wallKey] of [
+  ['CA1', 'CB1', 'plaster_pink'],
+  ['CA2', 'CB2', 'plaster_cream'],
+]) {
+  const w = BUILDINGS.find((b) => b.id === westId);
+  const [ex, ez] = RHO(w.x, w.z);
+  BUILDINGS.push({ ...w, id, x: ex, z: ez, streetSide: rhoSide(w.streetSide), wallKey });
+}
 /**
  * THERE IS NO BLOCK IN EITHER CROSS STREET, and that is a measured decision.
  * Two were tried, 9 x 4.5 m at 1.5x, flush to the outer kerb so each left a
@@ -2213,10 +2279,21 @@ SET_PIECES.tyres.push(
  * avenue's far kerb is x ∓83 (124.5 m) and the row behind it is MASS, not
  * ground, so it may stand at ∓95 without hiding anything from the gate.
  */
-/** The 180° rotation about the cathedral centre, on the authored plan. */
-const RHO = (x, z) => [-x, -2 - z];
+/**
+ * The 180° rotation about the cathedral centre, on the authored plan.
+ *
+ * DECLARATIONS AND NOT ARROW CONSTS: the IN-LANE HARD COVER pair, a thousand
+ * lines above, derives its east twins with these, and a `const` would be in its
+ * temporal dead zone up there. `widenX` is odd and z is untouched by it, so ρ
+ * commutes with the widening and may be applied on either side of it.
+ */
+function RHO(x, z) {
+  return [-x, -2 - z];
+}
 /** …and what it does to a face index (0 -Z, 1 +X, 2 +Z, 3 -X). */
-const rhoSide = (s) => (s === undefined ? undefined : (s + 2) % 4);
+function rhoSide(s) {
+  return s === undefined ? undefined : (s + 2) % 4;
+}
 const rhoKeys = (o) => {
   if (!o) return o;
   const out = {};
