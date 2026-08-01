@@ -30,6 +30,15 @@ const lockstep = capture && params.get('lockstep') === '1';
 // overrode that default — so changing DEFAULTS.quality did nothing at all.
 const configOpts = { deterministic: capture };
 if (params.has('q')) configOpts.quality = params.get('q');
+// `?seed=N` pins the level dice to one 32-bit value WITHOUT turning on capture
+// mode's other determinism (fixed time step, frozen fx). It exists so a gate
+// that fails one boot in N can be replayed: `window.__ENGINE__.levelSeed` is the
+// seed of the boot you are looking at, and handing it back here rebuilds that
+// exact level. Absent, nothing changes — the seed still comes from Math.random().
+if (params.has('seed')) {
+  const s = Number(params.get('seed'));
+  if (Number.isFinite(s)) configOpts.seed = s >>> 0;
+}
 const config = createConfig(configOpts);
 
 const canvas = document.getElementById('game');

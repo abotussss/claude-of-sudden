@@ -23,7 +23,25 @@ export class Engine {
     this.registry = new Registry();
     this.events = new EventBus();
     this.input = new Input(canvas, config);
-    this.rng = new Rng(config.deterministic ? 0x5eed1234 : (Math.random() * 2 ** 32) >>> 0);
+    /**
+     * THE LEVEL SEED, AND WHY IT IS NOW READABLE AND SETTABLE.
+     *
+     * `ctx.rng` is what makes the map a different map on every boot, and that is
+     * by design. The cost of it was that a level bug which only opens under one
+     * roll of the dice — `boundcheck` reported the SAME 7519 m² void region from
+     * three unrelated agents and none of them could reproduce it — had no handle
+     * anybody could grab. A bug you cannot boot twice cannot be fixed.
+     *
+     * `config.seed` (from `?seed=` in src/main.js) pins the stream. It is opt-in
+     * and changes NOTHING when absent: without it the seed is still drawn from
+     * `Math.random()` exactly as before. `engine.levelSeed` records whichever
+     * seed was used, so a harness can log the seed of a boot that failed and
+     * replay it.
+     */
+    this.levelSeed = config.seed != null
+      ? (config.seed >>> 0)
+      : config.deterministic ? 0x5eed1234 : (Math.random() * 2 ** 32) >>> 0;
+    this.rng = new Rng(this.levelSeed);
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(config.fov, 1, 0.05, 1200);
