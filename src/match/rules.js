@@ -313,9 +313,10 @@ export const RULES = {
    */
   cacheMarkerRange: 26,
   /**
-   * THE BEACON — "テンポラリーリスポーン地点としてのビーコンを起動できる（３０秒間）".
+   * THE BEACON — first "テンポラリーリスポーン地点としてのビーコンを起動できる
+   * （３０秒間）", then re-tuned to a full minute: 「ビーコンは1分維持して」.
    *
-   * Thirty seconds, as asked, and it is the FIRST tier of `_safeSpawn` rather
+   * Sixty seconds, as asked, and it is the FIRST tier of `_safeSpawn` rather
    * than a third candidate in one auction. It used to be the latter and it was
    * measured winning 0 respawns in 200 with a beacon live and clear, because it
    * is planted at a cache in contested ground and so always has the smallest
@@ -328,10 +329,20 @@ export const RULES = {
    * flag. Winning the tier is not the same as being unconditional.
    *
    * `beaconCooldown` is measured from the moment one is PLANTED, so the feature
-   * is up for 30 of every 75 seconds at best. A permanent forward spawn wherever
-   * you like would beat holding a zone, which is the mode's own currency.
+   * is now up for 60 of every 75 seconds at best — twice the forward-spawn
+   * pressure the 30 s beacon carried, and the reason `beaconSpawns` is reported
+   * per match rather than assumed. A permanent forward spawn wherever you like
+   * would still beat holding a zone, which is the mode's own currency; the 15 s
+   * dark window and the enemy-standing-on-it veto are what keep this short of
+   * that.
+   *
+   * WHO READS IT: the HUD strip scales its bar off `_hud.beaconLife` (written
+   * from this value every frame in `_publishHud`), the respawn tier tests the
+   * clock (`beacon.until = now + beaconTime` in `Caches.plantBeacon`), and
+   * `Caches.update` retires the flag off the same clock. None of them carries
+   * its own copy of the number.
    */
-  beaconTime: 30,
+  beaconTime: 60,
   beaconCooldown: 75,
 
   /* ────────────────────────────────────────────────────────────────────────

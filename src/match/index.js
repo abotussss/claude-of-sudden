@@ -1862,7 +1862,7 @@ export class MatchSystem {
          * THE GATE IS THE PLAYER'S OWN GATE, unchanged: the record is one per
          * MAP (`Caches.beacon` is a single object with a `team` on it), so bots
          * planting greedily would starve the human of a verb he has a key
-         * bound to. `beaconCooldown` is 75 s and `beaconTime` 30 s, so both
+         * bound to. `beaconCooldown` is 75 s and `beaconTime` 60 s, so both
          * sides and the player are racing for the same one slot, which is the
          * same race the crates already are.
          *
