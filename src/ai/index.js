@@ -1630,6 +1630,15 @@ export class AiSystem {
 
     // muzzle flash, light and smoke come from fx via the canonical event
     const fe = this._fireEvent;
+    /**
+     * WHICH GUN THIS WAS. Every bot on the map used to emit `'ai_rifle'`, which
+     * `src/audio/weapons.js:resolveProfile` falls through to the `rifle` family —
+     * so forty men firing was one report forty times. `Agent.weaponAudio` is one
+     * of the families that file already publishes (rifle / ak / smg / lmg /
+     * sniper / magnum / machinepistol), so a rack that varies is a rack you can
+     * HEAR varying. @see the `WEAPONS` table in agent.js.
+     */
+    fe.weapon = agent.weaponAudio ?? 'ai_rifle';
     fe.origin.copy(origin);
     fe.dir.copy(dir);
     fe.intensity = this._flashGain();

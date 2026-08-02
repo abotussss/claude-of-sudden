@@ -152,6 +152,92 @@ const ARCHETYPE_MIX = {
 };
 
 /**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE RACK — "あとAIそれぞれが持つ武器が何故一緒？ 全員異なる武器にして基本的に"
+ * ════════════════════════════════════════════════════════════════════════════
+ * MEASURED BEFORE THIS EXISTED: a 49-man roster carried 45 carbines and 4 bolt
+ * guns, and the four were the sniper archetype. Every other man on the map had
+ * byte-identical numbers — 10.5 rounds a second, 30 in the magazine, 17 damage,
+ * one cone — because `Agent`'s constructor wrote them as literals. The player
+ * can hear that: forty men firing one weapon is one sound.
+ *
+ * WHY THE TABLE IS HERE AND NOT IMPORTED. `src/weapons/defs.js` is the player's
+ * rack and `ai` may not import another subsystem (@see ARCHITECTURE.md), so the
+ * numbers are RESTATED rather than shared. They are restated FAITHFULLY — rpm,
+ * magazine and damage are the same figures `defs.js` publishes for the same gun,
+ * so a bot's AK really is 600 rpm against the carbine's 800 — and where `defs`
+ * has nothing to say (a bot's cone, its reserve, how long it holds a trigger)
+ * the number is the AI's own. This is the same split the bolt gun already made:
+ * the sniper's 55 damage is not `defs.sniper.damage` (125) because a bot may not
+ * one-shot a player, and that decision belongs on this side of the line.
+ *
+ *   audio     the profile `src/audio/weapons.js` resolves. This is most of what
+ *             the change is worth: `resolveProfile` has rifle / ak / smg / lmg /
+ *             sniper / magnum / machinepistol / pistol families and every bot on
+ *             the map was resolving to `rifle`.
+ *   rpm       rounds per minute. `fireRate` is rpm/60, still scaled by skill.
+ *   mag       rounds in the magazine.  `spares`  magazines behind it.
+ *   damage    per round, on the AI's own scale (the carbine's 17 is the datum).
+ *   cone      cone half-angle at skill 1; `coneLow` is the extra a conscript adds.
+ *   reload    seconds. A belt-fed tray is not a magazine change.
+ *   hold      how long this weapon is held down, as a multiple of the burst
+ *             the man's own `trigger` trait asks for. A belt is 2.4x; a revolver
+ *             is 0.35x, i.e. aimed single shots.
+ *
+ * THE MESH IS NOT IN HERE AND CANNOT BE. A soldier is ONE skinned geometry per
+ * VARIANT with the rifle baked into it (@see `soldier.js`, `buildWeapon`), which
+ * is what keeps a man at one draw call per material; a per-man mesh would be a
+ * per-man geometry. So the two sides already differ — vanguard/breacher carry
+ * the carbine model and irregular the AK — and inside a side what varies is the
+ * rate, the rhythm, the depth of the magazine and the SOUND, which is what a
+ * firefight is actually read by.
+ */
+const WEAPONS = {
+  carbine: { audio: 'rifle', rpm: 800, mag: 30, spares: 4, damage: 17, cone: 0.030, coneLow: 0.055, reload: 2.35, hold: 1.0 },
+  ak: { audio: 'ak', rpm: 600, mag: 30, spares: 3, damage: 21, cone: 0.034, coneLow: 0.062, reload: 2.75, hold: 0.85 },
+  smg: { audio: 'smg', rpm: 950, mag: 32, spares: 5, damage: 15, cone: 0.041, coneLow: 0.072, reload: 2.05, hold: 1.3 },
+  /**
+   * THE BELT. `magSize` 100 is the whole character of it: this is the man who
+   * does not stop, and he is the direct answer to "マガジンを使い切るくらい撃たない
+   * のか". Two belts behind it rather than four magazines, and a 5.6 s tray
+   * change during which he is worth nothing — the cost of holding it down.
+   */
+  lmg: { audio: 'lmg', rpm: 750, mag: 100, spares: 2, damage: 17, cone: 0.047, coneLow: 0.082, reload: 5.6, hold: 2.4 },
+  mpistol: { audio: 'machinepistol', rpm: 1050, mag: 20, spares: 7, damage: 14, cone: 0.055, coneLow: 0.092, reload: 1.85, hold: 1.15 },
+  magnum: { audio: 'magnum', rpm: 170, mag: 6, spares: 8, damage: 42, cone: 0.019, coneLow: 0.040, reload: 3.4, hold: 0.35 },
+  /**
+   * The bolt gun, and every dial on it is a trade rather than a tightening.
+   * @see the block in the constructor that applies `extra` — the settle, the
+   * tracking and the reach are what make 0.9 rounds a second survivable.
+   */
+  sniper: {
+    audio: 'sniper', rpm: 55, mag: 5, spares: 6, damage: 55, cone: 0.0072, coneLow: 0.0135,
+    reload: 3.1, hold: 0.3,
+    extra: { settleTime: [2.05, -1.15], trackRate: [1.6, 2.2], aimWobble: [0.004, 0.012], weaponRange: [78, 30], viewRange: 96 },
+  },
+};
+
+/**
+ * WHICH MAN CARRIES WHICH, and it is keyed on the archetype so the gun and the
+ * behaviour agree: the man who wants the fight at 9 m gets the 950 rpm weapon
+ * and the man who holds an angle at 28 m gets the belt. Drawn WITH REPLACEMENT
+ * from a short list per archetype, so two rushers are not guaranteed to be
+ * carrying the same thing — which is the request — while the roster still reads
+ * as a set of roles rather than as a jumble.
+ *
+ * The sniper's list is one entry long on purpose: his archetype IS his gun.
+ */
+const ARCHETYPE_ARMS = {
+  rusher: ['smg', 'smg', 'mpistol', 'carbine'],
+  flanker: ['smg', 'carbine', 'mpistol', 'ak'],
+  hunter: ['carbine', 'ak', 'carbine', 'smg'],
+  support: ['lmg', 'carbine', 'lmg', 'ak'],
+  anchor: ['lmg', 'ak', 'carbine', 'magnum'],
+  marksman: ['ak', 'carbine', 'ak', 'magnum'],
+  sniper: ['sniper'],
+};
+
+/**
  * Draw one soldier: an archetype, six traits jittered off it, and his marksmanship.
  *
  * Exported because `AiSystem` caches the result per callsign (`personaFor`) so a
@@ -168,8 +254,17 @@ export function drawPersona(rng, role, meanSkill, defenderBonus = 0) {
   const name = mix[rng.int(0, mix.length - 1)];
   const a = ARCHETYPES[name];
   const t = (v, sd) => Math.min(1, Math.max(0.02, v + rng.gauss() * sd));
+  /**
+   * THE GUN IS DRAWN HERE FOR THE SAME REASON THE TRAITS ARE. A respawn builds
+   * a new `Agent`, so a draw in the constructor would hand HAWK a different
+   * weapon every six seconds — unreadable to a player and unmeasurable, because
+   * a callsign's rounds-per-minute would then be the average of four guns.
+   * `AiSystem.personaFor` caches this whole record per callsign. @see `WEAPONS`.
+   */
+  const arms = ARCHETYPE_ARMS[name] ?? ARCHETYPE_ARMS.hunter;
   return {
     archetype: name,
+    weapon: arms[rng.int(0, arms.length - 1)],
     traits: {
       aggression: t(a.aggression, 0.11),
       patience: t(a.patience, 0.11),
@@ -541,14 +636,30 @@ export class Agent {
     this.skill = persona.skill;
     const k = this.skill;
 
+    /**
+     * WHAT HE IS CARRYING. @see `WEAPONS` / `ARCHETYPE_ARMS`. Drawn with the
+     * persona so it survives his own respawn, and every number below that used
+     * to be a carbine literal now comes off the record.
+     */
+    this.weaponId = persona.weapon && WEAPONS[persona.weapon] ? persona.weapon
+      : (this.archetype === 'sniper' ? 'sniper' : 'carbine');
+    const W = WEAPONS[this.weaponId];
+    /** The `src/audio/weapons.js` family this man's report resolves to. */
+    this.weaponAudio = W.audio;
+    /** How long he holds the trigger down, relative to his own discipline. */
+    this.holdFactor = W.hold;
+    /** The irregular's 1.23x on a magazine change is kept: it was a variant cue. */
+    this.reloadTime = W.reload * (this.variantName === 'irregular' ? 1.23 : 1);
+
     this.weaponRange = 44 + k * 18;
-    // Rate of fire barely varies — trigger discipline is expressed in the burst
-    // pattern below, which is what a player actually reads as "good" or "bad".
-    this.fireRate = (this.variantName === 'irregular' ? 8.2 : 10.5) * (0.86 + k * 0.2);
+    // Rate of fire is the WEAPON's now, still shaded by the man: a 600 rpm rifle
+    // and a 950 rpm submachine gun are two different rhythms in the same street,
+    // and that is half of what "全員異なる武器" buys the player.
+    this.fireRate = (W.rpm / 60) * (0.86 + k * 0.2);
     this.burstLeft = 0;
     this.fireCooldown = 0;
     this.burstCooldown = this.rng.range(0.4, 1.4);
-    this.magSize = 30;
+    this.magSize = W.mag;
     this.ammo = this.magSize;
     /**
      * ────────────────────────────────────────────────────────────────────────
@@ -576,7 +687,15 @@ export class Agent {
      * see the empty-magazine branch. It is recoverable in exactly one way, and
      * that way is a cache (`ai.resupply`, driven by `src/match/caches.js`).
      */
-    this.reserve = this.magSize * 4;
+    /**
+     * SPARES ARE THE WEAPON'S, NOT A CONSTANT FOUR. The mean life on this map is
+     * about 100 s, so what "four magazines" bought was a man who could fight for
+     * a life and a half; that is the number the rack has to preserve, not the
+     * literal 4. A belt-fed gunner carries two 100-round belts (300 rounds a
+     * life) and a machine pistol carries seven 20s (160) — both of them roughly
+     * a life and a half of THEIR OWN rate, which is the point.
+     */
+    this.reserve = this.magSize * W.spares;
     /** What he started with. `resupply` may not hand over more than this. */
     this.startReserve = this.reserve;
     /** Magazine empty AND nothing left to load. Set in `_shoot`. */
@@ -586,7 +705,7 @@ export class Agent {
      * the bottom — a poor shooter is 2.8x wider, which at 25 m is the difference
      * between hitting you and hitting the wall beside you.
      */
-    this.spread = 0.030 + (1 - k) * 0.055;
+    this.spread = W.cone + (1 - k) * W.coneLow;
     /**
      * FIRST-CONTACT SETTLE, 0..1, the single biggest change to how survivable a
      * fight is. A bot that has just acquired a target does not start on it: for
@@ -601,7 +720,7 @@ export class Agent {
     this.trackRate = 2.6 + k * 4.2;
     /** Baseline hand shake, before suppression is added on top. */
     this.aimWobble = 0.007 + (1 - k) * 0.026;
-    this.weaponDamage = 17;
+    this.weaponDamage = W.damage;
     /**
      * ══════════════════════════════════════════════════════════════════════
      * AND IF HE IS THE SNIPER, HE IS CARRYING A DIFFERENT GUN.
@@ -643,20 +762,21 @@ export class Agent {
      * fixed two line-of-sight rays per actor per call, not a function of the
      * radius — and this is one man in ten.
      */
-    this.sniper = this.archetype === 'sniper';
-    if (this.sniper) {
-      this.fireRate = 0.92 * (0.82 + k * 0.42);
-      this.weaponDamage = 55;
-      this.magSize = 5;
-      this.ammo = this.magSize;
-      this.reserve = this.magSize * 6;
-      this.startReserve = this.reserve;
-      this.spread = 0.0072 + (1 - k) * 0.0135;
-      this.settleTime = 2.05 - k * 1.15;
-      this.trackRate = 1.6 + k * 2.2;
-      this.aimWobble = 0.004 + (1 - k) * 0.012;
-      this.weaponRange = 78 + k * 30;
-      this.viewRange = 96;
+    /**
+     * The six numbers above now come off `WEAPONS[this.weaponId]` for EVERY man,
+     * so what is left here is the four dials no other gun touches: a scope is a
+     * slow settle, a bad way to track a sprinter, a steady hold and a reach that
+     * makes 52 m a range he can actually fight at. They ride on the record as
+     * `extra` so the gun is described in ONE place.
+     */
+    this.sniper = this.weaponId === 'sniper';
+    if (W.extra) {
+      const x = W.extra;
+      if (x.settleTime) this.settleTime = x.settleTime[0] + k * x.settleTime[1];
+      if (x.trackRate) this.trackRate = x.trackRate[0] + k * x.trackRate[1];
+      if (x.aimWobble) this.aimWobble = x.aimWobble[0] + (1 - k) * x.aimWobble[1];
+      if (x.weaponRange) this.weaponRange = x.weaponRange[0] + k * x.weaponRange[1];
+      if (x.viewRange) this.viewRange = x.viewRange;
     }
     this.aimTarget = new THREE.Vector3();
     this.aimActual = new THREE.Vector3();
@@ -1971,7 +2091,18 @@ export class Agent {
       // armourWorth 3 is SUPPRESSION cleared by `AiSystem.armourWorth` — the
       // hull provoked it, and rounds sparking off a glacis are the half of the
       // anti-armour policy the player can actually watch.
-      const shootMoving = tr.exposure > 0.5 && this.targetVisible && this.hasTarget
+      /**
+       * `exposure > 0.5` WAS TWO MEN IN FIVE. Measured on the build before this
+       * (seed 7): 27 % of all trigger pulls ended in this branch — a man with a
+       * VISIBLE target inside his own weapon range, walking between two walls
+       * with his weapon down. That is the single largest source of silence on
+       * the map after the burst length itself, and the request is explicit that
+       * misses are acceptable. 0.28 puts three men in four in the fight while
+       * they move, and the two terms that make it fair are untouched: he moves
+       * at 2.6-3.8 m/s instead of 4.3, and `_fireRound` opens his cone by his
+       * own speed. The armour clause is the tank agent's and is not changed.
+       */
+      const shootMoving = tr.exposure > 0.28 && this.targetVisible && this.hasTarget
         && dist < this.weaponRange
         && (!armour || this.armourWorth === 1 || this.armourWorth === 3);
       this.desiredSpeed = shootMoving ? 2.6 + tr.aggression * 1.2 : 4.3;
@@ -2028,8 +2159,18 @@ export class Agent {
        * "もっと戦争らしく撃ち合いまくって" asks for and it costs the player nothing,
        * because rounds into a wall are rounds not into him.
        */
-      if (!this.wantFire && !armour && this.hasTarget && this.lastKnownAge < 2.6 && this.peeking) {
-        this.wantFire = this.rng.float() < 0.12 + (1 - tr.trigger) * 0.62;
+      if (!this.wantFire && !armour && this.hasTarget && this.lastKnownAge < 4 && this.peeking) {
+        /**
+         * 0.12 + (1-t)*0.62 IS 0.17 FOR A MARKSMAN, and the marksman family is
+         * most of this roster. What that produced is a line of men leaning out
+         * of cover at a window they know somebody is behind and holding their
+         * rounds — quiet, correct, and the opposite of 「もっと撃ち合いの戦闘を
+         * 起こして」. The floor goes to 0.4 and the window that counts as "he was
+         * there a moment ago" from 2.6 s to 4 s. The discipline is still real:
+         * a sprayer is at 0.95, a marksman at 0.45, and rounds into a wall
+         * still cost the player nothing.
+         */
+        this.wantFire = this.rng.float() < 0.4 + (1 - tr.trigger) * 0.55;
         // Rounds into a window nobody is holding are only useful if somebody
         // knows they are covering fire, so this one is on the net too — at the
         // longest per-kind cooldown in the table, because it is a state and not
@@ -2858,7 +2999,7 @@ export class Agent {
         this.ai.radio?.say(this, 'ammodry', 'ammodry', null, true);
         return;
       }
-      this.animator.reload(this.variantName === 'irregular' ? 2.9 : 2.35);
+      this.animator.reload(this.reloadTime);
       this.ai.emitReload(this);
       this.reserve -= take;
       this.ammo = take;
@@ -2873,28 +3014,78 @@ export class Agent {
     if (this.burstLeft <= 0) {
       if (this.burstCooldown > 0) return;
       /**
-       * THE BURST PATTERN IS TRIGGER DISCIPLINE, and it used to be skill alone.
-       * Skill still shapes it — a poor shooter dumps a magazine and then has to
-       * wait, which is the window the player uses — but WHETHER a man is a
-       * sprayer is now a trait independent of whether he can shoot. A disciplined
-       * marksman fires 2-4 and pauses; an undisciplined rusher fires up to 14 and
-       * pauses for half as long. That asymmetry is deliberate: the volume of fire
-       * on the map goes up, and it comes from the men least likely to hit with it.
+       * ══════════════════════════════════════════════════════════════════════
+       * THE TRIGGER PULL — "なぜマガジンを使い切るくらい撃たないのか もっと撃ち合って
+       * ほしい 当たらなくてもいいからとにかく打ち切るくらいに"
+       * ══════════════════════════════════════════════════════════════════════
+       * MEASURED ON THE BUILD BEFORE THIS (seed 7, 192 s of live round, 37 men
+       * alive, `_sixaudit.mjs`): the MEDIAN trigger pull was 2 ROUNDS, the mean
+       * 2.6, p95 7. A man emptied a magazine once every three and a half
+       * minutes — 33 magazines across the whole roster in the window — and the
+       * whole map fired 12.3 rounds per man-minute. That is the complaint, and
+       * it is not a bug anywhere: it is exactly what these two lines asked for.
+       *
+       * The old window was `lo = 2 + (1-t)*3` and `hi = lo + 2 + …`, i.e. a
+       * disciplined man fired 2-4. THE ROSTER IS DISCIPLINED: the archetype mix
+       * is weighted to marksman / anchor / support / hunter, whose `trigger` is
+       * 0.56-0.92, so the map's MEDIAN man was the 2-4 case. Trigger discipline
+       * was written as a spread around "short" when the player wants it written
+       * as a spread around "long".
+       *
+       * So the floor is FOUR and the ceiling is the magazine. A disciplined
+       * marksman now fires 4-9 and a rusher 9-27; a belt-fed gunner multiplies
+       * both by `holdFactor` 2.4 and simply does not stop until the tray is
+       * empty. HE IS ALLOWED TO MISS — `_fireRound`'s bloom term opens the cone
+       * with every round in the magazine and the advancing-fire term opens it
+       * again, so a long burst is loud and inaccurate rather than lethal, which
+       * is the trade the request explicitly accepts.
+       *
+       * CAPPED AT WHAT IS IN THE GUN. A burst longer than the magazine is not a
+       * longer burst — it is the same burst followed by a reload — and reading
+       * it off `ammo` is what makes "empty the magazine" the literal default for
+       * the sprayers: the last round of a 30 is the last round of the burst.
        */
       const t = this.traits.trigger;
-      const lo = 2 + Math.round((1 - t) * 3);
-      this.burstLeft = this.rng.int(lo,
-        lo + 2 + Math.round((1 - this.skill) * 5 + (1 - t) * 5));
+      const hold = this.holdFactor;
+      const lo = Math.round((4 + (1 - t) * 6) * hold);
+      const hi = lo + Math.round((4 + (1 - this.skill) * 8 + (1 - t) * 10) * hold);
+      this.burstLeft = Math.max(1, Math.min(this.ammo, this.rng.int(lo, Math.max(lo, hi))));
+      /**
+       * AND THE GAP BETWEEN TWO PULLS IS HALVED. It was 0.55-1.8 s for the
+       * disciplined man who is most of this roster, on top of a two-round
+       * burst — a rifle heard once every two seconds. The suppression term is
+       * untouched: being shot at still stops you shooting.
+       */
       this.burstCooldown =
-        (this.rng.range(0.3, 0.85) + (1 - this.skill) * this.rng.range(0.25, 0.95))
-          * (0.55 + t * 0.8)
+        (this.rng.range(0.14, 0.42) + (1 - this.skill) * this.rng.range(0.12, 0.5))
+          * (0.5 + t * 0.7)
         + this.suppression * 0.5;
     }
-    if (this.fireCooldown > 0) return;
-    this.fireCooldown = 1 / this.fireRate;
-    this.burstLeft--;
-    this.ammo--;
-    this._fireRound();
+    /**
+     * ONE PULL OF THE TRIGGER IS NOT ONE ROUND PER FRAME.
+     *
+     * `fireCooldown` was TESTED and returned on, so a weapon could fire at most
+     * once per `update`. At 60 Hz that is a 3600 rpm ceiling and nothing ever
+     * touched it; on a frame that hitches — or in any headless harness, which
+     * renders at 12 fps and drives the clock with `time.scale` — it silently
+     * became the rate of fire. `_sixaudit.mjs` reported 1.7 rounds per man-
+     * minute at `--scale=10` and every one of those rounds was this line.
+     *
+     * Draining the cooldown in a loop is what "10.5 rounds a second" already
+     * claimed to mean. The bound is the magazine and a hard 12, so a stalled
+     * frame cannot empty a belt into one instant.
+     */
+    let fired = 0;
+    while (this.fireCooldown <= 0 && this.burstLeft > 0 && this.ammo > 0 && fired < 12) {
+      this.fireCooldown += 1 / this.fireRate;
+      this.burstLeft--;
+      this.ammo--;
+      this._fireRound();
+      fired++;
+    }
+    // Shed the backlog rather than carrying a large negative into the next
+    // frame — the same move `Engine.step` makes when it runs out of substeps.
+    if (this.fireCooldown < 0) this.fireCooldown = 1 / this.fireRate;
   }
 
   _fireRound() {
