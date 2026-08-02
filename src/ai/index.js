@@ -54,7 +54,7 @@ import { SoldierMaterials, TEAM_RIM, TEAM_DRESS } from './textures.js';
 import { buildSoldier, resolveMaterials, MATERIAL_SLOTS, VARIANTS } from './soldier.js';
 import { RIG } from './rig.js';
 import { NavGrid, CoverMap, StairMap } from './nav.js';
-import { Agent, STATE, drawPersona, ARMOUR_FRAG_MIN, ARMOUR_FRAG_MAX } from './agent.js';
+import { Agent, STATE, drawPersona, archetypeMixFor, ARMOUR_FRAG_MIN, ARMOUR_FRAG_MAX } from './agent.js';
 import { Squad } from './squad.js';
 import { Radio } from './radio.js';
 import { GroundShadows } from './grounding.js';
@@ -280,6 +280,8 @@ export class AiSystem {
      * with the level, not with the round.
      */
     this._personas = new Map();
+    /** One shuffled archetype deck per `team:role`. @see `_nextSlot`. */
+    this._decks = new Map();
     /** Actors hostile to team i, rebuilt at most once per frame. */
     this._hostiles = [[], []];
     this._hostileFrame = -1e9;
@@ -1527,15 +1529,57 @@ export class AiSystem {
      */
     const elite = agent._elite === true;
     if (!agent.name || agent.name.startsWith('BOT-')) {
-      return drawPersona(rng, agent.role, mean, this.defenderSkill, elite);
+      return drawPersona(rng, agent.role, mean, this.defenderSkill, elite, this._nextSlot(agent, elite));
     }
     const key = `${agent.team}:${agent.name}:${agent.role}${elite ? ':elite' : ''}`;
     let p = this._personas.get(key);
     if (!p) {
-      p = drawPersona(rng, agent.role, mean, this.defenderSkill, elite);
+      p = drawPersona(rng, agent.role, mean, this.defenderSkill, elite, this._nextSlot(agent, elite));
       this._personas.set(key, p);
     }
     return p;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * DEAL THE NEXT ARCHETYPE SLOT TO THIS SIDE — 「あとスナイパー持ってるAIはちゃんと
+   * いる？」
+   * ────────────────────────────────────────────────────────────────────────
+   * `ARCHETYPE_MIX` used to be SAMPLED per man, which makes "one slot in ten is
+   * a sniper" a probability: P(none at all in twenty) is 12 %, and on seed 7 one
+   * side fielded one and the other fielded none. That is a player playing a
+   * whole round without ever seeing the thing he is asking about.
+   *
+   * So the ten slots are DEALT round-robin off a shuffled copy, one deck per
+   * side and role. Twenty men are then exactly two snipers, two anchors and so
+   * on — the composition the table already described, with the variance taken
+   * out — and every other archetype whose absence would be noticed gets the same
+   * guarantee for free. The SHUFFLE is what keeps it from being a fixed roster:
+   * it is drawn once per deck from the persona rng, so the same callsign is not
+   * the same man every match, and the deck reshuffles on each pass through it.
+   *
+   * Reinforcements are exempt: they are all `spearhead` and must not consume a
+   * field slot. @see `drawPersona`.
+   */
+  _nextSlot(agent, elite) {
+    if (elite) return null;
+    const key = `${agent.team}:${agent.role}`;
+    let deck = this._decks.get(key);
+    if (!deck || deck.at >= deck.order.length) {
+      const src = archetypeMixFor(agent.role);
+      const order = deck?.order ?? src.slice();
+      order.length = 0;
+      for (const a of src) order.push(a);
+      // Fisher-Yates on the persona rng: deterministic under `?seed=`.
+      const rng = this._personaRng ?? (this._personaRng = this.rng.fork());
+      for (let i = order.length - 1; i > 0; i--) {
+        const j = rng.int(0, i);
+        const t = order[i]; order[i] = order[j]; order[j] = t;
+      }
+      deck = { order, at: 0 };
+      this._decks.set(key, deck);
+    }
+    return deck.order[deck.at++];
   }
 
   spawn(variantName, position, yaw = 0, opts = {}) {

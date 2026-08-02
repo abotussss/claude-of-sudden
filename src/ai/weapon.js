@@ -55,6 +55,12 @@ function cyl(r0, r1, z0, z1, x, y, seg = 14, cap = true) {
  * Build a weapon. `style`:
  *   'carbine' — flat-top 5.56 carbine, short optic, collapsible stock
  *   'ak'      — long-stroke rifle, iron sights, side-folding wire stock
+ *   'sniper'  — bolt gun: 0.60 m barrel, a full-size scope on a long rail, a
+ *               fixed stock with a raised comb, a folded bipod and a flush
+ *               five-round box. 「あとスナイパー持ってるAIはちゃんといる？」 — the
+ *               archetype, the rate of fire, the damage and the report were all
+ *               real and the SILHOUETTE was a carbine, which is the only one of
+ *               the five a player can check at 40 m.
  * Returns { steel, polymer, rubber, glass, muzzle:[x,y,z], stock:[x,y,z] }
  * with every mesh already transformed into the actor's bind space.
  */
@@ -64,8 +70,15 @@ export function buildWeapon(nz, style = 'carbine', rng) {
   const rubber = emptyMesh();
   const glass = emptyMesh();
 
+  /**
+   * `long` stays exactly what it was — the AK — because a dozen branches below
+   * read it and a bolt gun wants almost none of them: not the AK's curved
+   * 30-round magazine, not its wire stock and not its iron leaf sight. `bolt`
+   * is its own flag and every branch it needs is written out.
+   */
   const long = style === 'ak';
-  const barrelEnd = long ? 0.50 : 0.435;
+  const bolt = style === 'sniper';
+  const barrelEnd = bolt ? 0.60 : long ? 0.50 : 0.435;
 
   /* ---- lower receiver + magwell + grip (polymer) ---- */
   appendMesh(poly, box(0.019, 0.031, 0.055, 0, BORE_Y - 0.036, -0.012, { n: 4.2, roundY: 0.22 }));
@@ -112,9 +125,10 @@ export function buildWeapon(nz, style = 'carbine', rng) {
     const rows = 9;
     for (let i = 0; i < rows; i++) {
       const t = i / (rows - 1);
-      const y = BORE_Y - 0.070 - t * (long ? 0.20 : 0.175);
+      // A bolt gun's box holds five and barely clears the stock line.
+      const y = BORE_Y - 0.070 - t * (bolt ? 0.075 : long ? 0.20 : 0.175);
       // STANAG / AK curve: the magazine sweeps forward as it drops
-      const z = 0.004 + t * t * (long ? 0.062 : 0.030);
+      const z = 0.004 + t * t * (bolt ? 0.006 : long ? 0.062 : 0.030);
       rings.push({
         pts: superEllipse(0.0135, 0.0225 - t * 0.001, 4.4, 14),
         o: [0, y, z],
@@ -135,7 +149,7 @@ export function buildWeapon(nz, style = 'carbine', rng) {
   appendMesh(steel, box(0.0175, 0.0225, 0.062, 0, BORE_Y + 0.014, 0.005, { n: 4.4, roundY: 0.22 }));
   // top rail with slots
   {
-    const railZ0 = -0.055, railZ1 = long ? 0.06 : 0.145;
+    const railZ0 = -0.055, railZ1 = bolt ? 0.175 : long ? 0.06 : 0.145;
     appendMesh(steel, box(0.0115, 0.005, (railZ1 - railZ0) * 0.5, 0, BORE_Y + 0.040, (railZ0 + railZ1) * 0.5, { n: 6, roundY: 0.1 }));
     const n = Math.floor((railZ1 - railZ0) / 0.0102);
     for (let i = 0; i < n; i++) {
@@ -157,7 +171,7 @@ export function buildWeapon(nz, style = 'carbine', rng) {
   }
   // barrel + gas block + muzzle device
   appendMesh(steel, cyl(0.0105, 0.0098, 0.055, barrelEnd - 0.045, 0, BORE_Y, 12, false));
-  appendMesh(steel, box(0.0115, 0.014, 0.014, 0, BORE_Y + 0.008, long ? 0.33 : 0.29, { n: 5, roundY: 0.25 }));
+  if (!bolt) appendMesh(steel, box(0.0115, 0.014, 0.014, 0, BORE_Y + 0.008, long ? 0.33 : 0.29, { n: 5, roundY: 0.25 }));
   {
     const mz = cyl(0.0145, 0.0135, barrelEnd - 0.045, barrelEnd, 0, BORE_Y, 14, true);
     // port slots
@@ -171,12 +185,13 @@ export function buildWeapon(nz, style = 'carbine', rng) {
 
   /* ---- handguard ---- */
   {
-    const z0 = 0.055, z1 = long ? 0.34 : 0.30;
+    const z0 = 0.055, z1 = bolt ? 0.35 : long ? 0.34 : 0.30;
     const rows = 7;
     const rings = [];
     for (let i = 0; i < rows; i++) {
       const t = i / (rows - 1);
-      const r = long ? 0.0255 - t * 0.002 : 0.0245 - t * 0.0025;
+      // A free-float tube is slimmer than either carbine handguard.
+      const r = bolt ? 0.0195 - t * 0.002 : long ? 0.0255 - t * 0.002 : 0.0245 - t * 0.0025;
       rings.push({
         pts: superEllipse(r, r * (long ? 1.02 : 0.98), long ? 3.0 : 4.0, 18),
         o: [0, BORE_Y - 0.002, z0 + (z1 - z0) * t],
@@ -201,7 +216,34 @@ export function buildWeapon(nz, style = 'carbine', rng) {
   }
 
   /* ---- stock ---- */
-  if (long) {
+  if (bolt) {
+    // Fixed rifle stock: a straight comb the shooter's cheek sits ON, a deep
+    // grip belly and a long pull. This plus the scope is most of the read.
+    const body = box(0.0225, 0.044, 0.098, 0, BORE_Y - 0.006, -0.180, { n: 3.6, roundY: 0.3 });
+    warp(body, (v) => {
+      // the comb rises toward the butt, and the toe cuts away under it
+      if (v.y > BORE_Y + 0.014) v.y += (-v.z - 0.100) * 0.10;
+      if (v.y < BORE_Y - 0.030) v.y += (-v.z - 0.100) * 0.16;
+    });
+    computeNormals(body);
+    displace(body, (x, y, z) => nz.fbm3(x * 70, y * 70, z * 70, 2) * 0.0014);
+    appendMesh(poly, body);
+    // thumbhole web behind the grip
+    appendMesh(poly, box(0.016, 0.030, 0.026, 0, BORE_Y - 0.086, -0.098, { n: 4, roundY: 0.35 }));
+    appendMesh(rubber, box(0.0225, 0.046, 0.008, 0, BORE_Y - 0.010, -0.276, { n: 4, roundY: 0.4 }));
+    /* ---- bipod, folded back under the free-float tube ---- */
+    for (const sgn of [-1, 1]) {
+      const pts = [
+        [sgn * 0.010, BORE_Y - 0.022, 0.300],
+        [sgn * 0.020, BORE_Y - 0.030, 0.235],
+        [sgn * 0.026, BORE_Y - 0.034, 0.160],
+      ];
+      const leg = ribbon(pts, 0.007, 0.005, { seg: 5, up: [0, 1, 0] });
+      computeNormals(leg);
+      appendMesh(steel, leg);
+    }
+    appendMesh(steel, box(0.014, 0.010, 0.018, 0, BORE_Y - 0.026, 0.300, { n: 5, roundY: 0.3 }));
+  } else if (long) {
     // side-folding wire stock: two rails and a pad
     for (const s of [-1, 1]) {
       const pts = [
@@ -231,7 +273,33 @@ export function buildWeapon(nz, style = 'carbine', rng) {
   }
 
   /* ---- sights / optic ---- */
-  if (long) {
+  if (bolt) {
+    /**
+     * THE SCOPE IS THE SILHOUETTE. Twice the carbine optic's length, a bell at
+     * the objective end and a taller riser, because at 40 m a player reads the
+     * outline of the thing over the receiver and nothing else about the gun.
+     */
+    const ringZ = [-0.030, 0.088];
+    for (const rz of ringZ) {
+      appendMesh(steel, box(0.013, 0.020, 0.011, 0, BORE_Y + 0.062, rz, { n: 4.4, roundY: 0.25 }));
+    }
+    const tubeZ0 = -0.085, tubeZ1 = 0.150;
+    appendMesh(steel, cyl(0.0155, 0.0155, tubeZ0 + 0.030, tubeZ1 - 0.048, 0, BORE_Y + 0.098, 16, false));
+    // ocular bell and eyepiece
+    appendMesh(steel, cyl(0.0215, 0.0185, tubeZ0, tubeZ0 + 0.032, 0, BORE_Y + 0.098, 16, false));
+    appendMesh(rubber, cyl(0.0225, 0.0225, tubeZ0 - 0.010, tubeZ0 + 0.002, 0, BORE_Y + 0.098, 16, true));
+    // objective bell
+    appendMesh(steel, cyl(0.0185, 0.0265, tubeZ1 - 0.050, tubeZ1, 0, BORE_Y + 0.098, 18, false));
+    appendMesh(steel, cyl(0.0275, 0.0275, tubeZ1, tubeZ1 + 0.008, 0, BORE_Y + 0.098, 18, true));
+    appendMesh(glass, cyl(0.0245, 0.0245, tubeZ1 + 0.001, tubeZ1 + 0.004, 0, BORE_Y + 0.098, 18, true));
+    appendMesh(glass, cyl(0.0175, 0.0175, tubeZ0 - 0.002, tubeZ0 + 0.001, 0, BORE_Y + 0.098, 16, true));
+    // elevation and windage turrets
+    appendMesh(steel, cyl(0.0105, 0.0105, 0.014, 0.036, 0, BORE_Y + 0.098, 12, true));
+    appendMesh(steel, cyl(0.0095, 0.0095, 0.012, 0.030, -0.020, BORE_Y + 0.098, 10, true));
+    // bolt handle, out to the right and swept back
+    appendMesh(steel, cyl(0.006, 0.006, -0.010, 0.030, 0.024, BORE_Y + 0.006, 10, true));
+    appendMesh(steel, box(0.011, 0.011, 0.011, 0.040, BORE_Y + 0.004, -0.012, { n: 3.6, roundY: 0.45 }));
+  } else if (long) {
     // rear leaf sight + front post
     appendMesh(steel, box(0.010, 0.010, 0.006, 0, BORE_Y + 0.026, -0.040, { n: 5, roundY: 0.3 }));
     appendMesh(steel, box(0.008, 0.016, 0.005, 0, BORE_Y + 0.030, long ? 0.33 : 0.29, { n: 5, roundY: 0.3 }));
@@ -284,8 +352,8 @@ export function buildWeapon(nz, style = 'carbine', rng) {
     muzzle: toBind(0, BORE_Y, barrelEnd + 0.012),
     boreOrigin: toBind(0, BORE_Y, 0),
     ejection: toBind(-0.024, BORE_Y + 0.012, 0.012),
-    stockTop: toBind(0, BORE_Y, -0.10),
-    foregrip: toBind(0, BORE_Y - 0.028, long ? 0.22 : 0.205),
+    stockTop: toBind(0, BORE_Y, bolt ? -0.13 : -0.10),
+    foregrip: toBind(0, BORE_Y - 0.028, bolt ? 0.26 : long ? 0.22 : 0.205),
     magBottom: toBind(0, BORE_Y - 0.25, 0.03),
   };
 }

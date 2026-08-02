@@ -167,6 +167,32 @@ export const VARIANTS = {
   },
 };
 
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND A TWIN OF EACH ONE HOLDING A LONG GUN — 「あとスナイパー持ってるAIはちゃんと
+ * いる？」
+ * ────────────────────────────────────────────────────────────────────────────
+ * A soldier is ONE SKINNED GEOMETRY PER VARIANT with the rifle baked into it at
+ * `HandR` — that is what keeps a man at one draw call per material — so the
+ * held weapon cannot vary per man. It CAN vary per variant, and the sniper is
+ * not "per man": he is one archetype, so he can have his own variant.
+ *
+ * `<name>Dmr` is the same soldier in every other respect — same camo, same
+ * gear, same face, same bulk, so the side still reads as one side — carrying
+ * `weapon: 'sniper'` instead. Built lazily by `AiSystem.variant` on the first
+ * sniper of that dress, and `prewarmMaterials` already walks `VARIANTS` by key,
+ * so its nine materials are compiled with everybody else's.
+ *
+ * It is deliberately derived rather than authored: a fourth hand-written
+ * variant is a fourth thing to keep in step with `TEAM_VARIANTS`, and the one
+ * fact that has to hold — a sniper of MY side wears MY dress — is exactly what
+ * deriving guarantees. @see `Agent`'s constructor for the swap.
+ */
+export const DMR_SUFFIX = 'Dmr';
+for (const key of Object.keys(VARIANTS)) {
+  VARIANTS[`${key}${DMR_SUFFIX}`] = { ...VARIANTS[key], weapon: 'sniper' };
+}
+
 const bp = (name) => {
   const v = RIG.bindPos[RIG.index(name)];
   return [v.x, v.y, v.z];

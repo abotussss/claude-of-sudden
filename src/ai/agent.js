@@ -34,6 +34,7 @@
 
 import * as THREE from 'three';
 import { RIG } from './rig.js';
+import { VARIANTS, DMR_SUFFIX } from './soldier.js';
 import { Animator } from './animator.js';
 
 const STATE = {
@@ -197,8 +198,18 @@ const ARCHETYPES = {
 };
 
 /**
- * Who each side is made of. Ten slots, drawn from with replacement, so a
- * fifteen-man team is a plausible mix rather than a guaranteed one.
+ * Who each side is made of. Ten slots.
+ *
+ * THEY ARE DEALT, NOT SAMPLED, and that changed because of the one question the
+ * player asked out loud: 「あとスナイパー持ってるAIはちゃんといる？」. Drawn WITH
+ * REPLACEMENT, "one slot in ten is a sniper" is a probability and not a quota —
+ * P(no sniper at all in twenty men) = 0.9^20 ≈ 12 %, and it was observed: on
+ * seed 7 one side fielded ONE and the other fielded NONE. A player who has
+ * played a round with no sniper in it has correctly concluded there are no
+ * snipers. `AiSystem.personaFor` now walks a shuffled copy of this list and
+ * hands out the next slot per side, so twenty men are exactly two snipers, two
+ * anchors and so on — the composition is identical, the variance is gone, and
+ * the shuffle is what stops the same callsign always being the same man.
  *
  * ONE SLOT IN TEN IS A SNIPER, IN EVERY MIX, WHICH IS WHAT "敵味方に" MEANS.
  * Domination hands `ai.spawn` the same `role` for both sides (`AI_ROLE_FIELD`
@@ -333,10 +344,23 @@ const ELITE = {
  * the defence gets better on average without becoming uniform — there is still a
  * 0.2 conscript in it.
  */
-export function drawPersona(rng, role, meanSkill, defenderBonus = 0, elite = false) {
-  const mix = ARCHETYPE_MIX[role === 'defend' || role === 'attack' ? role : 'any'];
-  // A paradropped man is not drawn from the roster mix at all. @see `spearhead`.
-  const name = elite ? 'spearhead' : mix[rng.int(0, mix.length - 1)];
+/**
+ * THE MIX A SIDE OF THIS ROLE IS CUT FROM, so the caller can deal it out as a
+ * QUOTA instead of sampling it. @see `AiSystem.personaFor` and `ARCHETYPE_MIX`.
+ */
+export function archetypeMixFor(role) {
+  return ARCHETYPE_MIX[role === 'defend' || role === 'attack' ? role : 'any'];
+}
+
+export function drawPersona(rng, role, meanSkill, defenderBonus = 0, elite = false, forced = null) {
+  const mix = archetypeMixFor(role);
+  /**
+   * A paradropped man is not drawn from the roster mix at all (@see
+   * `spearhead`); otherwise `forced` is the slot the caller dealt him, and the
+   * random draw is the fallback for anybody who arrives without one.
+   */
+  const name = elite ? 'spearhead'
+    : (forced && ARCHETYPES[forced] ? forced : mix[rng.int(0, mix.length - 1)]);
   const a = ARCHETYPES[name];
   const t = (v, sd) => Math.min(1, Math.max(0.02, v + rng.gauss() * sd));
   /**
@@ -532,7 +556,52 @@ export class Agent {
     this.ctx = ai.ctx;
     this.id = _nextId++;
     this.rng = ai.rng.fork();
-    this.variantName = opts.variant ?? 'vanguard';
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * WHO HE IS COMES BEFORE WHAT HE LOOKS LIKE, and it did not used to.
+     * ──────────────────────────────────────────────────────────────────────
+     * These four `opts` fields sat two hundred lines below with the rest of the
+     * bookkeeping, which was fine while the mesh was a pure function of the
+     * variant `match` asked for. It is not any more: a sniper carries a
+     * DIFFERENT GEOMETRY (@see `DMR_SUFFIX` in soldier.js), so his persona —
+     * which is what says he is a sniper — has to be drawn before
+     * `ai.variant()` is called, and `personaFor` keys on exactly these.
+     */
+    this.squad = opts.squad ?? null;
+    this.team = opts.team ?? 1;
+    /** Killfeed / scoreboard handle. */
+    this.name = opts.name ?? `BOT-${this.id}`;
+    /** 'attack' | 'defend' — informational; the objective carries the verb. */
+    this.role = opts.role ?? null;
+    /**
+     * PARADROPPED. Set by `src/match`'s `ai.spawn(variant, pos, yaw, { elite })`.
+     * @see the `spearhead` archetype and `ELITE`.
+     */
+    this._elite = opts.elite === true;
+    /**
+     * PERSONALITY AND SKILL ARE STICKY PER SOLDIER. A respawn builds a NEW
+     * `Agent`, so drawing traits in the constructor alone would give HAWK a
+     * different character every six seconds — both unreadable to a player and
+     * unmeasurable, because a callsign's numbers would then be the average of
+     * ten different people. `ai.personaFor` keys the draw on team + callsign +
+     * role, so HAWK is the same man all half and becomes somebody else when the
+     * sides swap.
+     */
+    const persona = ai.personaFor(this);
+    /** What he is carrying. @see `WEAPONS` / `ARCHETYPE_ARMS`. */
+    this.weaponId = persona.weapon && WEAPONS[persona.weapon] ? persona.weapon
+      : (persona.archetype === 'sniper' ? 'sniper' : 'carbine');
+    const asked = opts.variant ?? 'vanguard';
+    /**
+     * A MAN WITH A BOLT GUN HOLDS A BOLT GUN. `<dress>Dmr` is the same soldier
+     * in the same dress carrying a long gun on a scope, so the side still reads
+     * as one side and the silhouette stops lying about the weapon. Falls back to
+     * the dress `match` asked for if no twin exists, so an unknown variant name
+     * behaves exactly as it always did.
+     */
+    this.variantName = this.weaponId === 'sniper' && VARIANTS[`${asked}${DMR_SUFFIX}`]
+      ? `${asked}${DMR_SUFFIX}`
+      : asked;
     const def = ai.variant(this.variantName);
     this.def = def;
     this.scale = def.variant.scale ?? 1;
@@ -615,20 +684,6 @@ export class Agent {
     this.alive = true;
     this.state = STATE.IDLE;
     this.stateTime = 0;
-    this.squad = opts.squad ?? null;
-    this.team = opts.team ?? 1;
-    /** Killfeed / scoreboard handle. */
-    this.name = opts.name ?? `BOT-${this.id}`;
-    /** 'attack' | 'defend' — informational; the objective carries the verb. */
-    this.role = opts.role ?? null;
-    /**
-     * PARADROPPED. Set by `src/match`'s `ai.spawn(variant, pos, yaw, { elite })`
-     * and read by `AiSystem.personaFor` on the very next lines, which is why it
-     * is up here with the other `opts` fields rather than beside the block that
-     * uses it. @see the `spearhead` archetype and `ELITE`.
-     */
-    this._elite = opts.elite === true;
-
     /* ---------------- fireteam (owned by `Squad`) ---------------- */
     /**
      * The four-man team this man is currently in, and his seat in it (0-3).
@@ -719,17 +774,8 @@ export class Agent {
      * dial: `RULES.botSkill` shifts the mean, and the gaussian gives the squad
      * its individuals.
      */
-    /**
-     * PERSONALITY AND SKILL ARE STICKY PER SOLDIER.
-     *
-     * A respawn builds a NEW `Agent`, so drawing traits in the constructor alone
-     * would give HAWK a different character every six seconds — which is both
-     * unreadable to a player and unmeasurable, because a callsign's numbers
-     * would then be the average of ten different people. `ai.personaFor` keys
-     * the draw on team + callsign + role, so HAWK is the same man all half and
-     * becomes somebody else when the sides swap.
-     */
-    const persona = ai.personaFor(this);
+    // `persona` and `weaponId` are drawn at the top of the constructor: the
+    // mesh depends on the gun. @see the block beside `this.variantName`.
     /** 'rusher'|'flanker'|'hunter'|'support'|'anchor'|'marksman' — see ARCHETYPES. */
     this.archetype = persona.archetype;
     /** Six independent behaviour traits. Read by `_think`, not by the gun. */
@@ -737,13 +783,8 @@ export class Agent {
     this.skill = persona.skill;
     const k = this.skill;
 
-    /**
-     * WHAT HE IS CARRYING. @see `WEAPONS` / `ARCHETYPE_ARMS`. Drawn with the
-     * persona so it survives his own respawn, and every number below that used
-     * to be a carbine literal now comes off the record.
-     */
-    this.weaponId = persona.weapon && WEAPONS[persona.weapon] ? persona.weapon
-      : (this.archetype === 'sniper' ? 'sniper' : 'carbine');
+    // Every number below that used to be a carbine literal comes off the record
+    // `this.weaponId` names. @see `WEAPONS` / `ARCHETYPE_ARMS`.
     const W = WEAPONS[this.weaponId];
     /** The `src/audio/weapons.js` family this man's report resolves to. */
     this.weaponAudio = W.audio;
