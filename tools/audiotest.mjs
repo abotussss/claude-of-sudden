@@ -353,6 +353,524 @@ async function sampleOrNull(p) {
 }
 
 /* ==================================================================== */
+/* --occwhy: WHAT THE OCCLUSION RAYS ARE ACTUALLY HITTING               */
+/* ==================================================================== */
+/**
+ * `--ear`'s census found 90 % of every spatialised voice in a live match sitting
+ * at occlusion >= 0.9 — a 420 Hz low-pass, a -26 dB shelf and a 0.38 gain on
+ * nine sounds out of ten. That is either the map (in which case the model is too
+ * harsh) or a bug in the two rays. A percentage cannot tell those apart, so this
+ * records the rays themselves: where they started, where they were aimed, how
+ * far they got, and what they hit.
+ *
+ *   node tools/audiotest.mjs --occwhy [--url=…] [--seconds=45]
+ */
+if (args.occwhy) {
+  const OSEC = Number(args.seconds ?? 45);
+  await page.evaluate(() => {
+    const e = window.__ENGINE__;
+    const a = e.ctx.peek('audio');
+    const f = a.field;
+    const phys = e.ctx.peek('physics');
+    const rows = [];
+    window.__OCC__ = rows;
+    const orig = f.occlusionAt.bind(f);
+    f.occlusionAt = (x, y, z) => {
+      const occ = orig(x, y, z);
+      if (rows.length < 4000 && phys?.raycast) {
+        const l = f.listenerPos;
+        const d = Math.hypot(x - l.x, y - l.y, z - l.z);
+        const r = { occ: +occ.toFixed(2), d: +d.toFixed(1), ly: +l.y.toFixed(2), sy: +y.toFixed(2), rays: [] };
+        for (let i = 0; i < 2; i++) {
+          const lift = i === 0 ? 0 : 0.55;
+          const ox = l.x, oy = l.y + lift, oz = l.z;
+          const dx = x - ox, dy = y + lift * 0.5 - oy, dz = z - oz;
+          const len = Math.hypot(dx, dy, dz);
+          const h = phys.raycast({ x: ox, y: oy, z: oz }, { x: dx, y: dy, z: dz }, len - 0.25, phys.MASK?.SIGHT);
+          r.rays.push(h?.hit
+            ? {
+              t: +(h.distance / len).toFixed(3), dist: +h.distance.toFixed(2),
+              surf: h.surface ?? '?', ny: +(h.normal?.y ?? 0).toFixed(2),
+              obj: h.object?.name || h.object?.userData?.kind || (h.actor ? 'ACTOR' : (h.collider ? 'COLLIDER' : 'static')),
+            }
+            : null);
+        }
+        rows.push(r);
+      }
+      return occ;
+    };
+    e.time.scale = 3;
+  });
+  console.log(`[audiotest] occwhy: ${OSEC}s …`);
+  await page.waitForTimeout(OSEC * 1000);
+  const rows = await page.evaluate(() => window.__OCC__);
+  console.log(`\n[occwhy] ${rows.length} occlusion queries sampled`);
+  const buckets = new Map();
+  let grazeNear = 0, blocked = 0, clear = 0;
+  for (const r of rows) {
+    if (r.occ >= 0.9) blocked++; else if (r.occ === 0) clear++;
+    for (const ray of r.rays) {
+      if (!ray) continue;
+      const key = `${ray.surf}/${ray.obj}`;
+      const b = buckets.get(key) ?? { n: 0, sumT: 0, sumNy: 0 };
+      b.n++; b.sumT += ray.t; b.sumNy += ray.ny;
+      buckets.set(key, b);
+      if (ray.t > 0.85) grazeNear++;
+    }
+  }
+  console.log(`  occ>=0.9 ${blocked}   occ=0 ${clear}   rays landing past 85% of the way ${grazeNear}`);
+  console.log('\n  what the rays hit          n     mean t (0=at the ear, 1=at the source)  mean normal.y');
+  const sorted = [...buckets.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 14);
+  for (const [k, v] of sorted) {
+    console.log(`  ${k.padEnd(28)} ${String(v.n).padStart(5)}   ${(v.sumT / v.n).toFixed(3)}                        ${(v.sumNy / v.n).toFixed(2)}`);
+  }
+  console.log('\n  first 15 queries in full:');
+  for (const r of rows.slice(0, 15)) console.log('   ', JSON.stringify(r));
+  console.log('[occwhy] page errors', pageErrors.slice(0, 8));
+  await browser.close();
+  process.exit(0);
+}
+
+/* ==================================================================== */
+/* --ear: WHAT ACTUALLY ARRIVES AT THE OUTPUT, ON THE LIVE PATH         */
+/* ==================================================================== */
+/**
+ * 「銃声が全然聞こえない」「爆風の音が小さい」「音がこもっている時が多い」
+ *
+ * Two passes have now answered these with numbers out of `src/audio/selftest.js`,
+ * and the player has twice said the numbers did not reach him. So this mode does
+ * not measure the synthesis. It measures the OUTPUT of a running game, one event
+ * at a time, and it exists because of one structural difference between the two:
+ *
+ *   selftest's `atDist()` is airLP -> distGain -> bus. The live path is
+ *   airLP -> occLP -> occHS -> distGain -> **PannerNode(HRTF)** -> bus, and the
+ *   two stages it leaves out are the two that only ever apply to somebody ELSE's
+ *   sound. The player's own weapon is `_playDry`, head-locked, and passes through
+ *   neither. Any loss in them is therefore invisible to the bench and lands
+ *   entirely on the ratio the complaint is about.
+ *
+ * What is measured here:
+ *   1. an analyser on `masterGain` — the real ear — sampled at 100 Hz across a
+ *      window, one event at a time, with the simulation frozen so nothing else
+ *      is playing. Own rifle, remote rifle at 40 m, the far layer at 90 and
+ *      150 m, and an airstrike blast.
+ *   2. the same, with `occlusionEnabled = false`, so the geometry's share of the
+ *      loss is a difference and not an opinion.
+ *   3. the HRTF panner's own insertion loss, rendered offline in the page
+ *      through a node configured exactly as `Emitter` configures it.
+ *   4. `muffleGain` / `muffleLP` / `deafness` sampled at 10 Hz through a live
+ *      match, because 「こもっている」 is a claim about a value over time.
+ *
+ *   node tools/audiotest.mjs --ear [--url=…] [--matchsecs=120]
+ */
+if (args.ear) {
+  const MATCHSECS = Number(args.matchsecs ?? 120);
+
+  await page.evaluate(() => {
+    const e = window.__ENGINE__;
+    const a = e.ctx.peek('audio');
+    const actx = a.actx;
+    const N = 2048;
+    const mk = (node) => {
+      const an = actx.createAnalyser();
+      an.fftSize = N;
+      an.smoothingTimeConstant = 0;
+      node.connect(an);
+      return an;
+    };
+    void mk;
+    /**
+     * EVERY SAMPLE, NOT EVERY POLL. An AnalyserNode holds the last 2048 samples
+     * and nothing else, so reading it from a `setInterval` measures whatever
+     * happened to be in the window at that instant. Under a null sink the render
+     * thread works in bursts — it produced half a second of audio between two
+     * 10 ms polls here — and a peak that falls in the gap is simply never seen.
+     * MEASURED consequence on the first audio-clock-gated run of this mode: the
+     * player's own rifle, an event `occlusionEnabled` cannot touch, came out at
+     * 0.0316 in one block and 0.0729 in the next.
+     *
+     * A ScriptProcessorNode is handed every block the graph renders. It is
+     * deprecated and it is the wrong tool for making sound; for counting it, it
+     * is the only one in a page that cannot skip.
+     */
+    const mkRec = (node) => {
+      const sp = actx.createScriptProcessor(2048, 2, 1);
+      const acc = { peak: 0, sumSq: 0, n: 0, on: false };
+      sp.onaudioprocess = (ev) => {
+        if (!acc.on) return;
+        const inp = ev.inputBuffer;
+        for (let ch = 0; ch < inp.numberOfChannels; ch++) {
+          const d = inp.getChannelData(ch);
+          for (let i = 0; i < d.length; i++) {
+            const v = d[i];
+            const av = v < 0 ? -v : v;
+            if (av > acc.peak) acc.peak = av;
+            acc.sumSq += v * v;
+            acc.n++;
+          }
+        }
+      };
+      node.connect(sp);
+      // It has to reach the destination to be pulled, and it must not be heard.
+      const sink = actx.createGain();
+      sink.gain.value = 0;
+      sp.connect(sink);
+      sink.connect(actx.destination);
+      return acc;
+    };
+    const rec = { out: mkRec(a.mixer.masterGain), world: mkRec(a.mixer.worldSum) };
+
+    // Every emitter the field hands out during a capture, with the two numbers
+    // the bench cannot see: the occlusion the raycasts found, and the gain that
+    // occlusion and the distance curve together put on the voice.
+    //
+    // The gain is RECOMPUTED rather than read off the node. `acquire` schedules
+    // it with `setValueAtTime(atten, when)` at a future time, so `gain.value`
+    // read immediately afterwards is still the PREVIOUS tenant's value — which
+    // is how the first run of this tool reported a 40 m shot at the gain of a
+    // 10 m one. The arithmetic below is `attenuationAt` and `acquire`'s occlusion
+    // term, verbatim.
+    const atten = (d) => {
+      const near = 2 / (2 + 0.85 * Math.max(0, d - 2));
+      const far = 0.055 * Math.pow(60 / Math.max(d, 60), 0.55);
+      return Math.max(near, d > 45 ? far : 0);
+    };
+    const grabs = [];
+    /**
+     * THE OCCLUSION CENSUS — 「音がこもっている時が多い」 as a percentage.
+     *
+     * `Mixer`'s muffle is one candidate for a dull mix and it is easy to read.
+     * The other one is per-voice and there are 72 of them: `acquire` puts every
+     * spatialised sound through `occLP` at `20000 * 0.021^occ`, so occ 1.0 is a
+     * 420 Hz low-pass, a -26 dB shelf and a 0.38 gain — and unlike the mixer's
+     * muffle nothing reports it. This counts how often it is on, and how hard.
+     */
+    const census = { n: 0, sumOcc: 0, hi: 0, mid: 0, lo: 0, zero: 0, refused: 0, byBus: {} };
+    window.__CENSUS__ = census;
+    const f = a.field;
+    const origAcquire = f.acquire.bind(f);
+    f.acquire = (opts) => {
+      const em = origAcquire(opts);
+      if (em) {
+        const g = atten(em.dist) * (1 - 0.62 * em.occ) * (em.userGain ?? 1);
+        grabs.push({
+          tag: em.kindTag ?? opts.tag ?? null, bus: em.busName,
+          dist: +em.dist.toFixed(1), occ: +em.occ.toFixed(2),
+          ug: +(em.userGain ?? 1).toFixed(2), g: +g.toFixed(5),
+        });
+        census.n++;
+        census.sumOcc += em.occ;
+        if (em.occ >= 0.9) census.hi++;
+        else if (em.occ >= 0.4) census.mid++;
+        else if (em.occ > 0) census.lo++;
+        else census.zero++;
+        const b = (census.byBus[em.busName] ??= { n: 0, sumOcc: 0, hi: 0 });
+        b.n++; b.sumOcc += em.occ; if (em.occ >= 0.9) b.hi++;
+      } else {
+        grabs.push({ tag: opts.tag ?? null, bus: opts.bus, refused: true });
+        census.refused++;
+      }
+      return em;
+    };
+
+    window.__EAR__ = {
+      start() {
+        grabs.length = 0;
+        for (const k in rec) {
+          const r = rec[k];
+          r.peak = 0; r.sumSq = 0; r.n = 0; r.on = true;
+        }
+      },
+      stop() {
+        for (const k in rec) rec[k].on = false;
+        const o = rec.out, w = rec.world;
+        return {
+          peak: +o.peak.toFixed(5),
+          rms: +Math.sqrt(o.sumSq / Math.max(1, o.n)).toFixed(6),
+          worldPeak: +w.peak.toFixed(5),
+          samples: o.n,
+          grabs: grabs.slice(0, 12),
+          muffle: +a.mixer.muffleGain.gain.value.toFixed(4),
+          lp: Math.round(a.mixer.muffleLP.frequency.value),
+        };
+      },
+      /** Somewhere `dist` metres from the ear on bearing `b` of eight. */
+      at(dist, b) {
+        const lp = a.field.listenerPos;
+        const ang = (b / 8) * Math.PI * 2;
+        return { x: lp.x + Math.cos(ang) * dist, y: lp.y, z: lp.z + Math.sin(ang) * dist };
+      },
+      fireOwn() {
+        const lp = a.field.listenerPos;
+        e.ctx.events.emit('weapon:fire', {
+          weapon: 'rifle', firstPerson: true,
+          origin: { x: lp.x + 0.2, y: lp.y - 0.1, z: lp.z - 0.3 }, dir: { x: 0, y: 0, z: -1 },
+        });
+      },
+      fireAt(dist, b, rounds = 1) {
+        const p = this.at(dist, b);
+        for (let i = 0; i < rounds; i++) {
+          e.ctx.events.emit('weapon:fire', { weapon: 'rifle', origin: p, dir: { x: 0, y: 0, z: -1 } });
+        }
+        return p;
+      },
+      blast(dist, radius) {
+        const p = this.at(dist, 0);
+        p.y = a.field.listenerPos.y - 1.2;
+        e.ctx.events.emit('explosion', { position: p, radius, damage: 260 });
+        return p;
+      },
+      occlusion(on) { a.setOcclusionEnabled(on); },
+      clearGates() { a.clearRateGates(); },
+      resetMix() { a.mixer.resetDynamics(); },
+      /**
+       * WAIT ON THE AUDIO CLOCK, NOT THE WALL CLOCK, AND IT IS NOT A DETAIL.
+       *
+       * Headless Chrome renders into a null sink and does not hold real time:
+       * measured here, `actx.currentTime` ran at 30 % of `performance.now()` for
+       * stretches and finished a 90 s probe 48 s in arrears. A voice scheduled at
+       * `currentTime` is rendered when the thread GETS there, so a capture window
+       * counted in wall milliseconds can close before the event has been rendered
+       * at all — which is exactly what happened on the first run of this mode:
+       * the player's own rifle measured 0.0079 in one block and 0.0598 in the
+       * next, same event, same build.
+       */
+      waitAudio(sec) {
+        const target = actx.currentTime + sec;
+        return new Promise((done) => {
+          const id = setInterval(() => {
+            if (actx.currentTime >= target) { clearInterval(id); done(+actx.currentTime.toFixed(2)); }
+          }, 15);
+        });
+      },
+      /** Block until the audio thread is keeping up, so a window means something. */
+      levelUp(timeoutMs = 30000) {
+        return new Promise((done) => {
+          const t0 = performance.now();
+          const tick = () => {
+            const a0 = actx.currentTime, w0 = performance.now();
+            setTimeout(() => {
+              const ratio = (actx.currentTime - a0) / ((performance.now() - w0) / 1000);
+              if (ratio > 0.92 || performance.now() - t0 > timeoutMs) {
+                done({ ratio: +ratio.toFixed(3), waited: Math.round(performance.now() - t0) });
+              } else tick();
+            }, 600);
+          };
+          tick();
+        });
+      },
+      state() {
+        return {
+          deaf: +a.mixer.deafness.toFixed(3),
+          muffle: +a.mixer.muffleGain.gain.value.toFixed(4),
+          lp: Math.round(a.mixer.muffleLP.frequency.value),
+          voices: a.field.stats.active, cap: a.field.stats.cap,
+        };
+      },
+    };
+  });
+
+  /* ---- 3. the panner's own insertion loss ------------------------- */
+  const panner = await page.evaluate(async () => {
+    // One noise burst, rendered twice: straight to the destination, and through
+    // a PannerNode built exactly as src/audio/spatial.js builds one, at 10 m
+    // dead ahead of a default listener. Nothing else in the graph.
+    const run = async (usePanner) => {
+      const SR = 48000;
+      const ctx = new OfflineAudioContext(2, SR, SR);
+      const b = ctx.createBuffer(1, SR * 0.2, SR);
+      const d = b.getChannelData(0);
+      let s = 12345;
+      for (let i = 0; i < d.length; i++) {
+        s = (s * 1664525 + 1013904223) >>> 0;
+        d[i] = ((s / 4294967296) * 2 - 1) * 0.5;
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = b;
+      if (usePanner) {
+        const p = ctx.createPanner();
+        p.panningModel = 'HRTF';
+        p.distanceModel = 'inverse';
+        p.refDistance = 1;
+        p.rolloffFactor = 0;
+        p.maxDistance = 10000;
+        p.coneInnerAngle = 360;
+        p.positionX ? (p.positionX.value = 0, p.positionY.value = 0, p.positionZ.value = -10)
+          : p.setPosition(0, 0, -10);
+        src.connect(p);
+        p.connect(ctx.destination);
+      } else {
+        src.connect(ctx.destination);
+      }
+      src.start(0);
+      const out = await ctx.startRendering();
+      let peak = 0, sum = 0, n = 0;
+      for (let ch = 0; ch < out.numberOfChannels; ch++) {
+        const c = out.getChannelData(ch);
+        for (let i = 0; i < c.length; i++) {
+          const v = c[i];
+          const av = v < 0 ? -v : v;
+          if (av > peak) peak = av;
+          sum += v * v; n++;
+        }
+      }
+      return { peak, rms: Math.sqrt(sum / n) };
+    };
+    const dry = await run(false);
+    const wet = await run(true);
+    return {
+      dryPeak: +dry.peak.toFixed(4), dryRms: +dry.rms.toFixed(5),
+      panPeak: +wet.peak.toFixed(4), panRms: +wet.rms.toFixed(5),
+      dbPeak: +(20 * Math.log10(wet.peak / dry.peak)).toFixed(2),
+      dbRms: +(20 * Math.log10(wet.rms / dry.rms)).toFixed(2),
+    };
+  });
+  console.log('\n[ear] HRTF PANNER INSERTION LOSS (offline, one noise burst, 10 m ahead)');
+  console.log(`  bypass  peak ${panner.dryPeak}  rms ${panner.dryRms}`);
+  console.log(`  panner  peak ${panner.panPeak}  rms ${panner.panRms}   => ${panner.dbPeak} dB peak, ${panner.dbRms} dB rms`);
+  console.log('  (the live path has this on EVERY remote sound; the player\'s own weapon has none of it)');
+
+  /* ---- 1 & 2. single events at the output, sim frozen ------------- */
+  const cases = [];
+  /**
+   * One event, three bearings, and the LOUDEST of the three is the answer.
+   *
+   * Not to flatter the number: a single trial can silently measure nothing at
+   * all (the rate gate closed, the bin had not filled, the window slipped), and
+   * a zero from a missed event is indistinguishable from a zero from a broken
+   * mix. Three bearings also spread the event across three pieces of geometry,
+   * so the occlusion-on figure is a best case rather than a lottery — which is
+   * the honest way round, because the claim under test is "even the best case is
+   * too quiet".
+   */
+  const runCase = async (label, fire, sec, trials = 3) => {
+    let best = null;
+    for (let b = 0; b < trials; b++) {
+      await page.evaluate(() => { window.__EAR__.resetMix(); window.__EAR__.clearGates(); });
+      await page.evaluate((s) => window.__EAR__.waitAudio(s), 0.6);
+      await page.evaluate(() => window.__EAR__.start());
+      await page.evaluate((s) => window.__EAR__.waitAudio(s), 0.05);
+      await fire(b * 3 + 1);
+      await page.evaluate((s) => window.__EAR__.waitAudio(s), sec);
+      const r = await page.evaluate(() => window.__EAR__.stop());
+      if (!best || r.peak > best.peak) best = r;
+    }
+    cases.push({ label, ...best });
+    return best;
+  };
+
+  for (const occOn of [true, false]) {
+    await page.evaluate((on) => {
+      window.__ENGINE__.time.scale = 0;
+      window.__EAR__.occlusion(on);
+    }, occOn);
+    const lvl = await page.evaluate(() => window.__EAR__.levelUp());
+    console.log(`\n[ear] audio clock level (occ ${occOn ? 'on' : 'off'}):`, JSON.stringify(lvl));
+    const sfx = occOn ? '' : ' [occ off]';
+
+    await runCase(`silence${sfx}`, async () => {}, 1.2, 1);
+    await runCase(`own rifle${sfx}`, () => page.evaluate(() => window.__EAR__.fireOwn()), 1.4);
+    for (const d of [10, 40, 55]) {
+      await runCase(`remote rifle @${d}m${sfx}`,
+        (b) => page.evaluate(([dd, bb]) => window.__EAR__.fireAt(dd, bb), [d, b]), 1.6);
+    }
+    // Past 60 m the near path culls and `BattleLayer` coalesces: six rounds flush
+    // the bin at once, which is the voice the player would actually be given.
+    for (const d of [90, 150]) {
+      await runCase(`far layer @${d}m${sfx}`,
+        (b) => page.evaluate(([dd, bb]) => window.__EAR__.fireAt(dd, bb, 6), [d, b]), 2.4);
+    }
+    await runCase(`blast r15 @12m${sfx}`,
+      () => page.evaluate(() => window.__EAR__.blast(12, 15)), 3.0);
+    await runCase(`blast r15 @35m${sfx}`,
+      () => page.evaluate(() => window.__EAR__.blast(35, 15)), 3.0);
+    await runCase(`grenade r6 @10m${sfx}`,
+      () => page.evaluate(() => window.__EAR__.blast(10, 6)), 2.5);
+  }
+
+  console.log('\n[ear] AT THE OUTPUT — one event at a time, simulation frozen');
+  console.log('  label                        outPeak    vs own    worldPk   emitter dist/occ/gain');
+  const own = cases.find((c) => c.label === 'own rifle')?.peak ?? 0;
+  for (const c of cases) {
+    const rel = own > 0 && c.peak > 0 ? `${(20 * Math.log10(c.peak / own)).toFixed(1)} dB` : '   -  ';
+    const g = c.grabs.filter((x) => x.bus === 'weapons').slice(0, 2)
+      .map((x) => (x.refused ? 'REFUSED' : `${x.dist}m occ${x.occ} x${x.ug} g${x.g}`)).join(' ; ');
+    console.log(
+      `  ${c.label.padEnd(26)} ${c.peak.toFixed(5)}  ${rel.padStart(8)}  ${c.worldPeak.toFixed(5)}   ${g}`
+    );
+  }
+
+  /* ---- 4. the muffle through a real match ------------------------- */
+  await page.evaluate((secs) => {
+    const e = window.__ENGINE__;
+    const a = e.ctx.peek('audio');
+    a.setOcclusionEnabled(true);
+    const c = window.__CENSUS__;
+    c.n = 0; c.sumOcc = 0; c.hi = 0; c.mid = 0; c.lo = 0; c.zero = 0; c.refused = 0; c.byBus = {};
+    e.time.scale = 3;
+    const rec = [];
+    window.__MUF__ = rec;
+    window.__MUFID__ = setInterval(() => {
+      rec.push({
+        t: +a.actx.currentTime.toFixed(2),
+        m: +a.mixer.muffleGain.gain.value.toFixed(4),
+        lp: Math.round(a.mixer.muffleLP.frequency.value),
+        hs: +a.mixer.muffleHS.gain.value.toFixed(2),
+        d: +a.mixer.deafness.toFixed(3),
+        dA: +a.mixer.buses.ambience.duck.gain.value.toFixed(3),
+        dF: +a.mixer.buses.foley.duck.gain.value.toFixed(3),
+        red: +(a.mixer.reduction ?? 0).toFixed(2),
+      });
+    }, 100);
+    void secs;
+  }, MATCHSECS);
+  console.log(`\n[ear] muffle trace: ${MATCHSECS}s of a live match at 3x …`);
+  await page.waitForTimeout(MATCHSECS * 1000);
+  const { muf, census } = await page.evaluate(() => {
+    clearInterval(window.__MUFID__);
+    return { muf: window.__MUF__, census: window.__CENSUS__ };
+  });
+  const cn = census.n || 1;
+  console.log('\n[ear] THE OCCLUSION CENSUS — every spatial voice the match handed out');
+  console.log(`  voices ${census.n} (refused ${census.refused})   mean occlusion ${(census.sumOcc / cn).toFixed(3)}`);
+  console.log(`  occ >= 0.9 (420 Hz LP, -26 dB shelf, x0.38 gain)  ${(100 * census.hi / cn).toFixed(1)}%`);
+  console.log(`  occ 0.4-0.9                                       ${(100 * census.mid / cn).toFixed(1)}%`);
+  console.log(`  occ 0-0.4                                         ${(100 * census.lo / cn).toFixed(1)}%`);
+  console.log(`  occ exactly 0 (clear line, or the layer forced it) ${(100 * census.zero / cn).toFixed(1)}%`);
+  for (const b in census.byBus) {
+    const v = census.byBus[b];
+    console.log(`    ${b.padEnd(9)} n ${String(v.n).padStart(5)}  mean occ ${(v.sumOcc / v.n).toFixed(3)}  fully blocked ${(100 * v.hi / v.n).toFixed(1)}%`);
+  }
+  const n = muf.length || 1;
+  const partOn = muf.filter((r) => r.m < 0.999).length;
+  const deep = muf.filter((r) => r.m < 0.85).length;
+  const lpDown = muf.filter((r) => r.lp < 19000).length;
+  const lp5k = muf.filter((r) => r.lp < 5000).length;
+  const worstM = muf.reduce((m, r) => Math.min(m, r.m), 1);
+  const worstLp = muf.reduce((m, r) => Math.min(m, r.lp), 20000);
+  const duckedA = muf.filter((r) => r.dA < 0.9).length;
+  console.log('\n[ear] THE MUFFLE THROUGH A MATCH (10 Hz)');
+  console.log(`  samples ${n} over ${(n / 10).toFixed(0)}s of wall time`);
+  console.log(`  muffleGain  < 0.999 for ${(100 * partOn / n).toFixed(1)}%   < 0.85 for ${(100 * deep / n).toFixed(1)}%   worst ${worstM}`);
+  console.log(`  muffleLP    < 19 kHz for ${(100 * lpDown / n).toFixed(1)}%   < 5 kHz for ${(100 * lp5k / n).toFixed(1)}%   worst ${worstLp} Hz`);
+  console.log(`  ambience duck < 0.9 for ${(100 * duckedA / n).toFixed(1)}%`);
+  const stride = Math.max(1, Math.floor(n / 30));
+  console.log('     t   muffle    lp    hs   deaf  duckA duckF   comp');
+  for (let i = 0; i < muf.length; i += stride) {
+    const r = muf[i];
+    console.log(
+      `  ${String(r.t.toFixed(1)).padStart(6)} ${r.m.toFixed(4)} ${String(r.lp).padStart(6)} ${String(r.hs).padStart(6)} ` +
+      `${r.d.toFixed(3)} ${r.dA.toFixed(3)} ${r.dF.toFixed(3)} ${String(r.red).padStart(6)}`
+    );
+  }
+
+  console.log('\n[ear] final', JSON.stringify(await sampleOrNull(page)));
+  console.log('[ear] page errors', pageErrors.slice(0, 8));
+  await browser.close();
+  process.exit(0);
+}
+
+/* ==================================================================== */
 /* --collapse: THE CATHEDRAL, AND WHAT IT DOES TO THE POOL              */
 /* ==================================================================== */
 /**
