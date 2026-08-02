@@ -1164,7 +1164,25 @@ export const WEAPON_DEFS = {
      * rather than a satchel's — the C4 is 22 m / 600, which is the round ending
      * three metres from your face; this is lethal inside 3 m, painful at 7 and
      * survivable at the rim. */
-    blastRadius: 7.5,
+    /**
+     * 7.5 -> 11.5 m — 「グレネードの爆破範囲を広げて」.
+     *
+     * The RADIUS is what was asked for and the radius is what moves; the
+     * damage number is unchanged, so this is a wider blast rather than a
+     * stronger one. What that means in practice comes out of the quadratic
+     * falloff `_damageActors` applies, (1 - d/r)^2:
+     *
+     *          d = 3 m    d = 6 m    d = 7.5 m   d = 10 m
+     *   7.5 m    59 dmg     20 dmg      0           0     (nothing past 7.5)
+     *   11.5 m   93 dmg     40 dmg     18 dmg       3
+     *
+     * — so a man who used to be safe at 8 m is now hurt, and a man at 3 m goes
+     * from surviving on 41 hp to surviving on 7. The lethal core is still
+     * about 3 m and it still cannot one-shot at the rim, which is the property
+     * that keeps a frag from being the whole game. It stays well under the
+     * C4's 22 m (match/rules.js), which is the round ending.
+     */
+    blastRadius: 11.5,
     blastDamage: 165,
     /* --- throwing ------------------------------------------------------- */
     /**
