@@ -1692,8 +1692,10 @@ export class Agent {
      * he does with the trigger, and the bench says the wrong answer is loud:
      * 447 rounds into the glacis against the 150 he carries. So
      *
-     *   • he fires only on `armourWorth === 1`, which is "the engine deck is
-     *     presented" and nothing else;
+     *   • he fires on `armourWorth === 1` — "the engine deck is presented" —
+     *     or on `armourWorth === 3`, which is SUPPRESSION: the hull just fired
+     *     or is squatting on his objective, `AiSystem` cleared him to answer
+     *     it visibly, and the 0.22 glacis multiplier is the ration;
      *   • he does not put SUPPRESSING fire on a last known position — the whole
      *     point of covering fire is that the man behind the wall might be hit
      *     and might flinch, and a tank does neither;
@@ -1966,8 +1968,12 @@ export class Agent {
        * opens his cone with his own speed, so advancing fire is suppression
        * rather than a free kill, and he moves slower while he does it.
        */
+      // armourWorth 3 is SUPPRESSION cleared by `AiSystem.armourWorth` — the
+      // hull provoked it, and rounds sparking off a glacis are the half of the
+      // anti-armour policy the player can actually watch.
       const shootMoving = tr.exposure > 0.5 && this.targetVisible && this.hasTarget
-        && dist < this.weaponRange && (!armour || this.armourWorth === 1);
+        && dist < this.weaponRange
+        && (!armour || this.armourWorth === 1 || this.armourWorth === 3);
       this.desiredSpeed = shootMoving ? 2.6 + tr.aggression * 1.2 : 4.3;
       this.crouch = false;
       this.wantFire = shootMoving;
@@ -2013,7 +2019,7 @@ export class Agent {
       this.crouch = this.cover ? !this.cover.high || !this.peeking : false;
       this.aimWeight = this.peeking ? 1 : 0.55;
       this.wantFire = this.peeking && this.targetVisible && this.hasTarget && dist < this.weaponRange
-        && (!armour || this.armourWorth === 1);
+        && (!armour || this.armourWorth === 1 || this.armourWorth === 3);
       /**
        * SUPPRESSING FIRE at the last known spot without a clean shot: a flat 35 %
        * coin flip for everybody became trigger discipline. A sprayer hoses the

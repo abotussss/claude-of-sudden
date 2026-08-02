@@ -265,7 +265,28 @@ const MIN_ROUTE = 16;
  * is worse than one that never tried. Nothing here adds collision or geometry
  * to the world; it only ever takes some away.
  */
-const PLOUGH_TOP = 1.8;
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * RAISED FROM THE GLACIS TOP (1.8) TO 3.2 — 「とにかく戦車の踏破力を高くして
+ * 基本何でも破壊して進めるようにして」, the player's THIRD report on this
+ * ────────────────────────────────────────────────────────────────────────────
+ * The glacis rule was the polite reading and he has now rejected it three
+ * times: the policy he is asking for is BY DEFAULT IT DESTROYS AND ADVANCES.
+ * So the ceiling is no longer the hull's own plate height — it is "anything
+ * the erase machinery can actually erase": market stalls, pillars, posts,
+ * stacked crates, every piece of street furniture with a `prop_*` instance
+ * behind it, up to 3.2 m.
+ *
+ * 3.2 AND NOT MORE, because the ceiling is also `PASS_TOP` — what a route's
+ * side probe drives past — and the cathedral's piers measure 3.39 m
+ * (`_ploughscan`, seed 7). A ceiling over that and the approach, which is
+ * baked while the cathedral is still STANDING, could measure a street through
+ * the nave. What still stops the hull is unchanged in kind: mass with no
+ * instance behind it (the enterable buildings, the cathedral, the boundary
+ * wall, the merged masonry sheds) cannot be erased and now TRIMS the route at
+ * bake instead of being ghosted through — @see `_trimAtBlockers`.
+ */
+const PLOUGH_TOP = 3.2;
 /** Under this the hull simply drives over it — a kerb is not an event. */
 const PLOUGH_MIN = 0.3;
 
@@ -315,10 +336,15 @@ const PLOUGH_MIN = 0.3;
 /** Mass no taller than this over the road is not a wall to a side probe: the
  *  hull either erases it (@see `PLOUGH_TOP`) or drives over it. */
 const PASS_TOP = PLOUGH_TOP;
-/** The step a 40 t tracked vehicle actually gets its nose over. */
-const CLIMB_TOP = 1.0;
-/** Nose up or down the ride is allowed to reach. 24 degrees. */
-const CLIMB_PITCH = 0.42;
+/**
+ * The step the hull gets its nose over — RAISED 1.0 -> 1.6 on the same third
+ * report: 「戦車は乗り越え性能高くして」. 1.6 is over any sandbag line, barrier,
+ * crate stack or rubble crest this map dresses a street with, and short of the
+ * 2.6 m masonry shed class that `_trimAtBlockers` now stops the route at.
+ */
+const CLIMB_TOP = 1.6;
+/** Nose up or down the ride is allowed to reach. ~30 degrees (was 24). */
+const CLIMB_PITCH = 0.52;
 /** How far fore and aft of the origin the track run bears on the ground. */
 const SUPPORT = HULL_L * 0.42;
 /** Metres the road may fall per metre travelled — the slope the lower envelope
@@ -823,7 +849,9 @@ export class Armour {
     const d = this._bv2 ?? (this._bv2 = new THREE.Vector3());
     const MASK = physics.MASK.WORLD;
     let travelled = 0;
-    for (let iter = 0; iter < 4; iter++) {
+    // 6 resumes, not 4: with `PASS_TOP` at 3.2 a dressed street can put more
+    // passable mass in one probe's way than the old ceiling ever could.
+    for (let iter = 0; iter < 6; iter++) {
       o.set(ox + dx * travelled, oy, oz + dz * travelled);
       d.set(dx, 0, dz);
       const h = physics.raycast(o, d, max - travelled, MASK);
@@ -1017,7 +1045,7 @@ export class Armour {
    * inside `ZONE_STANDOFF` of any capture centre, and each kept only if what
    * survives still reaches its point. Every drop is printed with its reason.
    */
-  _bakeLegs(spec, world, physics) {
+  _bakeLegs(spec, world, physics, props) {
     const zones = this._zoneCentres();
     const legs = [];
     const w = new THREE.Vector3();
@@ -1025,6 +1053,7 @@ export class Armour {
     const approach = this._bakePath(pts, world, physics);
     if (!approach) return null;
     this._trimToStandoff(approach, zones, null);
+    this._trimAtBlockers(approach, physics, props);
     if (approach.n < 4 || approach.length < MIN_ROUTE) return null;
     approach.zone = null;
     legs.push(approach);
@@ -1051,6 +1080,7 @@ export class Armour {
       path.X[0] = hub.x; path.Z[0] = hub.z; path.Y[0] = hub.y;
       path.ROAD[0] = Math.min(path.ROAD[0], hub.y);
       this._trimToStandoff(path, zones, target);
+      this._trimAtBlockers(path, physics, props);
       const d = path.n
         ? Math.hypot(path.X[path.n - 1] - target.x, path.Z[path.n - 1] - target.z)
         : Infinity;
@@ -1066,6 +1096,76 @@ export class Armour {
       legs.push(path);
     }
     return legs;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE OTHER HALF OF RAISING `PASS_TOP`: WHAT CANNOT BE ERASED STOPS THE ROUTE
+   * ────────────────────────────────────────────────────────────────────────
+   * With the ceiling at 3.2 a side probe resumes past a 2.6 m masonry shed as
+   * happily as past a stacked-crate stall — and only one of those two can the
+   * hull actually remove. A route baked through the other is a hull sliding
+   * through a wall that is still standing afterwards, which the plough's own
+   * header names as the worst outcome there is.
+   *
+   * So every leg is re-read after the standoff trim: a rise over the road that
+   * is above `CLIMB_TOP` (it cannot be climbed), no higher than `PASS_TOP`
+   * (it is standing mass, not a balcony the ground ray caught — over
+   * `PASS_TOP` is the `_bakeRide` roof rule and was always ridden under), and
+   * with NO `prop_*` instance under the corridor tall enough to account for
+   * it (it cannot be ploughed) is a wall in the driving line. The leg is cut a
+   * hull length short of it and says so.
+   *
+   * MEASURED, seed 7: BLUE's spoke to C dead-ended nose-against exactly this —
+   * a 4.2 x 2.6 x 3.6 m merged-masonry shed at world (-37, 19) — and the hull
+   * then sat against it for the rest of the match, which is the picture the
+   * player's report calls スタック.
+   */
+  _trimAtBlockers(p, physics, props) {
+    const grid = props?.length ? this._propGridOf(props) : null;
+    const MASKW = physics.MASK.WORLD;
+    const o = this._bv ?? (this._bv = new THREE.Vector3());
+    const d = this._bv2 ?? (this._bv2 = new THREE.Vector3());
+    for (let i = 0; i < p.n; i++) {
+      const rise = p.Y[i] - p.ROAD[i];
+      if (rise <= CLIMB_TOP + 0.05 || rise > PASS_TOP) continue;
+      let erasable = false;
+      if (grid) {
+        const cell = grid.cell;
+        const c0 = Math.floor((p.X[i] - PLOUGH_HALF) / cell);
+        const c1 = Math.floor((p.X[i] + PLOUGH_HALF) / cell);
+        const d0 = Math.floor((p.Z[i] - PLOUGH_HALF) / cell);
+        const d1 = Math.floor((p.Z[i] + PLOUGH_HALF) / cell);
+        for (let cx = c0; cx <= c1 && !erasable; cx++) {
+          for (let cz = d0; cz <= d1 && !erasable; cz++) {
+            const bucket = grid.g.get(cx * 65536 + cz);
+            if (!bucket) continue;
+            for (let k = 0; k < bucket.length; k++) {
+              const q = bucket[k];
+              const dx = q.x - p.X[i];
+              const dz = q.z - p.Z[i];
+              if (dx * dx + dz * dz > PLOUGH_HALF * PLOUGH_HALF) continue;
+              // Its top over the ROAD — the same measurement the plough makes.
+              o.set(q.x, p.ROAD[i] + 30, q.z);
+              d.set(0, -1, 0);
+              const t = physics.raycast(o, d, 45, MASKW);
+              if (!t?.hit) continue;
+              const top = 30 - t.distance;
+              // The instance has to ACCOUNT for the rise: a barrel beside a
+              // shed must not license driving through the shed.
+              if (top >= rise - 0.5 && top <= PLOUGH_TOP) { erasable = true; break; }
+            }
+          }
+        }
+      }
+      if (erasable) continue;
+      const cut = Math.max(0, i - Math.ceil(HULL_L / STEP));
+      p.n = cut;
+      p.length = cut > 0 ? p.S[cut - 1] : 0;
+      p.stop = `blocked by ${rise.toFixed(1)}m of unremovable mass at (${p.X[i].toFixed(0)},${p.Z[i].toFixed(0)})`;
+      p.trimmed = true;
+      return;
+    }
   }
 
   /** Capture centres in world space, D included. @see `_logZones` on `allZones`. */
@@ -1102,7 +1202,7 @@ export class Armour {
 
   _buildTank(spec, world, physics, props) {
     const rng = this.rng.fork();
-    const legs = this._bakeLegs(spec, world, physics);
+    const legs = this._bakeLegs(spec, world, physics, props);
     if (!legs) {
       console.error(
         `[tank] ${spec.id}: no drivable route from the authored polyline — SORTIE DROPPED. ` +
@@ -1169,6 +1269,16 @@ export class Armour {
        * shot from behind buries itself in the turret at 0.4.
        */
       aimPoint: new THREE.Vector3(),
+      /**
+       * WHEN THE MAIN GUN LAST FIRED, in `time.elapsed` seconds — the fourth
+       * field of the `ai.vehicles` contract. `AiSystem.armourWorth` reads it
+       * for the suppression clause: a tank that has just fired on your side of
+       * the street is not ignorable, and the player judges the AI by what he
+       * can SEE it doing. Written by `_mainGun` and `_coax`, reset by `_roll`.
+       */
+      firedAt: -1e9,
+      /** Contact-breach cadence — @see the `damageAt` call in `_drive`. */
+      breachIn: 0,
       /** THE WHEEL. `legs[0]` is the approach and its end is the hub; every
        *  other leg is a spoke off it, carrying the `zone` it stands off. */
       legs,
@@ -2603,6 +2713,8 @@ export class Armour {
     st.frags = 0; st.fragDmg = 0;
     st.liveT = 0; st.razed = 0; st.breaches = 0; st.legs = 0;
     tank.lastHitAt = -1e9;
+    tank.firedAt = -1e9;
+    tank.breachIn = 0;
     tank._woundFrame = -1;
     tank._woundSource = null;
     tank.root.visible = true;
@@ -2840,6 +2952,52 @@ export class Armour {
       }
       tank.s += speed * dt * tank.legDir;
       this._checkPlough(tank);
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * 「家なども砲撃で破壊して」 — AND THE GLACIS GETS THE HOUSES THE SHELLS MISS
+       * ────────────────────────────────────────────────────────────────────
+       * `world.damageAt` is the cache houses' own breach entry point and the
+       * shell already fires it (@see `_mainGun`) — but a shell goes where a
+       * TARGET is, and the baseline measured a whole match with six breachable
+       * walls on the map and not one opened. The hull itself passes within
+       * `reach` (3.4 m) of one of those walls on its own routes, so the nose
+       * now knocks: a breachable elevation inside the glacis's sweep comes
+       * open ON CONTACT, exactly as a 40 t vehicle scraping a house front
+       * should read. Four times a second while moving, and `damageAt` is six
+       * clamped distance tests that answer null on almost all of them —
+       * nothing is searched for and nothing allocated.
+       */
+      tank.breachIn -= dt;
+      if (tank.breachIn <= 0) {
+        tank.breachIn = 0.25;
+        const world = this._world ?? (this._world = this.ctx.peek('world'));
+        if (world?.damageAt) {
+          const nose = this._v;
+          nose.set(
+            tank.position.x + Math.sin(tank.yaw) * PLOUGH_NOSE,
+            tank.position.y + 1.0,
+            tank.position.z + Math.cos(tank.yaw) * PLOUGH_NOSE
+          );
+          const breach = world.damageAt(nose, 1);
+          if (breach) {
+            tank.stats.breaches++;
+            tank.ploughDrag = PLOUGH_DRAG;
+            const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
+            if (fx && breach.position) {
+              fx.dust?.(breach.position.x, breach.position.y + 1.0, breach.position.z, 2.6);
+              fx.hazeRing?.(breach.position.x, breach.position.y + 0.6, breach.position.z, 2.4, 14, 0.45, 1.6);
+            }
+            const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+            audio?.play?.('strike_rubble', breach.position ?? tank.position, {
+              level: 0.8, dur: 2.0, maxDist: 200, gain: 1.4, occlusion: 0.3,
+            });
+            console.info(
+              `[tank] ${tank.name} BREACHED ${breach.name ?? breach.id} BY CONTACT at ` +
+                `${nose.x.toFixed(1)}, ${nose.z.toFixed(1)}`
+            );
+          }
+        }
+      }
       tank.wheelSpin -= (speed * dt) / 0.44;
       const done = tank.legDir > 0 ? tank.s >= p.length : tank.s <= 0;
       if (done) {
@@ -3194,6 +3352,9 @@ export class Armour {
    */
   _mainGun(tank, target) {
     const phys = this.physics;
+    // The suppression clause in `AiSystem.armourWorth` reads this: a hull that
+    // has just fired is a hull the infantry is allowed to be SEEN answering.
+    tank.firedAt = this.ctx.time.elapsed;
     const from = this._muzzle(tank, this._v2);
     const dir = this._v;
     dir.set(0, 0, 1).transformDirection(tank.gun.matrixWorld);
@@ -3285,6 +3446,7 @@ export class Armour {
   /** The coaxial machine gun: one real round through `physics`, per shot. */
   _coax(tank, target) {
     const phys = this.physics;
+    tank.firedAt = this.ctx.time.elapsed; // @see the note in `_mainGun`
     const from = this._muzzle(tank, this._v2);
     from.y -= 0.12;
     const p = target.position;
@@ -3711,6 +3873,8 @@ export class Armour {
       tank.targetZone = null;
       tank.yaw = tank.legs[0].YAW[0];
       tank.health = RULES.tankHealth;
+      tank.firedAt = -1e9;
+      tank.breachIn = 0;
       tank.root.visible = false;
       tank.uniforms.uT.value = -1;
       tank.uniforms.uAnim.value = 1;

@@ -124,6 +124,42 @@ const ARMOUR_BIAS = 0.5;
  * untouched.
  */
 const ARMOUR_NOTICE = 40;
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * SUPPRESSION AGAINST ARMOUR — the engagement the player can actually SEE
+ * ────────────────────────────────────────────────────────────────────────────
+ * The deck/frag policy is correct and was measured doing its job — and the
+ * player still reports 「ちゃんと戦車を敵として認識して壊すようにAIにインプットして」,
+ * his third time, because the policy's success is INVISIBLE from his seat:
+ * `armourWorth` refuses 88-90 % of the men in range, and on seed 12 the RED
+ * hull finished a whole match with 0 rounds ever fired at it. Thirty men
+ * ignoring a tank that is shelling their objective reads as a bug whatever the
+ * bench says.
+ *
+ * So there is now a THIRD worth (3): fire is allowed as SUPPRESSION — tracers
+ * and sparks on the glacis, no expectation of effect — but only when the tank
+ * has made itself unignorable, and only from the men whose personality hoses:
+ *
+ *   • the hull fired its guns inside `ARMOUR_PROVOKED` seconds (a tank that
+ *     just killed your squadmate is not scenery), OR it is parked within
+ *     `ARMOUR_OBJECTIVE_R` of the man's own objective;
+ *   • the man's `traits.trigger` is under `ARMOUR_HOSE` — the sprayers, the
+ *     same men who already hose windows on the suppression coin flip. The
+ *     disciplined half of the roster still holds its fire, so the old refusal
+ *     is loosened, not deleted;
+ *   • and a suppressing man NEVER beats a live human contact: worth-3 armour
+ *     is scored at `ARMOUR_SUPPRESS_BIAS` times its distance where a real
+ *     shot on the deck is scored at `ARMOUR_BIAS` times. A man with a rifleman
+ *     in his face keeps fighting the rifleman; a man with nothing else to
+ *     shoot answers the tank.
+ *
+ * The glacis eats these rounds at 0.22 — that is the point. The kill still
+ * comes from the deck and the frags; this is the tank being VISIBLY fought.
+ */
+const ARMOUR_PROVOKED = 6.0;
+const ARMOUR_OBJECTIVE_R = 26;
+const ARMOUR_HOSE = 0.62;
+const ARMOUR_SUPPRESS_BIAS = 1.35;
 
 export class AiSystem {
   static id = 'ai';
@@ -255,7 +291,9 @@ export class AiSystem {
      *     { position:Vector3, alive:boolean, team:0|1,
      *       isVehicle:true,            // opts in to the armour rules below
      *       aimPoint:Vector3,          // WHERE to shoot it — @see `actorChest`
-     *       yaw:number }               // its heading — @see `armourWorth`
+     *       yaw:number,                // its heading — @see `armourWorth`
+     *       firedAt:number }           // when its guns last fired, elapsed s —
+     *                                  // the suppression clause reads it
      *
      * `match` owns the roster, so it hands the LIVE ARRAY over once
      * (`this.ai.vehicles = this.tank.tanks`) and every entry's `alive` flag does
@@ -898,7 +936,9 @@ export class AiSystem {
    * `pickVisibleHostile`'s rotating cursor), and it is arithmetic — no ray, no
    * allocation.
    *
-   * @returns 0 ignore it · 1 shoot it (the deck is there) · 2 frag it
+   * @returns 0 ignore it · 1 shoot it (the deck is there) · 2 frag it ·
+   *          3 suppress it (fire allowed, effect not expected — @see
+   *          ARMOUR_PROVOKED; the wound arithmetic is the glacis's problem)
    */
   armourWorth(agent, v) {
     if (!agent || !v || v.alive !== true) return 0;
@@ -923,6 +963,13 @@ export class AiSystem {
     /* ---- 2. the frag ------------------------------------------------- */
     if (agent.hasGrenade && agent.grenadeCooldown <= 0 &&
         d > ARMOUR_FRAG_MIN && d < ARMOUR_FRAG_MAX) return 2;
+
+    /* ---- 3. suppression — @see the ARMOUR_PROVOKED note --------------- */
+    if (d < agent.weaponRange && (agent.traits?.trigger ?? 1) < ARMOUR_HOSE) {
+      if (this.ctx.time.elapsed - (v.firedAt ?? -1e9) < ARMOUR_PROVOKED) return 3;
+      const o = agent.objective?.position;
+      if (o && Math.hypot(p.x - o.x, p.z - o.z) < ARMOUR_OBJECTIVE_R) return 3;
+    }
 
     return 0;
   }
@@ -966,9 +1013,14 @@ export class AiSystem {
     if (cur && cur.alive !== false && cur.dead !== true && this.targetable(cur) &&
         this.isHostile(agent, cur)) {
       const d = this._sightTo(agent, cur, eye, fx, fz, cone);
-      if (d >= 0 && (cur.isVehicle !== true || this.armourWorth(agent, cur) > 0)) {
+      // worth 3 is suppression: kept as a target, but at the WEAK bias, so any
+      // real man who shows himself takes over. @see ARMOUR_SUPPRESS_BIAS.
+      const curWorth = cur.isVehicle === true ? this.armourWorth(agent, cur) : 0;
+      if (d >= 0 && (cur.isVehicle !== true || curWorth > 0)) {
         best = cur;
-        bestScore = cur.isVehicle === true ? d * ARMOUR_BIAS : d;
+        bestScore = cur.isVehicle === true
+          ? d * (curWorth === 3 ? ARMOUR_SUPPRESS_BIAS : ARMOUR_BIAS)
+          : d;
       }
     }
     let checks = 0;
@@ -978,10 +1030,13 @@ export class AiSystem {
       checks++;
       // The armour test is arithmetic and the sight test is a ray, so the cheap
       // one goes first: a hull nobody has a shot on costs no line of sight.
-      if (t.isVehicle === true && this.armourWorth(agent, t) <= 0) continue;
+      const worth = t.isVehicle === true ? this.armourWorth(agent, t) : 0;
+      if (t.isVehicle === true && worth <= 0) continue;
       const d = this._sightTo(agent, t, eye, fx, fz, cone);
       if (d < 0) continue;
-      const score = t.isVehicle === true ? d * ARMOUR_BIAS : d;
+      const score = t.isVehicle === true
+        ? d * (worth === 3 ? ARMOUR_SUPPRESS_BIAS : ARMOUR_BIAS)
+        : d;
       if (score < bestScore) {
         best = t;
         bestScore = score;

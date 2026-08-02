@@ -1,0 +1,208 @@
+/**
+ * REPRODUCE WHAT THE PLAYER SEES — 「戦車が障害物を乗り越えないし破壊していない
+ * スタックしてる」, his THIRD report, so the aggregates are not to be trusted.
+ *
+ * A real match, the armour armed by its own cathedral beat (nothing fired by
+ * hand), fast-forwarded only until the hulls ROLL and then watched at 1x with a
+ * chase camera on one hull: a screenshot every ~2.5 game seconds and a
+ * kinematics sample every 0.5, so a stall is a visible run of frames AND a
+ * window in the log with a position on it to feed `_whatbox.mjs`.
+ *
+ * Usage: node _stallwatch.mjs [url] [seed] [follow=RED|BLUE] [watchSecs]
+ */
+import { chromium } from 'playwright';
+import { mkdirSync } from 'node:fs';
+
+const URL = process.argv[2] ?? 'http://127.0.0.1:4423/';
+const SEED = process.argv[3] ?? '7';
+const FOLLOW = process.argv[4] ?? 'RED';
+const WATCH = Number(process.argv[5] ?? 150);
+const SHOTS = `./shots/stall/${SEED}-${FOLLOW}`;
+mkdirSync(SHOTS, { recursive: true });
+
+const b = await chromium.launch({
+  headless: true,
+  args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--mute-audio'],
+});
+const page = await b.newPage({ viewport: { width: 1024, height: 640 } });
+const errs = [];
+const tanklog = [];
+page.on('pageerror', (e) => errs.push(String(e.message)));
+page.on('console', (m) => {
+  const t = m.text();
+  if (t.includes('[tank]')) tanklog.push(t.slice(0, 300));
+});
+await page.goto(`${URL}?capture=1&seed=${SEED}`, { waitUntil: 'domcontentloaded' });
+await page.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
+
+/* fast-forward the match until the armour rolls (its own beat sheet) */
+const rolled = await page.evaluate(async () => {
+  const e = window.__ENGINE__;
+  const m = e.ctx.peek('match');
+  const ai = e.ctx.peek('ai');
+  const player = e.ctx.peek('player');
+  e.input.frozen = true;
+  e.input.enabled = false;
+  player?.setControlEnabled?.(false);
+  ai?.protect?.(player, 1e9);
+  e.ctx.peek('ui')?.setHudVisible?.(false);
+  e.ctx.viewScene.visible = false;
+  e.time.scale = 10;
+  const t0 = performance.now();
+  const phases = [];
+  let lastPhase = '';
+  while (performance.now() - t0 < 600000) {
+    await new Promise((r) => requestAnimationFrame(r));
+    const a = m.tank;
+    if (a && a.tanks.some((t) => t.state !== 'parked')) break;
+    if (m.phase !== lastPhase) {
+      lastPhase = m.phase;
+      phases.push(`${m.phase}@${m.roundClock?.toFixed?.(0)}`);
+    }
+  }
+  e.time.scale = 1;
+  const a = m.tank;
+  return {
+    phase: m.phase, clock: +m.roundClock.toFixed(1), phases,
+    states: a ? a.tanks.map((t) => `${t.id}:${t.state}`) : [],
+  };
+});
+console.log('[stallwatch] armour rolled at', JSON.stringify(rolled));
+if (!rolled.states.some((s) => !s.endsWith(':parked'))) {
+  console.log('[stallwatch] NO SORTIE — match ended first. tanklog:');
+  for (const l of tanklog) console.log('   ', l);
+  await b.close();
+  process.exit(1);
+}
+
+/* watch at 1x: sample every 0.5 s, screenshot every 2.5 s, chase camera */
+await page.evaluate(({ FOLLOW }) => {
+  const e = window.__ENGINE__;
+  const m = e.ctx.peek('match');
+  window.__W = {
+    samples: [], last: 0, t0: e.time.elapsed, FOLLOW,
+    events: [],
+  };
+  e.ctx.events.on('match:tank', (ev) => {
+    window.__W.events.push(`${(e.time.elapsed - window.__W.t0).toFixed(1)}s ${ev.id}:${ev.phase}`);
+  });
+  window.__CAM = () => {
+    const t = m.tank.tanks.find((x) => x.id === FOLLOW) ?? m.tank.tanks[0];
+    const player = e.ctx.peek('player');
+    const ph = e.ctx.peek('physics');
+    if (!t || t.state === 'parked') return false;
+    const a = t.yaw + Math.PI * 0.82; // behind-left
+    const d = 13;
+    const x = t.position.x + Math.sin(a) * d;
+    const z = t.position.z + Math.cos(a) * d;
+    const g = ph.groundHeight(x, z, 60);
+    const y = (Number.isFinite(g) ? g : t.position.y) + 0.1;
+    const v = m.sites[0].position.clone().set(x, y, z);
+    const dx = t.position.x - x;
+    const dz = t.position.z - z;
+    const dy = t.position.y + 1.8 - (y + 1.62);
+    player.respawnAt(v, Math.atan2(-dx, -dz));
+    player.movement.pitch = Math.asin(dy / Math.hypot(dx, dy, dz));
+    return true;
+  };
+  window.__SAMPLE = () => {
+    const W = window.__W;
+    const now = e.time.elapsed - W.t0;
+    for (const t of m.tank.tanks) {
+      W.samples.push({
+        t: +now.toFixed(1), id: t.id, st: t.state, leg: t.legIx, dir: t.legDir,
+        s: +t.s.toFixed(1), x: +t.position.x.toFixed(1), z: +t.position.z.toFixed(1),
+        y: +t.position.y.toFixed(2),
+        tz: t.targetZone, hp: Math.round(t.health),
+        tgt: t.target ? 1 : 0, drag: +(t.ploughDrag ?? 0).toFixed(2),
+      });
+    }
+    return now;
+  };
+}, { FOLLOW });
+
+let shotN = 0;
+let lastShot = -99;
+let lastSample = -99;
+let now = 0;
+const wall0 = Date.now();
+while (now < WATCH && Date.now() - wall0 < WATCH * 1400 + 120000) {
+  await page.waitForTimeout(120);
+  now = await page.evaluate(() => {
+    const e = window.__ENGINE__;
+    return e.time.elapsed - window.__W.t0;
+  });
+  if (now - lastSample >= 0.5) {
+    lastSample = now;
+    await page.evaluate(() => window.__SAMPLE());
+  }
+  if (now - lastShot >= 2.5) {
+    lastShot = now;
+    const ok = await page.evaluate(() => window.__CAM());
+    if (ok) {
+      await page.waitForTimeout(80);
+      await page.screenshot({ path: `${SHOTS}/${String(shotN).padStart(3, '0')}-t${now.toFixed(0)}.png` });
+      shotN++;
+    }
+  }
+  const done = await page.evaluate(() => {
+    const m = window.__ENGINE__.ctx.peek('match');
+    return m.phase !== 'live' || m.tank.tanks.every((t) => t.state === 'parked' || t.state === 'dead');
+  });
+  if (done && now > 30) break;
+}
+
+const out = await page.evaluate(() => window.__W);
+await b.close();
+
+/* ---- stall analysis ------------------------------------------------------ */
+const byId = {};
+for (const s of out.samples) (byId[s.id] ?? (byId[s.id] = [])).push(s);
+for (const id of Object.keys(byId)) {
+  const rows = byId[id];
+  console.log(`\n===== ${id} — ${rows.length} samples =====`);
+  let stallStart = null;
+  let advanceT = 0;
+  let slowT = 0;
+  const stalls = [];
+  for (let i = 1; i < rows.length; i++) {
+    const a = rows[i - 1];
+    const c = rows[i];
+    const dt = c.t - a.t;
+    if (dt <= 0) continue;
+    const v = Math.hypot(c.x - a.x, c.z - a.z) / dt;
+    if (c.st === 'advance') {
+      advanceT += dt;
+      if (v < 0.35) {
+        slowT += dt;
+        if (stallStart === null) stallStart = { t: a.t, x: c.x, z: c.z, leg: c.leg, tz: c.tz };
+      } else if (stallStart !== null) {
+        const len = a.t - stallStart.t;
+        if (len >= 3) stalls.push({ ...stallStart, len: +len.toFixed(1) });
+        stallStart = null;
+      }
+    } else if (stallStart !== null) {
+      const len = a.t - stallStart.t;
+      if (len >= 3) stalls.push({ ...stallStart, len: +len.toFixed(1) });
+      stallStart = null;
+    }
+  }
+  if (stallStart !== null) {
+    const len = rows[rows.length - 1].t - stallStart.t;
+    if (len >= 3) stalls.push({ ...stallStart, len: +len.toFixed(1) });
+  }
+  console.log(`  advance time ${advanceT.toFixed(0)}s, under-0.35m/s inside it ${slowT.toFixed(0)}s (${advanceT ? ((slowT / advanceT) * 100).toFixed(0) : 0}%)`);
+  if (stalls.length) {
+    console.log('  STALLS >= 3s while ordered to MOVE:');
+    for (const st of stalls) console.log(`    t=${st.t}s for ${st.len}s at (${st.x}, ${st.z}) leg=${st.leg} target=${st.tz}`);
+  } else console.log('  no >=3s stall while ordered to move');
+  const states = {};
+  for (const r of rows) states[r.st] = (states[r.st] ?? 0) + 1;
+  console.log('  state census:', JSON.stringify(states));
+  console.log('  last:', JSON.stringify(rows[rows.length - 1]));
+}
+console.log('\nevents:', out.events.join('  '));
+console.log('\ntank console lines:');
+for (const l of tanklog) console.log('   ', l);
+if (errs.length) console.log('PAGEERRORS:', errs);
+console.log(`\n${shotN} screenshots in ${SHOTS}`);
