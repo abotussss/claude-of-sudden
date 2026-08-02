@@ -24,12 +24,32 @@ export const JUMP_APEX = 0.6;
 /** v = sqrt(2 g h) — solved from the apex so tuning the apex is meaningful. */
 export const JUMP_SPEED = Math.sqrt(2 * Math.abs(GRAVITY) * JUMP_APEX);
 
+/**
+ * EVERYBODY MOVES A LITTLE SLOWER ON FOOT — 「キャラ全体的にもう少し足をおそくして
+ * 欲しい 少しだけ」.
+ *
+ * 少しだけ, so it is 8%, applied as ONE factor to every ground speed below
+ * rather than as five retyped numbers: stand, crouch, prone, sprint and
+ * tactical sprint all scale together, so the relationships the whole feel is
+ * built on (a crouch is 53% of a walk, a sprint 153% of one) are preserved
+ * exactly. Anything that reads a speed reads it through these constants.
+ *
+ *   stand   4.57 -> 4.20      crouch  2.44 -> 2.24     prone   1.01 -> 0.93
+ *   sprint  7.01 -> 6.45      tac     8.38 -> 7.71
+ *
+ * NOT the weapon term. `weapons.moveScale` multiplies on top of this in
+ * `targetSpeed()` and is untouched, so the knife is still 18% faster than a
+ * rifle and the LMG is still 22% slower — those are per-weapon decisions and
+ * this is the baseline they are decisions about.
+ */
+export const FOOT_SPEED = 0.92;
+
 export const STANCE = {
   stand: {
     name: 'stand',
     height: UNITS.playerHeight, // 1.78
     eye: UNITS.playerHeight - UNITS.eyeOffset, // 1.66
-    speed: 4.57,
+    speed: 4.57 * FOOT_SPEED,
     stepHeight: 0.42,
     strideLength: 1.48,
   },
@@ -37,7 +57,7 @@ export const STANCE = {
     name: 'crouch',
     height: UNITS.playerCrouchHeight, // 1.12
     eye: UNITS.playerCrouchHeight - 0.1, // 1.02
-    speed: 2.44,
+    speed: 2.44 * FOOT_SPEED,
     stepHeight: 0.3,
     strideLength: 1.05,
   },
@@ -45,15 +65,15 @@ export const STANCE = {
     name: 'prone',
     height: 0.7, // capsule floor: 2 * radius = 0.64
     eye: 0.4,
-    speed: 1.01,
+    speed: 1.01 * FOOT_SPEED,
     stepHeight: 0.14,
     strideLength: 0.78,
   },
 };
 
 export const MOVE = {
-  sprintSpeed: 7.01,
-  tacSprintSpeed: 8.38,
+  sprintSpeed: 7.01 * FOOT_SPEED,
+  tacSprintSpeed: 8.38 * FOOT_SPEED,
 
   /** Directional scaling — you are slower sideways and slower still backwards. */
   strafeScale: 0.92,
