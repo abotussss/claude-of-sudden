@@ -359,6 +359,16 @@ export class Viewmodel {
     this._handPosL = new THREE.Vector3();
     this._handQuatL = new THREE.Quaternion();
     this._sightLocal = new THREE.Vector3();
+    /**
+     * The support arm's elbow pole, blended per frame. @see `_solveHands`.
+     * `_poleBase` is whatever the weapon authored (or the arm's default) and
+     * is refreshed in `setActive`; `_poleAds` is the ADS-only target; `_poleMix`
+     * is the working vector handed to `Arm.setElbowPole`. All three are
+     * preallocated because this runs every frame.
+     */
+    this._poleBase = new THREE.Vector3();
+    this._poleAds = new THREE.Vector3();
+    this._poleMix = new THREE.Vector3();
     this._lhandTarget = new THREE.Vector3();
     this._lhandFinger = [0, 0, 0];
     this._lhandBack = [0, 0, 0];
@@ -832,6 +842,11 @@ export class Viewmodel {
     for (const arm of [this.armR, this.armL]) {
       arm.setElbowPole(ep ? this._poleTmp.set(arm.side * ep[0], ep[1], ep[2]) : null);
     }
+    // Remember where the SUPPORT arm's elbow wants to swing at rest, because
+    // `_solveHands` blends away from it as the aim comes in and has to be able
+    // to get back. Read after `setElbowPole` so it is the normalised value,
+    // whether it came from the weapon or from the arm's own default.
+    this._poleBase.copy(this.armL.pole);
     return w;
   }
 
@@ -1259,6 +1274,66 @@ export class Viewmodel {
     this.armR.shoulder.copy(_v);
     _v.copy(this.shoulderL).sub(this.rig.position).applyQuaternion(_q);
     this.armL.shoulder.copy(_v);
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * THE SUPPORT SHOULDER COMES BACK AND UP WHEN YOU MOUNT THE WEAPON.
+     * 「ADS時の手がおかしな方向になっているのも治して」
+     * ────────────────────────────────────────────────────────────────────────
+     * MEASURED, tools/handshot.mjs "support forearm vs bore" — 25-40 degrees is
+     * what range photography shows and what this rig does at the HIP (carbine
+     * 33.8, LMG 40.7). Aimed, the same arm measured carbine 52.5, AK 71.4,
+     * sniper 66.8: the forearm lies ACROSS the gun.
+     *
+     * THE CAUSE IS THAT ONLY ONE END OF THE ARM MOVES. ADS pulls the weapon —
+     * and with it the support wrist, which is pinned in weapon space by the
+     * grip solve — 84 mm back toward the eye, while the shoulder stays where a
+     * standing man's shoulder is. Measured on the carbine: the wrist goes from
+     * z -0.256 to -0.340 and the shoulder from z +0.291 to +0.132, so the
+     * chain closes up and a forearm between two points that close together can
+     * only point sideways. A real shooter does the opposite of standing still:
+     * mounting a rifle rolls the support shoulder BACK under the stock and
+     * lifts it into the weapon.
+     *
+     * WHY THIS IS NOT THE EXPERIMENT THAT WAS REVERTED. That one moved the
+     * shoulder outright — ADS improved 54.9 -> 38.1 and the HIP was destroyed,
+     * 33.5 -> 98.4 — because a shoulder is one position shared by both poses.
+     * This offset is MULTIPLIED BY `adsT`, which is exactly 0 at the hip, so
+     * the hip pose cannot move. That is not an argument, it is measured: over
+     * the whole 3x3 sweep in _adsarm.mjs the hip figure never moved off 46.9
+     * (its worst weapon) while the ADS mean went 57.2 -> 16.6.
+     *
+     * (0, +0.08, +0.09) m, and the number is set by the OTHER failure mode.
+     * Searched on two sweeps (_adsarm.mjs, coarse then fine). Bigger offsets
+     * keep improving the angle — (0, 0.18, 0.20) reaches an ADS mean of 16.6
+     * — and they do it by pulling the shoulder so far from a wrist that is
+     * pinned in weapon space that `Arm.solve` CLAMPS the chain: measured
+     * extension 1.082 on the carbine and 1.106 on the LMG, past the end of the
+     * arm, where the elbow locks dead straight and the limb reads as a
+     * broomstick. That is the failure this file documents three times.
+     *
+     * So the search is bounded by extension, not by the angle:
+     *
+     *   offset (m)        ADS mean   ADS worst   worst ext
+     *   (0, 0.02, 0.06)     46.1       60.8        0.936
+     *   (0, 0.08, 0.09)     34.9       50.4        0.978   <- chosen
+     *   (0, 0.08, 0.12)     28.6       45.8        1.026   CLAMPED
+     *
+     * At the chosen point the carbine is 30.6, the sniper 28.6 and the LMG
+     * 24.9 — inside the 25-40 reference — with every arm off the clamp.
+     *
+     * THE AK IS STILL OUT OF BAND at ~50, improved from 71.4, and it is the
+     * one weapon that cannot be brought in: its hip pose measures 46.7, i.e.
+     * it is outside the band BEFORE any of this, because its handguard is
+     * 122 mm long and `adsSupportPush` below is already hard against the front
+     * of it — there is nowhere further forward to put that hand. Fixing the AK
+     * means moving its `gripL`, which is a searched, photographed pose on a
+     * shipped weapon, and is a separate change.
+     */
+    const st = this.adsT;
+    if (st > 1e-4) {
+      this.armL.shoulder.y += 0.08 * st;
+      this.armL.shoulder.z += 0.09 * st;
+    }
 
     // ---- shooting hand: welded to the grip ----
     const gR = w.gripR;
@@ -1324,6 +1399,54 @@ export class Viewmodel {
     }
     handBasis(this._handQuatL, finger, back);
     if (pose !== this.armL.pose) this.armL.setPose(pose);
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * THE ADS SUPPORT ARM — 「ADS時の手がおかしな方向になっているのも治して」
+     * ────────────────────────────────────────────────────────────────────────
+     * MEASURED (tools/handshot.mjs, "support forearm vs bore"): at the hip
+     * this rig reaches forward along the weapon like the reference — carbine
+     * 33.9, LMG 30.7 degrees, inside the 25-40 band range photography shows.
+     * The moment you aim, the same arm measured 54.8 on the carbine, 76.1 on
+     * the AK and 66.8 on the sniper: the forearm lies ACROSS the gun, which is
+     * the "he is leaning on it, not holding it" read that was reported.
+     *
+     * The note above explains WHY — ADS drags the hand back toward a shoulder
+     * that has not moved — and `adsSupportPush` already slides the hand as far
+     * forward along the handguard as the handguard's own length allows. That
+     * is spent: on the AK there is no more handguard to move onto.
+     *
+     * WHAT IS LEFT IS THE ELBOW, and it is the right thing to move, because
+     * the number being complained about is not the hand's position at all —
+     * it is the direction of ELBOW -> WRIST. With the wrist pinned by the
+     * grip solve, the only way to turn that vector down the bore is to put the
+     * elbow further BEHIND and BELOW it, which is exactly what a shooter does
+     * when they mount a rifle: the support elbow drops under the weapon and
+     * tucks back toward the ribs. `Arm.solve` already takes an elbow pole per
+     * weapon (see `setElbowPole`); this makes it a function of `adsT`.
+     *
+     * WHY THIS CANNOT REPEAT THE SHOULDER EXPERIMENT. The last attempt at this
+     * moved the support SHOULDER forward: ADS improved 54.9 -> 38.1 and the
+     * HIP pose was destroyed, 33.5 -> 98.4, and it was reverted. The shoulder
+     * is one position shared by both poses, so paying for one with the other
+     * is structural. `adsT` is 0 at the hip BY CONSTRUCTION, so this term is
+     * identically zero there — the hip pose cannot move, and the measurement
+     * below confirms it did not.
+     *
+     * The pole is (side*0.30, -1.0, +0.62) at full aim, normalised: mostly
+     * down, still outboard, and pulled 0.62 rearward against the authored
+     * 0.22. It is CLAMPED to 0.72 of the way there so the elbow never swings
+     * so far back that the upper arm points at the eye — the pistol's
+     * "mystery ring" failure, documented on `setElbowPole`.
+     */
+    const adsPole = this.adsT * 0.72;
+    if (adsPole > 1e-3) {
+      const s = this.armL.side;
+      this._poleAds.set(s * 0.3, -1.0, 0.62).normalize();
+      this._poleMix.copy(this._poleBase).lerp(this._poleAds, adsPole).normalize();
+      this.armL.setElbowPole(this._poleMix);
+    } else if (this._poleBase.lengthSq() > 1e-6) {
+      this.armL.setElbowPole(this._poleBase);
+    }
     this.armL.solve(this._handPosL, this._handQuatL);
   }
 
