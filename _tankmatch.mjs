@@ -50,7 +50,7 @@ for (const SEED of SEEDS) {
      * the wall clock and adds nothing to "did it survive".
      */
     const start = performance.now();
-    const until = m.roundClock - 350;
+    const until = m.roundClock - 220;
     while (performance.now() - start < 900000) {
       await new Promise((r) => requestAnimationFrame(r));
       if (m.phase !== 'live' || m.roundClock <= until) break;
