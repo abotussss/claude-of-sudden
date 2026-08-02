@@ -1013,6 +1013,313 @@ if (args.ear) {
 }
 
 /* ==================================================================== */
+/* --foot: THE FOOTSTEP SPECTRUM, WHICH IS WHAT A TIMBRE CLAIM NEEDS    */
+/* ==================================================================== */
+/**
+ * 「足音がなんか軽くなった？前みたいな革靴の音っぽくなくなってる 革靴っぽい音に戻して」
+ * with 「敵味方の足音は今の音響くらいで良いです」 attached to it: the CHARACTER is
+ * wrong and the LEVEL is right. That is two measurements, not one, and `--ear`
+ * can make neither of them:
+ *
+ *  1. It reports a PEAK off three trials, and a footstep is not repeatable —
+ *     `footstep()` draws its grit grains, its kit resonances and its scuff band
+ *     from the rng on every call. MEASURED scatter on this probe: the same
+ *     8 m step came out 0.0311 and 0.0240 in two blocks of one run, 2.6 dB
+ *     apart, on a build where nothing between them had changed. A 2 dB claim
+ *     cannot be made with a 3 dB instrument.
+ *  2. A peak is not a spectrum. "Light" versus "leather" is where the energy
+ *     sits, not how much of it there is, and the two can move in opposite
+ *     directions — which is exactly what is under test here.
+ *
+ * So: N trials per case, energy-averaged, with the simulation frozen; an FFT of
+ * the recorded output into octave bands; and RMS, peak and spectral centroid
+ * alongside, so "the level did not move" is a number rather than an assurance.
+ *
+ *   node tools/audiotest.mjs --foot [--url=…] [--trials=8]
+ */
+if (args.foot) {
+  const TRIALS = Number(args.trials ?? 8);
+
+  await page.evaluate(() => {
+    const e = window.__ENGINE__;
+    const a = e.ctx.peek('audio');
+    const actx = a.actx;
+
+    /* ---- the recorder: every block the graph renders ---------------- */
+    // Same argument as `--ear`'s mkRec — a ScriptProcessor is handed every
+    // block and cannot skip one, where an AnalyserNode holds only the last
+    // 2048 samples and silently misses whatever fell between two polls.
+    const CAP = 48000 * 3;
+    const buf = new Float32Array(CAP);
+    const st = { n: 0, on: false, peak: 0 };
+    const sp = actx.createScriptProcessor(16384, 2, 1);
+    sp.onaudioprocess = (ev) => {
+      if (!st.on) return;
+      const inp = ev.inputBuffer;
+      const d = inp.getChannelData(0);
+      const d2 = inp.numberOfChannels > 1 ? inp.getChannelData(1) : d;
+      for (let i = 0; i < d.length && st.n < CAP; i++) {
+        // Mono sum of the pair. The panner puts a remote sound mostly in one
+        // ear, and a one-channel capture would read a bearing as a level.
+        const v = (d[i] + d2[i]) * 0.5;
+        buf[st.n++] = v;
+        const av = v < 0 ? -v : v;
+        if (av > st.peak) st.peak = av;
+      }
+    };
+    a.mixer.masterGain.connect(sp);
+    const sink = actx.createGain();
+    sink.gain.value = 0;
+    sp.connect(sink);
+    sink.connect(actx.destination);
+
+    /* ---- a radix-2 FFT, because octave bands need one --------------- */
+    const NFFT = 16384;                       // 341 ms at 48 kHz
+    const re = new Float64Array(NFFT), im = new Float64Array(NFFT);
+    const fft = () => {
+      for (let i = 1, j = 0; i < NFFT; i++) {
+        let bit = NFFT >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) {
+          let t = re[i]; re[i] = re[j]; re[j] = t;
+          t = im[i]; im[i] = im[j]; im[j] = t;
+        }
+      }
+      for (let len = 2; len <= NFFT; len <<= 1) {
+        const ang = -2 * Math.PI / len;
+        const wr = Math.cos(ang), wi = Math.sin(ang);
+        for (let i = 0; i < NFFT; i += len) {
+          let cr = 1, ci = 0;
+          for (let k = 0; k < len / 2; k++) {
+            const ur = re[i + k], ui = im[i + k];
+            const vr = re[i + k + len / 2] * cr - im[i + k + len / 2] * ci;
+            const vi = re[i + k + len / 2] * ci + im[i + k + len / 2] * cr;
+            re[i + k] = ur + vr; im[i + k] = ui + vi;
+            re[i + k + len / 2] = ur - vr; im[i + k + len / 2] = ui - vi;
+            const ncr = cr * wr - ci * wi;
+            ci = cr * wi + ci * wr; cr = ncr;
+          }
+        }
+      }
+    };
+    // Octave centres. 63 Hz is the boot's body, 2k-8k is the grit, the kit and
+    // the scuff — the bands the wall used to remove and stopped removing.
+    const EDGES = [45, 90, 180, 355, 710, 1400, 2800, 5600, 11200];
+    const LABELS = ['63', '125', '250', '500', '1k', '2k', '4k', '8k'];
+
+    window.__FOOT__ = {
+      LABELS,
+      start() { st.n = 0; st.peak = 0; st.on = true; },
+      /** Analyse what was captured. Returns band ENERGIES, not dB: the caller
+       *  averages energies across trials and takes the log once. */
+      stop() {
+        st.on = false;
+        const n = st.n;
+        if (n < 64) return null;
+        let sum = 0;
+        for (let i = 0; i < n; i++) sum += buf[i] * buf[i];
+        // Window the loudest NFFT samples: a footstep is 0.3 s inside a window
+        // that may be a second long, and padding it with silence would put the
+        // event's own noise floor into every band.
+        let bestAt = 0, bestE = -1;
+        const HOP = 2048;
+        for (let s = 0; s + NFFT <= n; s += HOP) {
+          let e2 = 0;
+          for (let i = s; i < s + NFFT; i += 4) e2 += buf[i] * buf[i];
+          if (e2 > bestE) { bestE = e2; bestAt = s; }
+        }
+        for (let i = 0; i < NFFT; i++) {
+          const v = bestAt + i < n ? buf[bestAt + i] : 0;
+          // Hann.
+          re[i] = v * 0.5 * (1 - Math.cos(2 * Math.PI * i / (NFFT - 1)));
+          im[i] = 0;
+        }
+        fft();
+        const df = actx.sampleRate / NFFT;
+        const bands = new Float64Array(EDGES.length - 1);
+        let cw = 0, cs = 0;
+        for (let k = 1; k < NFFT / 2; k++) {
+          const f = k * df;
+          if (f > 14000) break;
+          const p = re[k] * re[k] + im[k] * im[k];
+          if (f >= 40) { cw += p * f; cs += p; }
+          for (let b = 0; b < bands.length; b++) {
+            if (f >= EDGES[b] && f < EDGES[b + 1]) { bands[b] += p; break; }
+          }
+        }
+        return {
+          rms2: sum / n, peak: st.peak, samples: n,
+          centroid: cs > 0 ? cw / cs : 0,
+          bands: Array.from(bands),
+        };
+      },
+      /** The local player's own boot — the real event, the real payload. */
+      own(running) {
+        const lp = a.field.listenerPos;
+        e.ctx.events.emit('player:footstep', {
+          position: { x: lp.x, y: lp.y - 1.6, z: lp.z },
+          surface: 'concrete', running, left: true,
+          speed: running ? 5.6 : 3.0, stance: 'stand',
+        });
+      },
+      /** Another man's boot, exactly as BattleLayer._step plays it. */
+      remote(dist, occ, gait = 'walk') {
+        const lp = a.field.listenerPos;
+        const ang = 1.1;
+        const p = {
+          x: lp.x + Math.cos(ang) * dist, y: lp.y - 1.6, z: lp.z + Math.sin(ang) * dist,
+        };
+        const lvl = 0.45 + 0.35 * Math.max(0, Math.min(1, dist / 40));
+        return a._playAt('step', p.x, p.y, p.z, {
+          surface: 'concrete', gait, level: lvl,
+          gear: gait === 'crouch' ? 0.12 : gait === 'walk' ? 0.22 : 0.45,
+          occlusion: occ, tag: 'step',
+        }, 'foley', 0.28);
+      },
+      resetMix() { a.mixer.resetDynamics(); a.clearRateGates(); },
+      /**
+       * THE BED OFF, AND IT IS NOT OPTIONAL FOR THIS QUESTION.
+       *
+       * MEASURED on the first run of this mode: the ambience bed alone is
+       * rms 1.59e-3, and a remote step behind a wall is rms ~0.5e-3 — the bed
+       * is 10 dB LOUDER than the sound being analysed, so both the level and
+       * the band shape that came back were mostly the bed's (the occluded rows
+       * and the bed row agreed to a decibel in every band). The bed is a
+       * constant here and it is measured separately as the reference every
+       * other row is quoted against; leaving it in the analysis window would
+       * measure the wind and call it a boot.
+       *
+       * `resetDynamics` writes every bus trim back to its nominal, so this has
+       * to be re-applied after each reset rather than set once.
+       */
+      quiet(on) {
+        /**
+         * AT `_outdoorGain`, NOT AT THE BUS TRIM. The bed's reverb tap hangs off
+         * that gain and goes STRAIGHT to `mixer.reverbSend`, bypassing the bus
+         * entirely (`Ambience.start`), so muting the ambience bus leaves the
+         * whole bed still washing through the convolvers — MEASURED as a
+         * residual floor of rms 5.4e-4 with the bus at zero, which is the same
+         * level as the occluded remote step being analysed. Zeroing the bed's
+         * own generator takes the tap with it.
+         */
+        const g = a.ambience?._outdoorGain?.gain;
+        if (!g) return false;
+        g.cancelScheduledValues(actx.currentTime);
+        g.setValueAtTime(on ? 0 : 1, actx.currentTime);
+        return true;
+      },
+      waitAudio(sec) {
+        const target = actx.currentTime + sec;
+        return new Promise((done) => {
+          const id = setInterval(() => {
+            if (actx.currentTime >= target) { clearInterval(id); done(+actx.currentTime.toFixed(2)); }
+          }, 15);
+        });
+      },
+      levelUp(timeoutMs = 30000) {
+        return new Promise((done) => {
+          const t0 = performance.now();
+          const tick = () => {
+            const a0 = actx.currentTime, w0 = performance.now();
+            setTimeout(() => {
+              const ratio = (actx.currentTime - a0) / ((performance.now() - w0) / 1000);
+              if (ratio > 0.92 || performance.now() - t0 > timeoutMs) {
+                done({ ratio: +ratio.toFixed(3), waited: Math.round(performance.now() - t0) });
+              } else tick();
+            }, 600);
+          };
+          tick();
+        });
+      },
+    };
+  });
+
+  await page.evaluate(() => {
+    window.__ENGINE__.time.scale = 0;
+    /**
+     * STAND THE WATCHDOG DOWN FOR THE CAPTURE, AND SAY SO OUT LOUD.
+     *
+     * This mode freezes the simulation and mutes the ambience bed, which is
+     * every symptom the dropout guard exists to catch: MEASURED on the first
+     * run of it, `[audio] graph rebuilt (#1)` arrived 4.5 s into the first
+     * silent window, the harness's node references went stale with the old
+     * context and the probe hung. That is the guard working exactly as
+     * designed — the one audio fix the player has stopped complaining about —
+     * so it is disabled HERE, in the tool, for the length of the measurement,
+     * and nothing in `src/audio/watchdog.js` is touched. `--dropout` still
+     * exercises the real thing on an untouched build.
+     */
+    const a = window.__ENGINE__.ctx.peek('audio');
+    if (a?.watchdog) a.watchdog.enabled = false;
+  });
+  const lvl = await page.evaluate(() => window.__FOOT__.levelUp());
+  console.log('[foot] audio clock level:', JSON.stringify(lvl), '(watchdog stood down for the capture)');
+
+  const rows = [];
+  const runCase = async (label, fire, sec, trials = TRIALS, bedOn = false) => {
+    let rms2 = 0, cent = 0, peak = 0, bands = null, n = 0;
+    for (let i = 0; i < trials; i++) {
+      await page.evaluate(() => window.__FOOT__.resetMix());
+      await page.evaluate((on) => window.__FOOT__.quiet(!on), bedOn);
+      await page.evaluate((s) => window.__FOOT__.waitAudio(s), 0.35);
+      await page.evaluate(() => window.__FOOT__.start());
+      await page.evaluate((s) => window.__FOOT__.waitAudio(s), 0.04);
+      await fire();
+      await page.evaluate((s) => window.__FOOT__.waitAudio(s), sec);
+      const r = await page.evaluate(() => window.__FOOT__.stop());
+      if (!r) continue;
+      n++;
+      rms2 += r.rms2;
+      peak = Math.max(peak, r.peak);
+      cent += r.centroid;
+      if (!bands) bands = r.bands.slice();
+      else for (let b = 0; b < bands.length; b++) bands[b] += r.bands[b];
+    }
+    rows.push({ label, n, rms: Math.sqrt(rms2 / Math.max(1, n)), peak, cent: cent / Math.max(1, n), bands });
+  };
+
+  // The bed, first and with nothing fired: every dB below is quoted against it,
+  // and it is the ONLY row measured with the ambience bus live.
+  await runCase('AMBIENCE BED (nothing fired)', async () => {}, 1.4, 3, true);
+  await runCase('silence, bed muted', async () => {}, 1.0, 2);
+  await runCase('own step walk', () => page.evaluate(() => window.__FOOT__.own(false)), 1.0);
+  await runCase('own step run', () => page.evaluate(() => window.__FOOT__.own(true)), 1.0);
+  // occ 0.97 is the census mean for the foley bus on this map: nine remote
+  // steps in ten are behind real concrete, so THIS is the remote footstep the
+  // player actually hears, and the clear-line one is the control that must not
+  // move at all.
+  for (const [d, occ] of [[8, 0], [8, 0.97], [12, 0.97], [20, 0], [20, 0.97], [40, 0.97]]) {
+    await runCase(`remote step @${d}m occ=${occ}`,
+      () => page.evaluate(([dd, oo]) => window.__FOOT__.remote(dd, oo), [d, occ]), 1.0);
+  }
+  await runCase('remote step @12m occ=0.97 run',
+    () => page.evaluate(() => window.__FOOT__.remote(12, 0.97, 'run')), 1.0);
+
+  const bed = rows[0];
+  const dB = (v, ref) => (v > 0 && ref > 0 ? 20 * Math.log10(v / ref) : NaN);
+  const labels = await page.evaluate(() => window.__FOOT__.LABELS);
+  console.log(`\n[foot] FOOTSTEP SPECTRA — ${TRIALS} trials per case, energy-averaged, sim frozen`);
+  console.log('  band energies are dB relative to each case\'s own total, i.e. SHAPE, not level');
+  console.log(`  ${'case'.padEnd(30)} ${'rms'.padStart(9)} ${'vs bed'.padStart(7)} ${'peak'.padStart(8)} ${'centroid'.padStart(9)}   ` +
+    labels.map((l) => l.padStart(6)).join(''));
+  for (const r of rows) {
+    const tot = r.bands ? r.bands.reduce((x, y) => x + y, 0) : 0;
+    const shape = r.bands
+      ? r.bands.map((b) => (b > 0 && tot > 0 ? (10 * Math.log10(b / tot)).toFixed(1) : '  -').padStart(6)).join('')
+      : '';
+    console.log(
+      `  ${r.label.padEnd(30)} ${r.rms.toExponential(2).padStart(9)} ` +
+      `${(r === bed ? '   -  ' : `${dB(r.rms, bed.rms).toFixed(1)} dB`).padStart(7)} ` +
+      `${r.peak.toFixed(5).padStart(8)} ${`${Math.round(r.cent)} Hz`.padStart(9)}   ${shape}`
+    );
+  }
+  console.log('\n[foot] page errors', pageErrors.slice(0, 8));
+  await browser.close();
+  process.exit(0);
+}
+
+/* ==================================================================== */
 /* --collapse: THE CATHEDRAL, AND WHAT IT DOES TO THE POOL              */
 /* ==================================================================== */
 /**
