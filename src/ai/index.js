@@ -54,7 +54,9 @@ import { SoldierMaterials, TEAM_RIM, TEAM_DRESS } from './textures.js';
 import { buildSoldier, resolveMaterials, MATERIAL_SLOTS, VARIANTS } from './soldier.js';
 import { RIG } from './rig.js';
 import { NavGrid, CoverMap, StairMap } from './nav.js';
-import { Agent, STATE, drawPersona, archetypeMixFor, ARMOUR_FRAG_MIN, ARMOUR_FRAG_MAX } from './agent.js';
+import {
+  Agent, STATE, drawPersona, archetypeMixFor, eliteArms, ARMOUR_FRAG_MIN, ARMOUR_FRAG_MAX,
+} from './agent.js';
 import { Squad } from './squad.js';
 import { Radio } from './radio.js';
 import { GroundShadows } from './grounding.js';
@@ -212,6 +214,22 @@ const DRONE_NOTICE = 18;
  */
 const SMOKE_MAX = 6;
 const SMOKE_CORE = 0.78;
+
+/**
+ * THE ZONE PULL. @see `AiSystem.divertZoneFor`.
+ *
+ * `DIVERT_MIN` is "he is still in transit rather than arriving" — 26 m is over
+ * three capture radii, so a man anywhere near the point he was sent to is never
+ * a candidate. `DIVERT_GAIN` is the honest margin: a diversion has to save a
+ * real walk, or it is churn. `CONTEST_W` and `RETAKE_W` are the weights that
+ * make "in play" beat "nearer", and they are why a contested point pulls men
+ * from across the map while a merely enemy-held one only pulls the men who were
+ * already going past it.
+ */
+const DIVERT_MIN = 26;
+const DIVERT_GAIN = 12;
+const CONTEST_W = 0.38;
+const RETAKE_W = 0.82;
 
 export class AiSystem {
   static id = 'ai';
@@ -1033,6 +1051,90 @@ export class AiSystem {
     return this._droneSet !== null && this._droneSet.has(actor);
   }
 
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE ZONES, READ RATHER THAN OWNED — 「CONTESTEDのところをメインに敵と戦闘する」
+   * ══════════════════════════════════════════════════════════════════════════
+   * `match` is and stays the only subsystem that decides who owns what and who
+   * is sent where: this is a READ of the record it already publishes
+   * (`m.sites`, documented at the head of `src/match/index.js`), reached at
+   * runtime through `ctx.peek` exactly as `fx`, `audio` and `player` are. No
+   * import, no write, and nothing here changes an order — @see
+   * `Agent._zonePull`, which can only ever bend a man's DESTINATION toward a
+   * point `match` has already declared to be in play.
+   *
+   * `peek` rather than `get` and cached only once it answers, because `match`
+   * deps on `ai`: at `ai.init` there is no match, and on a capture run there
+   * never will be.
+   */
+  get zones() {
+    const m = this._matchRef ?? (this._matchRef = this.ctx.peek('match') ?? null);
+    return m?.sites ?? null;
+  }
+
+  /**
+   * IS THIS ZONE WORTH WALKING TO INSTEAD? Returns the zone or null.
+   *
+   * "もっと占領がメインかつ銃撃がメインです 奪われた領地を取り返す、CONTESTEDのところを
+   *  メインに敵と戦闘するといったことをBOTに覚えさせて 今の所AIは占領したら終わりみたいに
+   *  なってる"
+   *
+   * Two facts sit behind this and they are both measurements. 90.6 % of every
+   * order on this map is the TAKE/CONTEST verb, and men spend 84 % of their
+   * actor-time in transit with a median 57 m still to walk — so the single
+   * biggest thing standing between this roster and a firefight is the length of
+   * the walk, and the single biggest thing standing between it and a CAPTURE is
+   * that the walk often ends somewhere nothing is happening.
+   *
+   * So a man far from his assigned point who can see a nearer one that is IN
+   * PLAY goes there instead. Three gates keep it from fighting `match`'s plan:
+   *
+   *   IT IS ONLY EVER A SHORTER WALK. `DIVERT_GAIN` metres nearer, minimum, and
+   *     only for a man who still has `DIVERT_MIN` to go. A man closing on his
+   *     own objective is never pulled off it, so the plan converges.
+   *   THE ZONE HAS TO BE IN PLAY. Contested (both sides standing in the paint),
+   *     or an enemy bar actually filling on ground we hold — that second case
+   *     is 「奪われた領地を取り返す」 literally — or simply not ours. A quiet zone we
+   *     already own is never a diversion.
+   *   AND IT IS WEIGHTED, NOT FILTERED. `CONTEST_W` makes a contested point
+   *     score as though it were nearly three times closer than it is, so a
+   *     brawl two streets over beats an empty flag next door — which is the
+   *     whole sentence: the fighting IS the objective.
+   */
+  divertZoneFor(agent) {
+    const zones = this.zones;
+    if (!zones || zones.length === 0) return null;
+    const obj = agent.objective;
+    const curD = obj ? agent.position.distanceTo(obj.position) : Infinity;
+    /**
+     * THE ELITE SQUAD IS PULLED HARDER AND FROM CLOSER IN — 「最強部隊はそれぞれの
+     * 占領地点を確実に占領するのが目的」. Their objective is not "fight well", it is
+     * "the point changes hands", so a zone that is actually in play outranks a
+     * shorter walk for them at half the distance it does for a rifleman.
+     */
+    const elite = agent.elite === true;
+    if (curD < (elite ? DIVERT_MIN * 0.5 : DIVERT_MIN)) return null;
+    let best = null;
+    let bestScore = curD - (elite ? DIVERT_GAIN * 0.5 : DIVERT_GAIN);
+    if (!(bestScore > 0)) return null;
+    for (let i = 0; i < zones.length; i++) {
+      const z = zones[i];
+      if (!z || !z.position) continue;
+      const mine = z.owner === agent.team;
+      // "being taken off us right now" — the enemy's bar is filling on ground
+      // we hold. `contested` alone is only true while both sides are physically
+      // in the circle, which is a much narrower moment than the fight for it.
+      const losing = z.capTeam >= 0 && z.capTeam !== agent.team && z.progress > 0.05;
+      const hot = z.contested === true || losing;
+      if (mine && !hot) continue;
+      const d = agent.position.distanceTo(z.position);
+      let score = d * (hot ? CONTEST_W : RETAKE_W);
+      if (elite) score *= 0.6;
+      if (score < bestScore) { bestScore = score; best = z; }
+    }
+    return best;
+  }
+
   /** Live actors hostile to `team`. The list is rebuilt at most once a frame. */
   hostilesOf(team) {
     const f = this.ctx.time.frame;
@@ -1145,6 +1247,15 @@ export class AiSystem {
    */
   armourWorth(agent, v) {
     if (!agent || !v || v.alive !== true) return 0;
+    /**
+     * THE ELITE SQUAD DOES NOT FIGHT ARMOUR AT ALL — 「近くに戦車がいるときは無闇に
+     * 戦わず迂回する動きをとって、何故なら負けるから確実に」. Clause 0, above the deck
+     * and above the frag, because for these ten men there is no shot worth
+     * taking: they cannot respawn, and a hull that notices them costs the side
+     * its whole reversal. The other half of the order is the walk —
+     * @see `Agent._tankDodge`.
+     */
+    if (agent.elite === true) return 0;
     const p = v.position;
     const dx = agent.position.x - p.x;
     const dz = agent.position.z - p.z;
@@ -1826,12 +1937,14 @@ export class AiSystem {
      */
     const elite = agent._elite === true;
     if (!agent.name || agent.name.startsWith('BOT-')) {
-      return drawPersona(rng, agent.role, mean, this.defenderSkill, elite, this._nextSlot(agent, elite));
+      return drawPersona(rng, agent.role, mean, this.defenderSkill, elite,
+        this._nextSlot(agent, elite), elite ? this._nextEliteArm(agent) : null);
     }
     const key = `${agent.team}:${agent.name}:${agent.role}${elite ? ':elite' : ''}`;
     let p = this._personas.get(key);
     if (!p) {
-      p = drawPersona(rng, agent.role, mean, this.defenderSkill, elite, this._nextSlot(agent, elite));
+      p = drawPersona(rng, agent.role, mean, this.defenderSkill, elite,
+        this._nextSlot(agent, elite), elite ? this._nextEliteArm(agent) : null);
       this._personas.set(key, p);
     }
     return p;
@@ -1858,6 +1971,35 @@ export class AiSystem {
    * Reinforcements are exempt: they are all `spearhead` and must not consume a
    * field slot. @see `drawPersona`.
    */
+  /**
+   * THE NEXT GUN OFF THE ELITE RACK — 「武器もそれぞれ構成を変えて」. @see
+   * `eliteArms` in agent.js for why this is dealt rather than sampled.
+   *
+   * Byte-for-byte the same deck machinery `_nextSlot` uses for the archetype
+   * mix: one shuffled copy per side, dealt in order, reshuffled when it runs
+   * out — so a ten-man drop always contains the rack's whole composition and
+   * never the same weapon twice more than the list says it should. Shuffled on
+   * `_personaRng`, so it is deterministic under `?seed=` like everything else.
+   */
+  _nextEliteArm(agent) {
+    const key = `E${agent.team}`;
+    let deck = this._decks.get(key);
+    if (!deck || deck.at >= deck.order.length) {
+      const src = eliteArms();
+      const order = deck?.order ?? src.slice();
+      order.length = 0;
+      for (const a of src) order.push(a);
+      const rng = this._personaRng ?? (this._personaRng = this.rng.fork());
+      for (let i = order.length - 1; i > 0; i--) {
+        const j = rng.int(0, i);
+        const t = order[i]; order[i] = order[j]; order[j] = t;
+      }
+      deck = { order, at: 0 };
+      this._decks.set(key, deck);
+    }
+    return deck.order[deck.at++];
+  }
+
   _nextSlot(agent, elite) {
     if (elite) return null;
     const key = `${agent.team}:${agent.role}`;

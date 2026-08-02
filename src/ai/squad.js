@@ -221,7 +221,27 @@ export class Squad {
        * with no order at all falls in the same bucket as the other spare men,
        * which is right: they are the ones about to be given the same thing.
        */
-      const key = o ? (o.site ?? (Math.round(o.position.x / 10) * 8192 + Math.round(o.position.z / 10))) : 0;
+      let key = o ? (o.site ?? (Math.round(o.position.x / 10) * 8192 + Math.round(o.position.z / 10))) : 0;
+      /**
+       * ════════════════════════════════════════════════════════════════════
+       * THE ELITE SQUAD IS ITS OWN CUT — "チームで動かして"
+       * ════════════════════════════════════════════════════════════════════
+       * 「AIとして最強のAIM、立ち回り、チームワークをさせて … チームで動かして、最強部隊は
+       *  それぞれの占領地点を確実に占領するのが目的」
+       *
+       * Ten men who cannot respawn land on one point and are immediately cut in
+       * with whichever ordinary riflemen `match` sent to the same place — so a
+       * "fireteam" was two elites and two conscripts, on a lane chosen by the
+       * arrival order, and the thing the player asked to move as a unit was
+       * never a unit. `ELITE_KEY` puts them in a bucket of their own: the ten
+       * form their own two or three fireteams, take their own lanes, and the
+       * lead brake in `_advance` then holds each of them together.
+       *
+       * It is a SEPARATE BUCKET PER OBJECTIVE, not one bucket for all of them —
+       * the key is still the job — so a drop split across two capture points is
+       * two elite teams and not one team pretending to have two destinations.
+       */
+      if (m.elite === true) key = `E${key}`;
       let row = buckets.get(key);
       if (!row) {
         row = this._rowPool.pop() ?? [];
@@ -237,7 +257,14 @@ export class Squad {
       // Stable membership: a man keeps his seat between refreshes as long as
       // the men either side of him are alive and on the same job.
       row.sort(byId);
-      let lane = 0;
+      /**
+       * AND THE ELITE BUCKET STARTS ONE RUNG OUT. Lanes are dealt from 0 per
+       * bucket, so an elite team and an ordinary team sent to the same point
+       * would both draw lane 0 — the middle — and walk up the same street,
+       * which is exactly the "全員が行動経路が一緒" this whole mechanism exists to
+       * stop. One rung is a flank of `LANE_STEP` metres and no more.
+       */
+      let lane = row[0]?.elite === true ? 1 : 0;
       for (let i = 0; i < row.length; i += FIRETEAM_SIZE) {
         let ft = this._ftPool.pop();
         if (!ft) ft = { id: 0, members: [], lane: 0, laneIndex: 0, centre: new THREE.Vector3() };

@@ -164,6 +164,14 @@ const SNIPER_MIN = 16;
  */
 const RESERVE_MUL = 2.0;
 
+/**
+ * HOW OFTEN A MAN ASKS WHETHER THERE IS A NEARER FIGHT. Jittered per man on top
+ * of this, so forty of them do not all re-decide on the same frame. `match`
+ * re-plans at 2 s; this is deliberately slower than that, because the plan is
+ * the thing and this only bends the walk. @see `_advance`'s pull.
+ */
+const DIVERT_EVERY = 2.5;
+
 const FLASH_LO = 6;
 const FLASH_HI = 22;
 const SMOKE_MIN = 22;
@@ -384,8 +392,43 @@ const ARCHETYPE_ARMS = {
 const ELITE = {
   skillFloor: 0.88, skillCap: 0.98,
   cone: 0.55, settle: 0.40, track: 1.7, wobble: 0.45,
-  health: 150, reserve: 1.75, view: 1.25, range: 1.15,
+  /**
+   * 150 -> 200: 「増援部隊は体力２００にしてください」, and it is the request rather
+   * than a tuning pass, so it is the request's number. Against a 21-damage
+   * rifle it is ten rounds on the torso instead of eight — a second and a half
+   * in the open under fire, which is what a 0.55x cone and a 0.40x settle need
+   * in order to convert into the 「一人で４人はキル」 the drop is for.
+   */
+  health: 200, reserve: 1.75, view: 1.25, range: 1.15,
 };
+
+/**
+ * ══════════════════════════════════════════════════════════════════════════
+ * THE ELITE SQUAD'S TWO STANDING ORDERS — 「戦車は避ける、ドローンは撃ち落とす」
+ * ══════════════════════════════════════════════════════════════════════════
+ * 「近くに戦車がいるときは無闇に戦わず迂回する動きをとって、何故なら負けるから確実に」
+ *
+ * The player is not guessing and the bench agrees with him: `_tankttk.mjs` puts
+ * 447 rounds of 17-damage rifle into a glacis for one kill against the 150 a
+ * man carries, while the hull's coaxial gun scores 12-27 kills a match. Ten men
+ * who cannot respawn have exactly one thing they must not spend themselves on.
+ *
+ * So the elite's armour policy is NOT the roster's three-clause worth test with
+ * a tighter threshold — it is a REFUSAL and an evasion, and both halves are
+ * needed. Refusing to shoot at a hull he is standing in front of is still a man
+ * standing in front of a hull.
+ *
+ *   `ELITE_TANK_R` is the radius he treats as the gun's ground. It is
+ *     deliberately wider than the frag window (`ARMOUR_FRAG_MAX`) — the point
+ *     is not to get close enough to decide, it is to not be there.
+ *   `ELITE_TANK_WIDE` is how far outside it he plans his way round: enough that
+ *     the detour clears the circle rather than grazing it.
+ *
+ * @see `Agent._tankDodge` for the manoeuvre and `AiSystem.armourWorth` for the
+ * refusal, which is one line and keyed on `elite`.
+ */
+const ELITE_TANK_R = 34;
+const ELITE_TANK_WIDE = 1.45;
 
 /**
  * Draw one soldier: an archetype, six traits jittered off it, and his marksmanship.
@@ -407,7 +450,24 @@ export function archetypeMixFor(role) {
   return ARCHETYPE_MIX[role === 'defend' || role === 'attack' ? role : 'any'];
 }
 
-export function drawPersona(rng, role, meanSkill, defenderBonus = 0, elite = false, forced = null) {
+/**
+ * THE ELITE RACK, so the caller can DEAL it instead of sampling it —
+ * 「武器もそれぞれ構成を変えて」.
+ *
+ * Ten men drawing independently from a ten-entry list is ten draws WITH
+ * REPLACEMENT: the composition the list describes (three rifles, two carbines,
+ * two belts, two submachine guns and one bolt gun) is only its EXPECTATION, and
+ * a perfectly ordinary seed hands the same side six AKs and no sniper. The
+ * request is about the squad's composition rather than about any one man's gun,
+ * and a composition you get on average is not one. @see `AiSystem._nextEliteArm`
+ * — the same shuffled-deck move `_nextSlot` already makes for the archetype mix.
+ */
+export function eliteArms() {
+  return ARCHETYPE_ARMS.spearhead;
+}
+
+export function drawPersona(rng, role, meanSkill, defenderBonus = 0, elite = false, forced = null,
+  armSlot = null) {
   const mix = archetypeMixFor(role);
   /**
    * A paradropped man is not drawn from the roster mix at all (@see
@@ -428,7 +488,10 @@ export function drawPersona(rng, role, meanSkill, defenderBonus = 0, elite = fal
   const arms = ARCHETYPE_ARMS[name] ?? ARCHETYPE_ARMS.hunter;
   return {
     archetype: name,
-    weapon: arms[rng.int(0, arms.length - 1)],
+    // `armSlot` is the DEALT gun and it is only ever non-null for the elite
+    // squad. @see `eliteArms`. Everybody else samples, which is right: a roster
+    // of fifteen hunters is a distribution, not a composition.
+    weapon: (armSlot && WEAPONS[armSlot]) ? armSlot : arms[rng.int(0, arms.length - 1)],
     traits: {
       aggression: t(a.aggression, 0.11),
       patience: t(a.patience, 0.11),
@@ -768,6 +831,12 @@ export class Agent {
     /* ---------------- objective (owned by `match`) ---------------- */
     /** { mode, position: Vector3, site, facing: Vector3|null } or null. */
     this.objective = null;
+    /**
+     * THE ZONE HE HAS DIVERTED TO, or null. `match`'s published zone record —
+     * READ, never written. @see `_advance`'s pull and `AiSystem.divertZoneFor`.
+     */
+    this.divert = null;
+    this._divertTimer = this.rng.float() * DIVERT_EVERY;
     /** Has the "IN POSITION" for THIS objective gone out yet. @see `_advance`. */
     this._saidSet = false;
     /** `ctx.time.elapsed` of this man's last transmission. @see `radio.js`. */
@@ -1332,6 +1401,11 @@ export class Agent {
       // objective has to roll a new one or the man holds the old site's ground.
       this._hasHoldSpot = false;
       this.holdTimer = 0;
+      // A DIVERSION IS AN OPINION ABOUT AN ORDER, so a new order ends it. It is
+      // re-asked on the next `DIVERT_EVERY` tick against the new destination,
+      // which is the only way `match`'s plan can stay the thing that converges.
+      this.divert = null;
+      this._divertTimer = this.rng.float() * DIVERT_EVERY;
       if (this.state === STATE.ADVANCE) this.hasMoveTarget = false;
     }
   }
@@ -2024,10 +2098,38 @@ export class Agent {
      * The pull to the objective is unchanged until he gets there: the sector only
      * engages inside 9 m, so nothing re-routes an approach or a staged flank.
      */
-    const anchored = obj.mode === 'hold' || obj.mode === 'retake';
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * THE NEARER FIGHT — "奪われた領地を取り返す、CONTESTEDのところをメインに"
+     * ══════════════════════════════════════════════════════════════════════
+     * @see `AiSystem.divertZoneFor` for the policy and for why it is a read of
+     * `match`'s published zones rather than an order.
+     *
+     * It is asked at `DIVERT_EVERY`, not per frame, and the answer is held on
+     * the man. Three things clear it and they are all "the reason has gone":
+     * a new order from `match` (`setObjective`), arriving inside the circle,
+     * and the zone dropping out of play — each checked below, so a diversion
+     * can never outlive the fight that caused it.
+     */
+    this._divertTimer -= dt;
+    if (this._divertTimer <= 0) {
+      this._divertTimer = DIVERT_EVERY + this.rng.float() * DIVERT_EVERY;
+      this.divert = this.ai.divertZoneFor?.(this) ?? null;
+    }
+    if (this.divert) {
+      const z = this.divert;
+      const dz = this.position.distanceTo(z.position);
+      const stillHot = z.contested === true
+        || (z.capTeam >= 0 && z.capTeam !== this.team && z.progress > 0.05)
+        || z.owner !== this.team;
+      if (!stillHot || dz < (z.radius ?? SITE_HOLD_R)) this.divert = null;
+    }
+    const div = this.divert;
+
+    const anchored = !div && (obj.mode === 'hold' || obj.mode === 'retake');
     const holdish = anchored
-      || (obj.mode === 'push' && this.position.distanceTo(obj.position) < 9);
-    let dest = obj.position;
+      || (!div && obj.mode === 'push' && this.position.distanceTo(obj.position) < 9);
+    let dest = div ? div.position : obj.position;
     if (holdish) {
       if (!this._hasHoldSpot || this.holdTimer <= 0) this._pickHoldSpot(obj);
       if (this._hasHoldSpot) dest = this._holdSpot;
@@ -2080,9 +2182,22 @@ export class Agent {
         // centre of mass. `ft.centre` counts HIM, so a four-man team damps this
         // by a quarter on its own — which is the right direction: one man in
         // front of three is braked harder than two abreast of two.
+        /**
+         * AND THE ELITE SQUAD IS HELD TIGHTER — "チームで動かして".
+         *
+         * `LEAD_SLACK` is 9 m, which is right for fifteen conscripts who only
+         * have to not arrive fifteen seconds apart. Ten men who cannot respawn
+         * and whose whole job is to take a point RELIABLY have to arrive
+         * together or they are ten separate one-man assaults, each killed by
+         * the men holding it before the next one lands. Half the slack and a
+         * harder brake — still a brake and never a stop, so nothing
+         * `stuckcheck` or `_unstick` reads changes sign.
+         */
+        const slack = this.elite ? LEAD_SLACK * 0.5 : LEAD_SLACK;
         const lead = ft.centre.distanceTo(dest) - dist;
-        if (lead > LEAD_SLACK) {
-          this.desiredSpeed *= Math.max(0.55, 1 - (lead - LEAD_SLACK) * 0.05);
+        if (lead > slack) {
+          this.desiredSpeed *= Math.max(this.elite ? 0.42 : 0.55,
+            1 - (lead - slack) * (this.elite ? 0.08 : 0.05));
         }
       }
       /**
@@ -2099,7 +2214,8 @@ export class Agent {
        * is the route his four men take to it, and it is the difference between
        * a side and a queue. @see `_laneVia`.
        */
-      const target = this._laneVia(dest, dist) ?? dest;
+      // The elite squad goes ROUND a hull rather than past it. @see `_tankDodge`.
+      const target = this._tankDodge(dest) ?? this._laneVia(dest, dist) ?? dest;
       const moved = this.hasMoveTarget && this.moveTarget.distanceToSquared(target) > 2 * 2;
       /**
        * NOT WHILE HE IS IN THE AIR. A man halfway down a six metre drop is off
@@ -2117,6 +2233,10 @@ export class Agent {
           // A lane that will not route is a lane, not a dead objective: drop it
           // and take the straight line before anything is called blocked.
           if (this._hasVia) this._hasVia = false;
+          // A zone he cannot route to is not a zone. Drop the diversion before
+          // anything falls back, or he walks at his real objective on a route
+          // planned for somewhere else.
+          else if (this.divert) { this.divert = null; this._divertTimer = DIVERT_EVERY; }
           else if (holdish && this._hasHoldSpot) this._hasHoldSpot = false; // try another spot
           else this._advanceFallback(obj);
         }
@@ -2154,6 +2274,70 @@ export class Agent {
      */
     this.crouch = holdish && this.traits.exposure < 0.42;
     this.aimWeight = 0.6;
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * GO ROUND IT — the elite squad's tank evasion. Returns a via point or null.
+   * ══════════════════════════════════════════════════════════════════════════
+   * 「近くに戦車がいるときは無闇に戦わず迂回する動きをとって、何故なら負けるから確実に」
+   * @see the `ELITE_TANK_R` block for why this is a refusal rather than a
+   * threshold, and `AiSystem.armourWorth`'s elite clause for the other half.
+   *
+   * It is the SAME SHAPE AS `_laneVia` on purpose: a via point on the way, fed
+   * to the same A* call, so nothing about how he walks changes — he simply
+   * plans through a doorway that is not in front of the gun. The offset is
+   * perpendicular to the hull's bearing and taken on the side he is ALREADY on,
+   * because a man who crosses the front of a tank to get to its far side has
+   * spent the whole evasion inside the thing he was evading.
+   *
+   * Nobody but the ten men who cannot respawn runs this. It returns null on the
+   * first line for every other soldier on the map, and null whenever no hull is
+   * near — which on a map with two of them is almost always.
+   */
+  _tankDodge(dest) {
+    if (!this.elite) return null;
+    const veh = this.ai.vehicles;
+    if (!veh || veh.length === 0) return null;
+    let hull = null;
+    let bestD = ELITE_TANK_R * ELITE_TANK_R;
+    for (let i = 0; i < veh.length; i++) {
+      const v = veh[i];
+      if (!v || v.alive !== true || v.team === this.team) continue;
+      const dx = v.position.x - this.position.x;
+      const dz = v.position.z - this.position.z;
+      const d = dx * dx + dz * dz;
+      if (d < bestD) { bestD = d; hull = v; }
+    }
+    if (!hull) return null;
+    // Which way round. `perp` is normal to the line he is walking; the sign is
+    // whichever side of it the hull is NOT on.
+    const fwd = this._v.set(dest.x - this.position.x, 0, dest.z - this.position.z);
+    if (fwd.lengthSq() < 1e-4) return null;
+    fwd.normalize();
+    const hx = hull.position.x - this.position.x;
+    const hz = hull.position.z - this.position.z;
+    const side = (-fwd.z * hx + fwd.x * hz) > 0 ? -1 : 1;
+    /**
+     * THE VIA POINT IS MEASURED OFF THE HULL, NOT OFF HIM. What has to be true
+     * at the end of the walk is "I am outside its circle", and a point offset
+     * from the man is a point whose distance to the tank depends on where the
+     * man happened to be standing.
+     */
+    this._v2
+      .set(hull.position.x, hull.position.y, hull.position.z)
+      .addScaledVector(fwd, ELITE_TANK_R * 0.35)
+      .add(this._v3.set(-fwd.z * side, 0, fwd.x * side)
+        .multiplyScalar(ELITE_TANK_R * ELITE_TANK_WIDE));
+    const g = this.ai.grid;
+    if (!g) return null;
+    const ci = g.nearest(this._v2.x, this._v2.z, this.position.y, 9, 4);
+    if (ci < 0) return null;
+    this._v2.set(g.worldX(ci % g.nx), g.floor[ci], g.worldZ((ci / g.nx) | 0));
+    // Already past it, or the detour points backwards into it: take the plain
+    // route rather than a manoeuvre that achieves nothing.
+    if (this.position.distanceToSquared(this._v2) < 4 * 4) return null;
+    return this._v2;
   }
 
   /**
