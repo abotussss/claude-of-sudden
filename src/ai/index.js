@@ -248,7 +248,9 @@ export class AiSystem {
     this.materials = new SoldierMaterials(this.rng.fork(), {
       size: 512,
       anisotropy: ctx.config.q.anisotropy ?? 8,
-      camo: ['arid', 'woodland', 'urban'],
+      // `civil` is PLAIN CLOTH and not a fourth camouflage — one bake serving
+      // both civilian dresses, separated by tint. @see CAMO.civil in textures.js.
+      camo: ['arid', 'woodland', 'urban', 'civil'],
     });
     // Contact occlusion under every actor. Without it the cast shadow alone
     // leaves them hovering: see grounding.js.

@@ -193,6 +193,114 @@ for (const key of Object.keys(VARIANTS)) {
   VARIANTS[`${key}${DMR_SUFFIX}`] = { ...VARIANTS[key], weapon: 'sniper' };
 }
 
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * AND TWO WHO ARE NOT SOLDIERS AT ALL — 「民間軍は私服にして軍服にはしないように」
+ * ════════════════════════════════════════════════════════════════════════════
+ * DERIVED, exactly as `<dress>Dmr` is, and off `irregular` because it is the
+ * one entry with no helmet on it: everything a civilian must NOT have is then
+ * a `false` in one small table instead of a fourth hand-written variant to keep
+ * in step with `TEAM_VARIANTS`.
+ *
+ * TWO ENTRIES AND NOT SIX. The Dmr loop twins EVERY dress because a sniper of
+ * MY side has to wear MY side's uniform; a civilian belongs to neither side and
+ * has no dress to agree with, so twinning all three would be three extra
+ * geometries and three extra material sets bought for nothing.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHY LEGIBILITY IS THE WHOLE MECHANIC AND HOW IT IS PAID FOR
+ * ────────────────────────────────────────────────────────────────────────────
+ * Killing an armed one is free and killing an unarmed one costs capture score,
+ * so if the player cannot tell them apart BEFORE he fires the penalty is a
+ * random tax rather than a decision. Three cues, deliberately redundant,
+ * ordered by the range at which each one survives:
+ *
+ *   1. SILHOUETTE, against BOTH ARMIES (works at any range, in any light).
+ *      Every soldier on this map is a helmet or a head wrap over a plate
+ *      carrier with three magazine pouches, a radio, an antenna, a dump pouch,
+ *      knee pads and a slung rifle. A civilian has NONE of it: `civil: true`
+ *      deletes the carrier, the webbing, every pouch, the pads, the gloves and
+ *      the sling, and drops `bulk` from 0.94 to 0.83. What is left is a person
+ *      in a shirt and trousers, and that read does not depend on colour.
+ *
+ *   2. VALUE, armed against unarmed (survives shade, dust and 27 pixels).
+ *      One plain cloth bake (`CAMO.civil`), two tints: the militiaman's work
+ *      jacket at 0.42x lands ~0.045 linear — DARKER than any uniform on the
+ *      map — and the civilian's shirt at 3.05x lands ~0.33, which is brighter
+ *      than sunlit plaster on this level. @see the measurement table in
+ *      textures.js: 7:1 between the two of them, and neither of them anywhere
+ *      near the 0.075-0.11 band both armies live in.
+ *
+ *   3. HEAD AND HANDS, at the range you actually fight indoors (under ~20 m).
+ *      The militiaman is wrapped — shemagh and face wrap, no skin above the
+ *      collar — and carries a chest bandolier of AK magazines that reads even
+ *      when the rifle itself is behind a doorframe. The civilian is BARE:
+ *      bare head, bare face, bare hands, and nothing in either of them.
+ *
+ * NEITHER TAKES THE TEAM DRESS OR THE TEAM RIM. @see `resolveMaterials` — the
+ * civilian slots are registered under no variant, so `setTeamDress` and
+ * `setTeamRim` cannot reach them and a civilian can never be repainted into
+ * one army's crimson or the other's slate. He is a third thing on purpose, and
+ * the militiaman deliberately does not get the hostile's free red outline:
+ * 「これはゲーム上アナウンスなし」 — the player's first contact IS the discovery.
+ */
+export const CIVIL_VARIANTS = Object.freeze({ armed: 'civilArmed', unarmed: 'civilUnarmed' });
+
+/** Cloth tint per kind. Multiplies the ONE `camo_civil` bake. @see CAMO.civil. */
+const CIVIL_CLOTH = {
+  armed: [0.44, 0.42, 0.36], // dark olive-brown work jacket, ~0.045 linear
+  unarmed: [3.05, 3.00, 2.82], // unbleached cotton shirt, ~0.33 linear
+};
+
+{
+  const base = VARIANTS.irregular;
+  /** Everything a soldier has that a man in his own clothes does not. */
+  const undress = {
+    civil: true,
+    camo: 'civil',
+    helmet: false,
+    helmetCover: false,
+    goggles: false,
+    gogglesDown: false,
+    shades: false,
+    maskHard: false,
+    kneePads: false,
+    fullCarrier: false,
+  };
+  VARIANTS[CIVIL_VARIANTS.armed] = {
+    ...base,
+    ...undress,
+    clothTint: CIVIL_CLOTH.armed,
+    // webbing and boots go with the jacket: a militiaman's kit is his own
+    gearTint: [0.86, 0.84, 0.74],
+    skinTint: [0.84, 0.78, 0.72],
+    headWrap: true,
+    faceWrap: true,
+    beard: true,
+    bandolier: true,
+    weapon: 'ak',
+    bulk: 0.86,
+    scale: 0.985,
+  };
+  VARIANTS[CIVIL_VARIANTS.unarmed] = {
+    ...base,
+    ...undress,
+    clothTint: CIVIL_CLOTH.unarmed,
+    gearTint: [0.78, 0.74, 0.68],
+    skinTint: [0.96, 0.88, 0.80],
+    // BARE. No wrap over the head, nothing across the face, nothing in either
+    // hand — this is the man the score penalty is about and he must never be
+    // mistaken for the one beside him.
+    headWrap: false,
+    faceWrap: false,
+    beard: false,
+    bandolier: false,
+    weapon: null,
+    bulk: 0.83,
+    scale: 0.97,
+  };
+}
+
 const bp = (name) => {
   const v = RIG.bindPos[RIG.index(name)];
   return [v.x, v.y, v.z];
@@ -204,6 +312,21 @@ const bp = (name) => {
  */
 export function buildSoldier(name, { rng, materials }) {
   const V = VARIANTS[name] ?? VARIANTS.vanguard;
+  /**
+   * A MAN IN HIS OWN CLOTHES. @see `CIVIL_VARIANTS` — this gates off every
+   * piece of soldier kit rather than recolouring it, because the silhouette is
+   * the cue that survives when the colour does not.
+   *
+   * THE MATERIAL SLOT ORDER IS STILL `MATERIAL_SLOTS`, and that is why the belt
+   * and its buckle move rather than simply being kept: `gear` first appears on
+   * a soldier at the elbow pad and `polymer` at the spare magazine, and both of
+   * those are gone here. Read the note on `MATERIAL_SLOTS` — the order is the
+   * opaque draw order. Belt (gear) goes in before the boots and the buckle
+   * (polymer) after them, which lands the civilian's slots as
+   * cloth/gear/boot/rubber/polymer/skin/steel: a subsequence of the canonical
+   * nine, which is exactly what the assertion at the bottom asks for.
+   */
+  const civ = V.civil === true;
   const nz = new Noise(rng.fork());
   const B = new CharacterBuilder(RIG, { noise: nz, materials: MATERIALS });
 
@@ -215,8 +338,10 @@ export function buildSoldier(name, { rng, materials }) {
 
   /* ---------------- occlusion proxies (drives baked vertex AO) -------- */
   B.occlude([0, 0.95, -0.01], [0, 1.42, 0.0], 0.155, 1.0); // torso core
-  B.occlude([0, 1.17, 0.130], [0, 1.40, 0.138], 0.11, 1.0); // front plate
-  B.occlude([0, 1.20, -0.105], [0, 1.40, -0.112], 0.105, 0.8); // back plate
+  if (!civ) {
+    B.occlude([0, 1.17, 0.130], [0, 1.40, 0.138], 0.11, 1.0); // front plate
+    B.occlude([0, 1.20, -0.105], [0, 1.40, -0.112], 0.105, 0.8); // back plate
+  }
   B.occlude([-0.17, 1.16, 0.02], [-0.17, 1.30, 0.02], 0.055, 0.7); // right side
   B.occlude([0.17, 1.16, 0.02], [0.17, 1.30, 0.02], 0.055, 0.7);
   B.occlude([0, 1.63, 0.0], [0, 1.81, -0.012], 0.106, 1.0); // helmet interior
@@ -238,7 +363,7 @@ export function buildSoldier(name, { rng, materials }) {
   B.occlude([-0.085, 1.42, 0.06], [-0.085, 1.42, -0.06], 0.048, 1.0);
   B.occlude([0.085, 1.42, 0.06], [0.085, 1.42, -0.06], 0.048, 1.0);
   B.occlude([-0.13, 1.40, 0.055], [0.10, 1.10, 0.115], 0.032, 0.9); // sling diagonal
-  B.occlude([-0.02, 1.02, 0.10], [-0.02, 1.02, -0.10], 0.10, 0.6); // carrier hem
+  if (!civ) B.occlude([-0.02, 1.02, 0.10], [-0.02, 1.02, -0.10], 0.10, 0.6); // carrier hem
   // cuffs, elbows and knees: the three places a uniform is always ground in
   B.occlude(wrR, [wrR[0], wrR[1] + 0.05, wrR[2]], 0.044, 0.9);
   B.occlude(wrL, [wrL[0], wrL[1] + 0.05, wrL[2]], 0.044, 0.9);
@@ -249,9 +374,11 @@ export function buildSoldier(name, { rng, materials }) {
   B.occlude([anR[0], anR[1] + 0.09, anR[2]], [anR[0], anR[1] + 0.15, anR[2]], 0.062, 0.8);
   B.occlude([anL[0], anL[1] + 0.09, anL[2]], [anL[0], anL[1] + 0.15, anL[2]], 0.062, 0.8);
   B.occlude(GRIP_R, [GRIP_R[0] + BORE_DIR[0] * 0.4, GRIP_R[1] + BORE_DIR[1] * 0.4 + 0.09, GRIP_R[2] + BORE_DIR[2] * 0.4], 0.045, 0.6);
-  for (let i = 0; i < 3; i++) {
-    const x = (i - 1) * 0.078;
-    B.occlude([x, 1.20, 0.160], [x, 1.28, 0.164], 0.040, 0.8); // mag pouches
+  if (!civ) {
+    for (let i = 0; i < 3; i++) {
+      const x = (i - 1) * 0.078;
+      B.occlude([x, 1.20, 0.160], [x, 1.28, 0.164], 0.040, 0.8); // mag pouches
+    }
   }
 
   /* ---------------- uniform ------------------------------------------ */
@@ -343,8 +470,8 @@ export function buildSoldier(name, { rng, materials }) {
         name: `sleeve${suffix}`,
       }
     );
-    // elbow reinforcement patch
-    B.add(
+    // elbow reinforcement patch — soldier kit; a shirt has a sleeve and no pad
+    if (!civ) B.add(
       P.limbTube(
         nz,
         [el[0] * 0.98 + sh[0] * 0.02, el[1] + 0.05, el[2] - 0.005],
@@ -365,6 +492,26 @@ export function buildSoldier(name, { rng, materials }) {
         name: `elbowPad${suffix}`,
       }
     );
+  }
+
+  /**
+   * THE CIVILIAN'S BELT, AND WHY IT IS HERE RATHER THAN WITH THE WEBBING.
+   * It is a trouser belt, not load-bearing gear, so it survives the undress —
+   * and it is the FIRST `gear` part on this figure, which is what keeps his
+   * material slots a subsequence of `MATERIAL_SLOTS`. @see `civ` above.
+   */
+  if (civ) {
+    B.add(P.belt(nz), {
+      material: 'gear',
+      bones: ['Hips', 'Spine'],
+      bias: [1, 0.5],
+      colour: GEAR.belt,
+      grime: 1.0,
+      dirt: 0.4,
+      dust: 0.25,
+      wear: 0.3,
+      name: 'belt',
+    });
   }
 
   // trousers
@@ -493,7 +640,21 @@ export function buildSoldier(name, { rng, materials }) {
     });
   }
 
+  /**
+   * …AND ITS BUCKLE, which is the first `polymer` on a figure that carries no
+   * spare magazine and no antenna. Same reason as the belt: slot ORDER. It is
+   * also the one hard, glossy thing on a man made entirely of cloth, and at
+   * 6 m it is the highlight that says the shape at his waist is a belt.
+   */
+  if (civ) {
+    B.add(
+      P.pouch(nz, { hx: 0.028, hy: 0.022, hz: 0.012, x: 0.0, y: 0.962, z: 0.108 }),
+      { material: 'polymer', bones: ['Hips', 'Spine'], bias: [1, 0.4], grime: 0.5, wear: 0.35, name: 'buckle' }
+    );
+  }
+
   /* ---------------- load-bearing gear -------------------------------- */
+  if (!civ) {
   B.add(P.plateCarrier(nz, V), {
     material: 'plate',
     bones: ['Spine', 'Spine1', 'Spine2', 'ClavicleR', 'ClavicleL'],
@@ -608,6 +769,60 @@ export function buildSoldier(name, { rng, materials }) {
     wear: 0.26,
     name: 'dumpPouch',
   });
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE BANDOLIER — WHAT SAYS "ARMED" WHEN THE RIFLE IS BEHIND A DOORFRAME
+   * ══════════════════════════════════════════════════════════════════════════
+   * The gun in his hands is the honest cue and it is not always available: a
+   * man leaning out of a room shows his torso a beat before he shows the AK,
+   * and a rifle held low against a dark jacket in an unlit interior is a
+   * silhouette question the player is being asked to answer in about a third of
+   * a second. So the militiaman also wears four AK magazines on a strap across
+   * his chest, and NOTHING else on this figure has anything on its chest at all
+   * — the unarmed civilian's is bare cloth and both armies wear a plate carrier
+   * that fills it edge to edge. The magazines are `polymer`, which lands them
+   * near-black and glossy against a matte jacket, and the strap is `gear`.
+   *
+   * It is the diagonal that reads, not the boxes: a bright line from the left
+   * shoulder to the right hip is the one mark on this map that means "armed".
+   */
+  if (civ && V.bandolier) {
+    for (let i = 0; i < 5; i++) {
+      const t = i / 4;
+      // shoulder (left, high, back) down to the right hip (low, front)
+      const x = 0.108 - t * 0.196;
+      const y = 1.408 - t * 0.30;
+      const z = 0.052 + t * 0.078;
+      B.add(
+        P.pouch(nz, { hx: 0.030, hy: 0.020, hz: 0.014, x, y, z, rz: 0.98, rx: -0.12 }),
+        {
+          material: 'gear',
+          bones: ['Spine2', 'Spine1', 'Spine'],
+          bias: [1, 0.9, 0.4],
+          colour: GEAR.webbing,
+          grime: 1.0,
+          dirt: 0.5,
+          dust: 0.35,
+          wear: 0.34,
+          name: `bandolier${i}`,
+        }
+      );
+      if (i === 4) continue;
+      B.add(
+        P.pouch(nz, { hx: 0.0135, hy: 0.041, hz: 0.021, x: x - 0.010, y: y + 0.012, z: z + 0.016, rz: 0.98, rx: -0.12 }),
+        {
+          material: 'polymer',
+          bones: ['Spine2', 'Spine1', 'Spine'],
+          bias: [1, 0.9, 0.4],
+          grime: 0.45,
+          wear: 0.28,
+          name: `bandolierMag${i}`,
+        }
+      );
+    }
+  }
 
   /* ---------------- head --------------------------------------------- */
   const wrapped = V.faceWrap;
@@ -752,18 +967,27 @@ export function buildSoldier(name, { rng, materials }) {
   const gripAxisR = new THREE.Vector3(0.18, 0.92, -0.34).normalize(); // down the grip
   const gripAxisL = bore.clone();
 
+  /**
+   * BARE HANDS ON A CIVILIAN. The same geometry — `P.glove` IS the hand — on
+   * the `skin` set with the head's own tint instead of the cordura set at
+   * GEAR.glove (0.032-0.048 linear, i.e. near black). At the range a room is
+   * fought at, two pale hands on a pale shirt are the second thing that says
+   * "there is nothing in them"; the knuckle guards go with the gloves.
+   */
+  const handMat = civ ? 'skin' : 'boot';
+  const handTint = civ ? undefined : GEAR.glove;
   B.add(P.glove(nz, wrR, [gripAxisR.x, gripAxisR.y, gripAxisR.z], [palmR.x, palmR.y, palmR.z], -1), {
-    material: 'boot',
+    material: handMat,
     bones: ['HandR', 'ForearmR'],
     bias: [1, 0.35],
-    colour: GEAR.glove,
+    colour: handTint,
     grime: 0.9,
-    dirt: 0.3,
+    dirt: civ ? 0.12 : 0.3,
     dust: 0.25,
     wear: 0.28,
     name: 'gloveR',
   });
-  B.add(P.knuckleGuard(wrR, [gripAxisR.x, gripAxisR.y, gripAxisR.z], [palmR.x, palmR.y, palmR.z]), {
+  if (!civ) B.add(P.knuckleGuard(wrR, [gripAxisR.x, gripAxisR.y, gripAxisR.z], [palmR.x, palmR.y, palmR.z]), {
     material: 'polymer',
     bone: 'HandR',
     grime: 0.5,
@@ -771,17 +995,17 @@ export function buildSoldier(name, { rng, materials }) {
     name: 'knuckleR',
   });
   B.add(P.glove(nz, wrL, [gripAxisL.x, gripAxisL.y, gripAxisL.z], [palmL.x, palmL.y, palmL.z], 1), {
-    material: 'boot',
+    material: handMat,
     bones: ['HandL', 'ForearmL'],
     bias: [1, 0.35],
-    colour: GEAR.glove,
+    colour: handTint,
     grime: 0.9,
-    dirt: 0.3,
+    dirt: civ ? 0.12 : 0.3,
     dust: 0.25,
     wear: 0.28,
     name: 'gloveL',
   });
-  B.add(P.knuckleGuard(wrL, [gripAxisL.x, gripAxisL.y, gripAxisL.z], [palmL.x, palmL.y, palmL.z]), {
+  if (!civ) B.add(P.knuckleGuard(wrL, [gripAxisL.x, gripAxisL.y, gripAxisL.z], [palmL.x, palmL.y, palmL.z]), {
     material: 'polymer',
     bone: 'HandL',
     grime: 0.5,
@@ -789,16 +1013,27 @@ export function buildSoldier(name, { rng, materials }) {
     name: 'knuckleL',
   });
 
-  const W = buildWeapon(nz, V.weapon, rng);
-  B.add(W.steel, { material: 'steel', bone: 'HandR', grime: 0.55, wear: 0.25, name: 'wpnSteel' });
-  B.add(W.polymer, { material: 'polymer', bone: 'HandR', grime: 0.5, wear: 0.3, name: 'wpnPoly' });
-  B.add(W.rubber, { material: 'rubber', bone: 'HandR', grime: 0.6, name: 'wpnRubber' });
-  if (W.glass.p.length) {
-    B.add(W.glass, { material: 'glass', bone: 'HandR', grime: 0.1, name: 'wpnGlass' });
+  /**
+   * NOTHING IN EITHER HAND. `V.weapon: null` is the unarmed civilian and it is
+   * the ONE fact the score penalty turns on, so it is expressed as the absence
+   * of the mesh rather than as a hidden or a shrunken one. `steel` (and the
+   * optic's `glass`) simply never appear in his slot list; `MATERIAL_SLOTS` is
+   * a subsequence test, so a shorter list is not a violation of it, and
+   * `resolveMaterials` is driven by what was actually emitted.
+   */
+  const W = V.weapon ? buildWeapon(nz, V.weapon, rng) : null;
+  if (W) {
+    B.add(W.steel, { material: 'steel', bone: 'HandR', grime: 0.55, wear: 0.25, name: 'wpnSteel' });
+    B.add(W.polymer, { material: 'polymer', bone: 'HandR', grime: 0.5, wear: 0.3, name: 'wpnPoly' });
+    B.add(W.rubber, { material: 'rubber', bone: 'HandR', grime: 0.6, name: 'wpnRubber' });
+    if (W.glass.p.length) {
+      B.add(W.glass, { material: 'glass', bone: 'HandR', grime: 0.1, name: 'wpnGlass' });
+    }
   }
 
-  // sling: body-bound so it stays on the chest as the arms move
-  B.add(P.sling(W.foregrip, W.stockTop), {
+  // sling: body-bound so it stays on the chest as the arms move. Soldier kit —
+  // the militiaman carries his rifle in his hands and his ammunition on a strap.
+  if (W && !civ) B.add(P.sling(W.foregrip, W.stockTop), {
     material: 'gear',
     bones: ['Spine2', 'Spine1', 'ClavicleR', 'ClavicleL', 'Hips'],
     bias: [1, 0.8, 0.5, 0.5, 0.3],
@@ -866,21 +1101,49 @@ export const MATERIAL_SLOTS = Object.freeze([
  */
 export function resolveMaterials(name, slots, materials) {
   const V = VARIANTS[name] ?? VARIANTS.vanguard;
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * A CIVILIAN WEARS NO SIDE'S COLOUR, AND HE CANNOT BE GIVEN ONE BY MISTAKE
+   * ────────────────────────────────────────────────────────────────────────
+   * Two switches, both off, and both off by OMISSION rather than by a flag
+   * somebody has to remember to honour:
+   *
+   *   `dress: true`  is what sets `owGarment` and is the only thing
+   *                  `setTeamDress` will repaint. Without it his jacket keeps
+   *                  its own hue for ever — no crimson, no slate.
+   *   `variant: name` is what puts a material into `SoldierMaterials.byVariant`,
+   *                  which is the ONLY list `setTeamRim` and `setTeamDress`
+   *                  walk. Leaving it off makes both of them a no-op that
+   *                  returns 0 for this dress, so `AiSystem._noteVariantTeam`
+   *                  can record a civilian as team 1 (which he is — every one
+   *                  of them is hostile) without that fact reaching a pixel.
+   *
+   * The rim is the half that matters most. It is a coloured edge on every
+   * hostile at range, i.e. a free "this is an enemy" outline, and 「これはゲーム
+   * 上アナウンスなし」 means the player's first contact IS the discovery: a
+   * militiaman must not be outlined before he is seen, and an unarmed civilian
+   * must not be outlined as a valid target at all.
+   */
+  const civ = V.civil === true;
   const detail = (set, matName, normal, rough) => ({
     set,
     scale: MATERIALS[matName].tile / DETAIL_TILE,
     normal,
     rough,
   });
+  /** Undefined for a civilian: see the block above. Every slot goes through it. */
+  const side = civ ? undefined : name;
+  /** Likewise — the garment flag `setTeamDress` keys on. */
+  const dress = civ ? undefined : true;
   return slots.map((n) => {
     switch (n) {
       case 'cloth':
         return materials.get(`camo_${V.camo}`, {
           key: name,
-          variant: name,
+          variant: side,
           tint: V.clothTint,
           // TEAM DRESS: the garment slots take the side's colour. See TEAM_DRESS.
-          dress: true,
+          dress,
           rough: ROUGH.cloth,
           metal: 1,
           // 1.15, not 1.0: the base tile now carries a 1-2 cm crease field and
@@ -891,9 +1154,9 @@ export function resolveMaterials(name, slots, materials) {
       case 'plate':
         return materials.get('plate', {
           key: name,
-          variant: name,
+          variant: side,
           tint: V.plateTint,
-          dress: true,
+          dress,
           rough: ROUGH.plate,
           normalScale: 1.0,
           detail: detail('nylon', 'plate', 0.45, 0.10),
@@ -901,34 +1164,34 @@ export function resolveMaterials(name, slots, materials) {
       case 'gear':
         return materials.get('nylon', {
           key: name,
-          variant: name,
+          variant: side,
           tint: V.gearTint,
-          dress: true,
+          dress,
           normalScale: 1.1,
           detail: detail('nylon', 'gear', 0.5, 0.14),
         });
       case 'boot':
         return materials.get('nylon', {
           key: `${name}_boot`,
-          variant: name,
+          variant: side,
           tint: V.gearTint,
-          dress: true,
+          dress,
           rough: ROUGH.boot,
           normalScale: 1.1,
           detail: detail('nylon', 'boot', 0.5, 0.10),
         });
       case 'skin':
-        return materials.get('skin', { key: name, variant: name, tint: V.skinTint, normalScale: 0.8, ao: 0.6 });
+        return materials.get('skin', { key: name, variant: side, tint: V.skinTint, normalScale: 0.8, ao: 0.6 });
       case 'polymer':
-        return materials.get('polymer', { key: name, variant: name, normalScale: 1.0 });
+        return materials.get('polymer', { key: name, variant: side, normalScale: 1.0 });
       case 'steel':
-        return materials.get('steel', { key: name, variant: name, normalScale: 1.0 });
+        return materials.get('steel', { key: name, variant: side, normalScale: 1.0 });
       case 'rubber':
-        return materials.get('rubber', { key: name, variant: name, normalScale: 1.2 });
+        return materials.get('rubber', { key: name, variant: side, normalScale: 1.2 });
       case 'glass':
         return materials.glass();
       default:
-        return materials.get('polymer', { key: name, variant: name });
+        return materials.get('polymer', { key: name, variant: side });
     }
   });
 }
