@@ -4907,6 +4907,11 @@ export class MatchSystem {
       this.ui.matchDriven = false;
       this.ui.isFriendlyTarget = null;
       this.ui.round = null;
+      // Same reason `ai.vehicles` is cleared below: the records `ui` is holding
+      // describe hulls that are about to stop existing, and a marker left on one
+      // is a bracket around empty street that never goes out.
+      this.ui.setVehicles?.(null);
+      this.ui.setCaches?.(null);
     }
     if (this.weapons) this.weapons.locked = false;
     if (this.ai) this.ai.combatEnabled = true;
