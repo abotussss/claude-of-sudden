@@ -1127,6 +1127,8 @@ export class NavGrid {
    */
   nearestGroundBelow(x, z, y, maxRings = 10, minFall = 1.6, maxFall = 12) {
     const cx = this.cellX(x), cz = this.cellZ(z);
+    const phys = this.physics;
+    const MASK = phys.MASK.WORLD;
     for (let ring = 0; ring <= maxRings; ring++) {
       let best = -1, bestD = Infinity;
       for (let dz = -ring; dz <= ring; dz++) {
@@ -1140,6 +1142,27 @@ export class NavGrid {
           const c = this.comp[i];
           if (c < 0) continue;
           if (this.compSize[c] < this.escapeFloor && !(this.escape.length && this.escape[c] >= 0)) continue;
+          /**
+           * THERE HAS TO BE SKY BETWEEN THEM, AND THAT IS THE WHOLE TEST.
+           *
+           * The first version of this searched from ring ZERO and the first
+           * thing it found was THE CELL DIRECTLY UNDER HIS BOOTS — the shop
+           * floor 6.4 m below a carved roof is walkable, is on the ground's own
+           * component and is 0 m away. `Agent._move` clears a detour inside
+           * 0.6 m, so the rescue was cancelled on the frame it was ordered, and
+           * the trace showed exactly that: `ds4.8 sp0.0` at stuck rung 2 for
+           * forty seconds together.
+           *
+           * One ray up from the landing to his feet answers it honestly and
+           * cheaply: everything under the slab he is standing on is refused,
+           * everything out past the parapet is not. The horizontal floor is the
+           * detour's own arrival radius, so the point he is sent to is always a
+           * point he has to walk to.
+           */
+          const wx = this.worldX(ix), wz = this.worldZ(iz);
+          const hx = wx - x, hz = wz - z;
+          if (hx * hx + hz * hz < 1.4 * 1.4) continue;
+          if (phys.raycastAny(wx, this.floor[i] + 0.25, wz, 0, 1, 0, fall - 0.4, MASK)) continue;
           // Nearest, then shallowest: the roof next door beats the street when
           // both are under him, and a man who can take one storey takes one.
           const d = dx * dx + dz * dz + fall * 0.35;

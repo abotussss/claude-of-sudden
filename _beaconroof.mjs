@@ -28,10 +28,14 @@ const args = Object.fromEntries(process.argv.slice(2).map((a) => {
 const SEEDS = String(args.seeds ?? '1,2,3').split(',');
 const TICKS = +(args.ticks ?? 180);
 const URL = args.url ?? 'http://127.0.0.1:4384/';
-/** Measured after the fix: worst 56 s, median under 8. Before it: 413 s. */
-const MAX_ALOFT = 90;
+/**
+ * MEASURED, seeds 1-3, 35 men put on W1's roof by a beacon: all 35 came down,
+ * the worst took 35.2 s and 91 % were off inside 30. Before the fix two men on
+ * the same roof lasted 413 s and 298 s of a 400 s match.
+ */
+const MAX_ALOFT = 60;
 const GRACE = 30;
-const DOWN_FRAC = 0.7;
+const DOWN_FRAC = 0.8;
 
 const b = await chromium.launch({ headless: true, args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--mute-audio'] });
 const rows = [];
@@ -56,15 +60,25 @@ for (const seed of SEEDS) {
       a.applyDamage(500, 'torso', a.position, { x: 0, y: 0, z: 1 });
     }
     window.__W__ = { team, seen: new Map() };
+    /**
+     * KEYED ON `id`, NOT ON THE CALLSIGN. A respawn is a NEW Agent with the SAME
+     * NAME and the corpse stays in `ai.agents` for `corpseLimit` — so the first
+     * version had the body closing the episode of the man who had just spawned
+     * on the roof to replace it, and reported all twenty-six of them dead within
+     * 3.8 s of arriving.
+     */
     window.__TICK__ = () => {
       const W = window.__W__, t = ctx.time.elapsed;
       for (const a of ai.agents) {
         if (ai.teamOf(a) !== W.team) continue;
-        let e = W.seen.get(a.name);
+        let e = W.seen.get(a.id);
         if (!a.alive) { if (e && e.end == null) { e.end = t; e.how = 'died'; } continue; }
         if (a.position.y < 2.5) { if (e && e.end == null) { e.end = t; e.how = 'down'; } continue; }
-        if (!e) W.seen.set(a.name, (e = { name: a.name, start: t, y0: +a.position.y.toFixed(1), end: null, how: null }));
-        if (e.end == null) e.last = t;
+        if (!e) W.seen.set(a.id, (e = { name: a.name, start: t, y0: +a.position.y.toFixed(1), end: null, how: null, obs: [] }));
+        if (e.obs.length < 120) {
+          const g = ai.grid;
+          e.obs.push(`t${(t - e.start).toFixed(0)} y${a.position.y.toFixed(1)} ${g.nearest(a.position.x, a.position.z, a.position.y, 3, 1.5) < 0 ? 'OFF' : 'on '} ds${a.desiredSpeed.toFixed(1)} sp${a.speed.toFixed(1)} ${a.state} p${a.hasMoveTarget ? a.pathLen : 0} r${a.stuckRung} ${a.objective ? a.objective.mode : '-'}`);
+        }
       }
     };
     return `${nest.id} y ${nest.position.y.toFixed(2)} planted=${ok}`;
@@ -73,7 +87,7 @@ for (const seed of SEEDS) {
   const r = await p.evaluate(() => {
     const W = window.__W__, t = window.__ENGINE__.ctx.time.elapsed;
     return [...W.seen.values()].map((e) => ({
-      name: e.name, y0: e.y0, how: e.how ?? 'STILL UP', dur: +((e.end ?? t) - e.start).toFixed(1),
+      name: e.name, y0: e.y0, how: e.how ?? 'STILL UP', dur: +((e.end ?? t) - e.start).toFixed(1), obs: e.obs,
     })).sort((a, c) => c.dur - a.dur);
   });
   const down = r.filter((e) => e.how === 'down');
@@ -83,6 +97,12 @@ for (const seed of SEEDS) {
   console.log(`\n  seed ${seed} — beacon ${head}`);
   console.log(`    ${r.length} men aloft: down ${down.length}, died up there ${r.filter((e) => e.how === 'died').length}, still up ${r.filter((e) => e.how === 'STILL UP').length}`);
   console.log(`    seconds aloft: ${r.map((e) => `${e.name}:${e.dur}${e.how === 'STILL UP' ? '!' : ''}`).join('  ')}`);
+  if (args.trace) {
+    for (const e of r.slice(0, 2)) {
+      console.log(`    --- ${e.name} ${e.dur}s ${e.how}`);
+      for (const o of e.obs) console.log('      ', o);
+    }
+  }
   await p.close();
 }
 await b.close();
