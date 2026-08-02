@@ -124,6 +124,43 @@ await page.evaluate(({ FOLLOW }) => {
     player.movement.pitch = Math.asin(dy / Math.hypot(dx, dy, dz));
     return true;
   };
+  /**
+   * WHEN SOMEBODY IS ACTUALLY SHOOTING AT IT. `stats.rounds` is incremented by
+   * `_takeRound` for every round that lands on a collider, so a jump in it is
+   * the frame the infantry is hitting the hull — which is the thing the player
+   * says he never sees. The camera goes BEHIND the hull looking back down the
+   * bearing the last round came from, so the shooters are in frame rather than
+   * the tank's own backplate.
+   */
+  window.__HITCAM = () => {
+    const t = m.tank.tanks.find((x) => x.id === FOLLOW) ?? m.tank.tanks[0];
+    if (!t || !t.alive) return null;
+    const by = t.lastHitBy;
+    const p = by?.position;
+    if (!p) return null;
+    const player = e.ctx.peek('player');
+    const ph = e.ctx.peek('physics');
+    // stand off to the side of the line between shooter and hull, elevated
+    let dx = t.position.x - p.x;
+    let dz = t.position.z - p.z;
+    const len = Math.hypot(dx, dz) || 1;
+    dx /= len; dz /= len;
+    const mx = (t.position.x + p.x) * 0.5;
+    const mz = (t.position.z + p.z) * 0.5;
+    const ox = mx - dz * 12;
+    const oz = mz + dx * 12;
+    const g = ph.groundHeight(ox, oz, 60);
+    const y = (Number.isFinite(g) ? g : t.position.y) + 7.0;
+    const v = m.sites[0].position.clone().set(ox, y, oz);
+    const ax = mx - ox;
+    const az = mz - oz;
+    const ay = t.position.y + 1.2 - (y + 1.62);
+    player.respawnAt(v, Math.atan2(ax, az));
+    player.movement.pitch = Math.asin(ay / Math.hypot(ax, ay, az));
+    return { by: by?.name ?? '?', dist: +len.toFixed(1) };
+  };
+  window.__ROUNDS = () => m.tank.tanks.reduce((a, t) => a + t.stats.rounds, 0);
+  window.__DEAD = () => m.tank.tanks.filter((t) => t.state === 'dead').map((t) => t.id);
   window.__SAMPLE = () => {
     const W = window.__W;
     const now = e.time.elapsed - W.t0;
@@ -141,11 +178,16 @@ await page.evaluate(({ FOLLOW }) => {
 }, { FOLLOW });
 
 let shotN = 0;
+let hitN = 0;
+let deadN = 0;
 let lastShot = -99;
+let lastHitShot = -99;
 let lastSample = -99;
+let rounds = 0;
+const seenDead = new Set();
 let now = 0;
 const wall0 = Date.now();
-while (now < WATCH && Date.now() - wall0 < WATCH * 1400 + 120000) {
+while (now < WATCH && Date.now() - wall0 < WATCH * 1400 + 180000) {
   await page.waitForTimeout(120);
   now = await page.evaluate(() => {
     const e = window.__ENGINE__;
@@ -155,6 +197,50 @@ while (now < WATCH && Date.now() - wall0 < WATCH * 1400 + 120000) {
     lastSample = now;
     await page.evaluate(() => window.__SAMPLE());
   }
+
+  /* ---- somebody is hitting a hull: photograph the engagement ---------- */
+  const r = await page.evaluate(() => window.__ROUNDS());
+  if (r > rounds && now - lastHitShot >= 4) {
+    lastHitShot = now;
+    const info = await page.evaluate(() => window.__HITCAM());
+    if (info) {
+      await page.waitForTimeout(90);
+      await page.screenshot({ path: `${SHOTS}/HIT-${String(hitN).padStart(2, '0')}-t${now.toFixed(0)}-${info.by}.png` });
+      console.log(`  [hit] t=${now.toFixed(0)}s rounds ${rounds}->${r}, last by ${info.by} at ${info.dist} m`);
+      hitN++;
+    }
+  }
+  rounds = r;
+
+  /* ---- a hull brewed up: photograph the wreck ------------------------- */
+  const dead = await page.evaluate(() => window.__DEAD());
+  for (const id of dead) {
+    if (seenDead.has(id)) continue;
+    seenDead.add(id);
+    await page.evaluate((id) => {
+      const e = window.__ENGINE__;
+      const m = e.ctx.peek('match');
+      const ph = e.ctx.peek('physics');
+      const player = e.ctx.peek('player');
+      const t = m.tank.tanks.find((x) => x.id === id);
+      const a = t.yaw + Math.PI * 0.7;
+      const x = t.position.x + Math.sin(a) * 16;
+      const z = t.position.z + Math.cos(a) * 16;
+      const g = ph.groundHeight(x, z, 60);
+      const y = (Number.isFinite(g) ? g : t.position.y) + 7;
+      const v = m.sites[0].position.clone().set(x, y, z);
+      const dx = t.position.x - x;
+      const dz = t.position.z - z;
+      const dy = t.position.y + 1.5 - (y + 1.62);
+      player.respawnAt(v, Math.atan2(dx, dz));
+      player.movement.pitch = Math.asin(dy / Math.hypot(dx, dy, dz));
+    }, id);
+    await page.waitForTimeout(120);
+    await page.screenshot({ path: `${SHOTS}/DEAD-${String(deadN).padStart(2, '0')}-t${now.toFixed(0)}-${id}.png` });
+    console.log(`  [dead] t=${now.toFixed(0)}s ${id} destroyed`);
+    deadN++;
+  }
+
   if (now - lastShot >= 2.5) {
     lastShot = now;
     const ok = await page.evaluate(() => window.__CAM());
@@ -258,4 +344,4 @@ console.log('\nevents:', out.events.join('  '));
 console.log('\ntank console lines:');
 for (const l of tanklog) console.log('   ', l);
 if (errs.length) console.log('PAGEERRORS:', errs);
-console.log(`\n${shotN} screenshots in ${SHOTS}`);
+console.log(`\n${shotN} chase shots, ${hitN} engagement shots, ${deadN} wreck shots in ${SHOTS}`);
