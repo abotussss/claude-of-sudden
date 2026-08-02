@@ -96,6 +96,7 @@ ai.protect(actor, seconds)  ai.targetable(actor)      ai.corpseLimit
 ai.needsAmmo(actor)         ai.needsGrenade(actor)    ai.ammoState(actor)
 ai.resupply(actor, mags, grenades)                    ai.radio
 ai.setCoverRazed(down)      ai.syncCoverBlocks()
+ai.vehicles = [...]         ai.drones = [...]
 agent.setObjective(mode, position, site, facing)   agent.working
 player.team / player.name / player.alive
 player.respawnAt(position, yaw)     player.health.regenEnabled
@@ -434,6 +435,11 @@ Emit and listen via `ctx.events`. Payloads are plain objects. The canonical set:
 | `match:drone` | `{ phase, id, team, position }` | match |
 | ↳ | A SUICIDE DRONE, at each beat of its life: `launch` out of a side's base, `lock` when it has taken a man and started his warning, `dive` when it commits, `boom` when the warhead functions, `dead` when it was shot down before it could. Thirty a match, both sides combined, paced on `_matchProgress`; at most `RULES.droneMaxAloft` are ever in the air. The payload object is REUSED — copy what you need. `match.drones.list` is the live array, published for the same reason `match.tank.tanks` is: a rotor is a CONTINUOUS sound and cannot be built off a one-shot event. See `src/match/drone.js`. | |
 
+| `weapon:flash` | `{ position, radius, duration }` | weapons / ai |
+| ↳ | A FLASHBANG HAS FUNCTIONED. Emitted by BOTH throwers — `ThrownGrenades._flash` for the player's and `AiSystem._detonateThrown` for a bot's — with identical payloads, which is the whole mechanism: `ai` blinds every soldier inside `radius` with a real `MASK.EXPLOSION` line of sight from ONE listener, so a bang is a bang whoever threw it. `duration` is the full effect at the centre; a man at the edge gets a fraction of it. Bots implement the blind as NOT ACQUIRING (`pickVisibleHostile` returns null) plus a suppression shove — they keep walking, keep shooting at what they already believed, and simply cannot find anything new. @see `Agent.blind`. | |
+| `weapon:smoke` | `{ position, radius, duration }` | weapons / ai |
+| ↳ | A SCREEN IS BURNING, and it is a wall to the AI as well as to the eye. Same two emitters, same payload. `ai` keeps at most six live volumes as a flat array of five numbers each and refuses any sightline through the opaque core of one (`AiSystem._smokeBlocks`, inside `_sightTo`) — SYMMETRICALLY, so a bot cannot use his own cloud as a firing position either. `fx` draws it off `addSmokeSource`; nothing in `physics` knows it exists. | |
+
 Additive fields on existing payloads, all optional and all ignorable:
 
 | payload | field | meaning |
@@ -443,6 +449,7 @@ Additive fields on existing payloads, all optional and all ignorable:
 | `explosion` | `kind` | what the ordnance IS, when the `source` had to be a string. `'grenade'` is read by `Armour._takeBlast` (`fragMul`) and is set by `ai`'s own frag and by the drone. |
 | `explosion` | `label` | a display string for the kill cam, when the blast belongs to something with a name that is not an actor. The drone sets `'SUICIDE DRONE'`. |
 | `explosion` | `team` | which side fired it, for the same reader. `-1` ⇒ nobody's. |
+| `weapon:flash` | `team` | which side threw it. `ai`'s listener gives that side 0.3 of the blind rather than all of it, because they were told on the net before it landed — a bot flashes a door at 6-22 m and the radius is 16, so without this a squad blinds itself on every assault. Absent (the player's own) ⇒ everybody takes it in full. |
 
 `label` and `team` exist because `Armour._takeBlast` passes a NON-string `source`
 straight through to `tank.lastHitBy` and from there to `ai.teamOf` and the
