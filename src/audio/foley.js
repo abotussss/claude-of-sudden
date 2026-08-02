@@ -1179,3 +1179,65 @@ export function heartbeat(actx, bank, rng, o = {}) {
   }
   return { node: out, end: t0 + 0.6, send: 0.1 };
 }
+
+/**
+ * THE MINE'S TRIP WARNING — a RISING beep, and the rise is the whole point.
+ *
+ * `src/weapons/grenades.js` arms a laser tripwire 0.9 s after it lands and
+ * detonates 1.0 s after the beam breaks. That one second is the entire feature:
+ * it is the difference between a mine and a trap you cannot answer, and its
+ * author had to build the warning out of `dryfire` — a striker falling — played
+ * twice, because nothing in this bank was an alarm. It cuts through a firefight,
+ * which is why it works at all, but a CLICK cannot say what this has to say.
+ *
+ * A click is an event: something happened. A rising pitch is a STATE: something
+ * is happening and it is not finished. Every countdown ever built rises for that
+ * reason, and it is the reason the request was right.
+ *
+ * Two pips, each sweeping up, the second starting above where the first ended,
+ * so the pair reads as one gesture that is going somewhere rather than as two
+ * sounds. Square through a bandpass: odd harmonics survive being heard across a
+ * street through gunfire in a way a sine does not, and the bandpass keeps it
+ * from being shrill in the ear of the man standing on it.
+ *
+ * @param {object} o { when, level }
+ */
+export function mineTrip(actx, bank, rng, o = {}) {
+  const t0 = o.when ?? actx.currentTime;
+  const lvl = clamp(o.level ?? 1, 0, 2);
+  const out = gain(actx, 0.42); // VOICE TRIM
+  const jit = rng.range(0.98, 1.02);
+
+  /* the mechanism: the striker/relay under the beep, because it IS a device */
+  struckResonator(actx, bank, rng, t0, [
+    { f: 2400 * jit, q: 22, g: 0.1 * lvl, decay: 0.02 },
+    { f: 5200 * jit, q: 14, g: 0.05 * lvl, decay: 0.012 },
+  ], 0.0015).connect(out);
+
+  /* two rising pips */
+  const PIPS = [
+    { at: 0.0, f0: 980, f1: 1480, dur: 0.11 },
+    { at: 0.16, f0: 1560, f1: 2320, dur: 0.13 },
+  ];
+  for (const p of PIPS) {
+    const st = t0 + p.at;
+    const o1 = osc(actx, 'square', p.f0 * jit);
+    const bp = biquad(actx, 'bandpass', p.f0 * 1.5 * jit, 1.4);
+    const g = gain(actx, 0);
+    series(o1, bp, g).connect(out);
+    sweep(o1.frequency, st, p.f0 * jit, p.f1 * jit, p.dur);
+    sweep(bp.frequency, st, p.f0 * 1.5 * jit, p.f1 * 1.6 * jit, p.dur);
+    // Hard on, hard off: a pip with a soft attack sounds like a synthesiser
+    // warming up, and this has one second to be understood.
+    ad(g.gain, st, 0.5 * lvl, 0.0015, p.dur);
+    o1.start(st);
+    o1.stop(st + p.dur * 1.4 + 0.02);
+  }
+
+  /**
+   * Nearly dry. A room on an alarm smears the two pips into one and the rise —
+   * the only information in the sound — goes with it. 「リバーブが強い」 is a
+   * standing complaint and this is the wrong voice to spend any of it on.
+   */
+  return { node: out, end: t0 + 0.34, send: 0.05 };
+}

@@ -297,3 +297,288 @@ export function tankGun(actx, bank, rng, o = {}) {
 
   return { node: out, end: end + 0.05, send: 0.22 };
 }
+
+/* ==================================================================== */
+/* SUICIDE DRONES — the other thing in this game with a motor            */
+/* ==================================================================== */
+/**
+ * 「ドローンの音も明確に出して」. `src/match/drone.js` flies thirty of these a
+ * match, two aloft at a time, and until now it had to build the sound out of
+ * voices that already existed: `strike_jet` re-struck about once a second
+ * inside 58 m. That is a TURBINE, played as a series of one-shots, for four
+ * small propellers — and its own author wrote down that it was a placeholder.
+ *
+ * A rotor cannot be made of one-shots for the same reason a tank engine cannot:
+ * it is not an event, it is a PRESENCE. What follows is the same contract
+ * `tankEngine` publishes — `{ node, drive, stop, freeAt, free }` — driven off
+ * `match.drones.list` by the same loop in `battle.js`, because `match` publishes
+ * that array for exactly this purpose and says so.
+ *
+ * WHY IT SOUNDS LIKE A QUADCOPTER AND NOT LIKE A WASP:
+ *
+ *   1. FOUR PROPS, NOT ONE. Each is a two-blade prop, so its fundamental is the
+ *      BLADE-PASS rate — twice the shaft rate — and the four are deliberately
+ *      detuned by up to 2.4 %. Four motors are never in sync (they are being
+ *      trimmed continuously to hold attitude), and the beat frequencies that
+ *      fall out of that mistuning, 2-9 Hz here, ARE the sound of a multirotor.
+ *      One oscillator at the same pitch is a doorbell.
+ *   2. THE CHOP IS AMPLITUDE, NOT PITCH. Air noise amplitude-modulated at the
+ *      blade rate, as a multiplier stage rather than an LFO summed into a gain
+ *      — the same trap `tankEngine`'s combustion layer documents.
+ *   3. LOAD IS PITCH *AND* GRIT. A quad holding station is a hum; a quad
+ *      committing to a 17 m/s dive has its motors saturated and reads as a
+ *      SCREAM. Both the blade rate and the noise's share rise with load, and
+ *      the low-pass opens, so the dive gets brighter as well as louder. That is
+ *      the whole warning: the player cannot outrun it, so what the sound has to
+ *      tell him is that it has stopped hunting and started arriving.
+ *
+ * @returns {{node: GainNode, drive: Function, stop: Function, free: Function}}
+ */
+export function droneRotor(actx, bank, rng, o = {}) {
+  const t0 = o.when ?? actx.currentTime;
+  /**
+   * VOICE TRIM. Under `tankEngine`'s 0.55 on purpose: a 50-tonne diesel is the
+   * loudest thing on the street and a 2 kg airframe is not. It is still a
+   * CONTINUOUS voice, and continuous sounds dominate a mix far more than their
+   * level suggests — `_startEngine`'s note on the tank measuring seven times
+   * the player's own rifle is the cautionary tale.
+   */
+  const out = gain(actx, 0.34);
+  const nodes = [];
+  const sources = [];
+  const keep = (n) => { nodes.push(n); return n; };
+
+  /** Blade-pass rate holding station, Hz, jittered so two drones never phase. */
+  const idleF = 196 * rng.range(0.93, 1.08);
+  /** …and at full load. A small motor DOES rev, unlike the tank's diesel. */
+  const maxF = idleF * 1.72;
+
+  /* ---- 1-4. the four props --------------------------------------- */
+  // Detune per prop, in cents of the blade rate. Fixed offsets rather than four
+  // rng draws so the beat pattern is stable for this airframe's whole life.
+  const DET = [1, 1.008, 0.987, 1.0235];
+  const props = [];
+  const propSum = keep(gain(actx, 1));
+  for (let i = 0; i < 4; i++) {
+    const p = keep(osc(actx, 'sawtooth', idleF * DET[i] * rng.range(0.997, 1.003)));
+    const g = keep(gain(actx, 0.26));
+    p.connect(g);
+    g.connect(propSum);
+    p.start(t0);
+    sources.push(p);
+    props.push({ osc: p, det: DET[i] });
+  }
+  // One shaper for all four: the intermodulation between the props is the point,
+  // and a saturator is where it comes from. Four separate shapers would give
+  // four clean buzzes that never interact.
+  const propLP = keep(biquad(actx, 'lowpass', 1500, 0.9));
+  const propDrv = keep(shaper(actx, saturationCurve(2.4, 0.35), '2x'));
+  const propG = keep(gain(actx, 0.5));
+  series(propSum, propLP, propDrv, propG).connect(out);
+
+  /* ---- 5. blade chop: air noise, AM'd at the blade rate ----------- */
+  const air = keep(bank.source('white', rng, rng.range(0.9, 1.2), true));
+  const airBP = keep(biquad(actx, 'bandpass', 2100, 0.55));
+  const airG = keep(gain(actx, 0.12));
+  const airAM = keep(gain(actx, 0.6));
+  series(air, airBP, airG, airAM).connect(out);
+  const am = keep(osc(actx, 'sawtooth', idleF));
+  const amG = keep(gain(actx, 0.5));
+  am.connect(amG);
+  amG.connect(airAM.gain);
+  air.start(t0, air._offset);
+  am.start(t0);
+  sources.push(air, am);
+
+  /* ---- 6. motor whine: the part that carries -------------------- */
+  // Two octaves over the blade rate and narrow. This is what you hear first
+  // across a courtyard, before the chop resolves.
+  const whine = keep(osc(actx, 'triangle', idleF * 4));
+  const whineBP = keep(biquad(actx, 'bandpass', idleF * 4, 3.5));
+  const whineG = keep(gain(actx, 0.07));
+  series(whine, whineBP, whineG).connect(out);
+  whine.start(t0);
+  sources.push(whine);
+
+  // Fade in: `match` may hand us a drone that is already in the air.
+  out.gain.setValueAtTime(0.0001, t0);
+  out.gain.setTargetAtTime(0.34, t0, 0.3);
+
+  let stopped = false;
+
+  return {
+    node: out,
+    /**
+     * @param {number} load  0 (holding station) .. 1 (committed dive)
+     * @param {number} speed metres/second through the air
+     */
+    drive(load, speed, when) {
+      if (stopped) return;
+      const t = when ?? actx.currentTime;
+      const ld = clamp(load, 0, 1);
+      const sp = clamp(speed, 0, 20);
+      const f = lerp(idleF, maxF, ld);
+      // 0.09 s, an order of magnitude quicker than the tank's 0.25: these are
+      // 2-inch props on brushless motors and they answer the mixer instantly.
+      // A drone whose note lags its dive is a drone that arrives before it is
+      // heard, which is the one thing this sound exists to prevent.
+      for (const p of props) p.osc.frequency.setTargetAtTime(f * p.det, t, 0.09);
+      am.frequency.setTargetAtTime(f, t, 0.09);
+      whine.frequency.setTargetAtTime(f * 4, t, 0.09);
+      whineBP.frequency.setTargetAtTime(f * 4, t, 0.09);
+      propLP.frequency.setTargetAtTime(lerp(1250, 3400, ld), t, 0.12);
+      propG.gain.setTargetAtTime(lerp(0.38, 0.72, ld), t, 0.12);
+      // Grit: the share of the voice that is turbulence rather than tone. A
+      // dive is not just a higher hum, it is a rougher one.
+      airG.gain.setTargetAtTime(lerp(0.09, 0.34, ld), t, 0.12);
+      airBP.frequency.setTargetAtTime(lerp(1800, 3600, ld), t, 0.15);
+      whineG.gain.setTargetAtTime(lerp(0.05, 0.14, ld), t, 0.15);
+      // Airspeed rush, separate from load: a drone crossing at cruise is moving
+      // air even while its motors are steady.
+      airAM.gain.setTargetAtTime(clamp(0.45 + sp * 0.02, 0.45, 0.85), t, 0.2);
+    },
+    stop(when) {
+      const t = when ?? actx.currentTime;
+      if (stopped) return this.freeAt;
+      stopped = true;
+      out.gain.cancelScheduledValues(t);
+      // Quicker than the tank's 0.22: a drone that stops existing (it detonated)
+      // should not leave a rotor fading over a crater.
+      out.gain.setTargetAtTime(0.0001, t, 0.09);
+      const at = t + 0.5;
+      for (const s of sources) { try { s.stop(at); } catch { /* already stopped */ } }
+      this.freeAt = at + 0.1;
+      return this.freeAt;
+    },
+    freeAt: Infinity,
+    free() {
+      stopped = true;
+      for (const s of sources) { try { s.stop(); } catch { /* already stopped */ } }
+      for (const n of nodes) { try { n.disconnect(); } catch { /* gone */ } }
+      try { out.disconnect(); } catch { /* gone */ }
+    },
+  };
+}
+
+/**
+ * DRONE LOCK — the warble the TARGET hears, head-locked.
+ *
+ * `src/match/drone.js` gives a man 2.2 seconds between the lock closing and the
+ * dive, and puts DRONE LOCK / BREAK LINE OF SIGHT on his HUD. A caption is not
+ * a threat; this is what makes it one, and it is deliberately not a sound
+ * anything else in this game makes — the mix is full of gunfire, impacts and
+ * boots, all of them broadband and all of them transient. A pitched, PERIODIC,
+ * artificial warble occupies a hole in that spectrum, which is why every
+ * missile warner ever built sounds roughly like this.
+ *
+ * Two tones a fifth apart, swapped at 13 Hz by a square LFO on the frequency
+ * (a warble, not two beeps: a continuous tone that will not sit still is much
+ * harder to ignore than a pulse train), with a second detuned voice under it so
+ * it beats, and a hard-edged pulse envelope on top.
+ */
+export function droneLock(actx, bank, rng, o = {}) {
+  const t0 = o.when ?? actx.currentTime;
+  const lvl = clamp(o.level ?? 1, 0, 2);
+  const dur = clamp(o.dur ?? 0.62, 0.2, 2);
+  const out = gain(actx, 0.5); // VOICE TRIM
+  const f0 = 940 * rng.range(0.99, 1.01);
+
+  for (let i = 0; i < 2; i++) {
+    const car = osc(actx, i === 0 ? 'square' : 'sawtooth', f0 * (i === 0 ? 1 : 1.006));
+    const bp = biquad(actx, 'bandpass', f0 * 1.6, 1.1);
+    const g = gain(actx, 0);
+    series(car, bp, g).connect(out);
+    // The warble: a square LFO of +-a fifth on the carrier. `square` and not
+    // `sine` on purpose — a smooth sweep reads as a siren, an instant swap
+    // reads as a machine telling you something.
+    const lfo = osc(actx, 'square', 13);
+    const lfoG = gain(actx, f0 * 0.24);
+    lfo.connect(lfoG);
+    lfoG.connect(car.frequency);
+    /**
+     * Pulsed under the warble, so it is a pattern rather than a tone.
+     *
+     * The pulse is an AUDIO-RATE INPUT to the gain's own parameter, and an
+     * AudioParam sums its connected inputs WITH its intrinsic value — so the
+     * intrinsic value is the floor and the LFO swings around it. That is the
+     * whole envelope: no DC source, no scheduled ramps per pip, and it stays
+     * correct if the duration changes.
+     */
+    const amp = 0.32 * lvl * (i === 0 ? 1 : 0.5);
+    const pulse = osc(actx, 'square', 6.5);
+    const pulseG = gain(actx, amp * 0.85);
+    pulse.connect(pulseG);
+    pulseG.connect(g.gain);
+    g.gain.setValueAtTime(amp, t0);
+    g.gain.setTargetAtTime(0, t0 + dur, 0.04);
+    car.start(t0); lfo.start(t0); pulse.start(t0);
+    const off = t0 + dur + 0.2;
+    car.stop(off); lfo.stop(off); pulse.stop(off);
+  }
+
+  /**
+   * DRY. A warning that arrives with a room on it is a warning that arrives
+   * late, and 「リバーブが強い」 is a standing complaint — this is head-locked
+   * anyway, so the reverb would be describing a space the sound is not in.
+   */
+  return { node: out, end: t0 + dur + 0.3, send: 0 };
+}
+
+/**
+ * DRONE DIVE — the terminal run, at the airframe.
+ *
+ * It commits at 17 m/s from about 22 m up and the player cannot outrun it: the
+ * only answer is to break line of sight, so this sound IS the warning and it has
+ * about a second and a half to deliver it. Three things happen at once, and all
+ * three are what a real one does rather than dressing:
+ *
+ *   the blade rate CLIMBS as the motors saturate — a rising pitch is the single
+ *   most legible "this is getting closer" cue there is, and it is also true;
+ *   the air over the airframe becomes a rush that rises with it;
+ *   and the whole thing gets brighter, because at that speed the props are
+ *   past their efficient angle of attack and are tearing rather than pulling.
+ *
+ * It ENDS ABRUPTLY. There is no tail: what follows is the `explosion` event,
+ * which `audio` already voices correctly, and a scream that decays politely
+ * under a detonation would be a mix error.
+ */
+export function droneDive(actx, bank, rng, o = {}) {
+  const t0 = o.when ?? actx.currentTime;
+  const lvl = clamp(o.level ?? 1, 0, 2);
+  const dur = clamp(o.dur ?? 1.35, 0.4, 3);
+  const out = gain(actx, 0.62); // VOICE TRIM
+  const f0 = 300 * rng.range(0.95, 1.06);
+  const f1 = f0 * 4.4;
+
+  /* the props, tearing */
+  for (let i = 0; i < 3; i++) {
+    const det = [1, 1.013, 0.984][i];
+    const p = osc(actx, 'sawtooth', f0 * det);
+    const g = gain(actx, 0);
+    const lp = biquad(actx, 'lowpass', 1400, 1.0);
+    const drv = shaper(actx, saturationCurve(3.4, 0.4), '2x');
+    series(p, lp, drv, g).connect(out);
+    sweep(p.frequency, t0, f0 * det, f1 * det, dur * 0.92);
+    lp.frequency.setValueAtTime(1400, t0);
+    lp.frequency.exponentialRampToValueAtTime(5200, t0 + dur * 0.92);
+    g.gain.setValueAtTime(0.001, t0);
+    g.gain.linearRampToValueAtTime(0.3 * lvl, t0 + dur * 0.8);
+    g.gain.linearRampToValueAtTime(0.34 * lvl, t0 + dur);
+    // No release: the blast is the release.
+    g.gain.setValueAtTime(0.0001, t0 + dur + 0.005);
+    p.start(t0); p.stop(t0 + dur + 0.05);
+  }
+
+  /* the air over the airframe */
+  const air = bank.source('white', rng, rng.range(0.9, 1.15));
+  const bp = biquad(actx, 'bandpass', 900, 0.6);
+  const ag = gain(actx, 0);
+  series(air, bp, ag).connect(out);
+  sweep(bp.frequency, t0, 900, 4200, dur);
+  ag.gain.setValueAtTime(0.001, t0);
+  ag.gain.linearRampToValueAtTime(0.26 * lvl, t0 + dur);
+  ag.gain.setValueAtTime(0.0001, t0 + dur + 0.005);
+  air.start(t0, air._offset, dur + 0.1);
+
+  return { node: out, end: t0 + dur + 0.1, send: 0.08 };
+}

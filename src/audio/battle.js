@@ -54,7 +54,7 @@
 
 import { clamp } from './dsp.js';
 import { WEAPON_PROFILES } from './weapons.js';
-import { tankEngine } from './vehicle.js';
+import { tankEngine, droneRotor } from './vehicle.js';
 
 /* ---------------------------------------------------------------- */
 /* Distant gunfire                                                   */
@@ -181,6 +181,26 @@ const ENGINE_RANGE = 190;
 /** Advance speed in `src/match/tank.js` is 4.6 m/s; this normalises the throttle. */
 const TANK_TOP_SPEED = 4.6;
 
+/* ---------------------------------------------------------------- */
+/* Drones                                                            */
+/* ---------------------------------------------------------------- */
+
+/**
+ * Where a 2 kg airframe stops being worth an emitter. Well past the 58 m the
+ * placeholder used: `match` flies these at 22 m altitude in the open, and the
+ * thing that makes a drone fair is hearing it BEFORE it is overhead. The level
+ * falls with distance anyway, so the far end is faint rather than loud.
+ */
+const DRONE_RANGE = 120;
+/** `RULES.droneDiveSpeed` is 17 m/s and cruise is 10; this normalises load. */
+const DRONE_TOP_SPEED = 17;
+/**
+ * How often the head-locked lock warble repeats while a drone holds the player.
+ * `match` gives him 2.2 s of warning, so this fires roughly three times: once is
+ * a noise he might have imagined, three times is a machine talking to him.
+ */
+const LOCK_REPEAT = 0.72;
+
 export class BattleLayer {
   /** @param {import('./index.js').AudioSystem} audio */
   constructor(audio) {
@@ -210,10 +230,18 @@ export class BattleLayer {
     this._tanks = [];
     this._dying = [];
 
+    /* ---- drones --------------------------------------------------- */
+    // Parallel to `match.drones.list` by INDEX, exactly as `_tanks` is to
+    // `match.tank.tanks`: the list is a fixed pool of records that are reused,
+    // so a slot is a stable identity and nothing here allocates per frame.
+    this._drones = [];
+    this._lockNext = 0;
+
     this.stats = {
       farVoices: 0, farRounds: 0, farHeld: 0,
       steps: 0, stepsHeld: 0,
       engines: 0, tankShots: 0,
+      rotors: 0, locks: 0,
     };
   }
 
@@ -511,8 +539,21 @@ export class BattleLayer {
       }
     }
 
-    // Anything faded out is disconnected here, on the frame loop, so no timer
-    // outlives dispose().
+  }
+
+  /**
+   * Anything faded out is disconnected here, on the frame loop, so no timer
+   * outlives `dispose()`.
+   *
+   * IT IS CALLED FROM `update`, NOT FROM `_updateTanks`, and that move is a bug
+   * fix rather than tidying: `_updateTanks` RETURNS EARLY when `match` has no
+   * hull list, which is most of a match, so anything left fading was reaped
+   * only while armour happened to be on the map. That was harmless while tanks
+   * were the only continuous voice — they are the thing whose absence causes
+   * the early return — and is not harmless now that a drone's rotor uses the
+   * same queue: a fading rotor would hold its emitter until the sortie rolled.
+   */
+  _reap(now) {
     for (let i = this._dying.length - 1; i >= 0; i--) {
       const d = this._dying[i];
       if (now < d.at) continue;
@@ -583,14 +624,137 @@ export class BattleLayer {
   }
 
   /* ================================================================ */
+  /* drones                                                           */
+  /* ================================================================ */
+
+  /**
+   * ONE TRACKED EMITTER PER AIRFRAME, off `match.drones.list`.
+   *
+   * This is `_updateTanks` with a different motor, and deliberately so: the
+   * request was for the rotor to be driven off the published list "exactly as
+   * battle.js drives tankEngine off match.tank.tanks", `match` publishes the
+   * array saying so, and the two loops now share their whole shape — differentiate
+   * speed from position (nothing publishes velocity and it is not ours to add),
+   * start inside range, stop outside it or on death, renew the lease every frame
+   * so a dead owner cannot pin a slot.
+   *
+   * The one thing armour does not have is the LOCK: `match` marks the drone that
+   * currently owns the player's warning with `warning` on its own record, so the
+   * head-locked warble is driven off that flag rather than off the `lock` event,
+   * which fires for everybody's locks and not just his.
+   */
+  _updateDrones(dt, now) {
+    const audio = this.audio;
+    const m = audio.ctx.peek('match');
+    const list = m?.drones?.list;
+    if (!list) { if (this._drones.length) this._stopAllRotors(now); return; }
+
+    let warned = false;
+    for (let i = 0; i < list.length; i++) {
+      const d = list[i];
+      const p = d?.position;
+      if (!p) continue;
+      let rec = this._drones[i];
+      if (!rec) {
+        rec = { x: p.x, y: p.y, z: p.z, speed: 0, rotor: null, em: null };
+        this._drones[i] = rec;
+      }
+      const dx = p.x - rec.x, dy = p.y - rec.y, dz = p.z - rec.z;
+      rec.x = p.x; rec.y = p.y; rec.z = p.z;
+      const moved = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const inst = dt > 1e-4 ? moved / dt : 0;
+      // Lighter smoothing than the tank's: a quad changes speed in a tenth of a
+      // second and the dive has to be audible as it starts, not after it.
+      rec.speed += (Math.min(inst, 30) - rec.speed) * Math.min(1, dt * 12);
+
+      const dist = audio.field.distanceTo(p.x, p.y, p.z);
+      const want = this.enabled && !!d.alive && dist < DRONE_RANGE;
+      if (want && !rec.rotor) this._startRotor(rec, p, dist, now);
+      if (!want && rec.rotor) this._stopRotor(rec, now);
+      if (rec.rotor) {
+        rec.em.moveTo(p.x, p.y, p.z, 0.05);
+        rec.rotor.drive(clamp(rec.speed / DRONE_TOP_SPEED, 0, 1), rec.speed, now);
+        rec.em.lease = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000 + 3;
+      }
+      if (d.alive && d.warning) warned = true;
+    }
+
+    /**
+     * THE WARBLE, while somebody's drone is holding HIM. Repeated rather than
+     * one-shot: `match` gives 2.2 s of warning and a single pip at the start of
+     * it is a sound he can talk himself out of having heard.
+     */
+    if (warned && this.enabled && now >= this._lockNext) {
+      this._lockNext = now + LOCK_REPEAT;
+      // Head-locked: it is not a sound in the world, it is his own gear telling
+      // him something. `ui` bus, so a concussion cannot take it away.
+      if (audio._playDry('drone_lock', { level: 1 }, 'ui', 0)) this.stats.locks++;
+    } else if (!warned) {
+      // Re-arm instantly, so the next lock does not wait out a stale timer.
+      this._lockNext = 0;
+    }
+  }
+
+  _startRotor(rec, p, dist, now) {
+    const audio = this.audio;
+    const f = audio.field;
+    // Same rule as the tank: do not START one while the governor has the pool
+    // clamped, but one already flying keeps flying.
+    if (f.capacity < f.emitters.length * 0.66) return;
+    const em = f.acquire({
+      x: p.x, y: p.y, z: p.z,
+      when: now, dist, bus: 'weapons',
+      /**
+       * 0.9, just under the tank's 0.92. Both are continuous voices that must
+       * not be stolen by the firefight — a rotor that cuts out for two seconds
+       * is a drone that arrives silently, which is the exact unfairness this
+       * sound exists to remove.
+       */
+      priority: 0.9,
+      send: 0.06,
+      /**
+       * 0.85. A drone is not a hull: `_startEngine` documents a tank at 25 m
+       * rendering seven times the player's own rifle at gain 2.4 and being cut
+       * to 0.9 for it. This starts where that ended up, minus a little, because
+       * the airframe's own voice trim is already under the tank's and the thing
+       * has to be audible at 100 m without being absurd at 10.
+       */
+      gain: 0.85,
+      endTime: now + 3600,
+      tracked: true,
+      tag: 'drone',
+    });
+    if (!em) return;
+    const rotor = droneRotor(audio.actx, audio.bank, audio.rng, { when: now });
+    f.hold(em, rotor.node, now + 3600, 0.06);
+    rec.rotor = rotor;
+    rec.em = em;
+    this.stats.rotors++;
+  }
+
+  _stopRotor(rec, now) {
+    if (!rec.rotor) return;
+    const at = rec.rotor.stop(now);
+    this._dying.push({ engine: rec.rotor, em: rec.em, at });
+    rec.rotor = null;
+    rec.em = null;
+  }
+
+  _stopAllRotors(now) {
+    for (const rec of this._drones) if (rec?.rotor) this._stopRotor(rec, now);
+  }
+
+  /* ================================================================ */
   /* frame                                                            */
   /* ================================================================ */
 
   update(dt, now) {
     // The armour loop runs even when the layer is disabled, so that turning it
     // off mid-match (the A/B control) shuts the engines down instead of
-    // stranding two tracked emitters in the pool for ever.
+    // stranding two tracked emitters in the pool for ever. Same for the rotors.
     this._updateTanks(dt, now);
+    this._updateDrones(dt, now);
+    this._reap(now);
     if (!this.enabled) return;
     this._updateFar(now);
     this._updateSteps(dt, now);
@@ -613,6 +777,14 @@ export class BattleLayer {
       rec.engine = null;
       rec.em = null;
     }
+    for (const rec of this._drones) {
+      if (!rec?.rotor) continue;
+      rec.rotor.free();
+      rec.em?.detach();
+      rec.rotor = null;
+      rec.em = null;
+    }
+    this._drones.length = 0;
     for (const d of this._dying) { d.engine.free(); d.em?.detach(); }
     this._dying.length = 0;
     this._tanks.length = 0;

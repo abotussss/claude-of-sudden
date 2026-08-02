@@ -44,13 +44,13 @@ import {
   WEAPON_PROFILES, resolveProfile, weaponShot, bulletWhizz, dryFire, boltCycle,
   distantFire, farGain,
 } from './weapons.js';
-import { tankGun } from './vehicle.js';
+import { tankGun, droneRotor, droneLock, droneDive } from './vehicle.js';
 import { collapseTear, collapseSub, collapseBell } from './collapse.js';
 import { BattleLayer } from './battle.js';
 import { AudioWatchdog } from './watchdog.js';
 import {
   surfaceImpact, footstep, shellCasing, reloadPhase, explosion, bodyFall, uiSound,
-  heartbeat, cloth, meleeSwing, meleeHit,
+  heartbeat, cloth, meleeSwing, meleeHit, mineTrip,
 } from './foley.js';
 import {
   strikeJet, strikeIncoming, strikeRubble, strikeTail, strafeCannon, rubbleCollapse,
@@ -107,6 +107,20 @@ const BUS_FOR = {
   strafe_cannon: 'weapons', strafe_walk: 'weapons',
   /** A building failing. @see src/audio/collapse.js */
   collapse_tear: 'weapons', collapse_sub: 'weapons', collapse_bell: 'weapons',
+  /**
+   * THE DRONES AND THE MINE. @see src/audio/vehicle.js, src/audio/foley.js
+   *
+   * `drone_lock` is on `ui` DELIBERATELY, and it is the only diegetic-ish voice
+   * in this table that is: the ui bus bypasses the concussion muffle
+   * (`Mixer`'s worldSum path), so a man who has just been near a blast still
+   * hears that a drone has locked him. He has 2.2 seconds to break line of
+   * sight and being deafened is not a reason to lose them.
+   *
+   * `drone_dive` and `mine_trip` are on `weapons`, which is the bus the duck
+   * does NOT push down — they are the two sounds in the game that exist to be
+   * heard over a firefight rather than under it.
+   */
+  drone_lock: 'ui', drone_dive: 'weapons', mine_trip: 'weapons',
 };
 
 /**
@@ -773,6 +787,10 @@ export class AudioSystem {
       case 'strafe_walk':
         return strafeCannon(actx, bank, rng, { when, dur: o.dur, level: o.level, rate: o.rate, ground: true });
       case 'bodyfall': return bodyFall(actx, bank, rng, { when, level: o.level });
+      /* the drones, and the mine that is waiting for somebody */
+      case 'drone_lock': return droneLock(actx, bank, rng, { when, level: o.level, dur: o.dur });
+      case 'drone_dive': return droneDive(actx, bank, rng, { when, level: o.level, dur: o.dur });
+      case 'mine_trip': return mineTrip(actx, bank, rng, { when, level: o.level });
       case 'cloth': return cloth(actx, bank, rng, { when, level: o.level });
       case 'heartbeat': return heartbeat(actx, bank, rng, { when, level: o.level });
       case 'bark': return voxBark(actx, bank, rng, { when, bark: o.bark, f0: o.f0, tract: o.tract, level: o.level, radio: o.radio });
@@ -1071,6 +1089,39 @@ export class AudioSystem {
     on('match:tank', (p) => {
       if (p?.phase !== 'fire' || !isVec(p.position)) return;
       this.battle?.onTankFire(p.position.x, p.position.y, p.position.z);
+    });
+    /**
+     * THE DRONES. `src/match/drone.js` emits `match:drone { phase, id, team,
+     * position }` with phases launch / lock / dive / boom / dead, and publishes
+     * `match.drones.list` for the rotor exactly as `tank.js` publishes its
+     * hulls. The split between the two is the same one armour uses:
+     *
+     *   CONTINUOUS  the rotor, one tracked emitter per airframe, driven off the
+     *               published list in the frame loop — a drone already in the
+     *               air when the graph starts still gets one. @see battle.js
+     *   EVENTS      the dive, here, because it happens once and its position is
+     *               on the payload.
+     *   BLAST       the `explosion` event, which is already correct. Untouched.
+     *
+     * THE LOCK WARBLE IS NOT DRIVEN FROM HERE, and the reason matters: `lock`
+     * fires for every drone that locks anybody, thirty a match across forty
+     * men, and the warble is a HEAD-LOCKED warning that means "you are the
+     * target". `match` marks that one drone with `warning` on the published
+     * record, so the frame loop watches for that flag and nothing else does.
+     */
+    on('match:drone', (p) => {
+      if (!p || !isVec(p.position)) return;
+      if (p.phase === 'dive') {
+        this._playAt('drone_dive', p.position.x, p.position.y, p.position.z, {
+          level: 1, maxDist: 220, gain: 1.6, occlusion: 0.35,
+          /**
+           * 0.9. It can evict almost anything below a near shot, and it should:
+           * the player cannot outrun the thing this announces, so a dive that
+           * loses its slot to a distant footfall is a death he was given no
+           * warning of. It is one voice, once, per drone that commits.
+           */
+        }, 'weapons', 0.9);
+      }
     });
     // Optional: emitted by `ai` if it wants scripted chatter.
     on('ai:bark', (p) => this.bark(p?.kind ?? 'spot', p?.position, { voice: p?.voice ?? 0 }));
