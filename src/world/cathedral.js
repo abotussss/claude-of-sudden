@@ -1059,6 +1059,54 @@ export function buildCathedral(A) {
      * `_carveInteriors` rejects `fy > floorY + 0.9`; this leaves 6 cm of margin.
      */
     const WALK_CAP = SEC.floor + 0.84;
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * THE OTHER CEILING, AND IT IS THE ONE THAT WAS MISSING — 「瓦礫があった
+     * 歩けるからいいのではなく、瓦礫による視認性の悪さが問題 視認性を改善しろ
+     * つまり瓦礫を小さくするか、歩ける位置を全て瓦礫の上にするか」
+     * ────────────────────────────────────────────────────────────────────────
+     * Three passes of this file measured D with `_dbury.mjs` — how much of the
+     * capture point is ground a man can STAND on — and moved it 60 % -> 65.7 %
+     * -> 79.4 %, and the player said 「埋もれすぎ」 all three times. He was not
+     * describing the floor. `_dsight.mjs` measures what he was describing, from
+     * a 1.62 m eye at every walkable cell in each circle, 36 azimuths:
+     *
+     *   zone   mean reach   rays past 20 m   rays stopped inside 4 m   mutual
+     *   A        19.85 m         46.6 %              15.2 %            76.1 %
+     *   C        19.00 m         36.7 %              14.2 %            62.9 %
+     *   E        18.93 m         36.4 %              14.0 %            59.2 %
+     *   B        21.97 m         53.8 %               9.0 %            94.5 %
+     *   D        13.40 m         17.9 %              10.2 %            98.1 %
+     *
+     * D is not cluttered — it has the FEWEST rays stopped short of four metres
+     * on the map and the best mutual visibility of any point, because the
+     * plaza really is clear. What it has is HALF the long shots of the worst of
+     * the other four. You can see everyone standing on D and you cannot see
+     * anybody walking towards it, which is the exact feeling of fighting at the
+     * bottom of a pit and is why raising the walkable count never touched it.
+     *
+     * WHY THE OTHER SHAPE HE OFFERED IS NOT AVAILABLE. "歩ける位置を全て瓦礫の
+     * 上にする" — stand the whole fightable area on top of the rubble — would be
+     * the better answer if it could be built, and it cannot: `_carveInteriors`
+     * rejects any cell in an interior volume whose surface stands more than
+     * 0.9 m over the volume's own `floorY`, the boot bake holds BOTH cathedral
+     * states solid, and `_reprobeZoneNav`'s opening branch re-applies the same
+     * 0.9 m ceiling against the ZONE's floor. A plateau is therefore not ground
+     * in any of the three passes that decide what ground is; it is a wall with
+     * a flat top. Raising the volume's `floorY` to suit would take the STANDING
+     * cathedral's nave floor out of its own carve. So this takes the first
+     * shape — 「瓦礫を小さくする」 — and takes it seriously.
+     *
+     * `EYE_CAP` IS WHAT "SMALLER" MEANS, IN A NUMBER. A standing man's eye is
+     * at 1.62 m and `NavGrid._bakeCover` calls a cover point STANDING cover
+     * when it finds mass at 1.32 m — so 1.32 to 1.62 m is the band that is
+     * cover you fire OVER, which is what a capture point wants, and anything
+     * above 1.62 m near D is a wall across somebody's sightline. Every mass
+     * from the crossing out to the arcade is now authored inside it. Beyond
+     * that the ruin is as tall as it ever was: the silhouette is not the
+     * complaint and 「しょぼい」 is still the other wall.
+     */
+    const EYE_CAP = 1.56;
     /** Grey rubble, ash and broken render — the palette the shell was built in. */
     const RUBBLE = ['concrete_dark', 'concrete', 'plaster_white', 'plaster_cream', 'plaster_sand', 'roof_screed'];
     const RUB_W = [0.2, 0.2, 0.16, 0.16, 0.16, 0.12];
@@ -1129,8 +1177,17 @@ export function buildCathedral(A) {
        * …AND THE CROSSING IS A PLAZA, NOT A JUNCTION OF TWO LANES. D's circle
        * and a metre of rim outside it are all lane, so a capture point in the
        * middle of a rubble field is somewhere fifteen men can actually work.
+       *
+       * 8.6 -> 10.4, AND IT IS A SIGHTLINE CHANGE RATHER THAN A WALKING ONE —
+       * 「瓦礫による視認性の悪さが問題」. The field runs to `WALK_CAP`, 0.84 m
+       * over the floor, which is under the 1.62 m eye and therefore never
+       * blinds anybody standing ON it — but it is the ramp the rim masses sit
+       * ON, and every centimetre of it under a block at the circle's edge is a
+       * centimetre added to that block's skyline from inside D. Holding the
+       * plaza flat two metres past the ring puts the ring's feet at the same
+       * height as the eyes looking at it.
        */
-      d = Math.min(d, Math.max(0, Math.hypot(u, v) - 8.6));
+      d = Math.min(d, Math.max(0, Math.hypot(u, v) - 10.4));
       return d;
     };
 
@@ -1432,9 +1489,17 @@ export function buildCathedral(A) {
      * the street at, so it carries the great portal and the two survivors that
      * frame it. The campanile end of it is the tower's.
      */
+    /**
+     * THE SURVIVOR LISTS CAME DOWN WITH THE CAMPANILE — 「瓦礫の高さが高すぎる」.
+     * They are scaled by the same ~0.73 the tower's cap took, so the elevations
+     * still TEAR (a survivor is still twice its own base) and the site still
+     * has a broken skyline; it is just no longer a six-metre wall standing over
+     * a seven-metre stump. None of these is inside 14.6 m of D and none of them
+     * appears in `_dsight.mjs` — this is the silhouette half of the complaint.
+     */
     tornWall('u', -WV, -HW, HW, [[-3.9, 3.9], [-8.1, -3.1], [3.1, 8.1]], {
-      key: 'plaster_cream', base: 2.3, sign: -1,
-      survivors: [[9.9, 3.0, 4.3], [-11.0, 2.8, 6.0], [13.2, 1.8, 3.5]],
+      key: 'plaster_cream', base: 1.9, sign: -1,
+      survivors: [[9.9, 3.0, 3.2], [-11.0, 2.8, 4.4], [13.2, 1.8, 2.6]],
     });
     portal('u', -WV, 0, 4.0, 6.1, 1.8, 'plaster_cream', -1, 0);
     // the two side portals kept their heads too, lower and half gone
@@ -1442,19 +1507,25 @@ export function buildCathedral(A) {
     portal('u', -WV, 5.6, 2.2, 4.4, 1.2, 'plaster_cream', -1, 1);
     /** THE APSE END, with its door on the axis and two facets still standing. */
     tornWall('u', WV, -HW, HW, [[-3.5, 3.5]], {
-      key: 'plaster_sand', base: 2.2, sign: 1,
-      survivors: [[-7.6, 2.4, 4.8], [7.0, 2.2, 4.1], [12.4, 2.4, 3.5]],
+      key: 'plaster_sand', base: 1.85, sign: 1,
+      survivors: [[-7.6, 2.4, 3.5], [7.0, 2.2, 3.0], [12.4, 2.4, 2.6]],
     });
     portal('u', WV, 0, 2.8, 4.6, 1.4, 'plaster_sand', 1, -1);
     /** BOTH FLANKS. The transept portal is dead centre of each and keeps its
      *  head; the tower owns the south end of the west one. */
+    /**
+     * BOTH FLANK WALLS ARE 14.6 m FROM THE MIDDLE OF D, which is the closest
+     * any wall gets to it, so these two lists are scaled for the sightline as
+     * well as for the skyline: a survivor here is a bearing D loses. The
+     * transept gap at v = 0 is untouched and is one of D's four long shots.
+     */
     tornWall('v', -WU, TOW.v1 - 0.6, HD, [[-3.6, 3.6]], {
-      key: 'plaster_sand', base: 2.4, sign: -1,
-      survivors: [[-9.0, 2.6, 5.0], [5.4, 2.0, 3.9], [13.4, 3.0, 5.6]],
+      key: 'plaster_sand', base: 1.95, sign: -1,
+      survivors: [[-9.0, 2.6, 3.5], [5.4, 2.0, 2.9], [13.4, 3.0, 4.1]],
     });
     tornWall('v', WU, -HD, HD, [[-3.6, 3.6]], {
-      key: 'plaster_cream', base: 2.4, sign: 1,
-      survivors: [[-16.4, 3.0, 5.9], [-7.0, 2.2, 4.2], [8.4, 2.6, 5.3], [18.4, 2.6, 3.7]],
+      key: 'plaster_cream', base: 1.95, sign: 1,
+      survivors: [[-16.4, 3.0, 4.3], [-7.0, 2.2, 3.1], [8.4, 2.6, 3.8], [18.4, 2.6, 2.7]],
     });
     portal('v', -WU, 0, 3.4, 5.0, 1.5, 'plaster_sand', -1, 1);
     portal('v', WU, 0, 3.4, 5.0, 1.5, 'plaster_cream', 1, -1);
@@ -1468,7 +1539,9 @@ export function buildCathedral(A) {
     for (const side of [-1, 1]) {
       for (const v of [...NAVE_V, ...CHOIR_V, -HD + 0.9, HD - 0.9]) {
         const u = side * (HW + BUTT / 2 - 0.1);
-        const h = rng.range(1.5, 3.8);
+        // …and these came down with the walls they brace: a broken buttress
+        // standing taller than the elevation behind it reads as a fence post.
+        const h = rng.range(1.3, 2.9);
         A.add('concrete', box, LL(IDENT, X(u), SEC.floor + h / 2, Z(v + 2), rng.range(-0.03, 0.03),
           BUTT, h, 1.3), { masks: [rng.range(0.5, 0.95), rng.range(0.4, 0.9), 0.4] });
         A.box('concrete', X(u), SEC.floor + h / 2, Z(v + 2), BUTT, h, 1.3);
@@ -1524,13 +1597,21 @@ export function buildCathedral(A) {
        * other wall; this sits between them — the stump tops out around 10 m,
        * every survivor and shaft below scaled with it (@see the survivor lists
        * and the arcade), and `_cathruin.mjs` carries the measured surface.
+       *
+       * AND THEN A QUARTER AGAIN — 「瓦礫の高さが高すぎるけど？」, said of the
+       * 9.97 m this produced. The stump now tops out around 7.2 m, which is
+       * twice the 3.45 m he called しょぼい and still the tallest thing on the
+       * site by three metres, so it is the skyline and it is not a cliff over
+       * the south-west corner. It is 21.6 m from the crossing and does not
+       * appear in `_dsight.mjs`'s numbers for D either way — this half of the
+       * complaint is about the SILHOUETTE and is answered on its own terms.
        */
       const towerH = (u, v) => {
         const f = clamp01(1 - Math.hypot((u - TOW.u0) / 9.6, (v - TOW.v0) / 10.6));
         const n = fbm3(u * 0.62 + 12.3, 7.1, v * 0.62 + 3.7, 3) - 0.5;
         const shear = (u - TOW.u0) * 0.62 + (v - TOW.v0) * 0.44;
-        return Math.max(1.6,
-          Math.min(2.4 + 8.2 * f * f + n * 3.4, 10.4 - shear * 0.85 + n * 2.2));
+        return Math.max(1.4,
+          Math.min(2.0 + 5.4 * f * f + n * 2.4, 7.2 - shear * 0.6 + n * 1.6));
       };
       // west wall, on the flank line; south wall, on the front line; and the
       // inner return that closes the corner into the aisle
@@ -1557,8 +1638,10 @@ export function buildCathedral(A) {
               (along === 'u' ? wid : su0) * 0.6, h * 0.4, (along === 'u' ? sv0 : wid) * 0.6),
             { masks: [0.95, rng.range(0.5, 1.0), 0.4] });
           A.box('concrete', X(cu), SEC.floor + h / 2, Z(cv), along === 'u' ? wid : su0, h, along === 'u' ? sv0 : wid);
-          // string courses survive on the shaft, which is what gives it scale
-          for (let y = 5.6; y < h - 0.8; y += 5.6) {
+          // string courses survive on the shaft, which is what gives it scale —
+          // spaced for a 7 m stump rather than a 10 m one, or the shorter shaft
+          // carries none at all and reads as a block instead of as a tower
+          for (let y = 3.4; y < h - 0.8; y += 3.4) {
             A.add('concrete_dark', soft,
               LL(IDENT, X(cu), SEC.floor + y, Z(cv), 0,
                 (along === 'u' ? wid : su0) + 0.2, 0.3, (along === 'u' ? sv0 : wid) + 0.2),
@@ -1575,7 +1658,8 @@ export function buildCathedral(A) {
       for (let i = 0; i < 11; i++) {
         const u = rng.range(TOW.u0 + 1.6, TOW.u1 - 1.6);
         const v = rng.range(TOW.v0 + 1.6, TOW.v1 - 2.6);
-        const h = rng.range(1.6, 3.6);
+        // scaled with the shaft over them — a cone of tower inside a 7 m stump
+        const h = rng.range(1.4, 2.8);
         const w = rng.range(1.3, 2.1);
         const d = rng.range(1.3, 2.1);
         const ry = rng.range(-0.6, 0.6);
@@ -1652,8 +1736,18 @@ export function buildCathedral(A) {
       const u = side * ARC;
       const all = [...NAVE_V, ...CHOIR_V];
       for (const v of all) {
-        const tall = rng.float() < 0.34;
-        const h = tall ? rng.range(2.9, 5.4) : rng.range(1.15, 2.4);
+        /**
+         * THE FOUR PIERS EITHER SIDE OF THE CROSSING ARE NOW STUMPS, AND LOW
+         * ONES. `ARC` is 8.6 and the nearest bay is v = ±5, so those four stand
+         * 9.95 m from the middle of D — closer than anything else on the map
+         * that was allowed to be five metres tall. A shaft of pier at that
+         * range subtends more of the horizon from inside the circle than the
+         * campanile does, and there are four of them. Past 13.5 m the arcade is
+         * the silhouette again and keeps its shafts.
+         */
+        const near = Math.hypot(ARC, v) < 13.5;
+        const tall = !near && rng.float() < 0.34;
+        const h = tall ? rng.range(2.6, 4.6) : near ? rng.range(1.0, EYE_CAP - 0.1) : rng.range(1.15, 2.4);
         const w = PW * (tall ? 1.0 : rng.range(1.05, 1.3));
         A.add(tall ? 'plaster_cream' : 'concrete_dark', box,
           LL(IDENT, X(u), SEC.floor + h / 2, Z(v), rng.range(-0.05, 0.05), w, h, w),
@@ -1700,7 +1794,9 @@ export function buildCathedral(A) {
         if (b - a > 6.5) continue; // the crossing: there was no arcade across it
         if (rng.float() < 0.5) continue; // …and half the bays are just gone
         const mid = (a + b) / 2;
-        const h = rng.range(1.35, 2.85);
+        // …and a fallen bay inside the arcade's near run is knee-to-chest, for
+        // the same reason its piers are. @see the note on `near` above.
+        const h = Math.hypot(ARC, mid) < 13.5 ? rng.range(1.0, EYE_CAP - 0.1) : rng.range(1.35, 2.85);
         const d = (b - a) * rng.range(0.34, 0.58);
         const ry = rng.range(-0.08, 0.08);
         A.add(rubbleKey(), box, LL(IDENT, X(u), SEC.floor + h / 2, Z(mid), ry, 1.5, h, d,
@@ -1728,7 +1824,22 @@ export function buildCathedral(A) {
       [-5.4, -18.6, 0.5], [5.8, -12.4, -0.35], [-6.0, -8.6, 0.22],
       [5.2, 9.6, 0.44], [-5.6, 14.8, -0.5], [6.2, 19.4, 0.16],
     ]) {
-      const h = rng.range(1.9, 2.8);
+      /**
+       * …AND THE THREE NEAREST ONES ARE NOW UNDER THE EYE. These six sit in the
+       * nave and the choir, which is the ONE 45 m axis this building has, and
+       * `_dsight.mjs` found D reaching 13.4 m against 19-22 m at the four open
+       * zones. The three inside about thirteen metres — (-6.0, -8.6),
+       * (5.8, -12.4) and (5.2, 9.6) — are what a man standing on D is looking
+       * at when he looks up his own nave, and at 1.9-2.8 m they ended the
+       * bearing there. Under `EYE_CAP` they are still a raft of vault on the
+       * floor and he sees the length of the building over them.
+       *
+       * THE FAR THREE KEEP THEIR HEIGHT, because the 45 m shot from the great
+       * portal to the apse door is the thing this section exists to break and
+       * it is broken twenty metres from D, not next to it.
+       */
+      const near = Math.hypot(u, v) < 13.5;
+      const h = near ? rng.range(1.2, EYE_CAP - 0.08) : rng.range(1.9, 2.8);
       const w = rng.range(3.4, 4.8);
       const d = rng.range(2.6, 4.2);
       A.add('plaster_white', box, LL(IDENT, X(u), SEC.floor + h / 2, Z(v), ry, w, h, d,
@@ -1742,14 +1853,17 @@ export function buildCathedral(A) {
         A.add(rng.float() < 0.5 ? 'plaster_white' : 'concrete', box,
           LL(IDENT, X(u + Math.cos(a) * w * 0.5), SEC.floor + h * rng.range(0.25, 0.75),
             Z(v + Math.sin(a) * d * 0.5), ry + rng.range(-0.9, 0.9),
-            rng.range(1.0, 2.4), rng.range(0.5, 1.4), rng.range(0.9, 1.8),
+            // …and on the near three these follow the raft down, because a
+            // DRAWN slab standing proud of a lowered raft is a sightline the
+            // player loses and a bullet the physics lets through.
+            rng.range(1.0, 2.4), rng.range(0.5, near ? 0.85 : 1.4), rng.range(0.9, 1.8),
             rng.range(-0.5, 0.5), rng.range(-0.5, 0.5)),
           { masks: [rng.range(0.4, 0.9), rng.range(0.5, 1.0), 0.5] });
       }
       // the ribs that were on its underside, now sticking out of it
       for (let k = 0; k < 3; k++) {
         A.add('concrete', soft,
-          LL(IDENT, X(u + rng.range(-1.4, 1.4)), SEC.floor + h * rng.range(0.55, 1.0), Z(v + rng.range(-1.4, 1.4)),
+          LL(IDENT, X(u + rng.range(-1.4, 1.4)), SEC.floor + h * rng.range(0.55, near ? 0.9 : 1.0), Z(v + rng.range(-1.4, 1.4)),
             ry + rng.range(-0.5, 0.5), rng.range(2.2, 3.8), 0.4, 0.42,
             0, rng.range(-0.5, 0.5)), { masks: [0.85, rng.range(0.4, 0.9), 0.3] });
       }
@@ -1825,7 +1939,28 @@ export function buildCathedral(A) {
      * open one. `_dbury.mjs` and `_dmass.mjs` carry the measured after-numbers.
      */
     {
-      const RING = [];
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * THE RING IS AUTHORED NOW, AND IT IS AUTHORED OFF THE FOUR AXES
+       * ────────────────────────────────────────────────────────────────────
+       * `RING` used to be `(i / 7) * 2π` plus jitter, which puts the first arc
+       * on bearing 0 — straight down the WEST TRANSEPT, one of the only four
+       * lines from the crossing that reach twenty metres at all. The nave and
+       * choir run 22.5 m each way to a portal and the street beyond it, the
+       * two transept portals 14.6 m the other way, and the footprint is 30 x 45
+       * m of enclosed plan: EVERY long sightline D has runs down the cruciform.
+       * Scattering the drum on seven random bearings closed two or three of the
+       * four at random, and that is the whole of `out20` being half the map's.
+       *
+       * So the seven bearings are listed, and every one of them clears each
+       * axis by at least 0.55 rad. At the 10.2-13.2 m ring that is 5.3 m of
+       * clearance against a lane half-width of 3.6 m and a block half-width
+       * under 0.6 m, so the cruciform stays open from anywhere in the circle
+       * and not only from its centre. The debris still reads as a ring — it is
+       * spread over three metres of radius and two of height — it simply is
+       * not a wall across the four doors.
+       */
+      const RING = [0.55, 1.05, 2.05, 2.62, 3.62, 4.20, 5.42];
       /**
        * SEVEN ARCS, AND NONE OF THEM ARE INSIDE THE CIRCLE ANY MORE.
        *
@@ -1847,17 +1982,26 @@ export function buildCathedral(A) {
        * carrying slabs of the dome that came through them. @see below.
        */
       for (let i = 0; i < 7; i++) {
-        const a = (i / 7) * 6.283 + rng.range(-0.2, 0.2);
-        RING.push(a);
+        const a = RING[i];
         /**
          * 9.4, NOT 8.8 — the ring is measured from the BLOCK'S CENTRE, and a
          * block half 0.47 m deep plus the bot radius (0.36) plus the capsule
          * margin reaches ~0.9 m inward: at 8.8 the ring's own dead cells lap
          * over the r = 8 circle it was moved out of. 9.4 keeps the whole ring,
-         * ring included, outside the point.
+         * ring included, outside the point. 10.2 now, for the sightline rather
+         * than for the nav grid: a metre of extra stand-off is a degree and a
+         * half of azimuth each side of every lane it is not standing in.
          */
-        const rr = rng.range(9.4, 13.0);
-        const h = rng.range(1.3, 2.35);
+        const rr = rng.range(10.2, 13.2);
+        /**
+         * 1.3-2.35 m WAS THE CANYON. Seven arcs of drum at chest-to-head height
+         * on a ring ten metres out is a revetment round the capture point: from
+         * inside D two thirds of the horizon ended at the ring. Under `EYE_CAP`
+         * every one of them is still cover a man walking in gets behind — the
+         * taller half of this range is over `_bakeCover`'s 1.32 m standing test
+         * — and none of them is a lid on the point.
+         */
+        const h = rng.range(0.95, EYE_CAP - 0.11);
         const seg = rng.range(2.2, 3.4);
         // an arc of drum: blocks following the ring, not one box across it
         for (let k = -1; k <= 1; k++) {
@@ -1872,7 +2016,10 @@ export function buildCathedral(A) {
             { masks: [rng.range(0.5, 0.95), rng.range(0.5, 1.0), 0.4] });
           A.box('concrete', X(u), SEC.floor + hh / 2, Z(v), seg / 3.0, hh, rng.range(0.6, 0.9), ry);
           for (let q = 0; q < 2; q++) {
-            const s = rng.range(0.22, 0.55);
+            // small, because a lump ON the ring is drawn and not collidable —
+            // a 0.55 m boulder on a 1.45 m arc is 30 cm of skyline that stops
+            // no bullet, which is the worst of both. @see `EYE_CAP`.
+            const s = rng.range(0.16, 0.36);
             lump(rubbleKey(), u + rng.range(-0.9, 0.9), SEC.floor + hh + s * 0.2, v + rng.range(-0.9, 0.9), s, 0.6);
           }
         }
@@ -1883,23 +2030,33 @@ export function buildCathedral(A) {
        *  standing between the rim and the middle, and the widest single ring
        *  of dead nav cells with the bot radius drawn round it. */
       for (let i = 0; i < 3; i++) {
-        const a = RING[i * 2] + rng.range(0.4, 0.8);
+        /**
+         * ON the authored bearing rather than 0.4-0.8 rad off it. The offset
+         * was what walked a 2.7 m raft into the transept mouth: a raft is the
+         * widest single thing on the ring, so it is the piece that must not be
+         * allowed to wander towards a lane. @see the note on `RING`.
+         */
+        const a = RING[i * 2] + rng.range(-0.1, 0.1);
         // 9.6 for the same reach arithmetic as the arcs, with a raft's own
-        // fatter half-extent in it.
-        const rr = rng.range(9.6, 12.6);
+        // fatter half-extent in it; 10.6 now, with the arcs.
+        const rr = rng.range(10.6, 13.4);
         const u = Math.cos(a) * rr;
         const v = Math.sin(a) * rr;
-        const h = rng.range(1.9, 2.7);
+        // …and tipped further over than it was, so it is a raft lying down
+        // rather than a raft on edge. 2.7 m of shell standing eleven metres
+        // from the point was the single tallest thing on D's horizon.
+        const h = rng.range(1.15, EYE_CAP - 0.06);
         const ry = rng.range(-1.2, 1.2);
         A.add('roof_screed', box,
           LL(IDENT, X(u), SEC.floor + h / 2, Z(v), ry, rng.range(2.6, 3.6), h, rng.range(0.6, 0.9),
             0, rng.range(0.25, 0.55)), { masks: [0.6, rng.range(0.5, 1.0), 0.35] });
         A.box('concrete', X(u), SEC.floor + h * 0.5, Z(v), rng.range(2.2, 3.0), h, 0.95, ry);
-        // the ribs that ran over the shell, snapped and still on it
+        // the ribs that ran over the shell, snapped and still on it — laid ON
+        // the raft now, not standing proud of it
         for (let k = 0; k < 2; k++) {
           A.add('concrete', soft,
-            LL(IDENT, X(u + rng.range(-1.2, 1.2)), SEC.floor + h * rng.range(0.6, 1.05), Z(v + rng.range(-0.8, 0.8)),
-              ry + rng.range(-0.3, 0.3), rng.range(1.8, 3.0), 0.4, 0.5, 0, rng.range(-0.7, 0.7)),
+            LL(IDENT, X(u + rng.range(-1.2, 1.2)), SEC.floor + h * rng.range(0.55, 0.88), Z(v + rng.range(-0.8, 0.8)),
+              ry + rng.range(-0.3, 0.3), rng.range(1.8, 3.0), 0.4, 0.5, 0, rng.range(-0.4, 0.4)),
             { masks: [0.9, 0.45, 0.25] });
         }
       }
@@ -1912,23 +2069,34 @@ export function buildCathedral(A) {
        * for a man walking in. @see the note over this section.
        */
       {
-        const a = RING[3] + 0.55;
+        /**
+         * ON an authored bearing, and the LOWEST it can be and still be the
+         * lantern. 3.0 x 2.4 m of solid at 2.1 m tall is a shed on the rim of
+         * the capture point; a lantern that fell twenty-six metres and landed
+         * on its side is 1.5 m of the same box, presents the same plan (so the
+         * same 7.2 m² of D's cover band) and stops blocking the horizon. The
+         * finial and the broken face read the story; the height was only ever
+         * the drawing's, never the fight's.
+         */
+        const a = RING[3];
         /**
          * 10.6: the lantern is 3.0 x 2.4 m of solid, so its half-diagonal is
          * 1.9 m and at 9.6 its corner plus the bot ring reached r = 7.3 —
          * measured, the single deepest bite the rim took out of the circle.
          */
-        const rr = 10.6;
+        const rr = 11.4;
         const u = Math.cos(a) * rr;
         const v = Math.sin(a) * rr;
         const ry = a + 0.4;
-        A.add('plaster_cream', box, LL(IDENT, X(u), SEC.floor + 1.05, Z(v), ry, 3.2, 2.1, 2.5,
+        const lh = EYE_CAP - 0.06;
+        A.add('plaster_cream', box, LL(IDENT, X(u), SEC.floor + lh / 2, Z(v), ry, 3.2, lh, 2.5,
           0.16, 0.1), { masks: [0.5, 0.6, 0.45] });
-        A.box('concrete', X(u), SEC.floor + 1.05, Z(v), 3.0, 2.1, 2.4, ry);
-        A.add('concrete_dark', soft, LL(IDENT, X(u + Math.cos(ry) * 1.7), SEC.floor + 1.5, Z(v - Math.sin(ry) * 1.7),
-          ry, 0.5, 3.5, 3.5, 0.2, 0), { masks: [0.95, 0.35, 0.12] });
+        A.box('concrete', X(u), SEC.floor + lh / 2, Z(v), 3.0, lh, 2.4, ry);
+        A.add('concrete_dark', soft, LL(IDENT, X(u + Math.cos(ry) * 1.7), SEC.floor + lh * 0.62, Z(v - Math.sin(ry) * 1.7),
+          ry, 0.5, 2.2, 2.6, 0.2, 0), { masks: [0.95, 0.35, 0.12] });
+        // the finial, snapped off and lying across it rather than sticking up
         const fin = tubeY(0.12, 2.2, { radial: 6 });
-        A.addOnce('metal_rust', fin, LL(IDENT, X(u + 1.1), SEC.floor + 1.9, Z(v + 0.7), ry, 1, 1, 1, 1.2, 0.3),
+        A.addOnce('metal_rust', fin, LL(IDENT, X(u + 1.1), SEC.floor + lh + 0.1, Z(v + 0.7), ry, 1, 1, 1, 1.52, 0.3),
           { masks: [1, 0.8, 0.1] });
         for (let k = 0; k < 6; k++) {
           const s = rng.range(0.25, 0.65);
@@ -1961,7 +2129,17 @@ export function buildCathedral(A) {
       for (const [tu, tv, ry] of [
         [-4.9, -4.9, 0.78], [4.9, -4.9, -0.78], [-4.9, 4.9, -0.78], [0, 6.1, 0],
       ]) {
-        const h = rng.range(1.0, 1.3);
+        /**
+         * 1.34-1.46, UP from 1.0-1.3, and it is a visibility change even though
+         * the number went up. `_bakeCover` calls a point STANDING cover when it
+         * finds mass at 1.32 m, so a 1.2 m chest was never standing cover at
+         * all — the six standing points D needs were being carried by the dome
+         * SLABS at 1.8-2.1 m, which is head height and is what was blinding the
+         * point. Raising the chest into the 1.32-1.62 m band and dropping the
+         * slab into it as well puts every piece of D's cover where a man fires
+         * OVER it and nothing of it above his eye. @see `EYE_CAP`.
+         */
+        const h = rng.range(1.34, 1.46);
         A.add('concrete', box, LL(IDENT, X(tu), SEC.floor + h / 2, Z(tv), ry + rng.range(-0.1, 0.1),
           2.6, h, 1.25, rng.range(-0.06, 0.06), rng.range(-0.06, 0.06)),
           { masks: [rng.range(0.5, 0.9), rng.range(0.55, 1.0), 0.45] });
@@ -1970,13 +2148,16 @@ export function buildCathedral(A) {
         const cs = Math.cos(ry);
         const sn = Math.sin(ry);
         A.add('concrete_dark', box,
-          LL(IDENT, X(tu + cs * rng.range(0.9, 1.5)), SEC.floor + h * rng.range(0.55, 0.9), Z(tv - sn * rng.range(0.9, 1.5)),
-            ry + rng.range(-0.3, 0.3), 2.0, 0.22, 1.25, 0, rng.range(0.4, 0.9)),
+          LL(IDENT, X(tu + cs * rng.range(0.9, 1.5)), SEC.floor + h * rng.range(0.45, 0.72), Z(tv - sn * rng.range(0.9, 1.5)),
+            // …and leaning at a shallower angle: a 2 m lid propped at 0.9 rad
+            // reaches 1.74 m, which is a head-height plate that stops no round.
+            ry + rng.range(-0.3, 0.3), 2.0, 0.22, 1.25, 0, rng.range(0.22, 0.5)),
           { masks: [0.95, rng.range(0.4, 0.9), 0.2] });
         // the dome slab on three of them: on edge, leaning the way it landed,
-        // its whole footprint over the chest's own dead square
+        // its whole footprint over the chest's own dead square — and inside
+        // `EYE_CAP`, which is the whole of 「視認性を改善しろ」 on this point.
         if (slab++ < 3) {
-          const sh = rng.range(1.8, 2.1);
+          const sh = rng.range(1.44, EYE_CAP);
           A.add('roof_screed', box,
             LL(IDENT, X(tu + cs * rng.range(-0.35, 0.35)), SEC.floor + h + (sh - h) / 2 - 0.15,
               Z(tv - sn * rng.range(-0.35, 0.35)), ry + rng.range(-0.25, 0.25),
@@ -2012,7 +2193,14 @@ export function buildCathedral(A) {
     for (let i = 0; i < 17; i++) {
       const u = rng.range(-HW + 1.4, HW - 1.4);
       const v = rng.range(-HD + 1.4, HD - 1.4);
-      if (Math.hypot(u, v) < KEEP_STAND) continue;
+      /**
+       * 9.5 m, NOT `KEEP_STAND`. A six-metre principal leaning at 0.7 rad
+       * stands 2.2 m in the air and is DRAWN ONLY, so one of these landing
+       * inside D was a screen across the capture point that stopped nothing —
+       * a bullet goes through it and a player does not know that. Out past the
+       * circle they are the same picture and cost the point no bearings.
+       */
+      if (Math.hypot(u, v) < 9.5) continue;
       const len = rng.range(3.0, 6.4);
       // shallow: a principal that fell is LEANING on the pile, not planted in it
       const tilt = rng.range(0.18, 0.72) * (rng.float() < 0.5 ? 1 : -1);
@@ -2364,7 +2552,7 @@ export function buildCathedral(A) {
      * standing. `_cathruin.mjs` measures the real surface over the whole plan.
      */
     intactTopY: SEC.towerTop,
-    ruinTopY: SEC.floor + 10.6,
+    ruinTopY: SEC.floor + 7.2,
 
     /* ------------------------------------------------------------------ */
     /* WHAT THE COLLAPSE IS MADE OF. @see section 8b.                      */
