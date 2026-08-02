@@ -34,6 +34,13 @@ const SEED = process.argv[3] ?? '12';
 const SCALE = Number(process.argv[4] ?? 8);
 const ONEWOUND = process.argv[5] === '1';
 /**
+ * `--nosuppress` turns OFF clause 3 of `AiSystem.armourWorth` (suppression
+ * against armour) for this run, so the engagement rate is reported BOTH ways
+ * out of ONE build. A/B by rebuilding is how you compare two different maps by
+ * accident — the level is procedural and the seed only pins the dice.
+ */
+const NOSUPPRESS = process.argv.includes('--nosuppress');
+/**
  * `--shot` freezes the clock on the frame a hull the INFANTRY killed brews up
  * and photographs it. It is bolted onto THIS probe rather than written as its
  * own because the sim is sensitive to the probe: a separate, lighter run of
@@ -57,7 +64,7 @@ await page.goto(`${URL}?capture=1&seed=${SEED}${ONEWOUND ? '&onewound=1' : ''}`,
 });
 await page.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
 
-const res = await page.evaluate(async ({ SCALE, SHOT }) => {
+const res = await page.evaluate(async ({ SCALE, SHOT, NOSUPPRESS }) => {
   const e = window.__ENGINE__;
   const ctx = e.ctx;
   const m = ctx.peek('match');
@@ -68,6 +75,7 @@ const res = await page.evaluate(async ({ SCALE, SHOT }) => {
   e.input.enabled = false;
   ctx.peek('player')?.setControlEnabled?.(false);
   e.time.scale = SCALE;
+  if (NOSUPPRESS) ai.armourSuppress = false;
 
   while (m.phase !== 'live') await new Promise((r) => requestAnimationFrame(r));
   const t0 = ctx.time.elapsed;
@@ -79,11 +87,11 @@ const res = await page.evaluate(async ({ SCALE, SHOT }) => {
       r = {
         id: t.id, team: t.team, sorties: 0, rolledAt: null, diedAt: null,
         life: 0, fate: null, health: t.health,
-        aimed: 0, aimedFire: 0, aimedFrag: 0, listed: 0,
+        aimed: 0, aimedFire: 0, aimedFrag: 0, aimedSupp: 0, listed: 0,
         menInRange: 0, samples: 0,
         // WHY the men who did not engage did not: the policy gate and the
         // perception gate are different failures and have different fixes.
-        worth1: 0, worth2: 0, worthLos: 0, near26: 0, astern: 0,
+        worth1: 0, worth2: 0, worth3: 0, worthLos: 0, near26: 0, astern: 0,
         in40: 0, los40: 0, losAll: 0, inView: 0,
         nHull: 0, nTurret: 0, nDeck: 0, dHull: 0, dTurret: 0, dDeck: 0,
         rounds: 0, roundDmg: 0, dupes: 0,
@@ -170,6 +178,7 @@ const res = await page.evaluate(async ({ SCALE, SHOT }) => {
           const wv = ai.armourWorth(g, t);
           if (wv === 1) r.worth1++;
           else if (wv === 2) r.worth2++;
+          else if (wv === 3) r.worth3++;
           if (d > 7.5 && d < 26) r.near26++;
           const s = Math.sin(t.yaw), c = Math.cos(t.yaw);
           const fz = (g.position.x - t.position.x) * s + (g.position.z - t.position.z) * c;
@@ -186,6 +195,7 @@ const res = await page.evaluate(async ({ SCALE, SHOT }) => {
           r.aimed++;
           if (g.armourWorth === 1) r.aimedFire++;
           else if (g.armourWorth === 2) r.aimedFrag++;
+          else if (g.armourWorth === 3) r.aimedSupp++;
         }
       }
     }
@@ -208,7 +218,7 @@ const res = await page.evaluate(async ({ SCALE, SHOT }) => {
     oneWound: a.oneWoundPerRound,
     shot: window.__DEAD__ ?? null,
   };
-}, { SCALE, SHOT });
+}, { SCALE, SHOT, NOSUPPRESS });
 
 const f = (n, d = 0) => (n === null || n === undefined ? '—' : n.toFixed(d));
 console.log(`\n=== seed ${SEED} @${SCALE}x  oneWoundPerRound=${res.oneWound} ===`);
@@ -225,7 +235,7 @@ for (const r of res.rows) {
   );
   console.log(
     `      of those: ${r.astern} astern of it, ${r.near26} in frag range, ` +
-      `${r.worth1} with a DECK shot, ${r.worth2} frag-only, ${r.worthLos} of those with LOS`
+      `${r.worth1} with a DECK shot, ${r.worth2} frag-only, ${r.worth3} cleared to SUPPRESS, ${r.worthLos} of those with LOS`
   );
   console.log(
     `      LOS to the deck: ${r.losAll}/${r.menInRange} in range, ${r.los40}/${r.in40} inside 40 m, ` +
@@ -233,7 +243,9 @@ for (const r of res.rows) {
   );
   console.log(
     `      AIMED AT by ${r.aimed} man-samples — ${r.aimedFire} cleared to fire (deck), ` +
-      `${r.aimedFrag} to frag only`
+      `${r.aimedFrag} to frag only, ${r.aimedSupp} to suppress · ENGAGEMENT RATE ` +
+      `${r.menInRange ? (((r.worth1 + r.worth2 + r.worth3) / r.menInRange) * 100).toFixed(1) : '0'}% ` +
+      `of men in range cleared to engage`
   );
   console.log(
     `      rounds ${r.rounds} for ${f(r.roundDmg)}  ·  ` +

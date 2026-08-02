@@ -301,6 +301,9 @@ export class AiSystem {
      * Nothing here is allocated per frame and nothing here reaches into `match`.
      */
     this.vehicles = null;
+    /** Suppression against armour — @see clause 3 of `armourWorth`. Flipped
+     *  only by `_tankfight.mjs`, to report the engagement rate both ways. */
+    this.armourSuppress = true;
     /**
      * Which side wears each appearance, so the team rim can be resolved (see
      * TEAM_RIM in textures.js). A variant's materials are shared by every actor
@@ -965,7 +968,12 @@ export class AiSystem {
         d > ARMOUR_FRAG_MIN && d < ARMOUR_FRAG_MAX) return 2;
 
     /* ---- 3. suppression — @see the ARMOUR_PROVOKED note --------------- */
-    if (d < agent.weaponRange && (agent.traits?.trigger ?? 1) < ARMOUR_HOSE) {
+    // `armourSuppress` is the A/B switch, not a setting: one build has to be
+    // able to report the engagement rate with and without this clause, and
+    // building the file twice is how you compare two different maps by
+    // accident. Nothing in the game ever writes it.
+    if (this.armourSuppress && d < agent.weaponRange &&
+        (agent.traits?.trigger ?? 1) < ARMOUR_HOSE) {
       if (this.ctx.time.elapsed - (v.firedAt ?? -1e9) < ARMOUR_PROVOKED) return 3;
       const o = agent.objective?.position;
       if (o && Math.hypot(p.x - o.x, p.z - o.z) < ARMOUR_OBJECTIVE_R) return 3;
