@@ -202,7 +202,17 @@ const ROUTES = [
       { zone: 'C', points: [L(0.5, 15), L(-4.5, 15), L(-9, 12), L(-13.5, 10.5), L(-28.5, 10.5), L(-34.5, 4.5), L(-34.5, 1.5), L(-37.5, -1.5)] },
       { zone: 'E', points: [L(0.5, 15), L(4.5, 15), L(9, 12), L(13.5, 10.5), L(28.5, 10.5), L(33, 9), L(34.5, 7.5), L(34.5, 1.5), L(37.5, -1.5)] },
       { zone: 'A', points: [L(0.5, 15), L(-4.5, 21), L(-13.5, 22.5), L(-16.5, 25.5), L(-25.5, 25.5), L(-31.5, 31.5), L(-39, 31.5), L(-42, 34.5), L(-69, 36)] },
-      { zone: 'B', points: [L(0.5, 15), L(4.5, 15), L(9, 12), L(13.5, 10.5), L(13.5, 0), L(21, -6), L(25.5, -6), L(30, -10.5), L(34.5, -15), L(34.5, -18), L(40.5, -24), L(46.5, -24), L(51, -28.5), L(51, -34.5), L(52.5, -36), L(55.5, -37.5), L(69, -37.5)] },
+      /**
+       * RE-SCOUTED — the old polyline drove past E's doorstep (8.4 m off its
+       * centre at the closest sample), so `_trimToStandoff` cut it 79 m short
+       * of B and the whole spoke was DROPPED at boot: a hull whose enemy held
+       * only B had nowhere to go and sat at the hub, which from the player's
+       * seat is a stuck tank. `_hullpath.mjs` with the other four capture
+       * circles blocked at 11 authored units found this corridor east of the
+       * mid street and south through the diagonal; it clears every non-target
+       * circle by more than the stand-off.
+       */
+      { zone: 'B', points: [L(0.5, 15), L(9, 15), L(12, 12), L(12, 7.5), L(15, 1.5), L(13.5, 0), L(13.5, -13.5), L(18, -15), L(33, -30), L(36, -30), L(43.5, -37.5), L(69, -37.5)] },
     ],
   },
   {
@@ -211,10 +221,23 @@ const ROUTES = [
     name: 'BLUE ARMOUR',
     approach: [L(-8, -56), L(-7, -46), L(-5, -36), L(-2.5, -28), L(-1, -22), L(-0.5, -17)],
     spokes: [
-      { zone: 'C', points: [L(-0.5, -17), L(-10.5, -16.5), L(-13.5, -13.5), L(-15, -7.5), L(-25.5, -7.5), L(-27, -6), L(-28.5, -7.5), L(-33, -3), L(-37.5, -1.5)] },
+      /**
+       * RE-SCOUTED — the old loop went west then NORTH round the courtyard and
+       * dead-ended nose-against a 4.2 x 2.6 m merged-masonry shed at world
+       * (-37, 19): `pinch 3.4m at sample 40`, hull parked against it for the
+       * rest of the match (watched, seed 7, twice). This corridor comes at C
+       * from the south-east instead and never meets the shed.
+       */
+      { zone: 'C', points: [L(-0.5, -17), L(-10.5, -16.5), L(-13.5, -13.5), L(-15, -7.5), L(-22.5, -4.5), L(-25.5, -1.5), L(-28.5, -1.5)] },
       { zone: 'E', points: [L(-0.5, -17), L(4.5, -23), L(13.5, -24.5), L(24, -24.5), L(30, -18), L(34.5, -12), L(34.5, -6), L(37.5, -1.5)] },
       { zone: 'B', points: [L(-0.5, -17), L(4.5, -23), L(13.5, -24.5), L(16.5, -27.5), L(25.5, -27.5), L(31.5, -33.5), L(39, -33.5), L(42, -36.5), L(69, -38)] },
-      { zone: 'A', points: [L(-0.5, -17), L(-10.5, -16.5), L(-13.5, -13.5), L(-15, -7.5), L(-25.5, -7.5), L(-30, -3), L(-34.5, 3), L(-34.5, 16.5), L(-40.5, 22.5), L(-46.5, 22.5), L(-51, 27), L(-51, 31.5), L(-55.5, 36), L(-69, 36)] },
+      /**
+       * RE-SCOUTED — the old spoke hugged the courtyard's east wall (8.4 m off
+       * C's centre) and was DROPPED at boot on the C stand-off, so BLUE could
+       * never drive at A at all. The x -15 corridor keeps 13 units off C and
+       * 15 off D, then rejoins the outer-ring streets RED's A spoke proved.
+       */
+      { zone: 'A', points: [L(-0.5, -17), L(-10.5, -16.5), L(-13.5, -13.5), L(-15, 9), L(-16.5, 10.5), L(-27, 10.5), L(-40.5, 22.5), L(-46.5, 22.5), L(-51, 27), L(-51, 31.5), L(-55.5, 36), L(-69, 36)] },
     ],
   },
 ];
@@ -972,7 +995,7 @@ export class Armour {
       ROAD: null, STEP: null, PILE: null,
       zone: null, plough: null, stop,
     };
-    this._bakeRide(path);
+    this._bakeRide(path, physics);
     return path;
   }
 
@@ -1013,14 +1036,22 @@ export class Armour {
    * same reason. A window shorter than the overhang would take the BALCONY as
    * the road and drive the tank along it.
    */
-  _bakeRide(p) {
+  _bakeRide(p, physics) {
     const n = p.n;
     const ROAD = new Float32Array(n);
     // NOT `STEP`: the module constant of that name is the sample spacing, and a
     // local shadowing it made `W` NaN and the envelope a no-op, silently.
     const RISE = new Float32Array(n);
     const PILE = new Int16Array(n).fill(-1);
+    /**
+     * 1 = a rise in the (CLIMB_TOP, PASS_TOP] band that a horizontal ray has
+     * PROVED is standing mass. @see the note below; `_trimAtBlockers` reads it.
+     */
+    const SOLID = new Uint8Array(n);
     const W = Math.ceil(20 / STEP);
+    const o = this._bv ?? (this._bv = new THREE.Vector3());
+    const d = this._bv2 ?? (this._bv2 = new THREE.Vector3());
+    const MASKW = physics.MASK.WORLD;
     for (let i = 0; i < n; i++) {
       let lo = p.Y[i];
       for (let j = Math.max(0, i - W); j <= Math.min(n - 1, i + W); j++) {
@@ -1029,11 +1060,41 @@ export class Armour {
       }
       ROAD[i] = lo;
       const rise = p.Y[i] - lo;
-      RISE[i] = rise > PASS_TOP ? 0 : Math.max(0, Math.min(rise, CLIMB_TOP));
+      if (rise > PASS_TOP) {
+        RISE[i] = 0; // a roof the ground ray caught — the hull drives under it
+      } else if (rise <= CLIMB_TOP) {
+        RISE[i] = Math.max(0, rise); // a step: the track run rides over it
+      } else {
+        /**
+         * THE AMBIGUOUS BAND, AND ONE RAY SETTLES IT. With `PASS_TOP` at 3.2
+         * the (CLIMB_TOP, PASS_TOP] band holds two different things the
+         * downward ray cannot tell apart: a market awning 2.5 m OVER an open
+         * road (drive under it, exactly as the roof rule always has) and a
+         * 2.6 m masonry shed standing ON the road (nothing to drive under —
+         * `_trimAtBlockers` must stop the route, or the plough must have an
+         * instance to erase). Measured the wrong way first: classifying the
+         * whole band as mass cut BOTH approaches off at the mid-street market
+         * awnings within 48 m of the pocket. So a horizontal ray is fired at
+         * hull height from the clear air of a neighbouring sample: it passes
+         * under an awning and buries itself in a shed.
+         */
+        const j = i >= 2 ? i - 2 : Math.min(n - 1, i + 2);
+        o.set(p.X[j], ROAD[i] + 1.1, p.Z[j]);
+        d.set(p.X[i] - p.X[j], 0, p.Z[i] - p.Z[j]);
+        const len = Math.hypot(d.x, d.z);
+        let solid = false;
+        if (len > 0.1) {
+          d.multiplyScalar(1 / len);
+          solid = !!physics.raycast(o, d, len + 0.3, MASKW)?.hit;
+        }
+        SOLID[i] = solid ? 1 : 0;
+        RISE[i] = solid ? CLIMB_TOP : 0;
+      }
     }
     p.ROAD = ROAD;
     p.STEP = RISE;
     p.PILE = PILE;
+    p.SOLID = SOLID;
   }
 
   /* ---------------------------------------------------------- one tank --- */
@@ -1129,6 +1190,9 @@ export class Armour {
     for (let i = 0; i < p.n; i++) {
       const rise = p.Y[i] - p.ROAD[i];
       if (rise <= CLIMB_TOP + 0.05 || rise > PASS_TOP) continue;
+      // Only rises `_bakeRide`'s horizontal ray PROVED are standing mass — a
+      // market awning over an open road is driven under, not trimmed at.
+      if (!p.SOLID?.[i]) continue;
       let erasable = false;
       if (grid) {
         const cell = grid.cell;
