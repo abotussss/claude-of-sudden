@@ -61,6 +61,17 @@ const rolled = await page.evaluate(async () => {
     }
   }
   e.time.scale = 1;
+  /**
+   * THE ROUND STOPS COUNTING ONCE THE ARMOUR IS OUT. The cathedral event that
+   * arms the sortie lands at ~57 % of a 600 s match, so watching from there to
+   * the end at 1x is about 35 real seconds of hull — which is not long enough
+   * to see whether a hull that stops STAYS stopped, and "it stops and never
+   * moves again" is precisely the complaint. Nothing else is touched: the bots
+   * fight, the zones flip, the guns fire; only the clock and the win check are
+   * held, exactly as `_tankshot.mjs` and `_razestuck.mjs` already do.
+   */
+  m.roundClock = 1e6;
+  m._checkWinConditions = () => {};
   const a = m.tank;
   return {
     phase: m.phase, clock: +m.roundClock.toFixed(1), phases,
@@ -200,6 +211,40 @@ for (const id of Object.keys(byId)) {
     if (len >= 3) stalls.push({ ...stallStart, len: +len.toFixed(1) });
   }
   console.log(`  advance time ${advanceT.toFixed(0)}s, under-0.35m/s inside it ${slowT.toFixed(0)}s (${advanceT ? ((slowT / advanceT) * 100).toFixed(0) : 0}%)`);
+  /**
+   * THE NUMBER THE AVERAGE HIDES. "5 % under walking pace while advancing" is
+   * a fine figure and it is not what the player is looking at: a hull that
+   * reaches `hold` is TERMINAL there by design and simply stands, so the way
+   * this reads as 「スタックしてる」 is one unbroken motionless stretch, whatever
+   * the state machine calls it. So the longest run of samples in which the hull
+   * did not move 0.35 m/s is reported REGARDLESS of state, with where it was.
+   */
+  let frozeStart = null;
+  let longest = null;
+  for (let i = 1; i < rows.length; i++) {
+    const a = rows[i - 1];
+    const c = rows[i];
+    const dt = c.t - a.t;
+    if (dt <= 0) continue;
+    const v = Math.hypot(c.x - a.x, c.z - a.z) / dt;
+    if (v < 0.35) {
+      if (frozeStart === null) frozeStart = a;
+    } else if (frozeStart !== null) {
+      const len = a.t - frozeStart.t;
+      if (!longest || len > longest.len) longest = { ...frozeStart, len: +len.toFixed(1) };
+      frozeStart = null;
+    }
+  }
+  if (frozeStart !== null) {
+    const len = rows[rows.length - 1].t - frozeStart.t;
+    if (!longest || len > longest.len) longest = { ...frozeStart, len: +len.toFixed(1) };
+  }
+  if (longest) {
+    console.log(
+      `  LONGEST MOTIONLESS STRETCH (any state): ${longest.len}s from t=${longest.t}s ` +
+        `at (${longest.x}, ${longest.z}), state=${longest.st}, standing off ${longest.tz}`
+    );
+  } else console.log('  never motionless for a whole sample gap');
   if (stalls.length) {
     console.log('  STALLS >= 3s while ordered to MOVE:');
     for (const st of stalls) console.log(`    t=${st.t}s for ${st.len}s at (${st.x}, ${st.z}) leg=${st.leg} target=${st.tz}`);
