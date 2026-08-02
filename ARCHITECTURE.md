@@ -99,6 +99,7 @@ ai.setCoverRazed(down)      ai.syncCoverBlocks()
 agent.setObjective(mode, position, site, facing)   agent.working
 player.team / player.name / player.alive
 player.respawnAt(position, yaw)     player.health.regenEnabled
+player.lastDamage                   { at, amount, type, source, kind, label, team, from }
 weapons.locked              weapons.resetAmmo()
 weapons.scavenge(mags)      weapons.needsAmmo
 weapons.pickUpPrimary(id)   weapons.primaryIds
@@ -107,6 +108,7 @@ ui.setRound(state)          ui.matchDriven      ui.isFriendlyTarget(actor)
 ui.airAlert(a)              ui.airImpact(title)   ui.clearAirAlert()
 ui.airDanger(position, life, label)
 ui.setCaches(list)          ui.pickup(title, sub, kind)
+ui.droneLock(state)         ui.killCam(kill)      ui.clearKillCam()
 world.levelYaw              world.levelToWorld(x, y, z, out)
 world.features              world.links          world.interiorVolumes
 world.demolitions           world.demolish(id, down)   world.demolishAll(down)
@@ -429,12 +431,24 @@ Emit and listen via `ctx.events`. Payloads are plain objects. The canonical set:
 | `match:strafe` | `{ phase: 'inbound'\|'impact'\|'settled', run, position }` | match |
 | ↳ | FIGHTER SUPPORT FIRE — an aircraft crossing low along one of four fixed lines with its gun open, walking 11-31 cannon impacts down a lane in about a second. `inbound` is the launch (the aeroplane and its gun are the telegraph, ~3.3 s before the first round lands); `impact` fires once per impact that carries a blast, which is every fourth one — see the DAMAGE IS SAMPLED note in the file; `settled` is when the grit stops moving. It changes no collision and no navigation. The payload object is REUSED — copy what you need. See `src/match/strafe.js`. | |
 
-Two additive fields on existing payloads, both optional and both ignorable:
+| `match:drone` | `{ phase, id, team, position }` | match |
+| ↳ | A SUICIDE DRONE, at each beat of its life: `launch` out of a side's base, `lock` when it has taken a man and started his warning, `dive` when it commits, `boom` when the warhead functions, `dead` when it was shot down before it could. Thirty a match, both sides combined, paced on `_matchProgress`; at most `RULES.droneMaxAloft` are ever in the air. The payload object is REUSED — copy what you need. `match.drones.list` is the live array, published for the same reason `match.tank.tanks` is: a rotor is a CONTINUOUS sound and cannot be built off a one-shot event. See `src/match/drone.js`. | |
+
+Additive fields on existing payloads, all optional and all ignorable:
 
 | payload | field | meaning |
 |---|---|---|
 | `damage:dealt` | `source` | the actor that fired. Set by `physics` from `fireBullet({ shooter })`, and by `ai` for its own rounds. Absent ⇒ the environment. |
 | `actor:death` | `by` | kill credit: the actor that landed the last round, or null. |
+| `explosion` | `kind` | what the ordnance IS, when the `source` had to be a string. `'grenade'` is read by `Armour._takeBlast` (`fragMul`) and is set by `ai`'s own frag and by the drone. |
+| `explosion` | `label` | a display string for the kill cam, when the blast belongs to something with a name that is not an actor. The drone sets `'SUICIDE DRONE'`. |
+| `explosion` | `team` | which side fired it, for the same reader. `-1` ⇒ nobody's. |
+
+`label` and `team` exist because `Armour._takeBlast` passes a NON-string `source`
+straight through to `tank.lastHitBy` and from there to `ai.teamOf` and the
+killfeed — so a weapon that wants to be NAMED without being an actor cannot put
+itself on `source`. They are read by `PlayerSystem.lastDamage` and by nothing
+else in the engine.
 
 `source` is what makes team damage, kill credit and the killfeed possible at
 all, and it is threaded through without changing a signature in
