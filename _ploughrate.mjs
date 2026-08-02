@@ -101,22 +101,33 @@ const out = await p.evaluate(() => {
       let zero = true;
       for (let k = 0; k < 16; k++) if (arr[off + k] !== 0) { zero = false; break; }
       if (zero) { erased++; continue; }
+      /**
+       * THE PROP'S OWN FOOT, NOT THE ROOF ABOVE IT. A downward ray dropped at
+       * the instance's x/z from road + 30 hits whatever is HIGHEST there, which
+       * for anything standing under a balcony or a gangway is the balcony — the
+       * first cut of this probe reported 113 survivors "over 3.0 m" on BLUE and
+       * every one of them was a brick on the pavement with a deck overhead.
+       * The instance ORIGIN's height over the road is the honest question: it
+       * says whether the survivor is on the ground the hull drove on at all.
+       */
+      const foot = q.y - rec.road;
       o.set(q.x, rec.road + 30, q.z);
       const h = phys.raycast(o, down, 45, phys.MASK.WORLD);
-      const top = h?.hit ? 30 - h.distance : 0;
-      left.push({ name: q.name, top: +top.toFixed(2) });
+      const over = h?.hit ? 30 - h.distance : 0;
+      left.push({ name: q.name, top: +foot.toFixed(2), over: +over.toFixed(2) });
     }
 
-    const bands = { '<=0.3': 0, '0.3-1.0': 0, '1.0-1.6': 0, '1.6-3.0': 0, '>3.0': 0 };
+    // Bands on the instance's own foot height over the road it stands on:
+    // "on the road" is where the hull could have hit it at all.
+    const bands = { 'on the road (<=0.4)': 0, '0.4-1.6 up': 0, '1.6-3.0 up': 0, 'off the ground (>3.0)': 0 };
     for (const q of left) {
-      if (q.top <= 0.3) bands['<=0.3']++;
-      else if (q.top <= 1.0) bands['0.3-1.0']++;
-      else if (q.top <= 1.6) bands['1.0-1.6']++;
-      else if (q.top <= 3.0) bands['1.6-3.0']++;
-      else bands['>3.0']++;
+      if (q.top <= 0.4) bands['on the road (<=0.4)']++;
+      else if (q.top <= 1.6) bands['0.4-1.6 up']++;
+      else if (q.top <= 3.0) bands['1.6-3.0 up']++;
+      else bands['off the ground (>3.0)']++;
     }
     const byName = {};
-    for (const q of left) if (q.top > 0.3) byName[q.name] = (byName[q.name] ?? 0) + 1;
+    for (const q of left) if (q.top <= 0.4) byName[q.name] = (byName[q.name] ?? 0) + 1;
 
     rows.push({
       id: t.id,
@@ -138,8 +149,8 @@ for (const r of out) {
   console.log(`\n===== ${r.id} — ${r.legs} legs, ${r.piles} piles =====`);
   console.log(`  ${r.corridor} prop instances inside the driven corridor`);
   console.log(`  ERASED ${r.erased} (${pct}%) · left standing ${r.left}`);
-  console.log(`  survivors by height over the road: ${JSON.stringify(r.bands)}`);
-  console.log(`  survivors over 0.3 m, by kind: ${JSON.stringify(r.worstLeft)}`);
+  console.log(`  survivors by their own foot height over the road: ${JSON.stringify(r.bands)}`);
+  console.log(`  survivors ON the road, by kind: ${JSON.stringify(r.worstLeft)}`);
 }
 if (errs.length) console.log('\nPAGEERRORS:', errs);
 await b.close();
