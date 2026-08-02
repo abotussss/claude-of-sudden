@@ -1454,6 +1454,7 @@ export class Agent {
         this.postTimer = this.rng.range(35, 75) + this.traits.patience * 40;
         if (this.ai.postStats) this.ai.postStats.reachedTop++;
         this._hasHoldSpot = true;
+        this._postWalk = 0;
         this._holdSpot.copy(p.stand[this.id % p.stand.length]);
       } else if (!up && (this.position.y < p.route[0].y + 0.9 || this.postWp < 0)) {
         this._dropPost('home');
@@ -1475,7 +1476,18 @@ export class Agent {
       this.postTimer = POST_PHASE_T;
       return true;
     }
-    if (far > 1.1 * 1.1) {
+    /**
+     * HE WALKS TO THE WINDOW FOR THREE SECONDS AND THEN HOLDS WHERE HE IS.
+     *
+     * A firing position is a preference, not a requirement — any square of a
+     * first floor with a wall at his back is a place to shoot from — and a man
+     * who keeps trying to reach one he cannot is a man who reads as STUCK to
+     * `tools/stuckcheck.mjs`, correctly, because `desiredSpeed` is exactly the
+     * field it uses for intent. Measured: 15 consecutive stuck samples on one
+     * man, all of them in this phase, all of them walking at a corner.
+     */
+    this._postWalk = (this._postWalk ?? 0) + dt;
+    if (far > 1.1 * 1.1 && this._postWalk < 3) {
       this.desiredSpeed = 1.9;
       this._detour.copy(stand);
       this._detourTimer = Math.max(this._detourTimer, 0.5);
@@ -2883,7 +2895,7 @@ export class Agent {
      * the recovery, and it is stricter than this is: it gives the post up
      * entirely rather than trying the same manoeuvre again.
      */
-    if (this.post) {
+    if (this.post && this.postPhase > 0) {
       this._progTime = 0;
       this._progFrom.copy(this.position);
       return;
