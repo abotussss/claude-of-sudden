@@ -12,6 +12,8 @@ import { Minimap } from './minimap.js';
 import { WorldMarkers } from './markers.js';
 import { Prompt, Banner } from './prompts.js';
 import { AirAlert } from './airalert.js';
+import { DroneLock } from './dronelock.js';
+import { KillCam } from './killcam.js';
 import { PauseMenu } from './menu.js';
 import { ScopeOverlay } from './scope.js';
 import { RoundStrip, ZoneStrip, BombPanel, Scoreboard, SpectateBar } from './round.js';
@@ -69,6 +71,20 @@ const MAX_BLIPS = 48;
  *   ui.clearAirAlert()
  *   ui.airDanger(worldPos, life, label) world-space impact reticle, one per
  *                                       point, for the length of the telegraph
+ *   ui.droneLock({active,diving,progress,remain,range,x,y,z})
+ *                                       A SUICIDE DRONE HAS YOU. Pushed every
+ *                                       frame the lock changes; `active:false`
+ *                                       is a break and is drawn as one. A strip
+ *                                       with a bearing and a countdown, plus a
+ *                                       frame treatment for an eye that is down
+ *                                       a sight. See src/ui/dronelock.js.
+ *   ui.killCam({name,cause,dist,friendly,environmental})
+ *                                       WHO KILLED YOU, once, on death. The
+ *                                       caption over the kill cam in
+ *                                       src/match/spectate.js; the killer may
+ *                                       be a bomb, a tank, a drone or the
+ *                                       church, so `cause` stands on its own.
+ *   ui.clearKillCam()                   they are back on their feet
  *   ui.setMatch({scoreUs,scoreThem,timeLeft,mode})
  *   ui.setRound(state)                  the round HUD: alive counts, phase, the
  *                                       domination zone strip (state.mode ===
@@ -135,6 +151,15 @@ export class UiSystem {
     this.banner = new Banner(this.chromeLayer);
     /** Incoming air. Inert until `match` calls airAlert(). */
     this.airAlertStrip = new AirAlert(this.chromeLayer);
+    /**
+     * A SUICIDE DRONE HAS YOU. Inert until `match` calls droneLock(). The strip
+     * is chrome; the frame treatment it also owns goes in the hurt layer, under
+     * the rest of the HUD, because it is the cue that has to work with the eye
+     * down a sight. @see src/ui/dronelock.js.
+     */
+    this.droneLockStrip = new DroneLock(this.chromeLayer, this.hurtLayer);
+    /** WHO KILLED YOU. Inert until `match` calls killCam(). @see src/ui/killcam.js */
+    this.killCamStrip = new KillCam(this.chromeLayer);
     // Round HUD. Inert until `match` calls setRound(), and each widget hides
     // itself when the running mode has nothing to say through it: the zone strip
     // needs `mode === 'domination'`, the C4 panel needs a charge in play.
@@ -510,6 +535,45 @@ export class UiSystem {
     this.airAlertStrip.clear();
   }
 
+  /**
+   * A SUICIDE DRONE HAS LOCKED ON — 「捕捉されたらUIを出してほしい」. Pushed every
+   * frame the drone system's state changes; `l.active === false` is a break and
+   * is drawn as one. @see src/ui/dronelock.js for why a strip is not enough on
+   * its own and what the frame treatment is for.
+   *
+   * The alarm is `grenade_warn`, which is the sound this HUD already means
+   * "something lethal is on its way" with — the same choice `airAlert` makes,
+   * and it is struck ONCE per lock rather than per frame.
+   *
+   * @param {object} l { active, diving, progress, remain, range, x, y, z }
+   *                   `match`'s own reused record; every field is copied.
+   */
+  droneLock(l) {
+    const was = this.droneLockStrip.active;
+    const wasDiving = this.droneLockStrip.diving;
+    this.droneLockStrip.set(l);
+    if (l?.active && !was) this.sfx('grenade_warn', 0.85);
+    // The commit is its own event and gets its own strike: "it has decided"
+    // is a different fact from "it is looking at you".
+    else if (l?.active && l.diving && !wasDiving) this.sfx('grenade_warn', 1);
+  }
+
+  /**
+   * YOU ARE DEAD AND THIS IS WHO DID IT — 「誰が自分をキルしたのか、キルカメラに」.
+   * `match` calls it once on death with a record it owns, and `clearKillCam()`
+   * on the respawn. @see src/ui/killcam.js and src/match/spectate.js, which owns
+   * the camera this is the caption for.
+   *
+   * @param {object} k { name, cause, dist, friendly, environmental }
+   */
+  killCam(k) {
+    this.killCamStrip.set(k);
+  }
+
+  clearKillCam() {
+    this.killCamStrip.clear();
+  }
+
   /** One world-space impact reticle. `life` is the remaining telegraph. */
   airDanger(worldPos, life = 4.4, label = 'INCOMING') {
     if (!worldPos) return;
@@ -707,6 +771,9 @@ export class UiSystem {
     // Fed the heading and the eye, not the camera: the arrow is "turn this way",
     // which is a bearing difference and nothing to do with projection.
     this.airAlertStrip.update(dt, heading, pos.x, pos.z);
+    // Same two arguments and the same reason: the arrow is a bearing
+    // difference and has nothing to do with projection.
+    this.droneLockStrip.update(dt, heading, pos.x, pos.z);
 
     // ---- round HUD (domination / demolition) -----------------------------
     const r = this.round;
@@ -718,6 +785,8 @@ export class UiSystem {
     this.beaconStrip.update(dt, r?.beacon, r?.beaconLife ?? 30);
     this.bombPanel.update(dt, r);
     this.spectateBar.update(dt, r);
+    // The respawn clock is `match`'s; the bar just draws what is left of it.
+    this.killCamStrip.update(dt, r?.killCamProgress ?? 0);
     // Held on Tab, and shown for free between rounds — which is when you
     // actually want to read it.
     this._scoreboardHeld = !!(ctx.input.enabled && !ctx.input.frozen && ctx.input.action('scoreboard'));
@@ -875,6 +944,8 @@ export class UiSystem {
     this.prompt.dispose();
     this.banner.dispose();
     this.airAlertStrip.dispose();
+    this.droneLockStrip.dispose();
+    this.killCamStrip.dispose();
     this.roundStrip.dispose();
     this.zoneStrip.dispose();
     this.capturePanel.dispose();

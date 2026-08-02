@@ -1260,6 +1260,96 @@ const CSS = `
 .ow-spec-hint { margin-top: calc(var(--u) * .8); font-size: calc(9px * var(--k));
   letter-spacing:.2em; color: var(--ink-3); }
 
+/* ========================================================= drone lock
+   You have been captured by a suicide drone.  It sits UNDER the air-alert
+   strip and above the crosshair, because it is the same class of information
+   (something lethal is on its way, turn this way) and the two can be on screen
+   at once.  See src/ui/dronelock.js for why the whole thing exists. */
+.ow-dl {
+  position:absolute; left:50%; top: calc(var(--pad) * .7 + 168px * var(--k));
+  transform: translateX(-50%);
+  display:flex; align-items:center; gap: calc(var(--u) * 2.2);
+  padding: calc(var(--u) * 1.3) calc(var(--u) * 3.4) calc(var(--u) * 1.3) calc(var(--u) * 2.4);
+  background: linear-gradient(180deg, rgba(30,4,6,.62), rgba(12,3,4,.46));
+  border-left: calc(2.5px * var(--k)) solid var(--red);
+  box-shadow: 0 calc(2px * var(--k)) calc(14px * var(--k)) rgba(0,0,0,.55);
+  will-change: opacity, transform;
+}
+.ow-dl-arrow { width: calc(20px * var(--k)); height: calc(20px * var(--k));
+  color: var(--red); flex: 0 0 auto; will-change: transform; }
+.ow-dl-arrow svg { width:100%; height:100%; display:block;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.9)); }
+.ow-dl-col { min-width: calc(212px * var(--k)); }
+.ow-dl-t {
+  font-family: var(--fd);
+  font-size: calc(17px * var(--k)); letter-spacing:.26em; font-weight:700;
+  color: #ffd2c8; text-shadow: var(--sh-o1);
+}
+.ow-dl-s { margin-top: calc(var(--u) * .4);
+  font-size: calc(9.5px * var(--k)); letter-spacing:.22em;
+  color: var(--ink-2); text-shadow: var(--sh); }
+.ow-dl-bar { margin-top: calc(var(--u) * 1); height: calc(2px * var(--k));
+  background: rgba(255,255,255,.16); }
+.ow-dl-bar > i { display:block; height:100%; width:100%; background: var(--red);
+  transform-origin:left; transform:scaleX(1); }
+/* Committed.  A different problem and a different colour: nothing you do with
+   your feet solves this one. */
+.ow-dl.dive { border-left-color: #fff2ec;
+  background: linear-gradient(180deg, rgba(58,6,6,.74), rgba(20,4,4,.56)); }
+.ow-dl.dive .ow-dl-t { color:#fff; letter-spacing:.32em; }
+.ow-dl.dive .ow-dl-arrow { color:#fff2ec; }
+.ow-dl.dive .ow-dl-bar > i { background:#fff2ec; }
+/* It worked.  A break has to be as legible as the lock was. */
+.ow-dl.clear { border-left-color: var(--ok);
+  background: linear-gradient(180deg, rgba(8,22,10,.6), rgba(4,10,6,.44)); }
+.ow-dl.clear .ow-dl-t { color: var(--ok); }
+.ow-dl.clear .ow-dl-arrow { color: var(--ok); }
+/* The frame treatment: the one cue that reads with the eye down a sight. */
+.ow-dl-edge {
+  position:absolute; inset:0; pointer-events:none;
+  background: radial-gradient(ellipse 74% 62% at 50% 50%,
+    rgba(0,0,0,0) 52%, rgba(190,26,18,.30) 84%, rgba(150,16,10,.56) 100%);
+  will-change: opacity;
+}
+.ow-dl-edge.dive { background: radial-gradient(ellipse 68% 56% at 50% 50%,
+  rgba(0,0,0,0) 44%, rgba(226,44,26,.42) 78%, rgba(196,22,12,.72) 100%); }
+
+/* ============================================================== kill cam
+   Who killed you, with what, from how far, and how long until you are back.
+   Bottom-centre and BELOW the spectate bar it replaces the meaning of: the
+   eye is already low because that is where ELIMINATED left it. */
+.ow-kc {
+  position:absolute; left:50%; bottom: calc(var(--pad) * 3.1);
+  transform: translateX(-50%); text-align:center;
+  min-width: calc(280px * var(--k));
+  padding: calc(var(--u) * 1.8) calc(var(--u) * 4) calc(var(--u) * 1.6);
+  background: linear-gradient(180deg, rgba(26,6,5,.62), rgba(8,4,4,.46));
+  border-top: calc(2px * var(--k)) solid var(--enemy);
+  box-shadow: 0 calc(2px * var(--k)) calc(16px * var(--k)) rgba(0,0,0,.6);
+  will-change: opacity, transform;
+}
+.ow-kc-tag { font-size: calc(8.5px * var(--k)); letter-spacing:.42em;
+  color: var(--ink-3); text-shadow: var(--sh); }
+.ow-kc-t { margin-top: calc(var(--u) * .8);
+  font-family: var(--fd); font-size: calc(21px * var(--k)); font-weight:700;
+  letter-spacing:.2em; color: var(--enemy); text-shadow: var(--sh-o1); }
+.ow-kc-s { margin-top: calc(var(--u) * .5);
+  font-size: calc(10px * var(--k)); letter-spacing:.24em;
+  color: var(--ink-2); text-shadow: var(--sh-o1); }
+.ow-kc-bar { margin-top: calc(var(--u) * 1.6); height: calc(2px * var(--k));
+  background: rgba(255,255,255,.14); }
+.ow-kc-bar > i { display:block; height:100%; width:100%; background: var(--enemy);
+  transform-origin:left; transform:scaleX(1); }
+/* Your own side did it — the row in the feed is blue and so is this. */
+.ow-kc.friendly { border-top-color: var(--friend); }
+.ow-kc.friendly .ow-kc-t { color: var(--friend); }
+.ow-kc.friendly .ow-kc-bar > i { background: var(--friend); }
+/* Nobody did it: an airstrike, the church, a drone, your own frag.  Amber,
+   because "WORLD killed you" is a different sentence from a name. */
+.ow-kc.env { border-top-color: var(--amber); }
+.ow-kc.env .ow-kc-t { color: #ffdca4; }
+.ow-kc.env .ow-kc-bar > i { background: var(--amber); }
+
 /* ============================================================== fadeouts */
 .ow-hidden { display:none !important; }
 
