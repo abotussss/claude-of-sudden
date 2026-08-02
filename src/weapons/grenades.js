@@ -137,7 +137,6 @@ export class ThrownGrenades {
     g.armed = false;
     g.tripped = false;
     g.trig = 0;
-    g.beep = 0;
     g.len = 1;
     g.dir.set(0, 0, 1);
     g.pos.copy(pos);
@@ -452,18 +451,18 @@ export class ThrownGrenades {
    * one second of it is the entire difference between a mine and a trap you
    * cannot answer.
    *
-   * `audio` has no dedicated alarm voice — the bank is gunfire, impacts,
-   * footsteps and explosions — so this uses `dryfire`, which is a hard
-   * mechanical CLICK, played loud and twice: a striker falling is exactly what
-   * a mine tripping sounds like, and it is unmistakable against a firefight.
-   * A dedicated rising `beep` would be better and is named in the report.
+   * `mine_trip` is that voice, and it is now a real one: two pips, each
+   * SWEEPING UP, the second starting above where the first ended. The
+   * placeholder was `dryfire` — a hard mechanical click, played twice — which
+   * cut through a firefight but said the wrong thing. A click is an EVENT; a
+   * rising pitch is a STATE, and the state is that a clock is running.
+   *
+   * The voice carries both pips itself, so the 180 ms re-strike this used to
+   * queue is gone. Leaving it would have played four.
    */
   _trip(g) {
     const audio = this.ctx.peek('audio');
-    audio?.play?.('dryfire', g.pos, { level: 1.0 });
-    // A second click 180 ms later: one click is a reload somewhere, two is a
-    // signal. Queued on the mine rather than scheduled, so nothing allocates.
-    g.beep = 0.18;
+    audio?.play?.('mine_trip', g.pos, { level: 1.0 });
     // Everyone near it should FLINCH, which is what says "that was for you".
     const player = this.ctx.peek('player');
     if (player?.addSuppression) {
@@ -516,10 +515,6 @@ export class ThrownGrenades {
       // 8 Hz blink off the game clock: no per-mine timer to keep.
       const on = Math.sin(this.ctx.time.elapsed * 50) > 0;
       m.material.opacity = on ? 0.95 : 0.15;
-      if (g.beep > 0) {
-        g.beep -= this.ctx.time.delta ?? 0.016;
-        if (g.beep <= 0) this.ctx.peek('audio')?.play?.('dryfire', g.pos, { level: 1.0 });
-      }
     }
   }
 

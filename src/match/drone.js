@@ -98,15 +98,18 @@ const LOOK_AHEAD = 6;
 /** Seconds a drone that missed spends climbing out before it may lock again. */
 const RECOVER = 2.4;
 /**
- * Seconds between rotor strikes, cruising and diving. @see `_sound` — this is a
- * placeholder loop and the interval is the voice budget's, not the sound's: the
- * weapons bus is 18 of 40 emitters and a firefight must not be evicted by four
- * drones. One voice per drone per second, and only inside `ROTOR_RANGE`.
+ * THE ROTOR IS NOT PLAYED FROM HERE ANY MORE.
+ *
+ * It was a one-shot re-struck about once a second — a placeholder, and audibly
+ * the wrong shape: a rotor is continuous, and repeating a jet sample gives a
+ * pass overhead rather than four propellers. `src/audio/vehicle.js` now drives
+ * a tracked emitter off `match.drones.list`, the same contract `tankEngine`
+ * takes from `match.tank.tanks`, so this file publishes state and plays
+ * nothing. Leaving the placeholder in would layer a jet over the props.
+ *
+ * The audible range moved 58 -> 120 m with it, which is audio's call: hearing
+ * one before it is overhead is what makes it fair rather than a coin flip.
  */
-const ROTOR_TICK = 0.95;
-const ROTOR_TICK_DIVE = 0.42;
-/** Metres a drone can be heard at. */
-const ROTOR_RANGE = 58;
 
 /** Chest height on a target, whatever it is. Bots and the player are both 1.8 m. */
 const CHEST = 1.15;
@@ -142,8 +145,6 @@ class Drone {
     this.blindT = 0;
     this.scanT = 0;
     this.recoverT = 0;
-    /** Seconds until the next rotor strike. @see `Drones._sound`. */
-    this.soundT = 0;
     this.rotor = 0;
     this.group = null;
     this.rotors = null;
@@ -454,7 +455,6 @@ export class Drones {
     d.groundY = from.y;
     d.vel.set(0, RULES.droneSpeed * 0.6, 0);
     d.scanT = this.rng.range(0, SCAN_EVERY);
-    d.soundT = this.rng.range(0, ROTOR_TICK);
     d.rotor = this.rng.range(0, Math.PI * 2);
     d.group.visible = true;
     d.group.position.copy(d.position);
@@ -508,60 +508,6 @@ export class Drones {
     }
 
     this._integrate(d, dt);
-    this._sound(d, dt);
-  }
-
-  /**
-   * ──────────────────────────────────────────────────────────────────────────
-   * THE NOISE — 「ドローンの音も明確に出して」
-   * ──────────────────────────────────────────────────────────────────────────
-   * A drone you cannot hear is an unfair drone, and this is the one part of the
-   * feature that is currently a PLACEHOLDER and says so.
-   *
-   * `src/audio` is another agent's directory, so this goes out through the
-   * public `audio.play(kind, position, opts)` and can only use voices that
-   * already exist. Nothing in the bank is a rotor. What is used instead:
-   *
-   *   ROTOR   `strike_jet` at 0.3 s and low level, re-struck every `ROTOR_TICK`
-   *           while the drone is within earshot. It is an aircraft, it is
-   *           spatialised at the airframe and it moves with it, so the
-   *           information (something is flying, and it is over THERE) is
-   *           carried — but it is a turbine, not four small props.
-   *   DIVE    `strike_incoming`, the falling-bomb whistle. Semantically almost
-   *           exactly right and used at full value.
-   *   BLAST   the `explosion` event, which `audio` already voices. Correct.
-   *   LOCK    a head-locked `grenade_warn`, played by `ui` — the same sound
-   *           `ui.airAlert` uses, and for the same reason. Correct.
-   *
-   * WHAT IS ACTUALLY WANTED, stated for the audio agent: a tracked emitter
-   * `droneRotor` driven off `match.drones.list` exactly as `battle.js` drives
-   * `tankEngine` off `match.tank.tanks` — four small two-blade props, a beat
-   * frequency between them, a load term from the airframe's speed so a dive
-   * screams — plus two one-shots, `drone_lock` (the target's own warble) and
-   * `drone_dive`. @see the report.
-   */
-  _sound(d, dt) {
-    const diving = d.state === 'dive';
-    d.soundT -= dt;
-    if (d.soundT > 0) return;
-    const tick = diving ? ROTOR_TICK_DIVE : ROTOR_TICK;
-    d.soundT = tick;
-    const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
-    if (!audio?.play) return;
-    const cam = this.ctx.camera.position;
-    const dist = d.position.distanceTo(cam);
-    if (dist > ROTOR_RANGE) return;
-    // Louder in the dive and louder close in — the two things a man has to be
-    // able to tell apart without looking up.
-    const near = 1 - dist / ROTOR_RANGE;
-    audio.play(diving ? 'strike_incoming' : 'strike_jet', d.position, {
-      level: (diving ? 0.62 : 0.3) * (0.45 + near * 0.55),
-      dur: tick * 1.2,
-      maxDist: ROTOR_RANGE,
-      gain: 0.9,
-      occlusion: 0.6,
-      priority: diving ? 0.72 : 0.3,
-    });
   }
 
   /** Straight up out of the spawn until it is over the roofline. */
