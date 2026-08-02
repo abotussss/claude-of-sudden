@@ -300,16 +300,29 @@ const MIN_ROUTE = 16;
  * stacked crates, every piece of street furniture with a `prop_*` instance
  * behind it, up to 3.2 m.
  *
- * 3.2 AND NOT MORE, because the ceiling is also `PASS_TOP` — what a route's
- * side probe drives past — and the cathedral's piers measure 3.39 m
- * (`_ploughscan`, seed 7). A ceiling over that and the approach, which is
- * baked while the cathedral is still STANDING, could measure a street through
- * the nave. What still stops the hull is unchanged in kind: mass with no
- * instance behind it (the enterable buildings, the cathedral, the boundary
- * wall, the merged masonry sheds) cannot be erased and now TRIMS the route at
- * bake instead of being ghosted through — @see `_trimAtBlockers`.
+ * 3.0 AND NOT MORE, AND THAT NUMBER WAS SWEPT RATHER THAN CHOSEN. The ceiling
+ * is also `PASS_TOP` — what a route's side probe drives past — so it decides
+ * where the hull may GO as well as what it removes, and the two answers stop
+ * agreeing at the cathedral square. Baked at seed 7 (boot log, legs kept and
+ * piles bound):
+ *
+ *     1.8 (old)  RED 4 legs / 40 piles · BLUE 4 legs / 34 piles
+ *     2.2        RED 4 legs / 52 piles · BLUE 3 legs / 29 piles
+ *     2.6        RED 4 legs / 53 piles · BLUE 4 legs / 40 piles
+ *     3.0        RED 4 legs / 53 piles · BLUE 4 legs / 40 piles
+ *     3.2        RED 3 legs / 38 piles · BLUE 4 legs / 39 piles — both
+ *                approaches CUT 17 m short, because at 3.2 the 3.4 m masonry
+ *                on the cathedral's outer steps reads as passable to the side
+ *                probe and as a wall to `_trimAtBlockers`, and the hub moves.
+ *
+ * So 3.0 is the top of the plateau: +33 % of the map's street furniture over
+ * the glacis rule with no route lost. What still stops the hull is unchanged
+ * in kind — mass with no `prop_*` instance behind it (the enterable buildings,
+ * the cathedral, the boundary wall, the merged masonry sheds) cannot be erased
+ * by anything in this file, and now TRIMS the route at bake instead of being
+ * ghosted through. @see `_trimAtBlockers` and `_ploughableAt`.
  */
-const PLOUGH_TOP = 3.2;
+const PLOUGH_TOP = 3.0;
 /** Under this the hull simply drives over it — a kerb is not an event. */
 const PLOUGH_MIN = 0.3;
 
@@ -364,6 +377,8 @@ const PASS_TOP = PLOUGH_TOP;
  * report: 「戦車は乗り越え性能高くして」. 1.6 is over any sandbag line, barrier,
  * crate stack or rubble crest this map dresses a street with, and short of the
  * 2.6 m masonry shed class that `_trimAtBlockers` now stops the route at.
+ * Measured before and after with `_climbmax.mjs`, which walks a hull up a real
+ * step on the real map rather than trusting the constant.
  */
 const CLIMB_TOP = 1.6;
 /** Nose up or down the ride is allowed to reach. ~30 degrees (was 24). */
@@ -379,6 +394,10 @@ const PLOUGH_HALF = HULL_W * 0.5 + 0.25;
 const PLOUGH_NOSE = 3.3;
 /** Two obstructions closer together than this are one pile. */
 const PLOUGH_MERGE = 2.4;
+/** Consecutive samples of unremovable mass that make a wall rather than a
+ *  clipped corner. 3 x `STEP` is 3.75 m — wider than the hull. @see
+ *  `_trimAtBlockers`, which measured why one sample is not enough. */
+const BLOCK_RUN = 3;
 /** Seconds of drag on the hull while it shoves a pile aside. */
 const PLOUGH_DRAG = 0.7;
 /** How much of its speed the hull keeps while ploughing. */
@@ -1011,10 +1030,32 @@ export class Armour {
       const dL = this._freeSide(physics, x, y + 1.0, z, -side.x, -side.z, 9, props);
       // Slide to the middle of what was found, then re-probe the ground there.
       const shift = clamp((dR - dL) * 0.5, -LATERAL_MAX, LATERAL_MAX);
-      x += side.x * shift;
-      z += side.z * shift;
-      const y2 = physics.groundHeight(x, z, 30);
-      if (Number.isFinite(y2)) y = y2;
+      const sx = x + side.x * shift;
+      const sz = z + side.z * shift;
+      const y2 = physics.groundHeight(sx, sz, 30);
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * A SLIDE MAY NOT PUT THE CENTRELINE ON TOP OF A BUILDING
+       * ────────────────────────────────────────────────────────────────────
+       * `_freeSide` answers "how much room is there THIS WAY", and the middle
+       * of the room it found is not guaranteed to be ground: at the cathedral
+       * square the resumed probes reach past a dressed corner on both sides,
+       * the midpoint lands on the 3.4 m masonry shed at world (17, 26), and
+       * the sample's own downward ray comes back with the SHED'S ROOF. The old
+       * ride then quietly clamped that to `CLIMB_TOP` and drove the hull a
+       * metre in the air across it; with `_trimAtBlockers` watching, it cut
+       * RED's approach 17 m short instead and cost the hull two destinations.
+       * Neither is the answer — the authored line was on the road all along.
+       *
+       * So a slide is REJECTED if it lands more than a climbable step above
+       * where the sample already was. The authored point is what the route
+       * falls back to, and the span test below still owns "the tank stops".
+       */
+      if (Number.isFinite(y2) && y2 - y <= CLIMB_TOP + 0.05) {
+        x = sx;
+        z = sz;
+        y = y2;
+      }
       const span = dR + dL;
       if (span < need) {
         // a pinch: the route ends here
@@ -1249,12 +1290,24 @@ export class Armour {
     const MASKW = physics.MASK.WORLD;
     const o = this._bv ?? (this._bv = new THREE.Vector3());
     const d = this._bv2 ?? (this._bv2 = new THREE.Vector3());
+    /**
+     * A RUN, NOT A SAMPLE — measured, and the first cut of this rule got it
+     * wrong. RED's approach clips the corner of the 3.6 m masonry shed at
+     * world (17, 26) for ONE sample: the centreline's own downward ray lands
+     * on its roof, everything either side of it is road, and a 6.9 m hull
+     * rides across 1.25 m of clipped corner without noticing. Trimming there
+     * cost RED seventeen metres of approach and, through the hub, THREE of its
+     * four destinations. A wall that really crosses the driving line is at
+     * least a hull's width thick and blocks `BLOCK_RUN` samples in a row.
+     */
+    let run = 0;
+    let runStart = -1;
     for (let i = 0; i < p.n; i++) {
       const rise = p.Y[i] - p.ROAD[i];
-      if (rise <= CLIMB_TOP + 0.05 || rise > PASS_TOP) continue;
+      if (rise <= CLIMB_TOP + 0.05 || rise > PASS_TOP) { run = 0; continue; }
       // Only rises `_bakeRide`'s horizontal ray PROVED are standing mass — a
       // market awning over an open road is driven under, not trimmed at.
-      if (!p.SOLID?.[i]) continue;
+      if (!p.SOLID?.[i]) { run = 0; continue; }
       let erasable = false;
       if (grid) {
         const cell = grid.cell;
@@ -1284,11 +1337,15 @@ export class Armour {
           }
         }
       }
-      if (erasable) continue;
-      const cut = Math.max(0, i - Math.ceil(HULL_L / STEP));
+      if (erasable) { run = 0; continue; }
+      if (run === 0) runStart = i;
+      if (++run < BLOCK_RUN) continue;
+      const cut = Math.max(0, runStart - Math.ceil(HULL_L / STEP));
       p.n = cut;
       p.length = cut > 0 ? p.S[cut - 1] : 0;
-      p.stop = `blocked by ${rise.toFixed(1)}m of unremovable mass at (${p.X[i].toFixed(0)},${p.Z[i].toFixed(0)})`;
+      p.stop =
+        `blocked by ${rise.toFixed(1)}m of unremovable mass over ${run} samples ` +
+        `at (${p.X[runStart].toFixed(0)},${p.Z[runStart].toFixed(0)})`;
       p.trimmed = true;
       return;
     }
