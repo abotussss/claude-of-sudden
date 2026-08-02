@@ -1787,10 +1787,12 @@ export class Airstrike {
    *
    * `world.breaches` is deliberately NOT here. A breach takes ONE ground-storey
    * elevation off and leaves the storeys above standing on their jambs — the
-   * building does not stop existing, and measured over every settled chunk on
-   * the map (`_hostbake.mjs`, all six breaches swapped one at a time) not one
-   * chunk anywhere changes the plane it stands on. A candidate that can never
-   * bind is a candidate that costs rays at boot to prove a negative.
+   * building does not stop existing, and measured at ?seed=7 over all 10 988
+   * settled chunks and mound centres on the map (`_hostbake.mjs`, all six
+   * breaches swapped one at a time) not one of them changes the plane it stands
+   * on. A candidate that can never bind is a candidate that costs rays at boot
+   * to prove a negative. If a breach ever spills a ramp somebody's rubble comes
+   * to rest on, `_hostbake.mjs` will say so and this list is where it goes.
    */
   _perishables(world, physics) {
     if (this._hosts) return this._hosts;
