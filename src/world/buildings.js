@@ -252,11 +252,18 @@ export function buildBuilding(A, rng, spec, hooks = null) {
     const fs = floorSpec(spec, f);
     for (let side = 0; side < 4; side++) {
       if (spec.skipSides?.includes(side)) continue;
-      // The one elevation a breach can take off, bracketed. @see `hooks` above.
-      const brack = hooks && f === 0 && hooks.scopeGroundSide === side;
-      if (brack) info.facadeScope = A.beginScope(hooks.scopeId);
+      /**
+       * The elevations a breach can take off, each bracketed on its own. @see
+       * `hooks` above. Sequential, never nested: `A._scope` is a single slot,
+       * and side N's scope is closed before side N+1's is opened.
+       */
+      const scopeId = f === 0 ? hooks?.scopeGroundSides?.[side] : undefined;
+      if (scopeId) {
+        info.facadeScopes = info.facadeScopes ?? {};
+        info.facadeScopes[side] = A.beginScope(scopeId);
+      }
       buildFacade(A, rng, fs, info, { side, f, y, h, t, wallKey, streetSide, floors });
-      if (brack) A.endScope();
+      if (scopeId) A.endScope();
     }
     // ---- floor / ceiling slab of the NEXT level ----
     y += h;

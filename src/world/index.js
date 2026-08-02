@@ -220,26 +220,39 @@ export class WorldSystem {
      * facade goes up. @see src/world/breach.js. No rng is drawn to plan it.
      */
     const breachPlan = planBreaches(BUILDINGS);
-    const breachOf = new Map(breachPlan.map((b) => [b.building, b]));
+    /**
+     * A LIST PER BUILDING, NOT ONE RECORD PER BUILDING. A cache house carries
+     * up to two breachable elevations now — 「今は屋内が安全すぎる」 — and this
+     * was a `Map(id -> record)`, which silently keeps the LAST of the pair and
+     * leaves the other with no wall scope at all.
+     */
+    const breachOf = new Map();
+    for (const b of breachPlan) {
+      const list = breachOf.get(b.building);
+      if (list) list.push(b);
+      else breachOf.set(b.building, [b]);
+    }
 
     const infos = [];
     for (const spec of BUILDINGS) {
       const demo = demoOf.get(spec.id);
-      const br = breachOf.get(spec.id);
+      const brs = breachOf.get(spec.id);
       if (demo) demo.shell = A.beginScope(`shell:${spec.id}`);
       const info = buildBuilding(
         A,
         rng,
         spec,
-        br ? { scopeGroundSide: br.side, scopeId: `wall:${br.id}` } : null
+        brs
+          ? { scopeGroundSides: Object.fromEntries(brs.map((b) => [b.side, `wall:${b.id}`])) }
+          : null
       );
       if (demo) {
         A.endScope();
         demo.info = info;
       }
-      if (br) {
+      for (const br of brs ?? []) {
         br.info = info;
-        br.wall = info.facadeScope ?? null;
+        br.wall = info.facadeScopes?.[br.side] ?? null;
       }
       infos.push(info);
       if (spec.collapse) {
