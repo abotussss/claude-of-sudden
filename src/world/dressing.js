@@ -2169,7 +2169,20 @@ export function scatterDebris(A, rng) {
        *   it is why the eye stops reading them as a row of identical boxes.
        */
       const MANUF = 0.72; // the pick above which the table is manufactured goods
-      const MANUF_WALL = 2.6; // …and how near a facade they are allowed to be
+      /**
+       * HOW NEAR A FACADE GOODS HAVE TO BE, AND IT IS 1.6 RATHER THAN THE 2.6
+       * THIS SHIPPED WITH, BECAUSE A HULL NEEDS 3.5 m OF LANE.
+       *
+       * A huddle spreads up to 0.85 m along the face and its members sit up to
+       * 0.5 m either side of the seed point, so at 2.6 m the far edge of a stack
+       * could stand ~3.4 m out into a street — and a tank spoke was measured
+       * losing a lane to exactly that this round. At 1.6 m the same stack cannot
+       * reach past ~2.4 m, which leaves a 10.5 m connector arm over 8 m of clear
+       * middle and every lane on the map wider than a hull. It is also the
+       * better picture: goods against the wall read as goods against the wall,
+       * and 2.6 m was far enough out to look like they had been dropped near it.
+       */
+      const MANUF_WALL = 1.6;
       const manufactured = pick >= MANUF;
       if (manufactured && near.d > MANUF_WALL) {
         // Re-spend the roll on ground junk: same instance count, no staging.

@@ -418,7 +418,34 @@ export const SITEWORKS = [
    * the arm is two 2.3-unit slots and the rotation is a dog-leg both ways.
    * `flankLevel` is null in domination so nothing stages here any more.
    */
-  { id: 'A connector blockhouse', kind: 'pier', x: -18.6, z: -4.5, w: 2.8, d: 2.4, h: 2.6, key: 'concrete' },
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * …AND IT IS OFF-CENTRE NOW, BECAUSE TWO EQUAL SLOTS WERE BOTH 0.05 m TOO
+   * NARROW FOR A TANK
+   * ────────────────────────────────────────────────────────────────────────
+   * 「戦車がスタックしてる」. Centred at z -4.5 this pier splits the arm into two
+   * slots of 2.3 authored units — 3.45 m of real ground each — which is what
+   * the paragraph above was aiming for and is right for a man. A hull needs
+   * about 3.5 m, so BOTH slots were impassable by five centimetres, and this
+   * 4.2 x 2.6 x 3.6 m block is merged masonry with no `prop_*` instance behind
+   * it and stands over the 3.0 m plough ceiling: armour can neither fit past it
+   * nor remove it. It was measured pinching a spoke to 3.4 m at world (-37, 19),
+   * which is this piece — authored (-18.6, -4.5) — to the centimetre.
+   *
+   * The fix is 0.4 of a unit of z, not a smaller pier. At -4.9 the block spans
+   * z -6.1..-3.7 and the arm's two slots become UNEQUAL:
+   *
+   *              north slot            south slot
+   *   z -4.5     2.3 u = 3.45 m        2.3 u = 3.45 m    both refuse a hull
+   *   z -4.9     2.7 u = 4.05 m        1.9 u = 2.85 m    armour takes the north
+   *
+   * So the rotation keeps its dog-leg — it is still two slots and still not a
+   * straight line through the arm, which is the whole reason this piece was
+   * moved to the middle in the first place — and there is now one lane a tank
+   * can actually drive. The tight slot is infantry's, which is what a
+   * chokepoint in a connector should be.
+   */
+  { id: 'A connector blockhouse', kind: 'pier', x: -18.6, z: -4.9, w: 2.8, d: 2.4, h: 2.6, key: 'concrete' },
   /**
    * THE SPINE — the single most important piece here, and the one that was most
    * wrong. A broken wall between the ATTACK'S LANE and the point, in two runs:
@@ -545,7 +572,10 @@ export const SITEWORKS = [
    */
   { id: 'B north gatehouse', kind: 'pier', x: 29.2, z: 3.2, w: 3.6, d: 3.2, h: 3.2, key: 'plaster_cream' },
   { id: 'B north baffle', kind: 'wall', x: 23.5, z: 4.2, w: 2.4, d: 2.8, h: 1.6, key: 'brick' },
-  { id: 'B connector blockhouse', kind: 'pier', x: 18.6, z: -4.5, w: 2.8, d: 2.4, h: 2.6, key: 'concrete' },
+  /** …and the east arm takes the same 0.4 unit of z, so the two connectors are
+   *  the same rotation from both sides and armour has a lane through each.
+   *  @see the A blockhouse above for the measurement. */
+  { id: 'B connector blockhouse', kind: 'pier', x: 18.6, z: -4.9, w: 2.8, d: 2.4, h: 2.6, key: 'concrete' },
   { id: 'B spine east', kind: 'wall', x: 30.6, z: 1.9, w: 3.4, d: 0.55, h: 1.45, key: 'brick', revet: true },
   { id: 'B spine west', kind: 'wall', x: 24.0, z: 1.9, w: 2.6, d: 0.55, h: 1.3, key: 'brick' },
   { id: 'B point screen', kind: 'wall', x: 24.3, z: -1.2, w: 0.55, d: 2.8, h: 1.35, key: 'plaster_cream' },
