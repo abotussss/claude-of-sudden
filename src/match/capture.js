@@ -164,13 +164,30 @@ export class CaptureZones {
      * rather than `scorePerZone` or `scoreInterval`.
      *
      * `?? 1` so a `rules.js` without the key behaves exactly as before.
+     *
+     * ────────────────────────────────────────────────────────────────────────
+     * …AND A MINIMUM IS A CLIFF, WHICH IS WHY IT READ AS SKEWED
+     * ────────────────────────────────────────────────────────────────────────
+     * 「またポイントの加算がなんか歪です 見直して」. `RULES.zonePayout` replaces
+     * the step with a curve — points per tick indexed by zones held — and the
+     * whole argument, the income table and what it does to match length are on
+     * that key. Two lines here, one lookup, no allocation, and the `minZones`
+     * lever above stays live as the fallback for a `rules.js` without it.
      */
     const minZones = RULES.scoreMinZones ?? 1;
+    const table = RULES.zonePayout ?? null;
+    /** Points for `n` zones: the curve, clamped to its last entry. */
+    const pay = (n) =>
+      table
+        ? table[n < table.length ? n : table.length - 1]
+        : n >= minZones
+          ? n * RULES.scorePerZone
+          : 0;
     const g = this._gains;
     const held0 = this.ownedBy(0);
     const held1 = this.ownedBy(1);
-    g[0] = held0 >= minZones ? held0 * RULES.scorePerZone : 0;
-    g[1] = held1 >= minZones ? held1 * RULES.scorePerZone : 0;
+    g[0] = pay(held0);
+    g[1] = pay(held1);
     this.score[0] += g[0];
     this.score[1] += g[1];
     this.stats.ticks++;

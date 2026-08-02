@@ -205,8 +205,94 @@ export const RULES = {
    * respectable score without contesting anything. The one case that genuinely
    * slows is a 2-2 stalemate broken into 3-1 and back — the loser banks nothing
    * in between. Set to 1 to restore the old behaviour exactly.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * AND IT WAS A CLIFF, WHICH IS WHY IT READ AS SKEWED — 「またポイントの加算が
+   * なんか歪です 見直して ポイント加算は遅くてもいいけど、もう少しフェアな加算
+   * システムにして」
+   * ──────────────────────────────────────────────────────────────────────────
+   * The paragraphs above are still true and the lever is still here, but a
+   * minimum holding is a STEP FUNCTION and a step function is the one shape
+   * that cannot be fair. Three things it does, none of them intended:
+   *
+   *   1. THE OPENING PAYS NOBODY. Both sides start on their own home zone. At
+   *      a minimum of 2 the scoreboard is 0-0 until somebody takes a second
+   *      point, so the first stretch of every match is unscored and the first
+   *      side to a second zone gets a lead out of a discontinuity rather than
+   *      out of a fight.
+   *   2. A BEATEN SIDE IS LOCKED OUT ENTIRELY. Pushed to one zone it earns
+   *      nothing at all, for ever — so the gap opens at the leader's FULL rate
+   *      and the deficit compounds. That is the definition of skewed: the
+   *      state you are in changes how fast you lose, not just whether you win.
+   *   3. IT CAN STALL THE SCHEDULE. `cathedralScore` fires the collapse at 300
+   *      and `finalCollapseProgress` reads the leader's score; a map deadlocked
+   *      1-1 pays neither side, so the events never arrive at all.
+   *
+   * `zonePayout` REPLACES IT WITH A CURVE, and `scoreMinZones` drops to 1 so
+   * the old lever is inert while staying documented above.
    */
-  scoreMinZones: 2,
+  scoreMinZones: 1,
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * POINTS PER TICK BY ZONES HELD — the accrual as a SHAPE rather than a rate
+   * ──────────────────────────────────────────────────────────────────────────
+   * Indexed by how many of the five zones a side owns; `scorePerZone` times the
+   * count is the fallback when this is absent, so a `rules.js` without the key
+   * behaves exactly as it did. `capture.js` reads it once per tick.
+   *
+   * WHAT THE THREE CANDIDATE SHAPES DO, at `scoreInterval` 4 s, in points per
+   * second, for a side holding n of the five zones:
+   *
+   *   n                    0     1     2     3     4     5
+   *   linear (old, min 1)  0   0.50  1.00  1.50  2.00  2.50
+   *   cliff  (old, min 2)  0   0.00  1.00  1.50  2.00  2.50
+   *   THIS   [0,1,4,6,7,8] 0   0.25  1.00  1.50  1.75  2.00
+   *
+   * IT IS MONOTONIC AND IT HAS NO STEP. Every extra zone is worth strictly
+   * more than the last total and the marginal value falls away smoothly —
+   * +1, +3, +2, +1, +1 per tick. Three properties come out of that shape and
+   * each answers one of the three faults above:
+   *
+   *   - THE SECOND ZONE IS WHERE THE MONEY IS. Going from one to two QUADRUPLES
+   *     income, which is the whole of 「加算をもう少しシビアにして」 — you are
+   *     paid for crossing the map and holding ground somebody else wants — but
+   *     it is a slope, not a wall, so a side on one zone is still on the board
+   *     and the scoreboard moves from the first tick of the match.
+   *   - THE TOP OF THE CURVE IS FLATTENED. Sweeping the map is worth 2.00 pt/s
+   *     rather than 2.50, so a side that has already won the ground does not
+   *     also win the clock: the runaway match was the one case where the
+   *     schedule ran out of room, and this is where the room comes from.
+   *   - THE GAP OPENS MORE SLOWLY IN EXACTLY THE STATE THAT FELT UNFAIR. At a
+   *     4-1 split the leader gained 2.00 pt/s on the cliff and now gains 1.50.
+   *
+   * WHAT IT DOES TO MATCH LENGTH, from the arithmetic and not from matches.
+   * Seconds for a leader to reach `scoreTarget` 500 at a steady holding, with
+   * the measured ~60 s of opening at one zone apiece folded in:
+   *
+   *   holding   cliff (before)   this (after)
+   *   2 of 5        ~500 s          ~545 s
+   *   3 of 5        ~395 s          ~385 s
+   *   4 of 5        ~310 s          ~340 s
+   *   5 of 5        ~260 s          ~305 s
+   *
+   * So a CLOSE match is the same length it was, a one-sided one is 10-17 %
+   * longer, and nothing goes past `matchTime` 600 that was not already going
+   * there. That is "遅くてもいい" spent where it buys something: the shortest
+   * matches were the ones that ended before the tank, D and the final collapse
+   * had all landed, and 305 s is now the floor rather than 260.
+   *
+   * THE EVENTS, PLACED AGAINST THIS CURVE. `cathedralScore` 300 arrives at
+   * roughly 0.6 of the numbers above — t ≈ 230 at three zones, t ≈ 330 at two
+   * — and the whole cathedral act (barrage, collapse, D, both tanks) takes 25 s
+   * behind it, so it lands with 150-215 s of match still to play in every
+   * column. `districtSalvoProgress` [0.20, 0.28] is still ahead of it and
+   * `finalCollapseProgress` 0.82 — 410 points — is still behind it.
+   *
+   * Five entries plus the zero. A sixth zone would need a sixth entry; the
+   * lookup clamps to the last, so it degrades to a flat rate rather than to
+   * `undefined`.
+   */
+  zonePayout: [0, 1, 4, 6, 7, 8],
   /**
    * ──────────────────────────────────────────────────────────────────────────
    * FIRST SIDE TO THIS WINS — AND IT IS THE KNOB THE WHOLE SCHEDULE HANGS OFF
@@ -1189,6 +1275,52 @@ export const RULES = {
    * kept — @see the AND 0.44 DID NOT HAVE TO MOVE WITH IT block above.
    */
   cathedralOpenProgress: 0.40,
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * …AND IT IS NOW A SCORE, NOT A FRACTION — 「大聖堂破壊は３００ポイントから発生
+   * させてね」
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE LEADER REACHING THIS MANY POINTS CALLS THE COLLAPSE. `cathedralOpenProgress`
+   * above stays exactly where it is and stays documented, because it is the
+   * FALLBACK: set this to 0 and `_updateMapEvents` goes back to
+   * `_matchProgress()` and every paragraph above is live again.
+   *
+   * WHY THE PLAYER'S NUMBER IS BETTER THAN THE ONE IT REPLACES, and it is not
+   * only that he asked for it. `_matchProgress` is `max(elapsed / matchTime,
+   * leader / scoreTarget)`, and the note above admits the case that breaks it:
+   * a low-scoring match is carried by the CLOCK term, so 0.40 resolves to a
+   * flat t = 240 s whatever is happening on the map, and the cathedral comes
+   * down in a game where nobody has taken anything. 300 of 500 cannot do that.
+   * It is a statement about the MATCH — somebody is three fifths of the way to
+   * winning it — and it fires at the same point in the shape of the game
+   * whether that took four minutes or nine.
+   *
+   * 300 OF 500 IS 60 %, WHICH IS WHERE THE OLD THRESHOLD ACTUALLY LANDED. 0.40
+   * was measured firing at 73-76 % of elapsed time (@see the block above: the
+   * score curve is convex, so a progress threshold is always later in seconds
+   * than it looks). Read against the accrual curve in `zonePayout`, 300 arrives
+   * at roughly 300/1.5 = 200 s for a side holding three of five, plus the slow
+   * opening — call it t = 240-280 in a decisive match and t = 400-440 in a
+   * grinding one. Both leave the whole tail of the schedule after it:
+   *
+   *   t + 10 s   `cathedralLead`        the warning and the barrage
+   *   t + 12 s   `cathedralRazeDelay`   the shell comes down
+   *   t + 22 s   `cathedralOpenDelay`   D goes live in the wreckage
+   *   t + 25 s   `tankAfterCathedral`   both hulls roll
+   *
+   * NOTHING ELSE KEYS OFF THE OLD NUMBER. The tank, D and the final collapse
+   * are all measured FROM the cathedral beat rather than from the same
+   * threshold — @see `MatchSystem._updateCathedralEvent` for the beat sheet —
+   * so moving the trigger moves the whole act together. The two district
+   * salvos are still on `districtSalvoProgress` and still land before this,
+   * and `finalCollapseProgress` is still on progress and still lands after it,
+   * because 300 of 500 is 0.60 of the score term and 0.82 is above it.
+   *
+   * IT IS STILL HELD TO CLEAR AIR. `_districtGap` and `airstrike.busy` guard it
+   * exactly as before: the score only ever rises, so the branch is taken on the
+   * first frame the sky is clear and can be delayed by seconds, never skipped.
+   */
+  cathedralScore: 300,
 
   /**
    * ──────────────────────────────────────────────────────────────────────────

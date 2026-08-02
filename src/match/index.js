@@ -361,6 +361,17 @@ export class MatchSystem {
     /** One record per participant for the scoreboard. Never reallocated. */
     this.roster = [];
     this._botsByTeam = [[], []];
+    /**
+     * WHO IS STANDING ON A CAPTURE POINT, which is the men PLUS THE ARMOUR —
+     * 「戦車自体も占領できる物体として、つまり占領サイトにいたら占領％を加算できるように
+     * して」. `_botsByTeam` is the roster and is walked by objective assignment,
+     * the respawn queue and the HUD, so a tank may not be put in it: a hull has
+     * no `setObjective`, no ammunition state and no scoreboard row. This is the
+     * presence list and nothing else reads it. Reused, never reallocated, and
+     * refilled once per frame beside `capture.update`. @see
+     * `Armour.captureBodies`, which decides what a hull is worth and when.
+     */
+    this._capBodies = [[], []];
     /** The Squad each side's bots belong to, so a respawn joins the right one. */
     this._squads = [null, null];
     /** Pending respawns: { rec, at } sorted by nothing — the list is tiny. */
@@ -2735,10 +2746,28 @@ export class MatchSystem {
          * `_checkWinConditions` sees the score the tick just wrote.
          */
         if (this.capture) {
+          /**
+           * THE MEN, AND THE ARMOUR STANDING WITH THEM. `capture.js` counts
+           * bodies with an `alive` and a `position`, and a hull means the same
+           * thing by both — so a tank contributes to a capture by BEING IN THE
+           * LIST, with no second rule, no capture arithmetic outside
+           * `capture.js` and no change to the circle test, the crowd scaling or
+           * the contest freeze. `Armour.captureBodies` decides what a hull is
+           * worth and refuses one that is merely driving past. @see
+           * `this._capBodies`.
+           */
+          const cb = this._capBodies;
+          for (let t = 0; t < 2; t++) {
+            const list = cb[t];
+            list.length = 0;
+            const men = this._botsByTeam[t];
+            for (let i = 0; i < men.length; i++) list.push(men[i]);
+            this.tank?.captureBodies?.(t, list);
+          }
           this.capture.update(
             dt,
             ctx.time.elapsed,
-            this._botsByTeam,
+            cb,
             this.player,
             this.playerTeam
           );
@@ -3110,10 +3139,24 @@ export class MatchSystem {
        * the branch is still taken on the first frame the sky is clear; it can
        * postpone the collapse by seconds and can never skip it.
        */
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * AND THE TRIGGER IS A SCORE — 「大聖堂破壊は３００ポイントから発生させてね」
+       * ────────────────────────────────────────────────────────────────────
+       * The LEADER reaching `RULES.cathedralScore` of `scoreTarget` calls it,
+       * not `_matchProgress`. Both are monotone, so every guard below and
+       * every latch above behaves identically; what changes is that the
+       * collapse now answers to the state of the MATCH rather than to
+       * `max(clock, score)`, whose clock term fires it on a timer in a game
+       * where nobody has taken anything. `cathedralScore: 0` restores
+       * `cathedralOpenProgress` exactly. @see both keys in `rules.js`.
+       */
     } else if (
       !this._cathedralCalled &&
       this.lockedZone &&
-      p >= RULES.cathedralOpenProgress &&
+      (RULES.cathedralScore > 0
+        ? (this.score[0] > this.score[1] ? this.score[0] : this.score[1]) >= RULES.cathedralScore
+        : p >= RULES.cathedralOpenProgress) &&
       this._districtGap <= 0 &&
       !this.airstrike?.busy
     ) {
