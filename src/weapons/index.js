@@ -10,6 +10,8 @@ import { buildSniper } from './models/sniper.js';
 import { buildLmg } from './models/lmg.js';
 import { buildSmg } from './models/smg.js';
 import { buildPistol } from './models/pistol.js';
+import { buildRevolver } from './models/revolver.js';
+import { buildMpistol } from './models/mpistol.js';
 import { buildKnife } from './models/knife.js';
 import { buildGrenade } from './models/grenade.js';
 import { ThrownGrenades } from './grenades.js';
@@ -91,7 +93,7 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  * in, and the order the pause menu lists. Primaries first, then the sidearm,
  * then the blade.
  */
-const WEAPON_IDS = ['rifle', 'ak', 'sniper', 'lmg', 'smg', 'pistol', 'knife', 'grenade'];
+const WEAPON_IDS = ['rifle', 'ak', 'sniper', 'lmg', 'smg', 'pistol', 'revolver', 'mpistol', 'knife', 'grenade'];
 
 export class WeaponSystem {
   static id = 'weapons';
@@ -104,6 +106,8 @@ export class WeaponSystem {
     this.activeId = 'rifle';
     /** Which weapon slot 1 draws. @see setPrimary */
     this.primaryId = 'rifle';
+    /** Which sidearm slot 2 draws first — the last one the player held. */
+    this.sidearmId = 'pistol';
     this.debugMode = null;
     /**
      * Trigger disabled from outside. `match` holds this true through freeze
@@ -253,6 +257,8 @@ export class WeaponSystem {
       lmg: buildLmg,
       smg: buildSmg,
       pistol: buildPistol,
+      revolver: buildRevolver,
+      mpistol: buildMpistol,
       knife: buildKnife,
       grenade: buildGrenade,
     };
@@ -341,6 +347,13 @@ export class WeaponSystem {
        */
       return c !== 'pistol' && c !== 'melee' && c !== 'throwable' && c !== 'grenade';
     });
+  }
+
+  /** THE SIDEARM SLOT'S CANDIDATES — every `class: 'pistol'` weapon, in
+   *  registration order. Derived like `primaryIds` so a new handgun added to
+   *  defs.js appears in the slot-2 cycle with nothing else to change. */
+  get sidearmIds() {
+    return WEAPON_IDS.filter((id) => WEAPON_DEFS[id]?.class === 'pistol');
   }
 
   /**
@@ -582,6 +595,9 @@ export class WeaponSystem {
     this._switchTimer = 0;
     if (!id || !this.states.has(id)) return false;
     this.activeId = id;
+    // Slot 2's memory: whichever sidearm ends up in the hands — by number key,
+    // wheel or anything else — is the one the slot draws next time.
+    if (this.states.get(id).def.class === 'pistol') this.sidearmId = id;
     this.viewmodel.setActive(id);
     this.viewmodel.play('draw');
     this._shotIndex = 0;
@@ -940,7 +956,9 @@ export class WeaponSystem {
     this._fireSeed = seed;
 
     // Shell leaves the port shortly after the shot, once the bolt is back.
-    this._queueShell(Math.min(0.05, this._fireTimer * 0.45));
+    // A revolver keeps its brass in the cylinder — `ejectOnFire: false` is the
+    // one def flag that says so, and it is the only weapon that sets it.
+    if (def.ejectOnFire !== false) this._queueShell(Math.min(0.05, this._fireTimer * 0.45));
 
     /**
      * A manually cycled action does NOT start with the shot: the shooter has to
@@ -1309,6 +1327,9 @@ export class WeaponSystem {
     const phys = this.physics ?? (this.physics = this.ctx.peek('physics'));
     const w = this.viewmodel.active;
     if (!w) return;
+    // The revolver reloads through a fixed cylinder: there is no magazine part
+    // to throw on the floor, and the clip's `magdrop` beat is honestly a no-op.
+    if (!w.parts.magazine) return;
     const proxy = this._magProxy(w);
     if (!proxy) return;
     const mag = w.parts.magazine;
@@ -1478,7 +1499,22 @@ export class WeaponSystem {
       // Slot 1 is whatever primary the player chose in the menu, not always
       // the M4. @see setPrimary
       if (input.pressed('Digit1')) this.setWeapon(this.primaryId);
-      if (input.pressed('Digit2')) this.setWeapon('pistol');
+      /**
+       * SLOT 2 CYCLES THE SIDEARMS — 「ハンドガンも種類増やして」 put three
+       * `class: 'pistol'` weapons in the loadout and the slot key was
+       * hardcoded to the first. Press 2 to draw your sidearm; press 2 again
+       * while holding one to cycle P-19 -> RX-44 -> VZ-93. `sidearmId`
+       * remembers the last one drawn (however it was reached, see
+       * `_completeSwitch`), so the slot behaves like slot 1's loadout memory.
+       */
+      if (input.pressed('Digit2')) {
+        const side = this.sidearmIds;
+        if (side.includes(this.activeId)) {
+          this.setWeapon(side[(side.indexOf(this.activeId) + 1) % side.length]);
+        } else {
+          this.setWeapon(this.sidearmId);
+        }
+      }
       if (input.pressed('Digit3')) this.setWeapon('knife');
       /** Slot 4: the frag. Empty pouch = an empty hand, so the swap is refused. */
       if (input.pressed('Digit4') && this.grenadeCount > 0) this.setWeapon('grenade');

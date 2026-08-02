@@ -800,6 +800,201 @@ export const WEAPON_DEFS = {
     magLen: 0.108,
   },
 
+  revolver: {
+    /**
+     * MOVEMENT AND RECOIL CONTROL.
+     *
+     * The heavy sidearm — 「ハンドガンも種類増やして」's slow pole. Nearly a
+     * kilo of steel kicks HARD and a third of it stays: you ride the front
+     * sight back down between shots, which is the rhythm the 42 damage pays
+     * for. Still a holstered weapon, so it carries almost as light as the P-19.
+     */
+    moveScale: 1.06,
+    recoilControl: { residualShare: 0.36, residualTau: 0.3 },
+    id: 'revolver',
+    label: 'RX-44',
+    /** `pistol`: keeps it off the primary rack (primaryIds filters the class)
+     *  and in the sidearm slot's cycle. fx keys the flash off this string. */
+    class: 'pistol',
+    /** Audio: its own profile — a magnum's report is a shotgun-family boom,
+     *  not a 9 mm snap. @see audio/weapons.js WEAPON_PROFILES.magnum */
+    audio: 'magnum',
+    caliber: '.44mag',
+    /* --- fire control ---
+     * Double-action: 180 rpm is a strong shooter running the trigger, and
+     * `semi` is the only mode a revolver has. */
+    rpm: 180,
+    modes: ['semi'],
+    burstCount: 1,
+    burstRpm: 180,
+    burstDelay: 0.1,
+    /* --- ammunition --- SIX. The whole character in one number. */
+    magSize: 6,
+    reserve: 30,
+    /**
+     * A REVOLVER KEEPS ITS BRASS. `tryFire` queues a `weapon:shell` on every
+     * shot for every self-loader; this flag is the one bit that says the case
+     * stays in the chamber until the reload.
+     */
+    ejectOnFire: false,
+    /* --- terminal ballistics ---
+     * 2.4 body shots on 100 HP — between the AK (4.8) and the sniper (1), out
+     * of a handgun. A heavy slug also penetrates like a rifle and carries
+     * further than any other pistol round before the falloff. */
+    muzzleVelocity: 440,
+    damage: 42,
+    penetration: 1.1,
+    dropoff: 0.55,
+    maxRange: 260,
+    dragK: 0.4,
+    tracerEvery: 6,
+    /* --- accuracy (degrees) ---
+     * Tight from the sights — a 6" barrel on a locked wrist — but each shot
+     * blooms 0.9 deg and takes almost a second to settle, so fast pairs are a
+     * choice you pay for. */
+    spreadHip: 3.4,
+    spreadAds: 0.3,
+    spreadPerShot: 0.9,
+    spreadMax: 5.2,
+    spreadDecay: 3.2,
+    /* --- recoil ---
+     * The biggest kick of the handguns by far: 2.4x the P-19's climb, a slow
+     * 6.2 Hz shove with muzzle flip (roll 0.065), pattern only 6 long because
+     * the cylinder is. */
+    recoil: {
+      pitch: 0.03,
+      yaw: 0.005,
+      kickBack: 0.035,
+      kickUp: 0.021,
+      roll: 0.065,
+      punch: 0.85,
+      freq: 6.2,
+      damping: 0.5,
+      patternLength: 6,
+      patternSeed: 0x44a7e1,
+      climbShape: [1.0],
+      drift: 0.5,
+    },
+    /* --- handling (seconds) ---
+     * Slower to the sights than the P-19 (heavier gun, higher bore) and a
+     * 3.2/3.6 s speedloader reload — the other half of the six-round price. */
+    adsTime: 0.24,
+    adsFov: 0.86,
+    viewFov: 0.92,
+    reloadTac: 3.2,
+    reloadEmpty: 3.6,
+    inspectTime: 2.8,
+    drawTime: 0.5,
+    holsterTime: 0.34,
+    /* --- pose --- the P-19's two-handed hold (see there), pushed 10 mm
+     * further out for the longer barrel. */
+    hipPos: [0.115, -0.15, -0.35],
+    hipRot: [-0.05, 0.066, -0.115],
+    adsCant: [0, 0, 0],
+    /** Same reference-photograph extension argument as the P-19. */
+    eyeRelief: 0.38,
+    /** @see the P-19's elbowPole note — same two-handed stance. */
+    elbowPole: [0.6, -0.78, -0.14],
+    sprintPos: [0.09, -0.25, -0.29],
+    sprintRot: [-0.42, 0.5, 0.14],
+    lowReadyPos: [0.1, -0.26, -0.33],
+    lowReadyRot: [-0.44, 0.105, -0.07],
+    swayScale: 1.2,
+    bobScale: 1.1,
+    magLen: 0.05,
+  },
+
+  mpistol: {
+    /**
+     * MOVEMENT AND RECOIL CONTROL.
+     *
+     * The fast sidearm — 「ハンドガンも種類増やして」's other pole. The
+     * lightest firearm in the game to carry and the least residual kick,
+     * because every round is tiny; what fights you is the RATE, not the shove.
+     */
+    moveScale: 1.08,
+    recoilControl: { residualShare: 0.18, residualTau: 0.15 },
+    id: 'mpistol',
+    label: 'VZ-93',
+    class: 'pistol',
+    /** Audio: its own profile — brighter and snappier than the SMG, a tiny
+     *  action cycling very fast. @see audio/weapons.js machinepistol. */
+    audio: 'machinepistol',
+    caliber: '9x19',
+    /* --- fire control --- 1050 rpm from a pistol: the whole point. */
+    rpm: 1050,
+    modes: ['auto', 'semi'],
+    burstCount: 2,
+    burstRpm: 1050,
+    burstDelay: 0.12,
+    /* --- ammunition --- a 24-round extended stick; 1.4 s of trigger. */
+    magSize: 24,
+    reserve: 120,
+    /* --- terminal ballistics ---
+     * 13 a round — 7.7 body shots, the weakest bullet in the game — from a
+     * 108 mm barrel, so it sheds speed fast and the falloff starts at 40% of
+     * an already short range. Inside a room none of that matters. */
+    muzzleVelocity: 355,
+    damage: 13,
+    penetration: 0.3,
+    dropoff: 0.4,
+    maxRange: 150,
+    dragK: 0.5,
+    tracerEvery: 5,
+    /* --- accuracy (degrees) ---
+     * Blooms twice as fast as the P-19 and to a wider ceiling, with the
+     * quickest decay in the game: a two-round tap is accurate, the full
+     * stick is a cone. That asymmetry IS the weapon. */
+    spreadHip: 3.0,
+    spreadAds: 0.6,
+    spreadPerShot: 0.5,
+    spreadMax: 6.2,
+    spreadDecay: 5.6,
+    /* --- recoil ---
+     * Small pitch, WILD yaw (1.5 drift — the highest in the file): a light
+     * slide cycling at 17 Hz walks the muzzle sideways, it does not climb. */
+    recoil: {
+      pitch: 0.0072,
+      yaw: 0.0046,
+      kickBack: 0.011,
+      kickUp: 0.0068,
+      roll: 0.03,
+      punch: 0.22,
+      freq: 11.5,
+      damping: 0.38,
+      patternLength: 24,
+      patternSeed: 0x93b2f5,
+      climbShape: [1.2, 1.1, 1.0],
+      drift: 1.5,
+    },
+    /* --- handling (seconds) --- the fastest gun in the loadout to do
+     * anything with: 150 ms to the irons, 1.7 s reload, 400 ms draw. */
+    adsTime: 0.15,
+    adsFov: 0.88,
+    viewFov: 0.92,
+    reloadTac: 1.7,
+    reloadEmpty: 2.3,
+    inspectTime: 2.6,
+    drawTime: 0.4,
+    holsterTime: 0.28,
+    /* --- pose --- the P-19's hold, pulled 20 mm closer: a machine pistol is
+     * held tighter into the body to fight the climb. */
+    hipPos: [0.115, -0.15, -0.32],
+    hipRot: [-0.05, 0.066, -0.115],
+    adsCant: [0, 0, 0],
+    /** Irons only, so the eye can come 40 mm closer than the P-19's reflex. */
+    eyeRelief: 0.34,
+    /** @see the P-19's elbowPole note — same two-handed stance. */
+    elbowPole: [0.6, -0.78, -0.14],
+    sprintPos: [0.09, -0.25, -0.26],
+    sprintRot: [-0.42, 0.5, 0.14],
+    lowReadyPos: [0.1, -0.26, -0.3],
+    lowReadyRot: [-0.44, 0.105, -0.07],
+    swayScale: 1.1,
+    bobScale: 1.05,
+    magLen: 0.164,
+  },
+
   knife: {
     /**
      * MOVEMENT AND RECOIL CONTROL.

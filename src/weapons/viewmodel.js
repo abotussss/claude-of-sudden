@@ -341,6 +341,8 @@ export class Viewmodel {
     // moving-part drive
     this.boltCycle = 0; // 0..1, driven by firing
     this.boltHold = 0; // 1 = locked back (empty)
+    /** Shots since the weapon was drawn — drives the revolver's cylinder. */
+    this.cylShots = 0;
     this.magInHand = 0;
     this.magVisible = true;
 
@@ -482,6 +484,7 @@ export class Viewmodel {
     // Seat the moving parts at their rest transforms.
     const n = model.nodes;
     if (parts.magazine && n.magSeat) applyNode(parts.magazine, n.magSeat);
+    if (parts.cylinder && n.cylinderRest) applyNode(parts.cylinder, n.cylinderRest);
     if (parts.charging && n.chargeRest) applyNode(parts.charging, n.chargeRest);
     if (parts.bolt && n.boltRest) applyNode(parts.bolt, n.boltRest);
     if (parts.slide && n.slideRest) applyNode(parts.slide, n.slideRest);
@@ -816,6 +819,7 @@ export class Viewmodel {
     this.settle.reset();
     this.boltCycle = 0;
     this.boltHold = 0;
+    this.cylShots = 0;
     this.magInHand = 0;
     this.magVisible = true;
     // The FITTED poses for this weapon, not the authored ones — see
@@ -903,6 +907,8 @@ export class Viewmodel {
       this.rng.signed() * 0.003 * scale * ws
     );
     this.boltCycle = 1;
+    // The revolver's hammer fall advances the cylinder one chamber.
+    if (w.parts?.cylinder) this.cylShots++;
   }
 
   jump() {
@@ -1197,6 +1203,19 @@ export class Viewmodel {
     }
     if (p.trigger) {
       p.trigger.rotation.x = w.triggerPull * this.triggerT;
+    }
+    /**
+     * REVOLVER CYLINDER — indexes one chamber per hammer fall, riding the
+     * same 0..1 `boltCycle` every other action uses: at the shot the drum is
+     * still on the fired chamber, and it rolls onto the next one as the cycle
+     * decays. `cylShots` counts shots since the draw, so the rotation is
+     * absolute and cannot drift.
+     */
+    if (p.cylinder && w.model.nodes.cylinderSpec) {
+      const steps = w.model.nodes.cylinderSpec.steps ?? 6;
+      const turn = (Math.PI * 2) / steps;
+      const roll = 1 - Math.min(1, this.boltCycle);
+      p.cylinder.rotation.z = -turn * (Math.max(0, this.cylShots - 1) + roll * Math.min(1, this.cylShots));
     }
     if (p.selector) {
       p.selector.rotation.x = lerp(-0.95, 0, clamp01(this.selectorLive ?? 1));
