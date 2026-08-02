@@ -55,6 +55,13 @@
  *   p.health  p.maxHealth  p.healthFraction  p.lowHealth  p.dead
  *   p.suppression  p.damageIndicators
  *   p.applyDamage(amount, fromVector3, opts)   p.heal(a)   p.addSuppression(a)
+ *   p.lastDamage      { at, amount, type, source, kind, label, team, from }
+ *                     WHAT LAST HURT YOU, written at the one funnel every wound
+ *                     goes through and readable the instant `player:death`
+ *                     fires. `source` is the actor when there was one and the
+ *                     STRING a system named itself with when there was not
+ *                     ('airstrike', 'drone', 'grenade'). It is the kill cam's
+ *                     only input; see the note on the field.
  *
  * CONTROL
  *   p.setControlEnabled(bool)     shot harness / cutscenes
@@ -138,6 +145,61 @@ export class PlayerSystem {
       move: 0, sprint: false, crouch: false, ads: false, airborne: false,
       suppression: 0, position: null,
     };
+
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * WHAT LAST HURT YOU — 「誰が自分をキルしたのか、キルカメラにしてください」
+     * ══════════════════════════════════════════════════════════════════════
+     * A preallocated record of the last damage that actually landed, and it
+     * exists because THE ONLY EXISTING ANSWER WAS WRONG FOR HALF THE DEATHS ON
+     * THIS MAP. `MatchSystem._playerLastAttacker` is set from `damage:dealt`,
+     * which is bullets and nothing else — every explosive in the game reaches
+     * the player through `_onExplosion` -> `applyDamage` instead, so an
+     * airstrike, a bomb, a tank shell, a drone, a grenade and the cathedral all
+     * left the field holding whoever last SHOT at you, possibly a minute ago
+     * and possibly on the other side of the map. A kill cam built on that field
+     * would name the wrong man, confidently, for every blast death.
+     *
+     * So this is written at the ONE funnel every wound goes through, and it
+     * carries what the caller knew:
+     *
+     *   source  the actor, when there was one — an `Agent`, a tank, anything
+     *           with a `name`. A STRING when the payload named a system rather
+     *           than a shooter ('airstrike', 'bomber', 'drone', 'grenade'),
+     *           which is what every environmental blast in `src/match` sets.
+     *   kind    the explosion's own `kind`, when it published one
+     *   label   an optional display string off the payload (the drone's)
+     *   type    'bullet' | 'explosion' | 'fall'
+     *   from    where it came from, when that is known
+     *
+     * NOTHING IN THE PLAYER READS IT. It is published state, like `health`, and
+     * `match` is the only thing that has any business interpreting it.
+     */
+    this.lastDamage = {
+      at: -1000,
+      amount: 0,
+      type: 'bullet',
+      source: null,
+      kind: null,
+      label: null,
+      team: -1,
+      from: new THREE.Vector3(),
+      hasFrom: false,
+    };
+    /**
+     * The last blast that REACHED us, damage or no damage, latched in
+     * `_onExplosion`. It is separate from the record above for one measured
+     * reason: a player's own thrown frag publishes `damage: 0` on the event on
+     * purpose (`src/weapons/grenades.js` — `ai`'s listener has no team test) and
+     * wounds the player through a SECOND, direct `applyDamage` call that carries
+     * no source at all. Latching the blast lets that call be matched back to the
+     * thing that made it, which is how "KILLED BY YOUR OWN GRENADE" is possible.
+     */
+    this._lastBlast = {
+      at: -1000, x: 0, y: 0, z: 0, source: null, kind: null, label: null, team: -1,
+    };
+    /** Set by a listener immediately before it calls `applyDamage`. */
+    this._pending = null;
 
     this._tmp = new THREE.Vector3();
     /** Last emitted discrete state, compared field-wise so no string is built. */
@@ -353,7 +415,10 @@ export class PlayerSystem {
       // Fall damage — CoD only hurts you past a real drop.
       const L = CAMERA.land;
       if (speed > L.damageSpeed) {
-        this.health.damage((speed - L.damageSpeed) * L.damagePerSpeed, null, { type: 'fall' });
+        // Through `applyDamage` rather than straight at `health`, so the ground
+        // is on `lastDamage` like everything else that can kill you. Identical
+        // otherwise: a fall has no `from`, so there is no indicator either way.
+        this.applyDamage((speed - L.damageSpeed) * L.damagePerSpeed, null, { type: 'fall' });
       }
       if (mag > 0.35) this.movement._footHold = FOOTSTEP.landHold;
     }
@@ -440,7 +505,10 @@ export class PlayerSystem {
     // `point` to where the round landed (which is the player), and `from` to the
     // muzzle. Using `point` pinned every arc to dead ahead.
     const from = e.from ?? e.source?.position ?? e.point ?? null;
+    // Who fired it, for the kill cam. @see `lastDamage`.
+    this._pending = e;
     this.applyDamage(e.amount ?? 0, from, { type: 'bullet' });
+    this._pending = null;
   }
 
   _onExplosion(e) {
@@ -449,13 +517,68 @@ export class PlayerSystem {
     const r = e.radius ?? 5;
     const d = this._tmp.copy(e.position).distanceTo(eye);
     if (d > r * 1.6) return;
+    /**
+     * IT REACHED US, so latch what it was — before the occlusion test, because
+     * a blast that only shook you is still the last thing that happened and a
+     * SECOND, sourceless `applyDamage` may be about to arrive from it. @see
+     * `_lastBlast`.
+     */
+    const b = this._lastBlast;
+    b.at = this.ctx.time.elapsed;
+    b.x = e.position.x; b.y = e.position.y; b.z = e.position.z;
+    b.source = e.source ?? null;
+    b.kind = e.kind ?? null;
+    b.label = e.label ?? null;
+    b.team = e.team ?? -1;
     // Occluded blasts still shake you, they just do not wound you.
     const clear = this.physics.lineOfSight(e.position, eye, this.physics.MASK.EXPLOSION);
     const falloff = Math.pow(clamp01(1 - d / r), 1.6);
     this.rig.addTrauma(clamp01(falloff * 1.4));
     this.health.addSuppression(HEALTH.suppression.perExplosion * falloff);
     if (clear && falloff > 0.02) {
+      this._pending = e;
       this.applyDamage((e.damage ?? 90) * falloff, e.position, { type: 'explosion' });
+      this._pending = null;
+    }
+  }
+
+  /**
+   * Fold whatever the caller knew into `lastDamage`. Called from `applyDamage`
+   * and from nowhere else, so every wound in the game — a round, a blast, a
+   * blast that arrived through a second sourceless call, a fall — writes one
+   * record by one path.
+   */
+  _recordDamage(amount, from, opts) {
+    const r = this.lastDamage;
+    const e = this._pending;
+    r.at = this.ctx.time.elapsed;
+    r.amount = amount;
+    r.type = opts?.type ?? 'bullet';
+    r.source = e?.source ?? null;
+    r.kind = e?.kind ?? null;
+    r.label = e?.label ?? null;
+    r.team = e?.team ?? -1;
+    r.hasFrom = !!from;
+    if (from) r.from.set(from.x, from.y, from.z);
+    /**
+     * THE SECOND CALL. `grenades.js:_damagePlayer` and anything shaped like it
+     * wound the player directly, with `{ type: 'explosion' }` and nothing else,
+     * in the same frame as the blast event it belongs to. Matching it back by
+     * (this frame, within half a metre of the blast) is exact rather than
+     * approximate: a second unrelated blast at the same point in the same frame
+     * is the same blast for every purpose this record has.
+     */
+    if (!e && r.type === 'explosion' && from) {
+      const b = this._lastBlast;
+      if (b.at === r.at) {
+        const dx = b.x - from.x, dy = b.y - from.y, dz = b.z - from.z;
+        if (dx * dx + dy * dy + dz * dz < 0.25) {
+          r.source = b.source;
+          r.kind = b.kind;
+          r.label = b.label;
+          r.team = b.team;
+        }
+      }
     }
   }
 
@@ -629,6 +752,10 @@ export class PlayerSystem {
   }
 
   applyDamage(amount, from, opts) {
+    // BEFORE the wound, not after: `health.damage` emits `player:death` from
+    // inside itself, and everything listening to that has to be able to read
+    // what did it. @see `lastDamage`.
+    if (amount > 0 && !this.health.dead) this._recordDamage(amount, from ?? null, opts);
     return this.health.damage(amount, from ?? null, { yaw: this.movement.yaw, ...opts });
   }
   heal(a) {
