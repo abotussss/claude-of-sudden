@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { RULES, TEAM_COLOR } from './rules.js';
+import { RULES } from './rules.js';
 
 /**
  * ══════════════════════════════════════════════════════════════════════════
@@ -46,10 +46,10 @@ import { RULES, TEAM_COLOR } from './rules.js';
  *    in neither `MASK.CHARACTER` nor `MASK.SIGHT`, so a moving object in the
  *    air can never cost anybody a route — with `owner: drone`, so a round that
  *    lands on it arrives as the canonical `damage:dealt` with the shooter
- *    attached and the player gets his hitmarker. `HEALTH` is 50, which is TWO
- *    rounds of a 21-damage rifle once the collider's double-count is counted —
- *    @see the note on that constant — against a target the size of a dinner
- *    plate crossing at 10 m/s.
+ *    attached and the player gets his hitmarker. `HEALTH` is 60, which is two
+ *    rounds of the AK and three of the carbine once the collider's double-count
+ *    is counted — @see the note on that constant for the measured table —
+ *    against a target the size of a dinner plate crossing at 10 m/s.
  *
  * 3. THE PACING. Twenty PER MATCH, both sides, which at `droneLife` 45 s is 1.5
  *    in the air at any moment under a ceiling of `droneMaxAloft` 4. Launches
@@ -106,25 +106,54 @@ import { RULES, TEAM_COLOR } from './rules.js';
  */
 
 /**
- * HP, 90 -> 50, AND WHAT THAT ACTUALLY COSTS IT.
+ * ──────────────────────────────────────────────────────────────────────────
+ * HP, 90 -> 60, AND IT IS A ROUNDS-TO-KILL RATHER THAN A NUMBER
+ * ──────────────────────────────────────────────────────────────────────────
+ * 「ドローンの体力は2回から3回球が当たって破壊されるのでちょうどいい ただし、基本的に
+ *   AIとか撃っても当たりにくいからそれくらいの体力でいい」
  *
- * A rifle round lands on the proxy as TWO `damage:dealt` events — the entry and
- * the exit face of the collider box, the double-count `tank.js` documents under
- * `oneWoundPerRound` — so a 21-damage round is measured at ~30 on a drone
- * (`_droneshot.mjs`: 2 rounds, 4 events, 30.0 per round).
+ * The ask is TWO TO THREE ROUNDS. 50 was the figure he named for it, and 50 is
+ * not that — it is the bottom of the range and a shade under it, because a
+ * round is worth more to a drone than its own damage number says.
  *
- *   90 HP  3 rounds   (60 leaves it at 30 and flying)
- *   50 HP  2 rounds   (60 kills it with 10 to spare)
+ * WHY. A round that punches through the proxy is scored on the ENTRY and the
+ * EXIT face — the double-count `tank.js` documents under `oneWoundPerRound` —
+ * so anything with the penetration to go out the far side lands twice. Measured
+ * at 18 m through the canonical `phys.fireBullet` path, `_dronehp.mjs`:
  *
- * So the airframe is now a two-round target and, with a 3.4 m/s handling of the
- * gun on a crossing target, that is roughly a second of tracked fire instead of
- * a second and a half. It matters more than 33% suggests, because the bots are
- * about to start shooting at them too: a drone that crosses one alert squad now
- * dies to the first man who gets two rounds into it rather than needing two men
- * to agree. Expect fewer of the twenty to reach a lock — which is the trade the
- * player asked for, and the reason the LAUNCH count came down with it.
+ *   gun      def   pen    events   effective   at 60 HP
+ *   carbine   17   1.00      2        23.3       3 rounds
+ *   AK        21   1.25      2        31.1       2 rounds
+ *   LMG       17   1.40      2        26.0       3 rounds
+ *   SMG       15   0.45      1        14.4       5 rounds
+ *   pistol    16   0.35      1        15.4       4 rounds
+ *   bolt gun 125   2.40      2       211.3       1 round
+ *
+ * THE SMG AND THE PISTOL DO NOT DOUBLE-COUNT: under about 0.5 penetration the
+ * round stops inside the airframe and is scored once. A drone is a rifleman's
+ * target and a poor one for anybody carrying a 9 mm, which is the right shape
+ * for a thing you are meant to shoot out of the sky.
+ *
+ * SO 60, AND WHICH END OF HIS RANGE IT IS. It puts the two rifles either side
+ * of the ask — AK two, carbine three — with the LMG at three and the bolt gun
+ * at one, which is the MIDDLE of 「2回から3回」 rather than the floor. 50 would
+ * have made the AK, the LMG and (nearly) the carbine all two, and 65 would have
+ * made every rifle on the map three.
+ *
+ *   The AK's two is TIGHT: 62.2 against 60, and `dropoff` 0.7 over `maxRange`
+ *   360 eats that 3.7% at about 130 m. So it is two rounds across the town and
+ *   three from the far ridge, which is a fair way for a range band to read.
+ *
+ * AND HE IS RIGHT THAT IT IS SAFE TO BE FRAGILE: 「AIとか撃っても当たりにくい」 —
+ * a 0.62 m airframe crossing at 10 m/s is a target bots rarely connect with, so
+ * the cost of this is paid almost entirely by players who track it deliberately.
+ * That is a caveat rather than a proof, though — @see the report: bots are being
+ * taught to shoot at drones and pushed toward roughly triple their rate of fire
+ * in parallel, and volume alone could make 60 read as instant once forty men are
+ * firing at the sky. Nothing here is pre-compensated for that; it wants a
+ * measurement once both land.
  */
-const HEALTH = 50;
+const HEALTH = 60;
 
 /**
  * TWENTY A MATCH, both sides, 10/10 — 「全部で２０機まで登場」, down from 30.
@@ -174,6 +203,64 @@ const RECOVER = 2.4;
 /** Chest height on a target, whatever it is. Bots and the player are both 1.8 m. */
 const CHEST = 1.15;
 
+/**
+ * ══════════════════════════════════════════════════════════════════════════
+ * THE HALO — 「ドローン自体をハイライトして 敵味方のドローンで色分けして」
+ * ══════════════════════════════════════════════════════════════════════════
+ *
+ * WHAT WAS WRONG. The HUD strip is a CAPTION: it says a drone has you, which
+ * way and how long you have. It cannot say WHICH SPECK. The airframe is 0.62 m
+ * of matt composite at 22 m altitude against a bright sky, and the only thing
+ * on it with any emission was a 3 cm strobe. A player who reads DRONE LOCK,
+ * turns to the bearing and looks up is looking at an empty sky — and the one
+ * counter-play the whole feature is built around (shoot it, or find the cover
+ * it cannot see through) needs him to FIND it, not to know it exists.
+ *
+ * So the airframe carries its own mark, in the world, at the drone:
+ *
+ *   A RING, BILLBOARDED. Camera-facing, so it is the same shape from every
+ *   angle and never edge-on to the man it is about to kill.
+ *   A DARK BACKING RING UNDER IT. This is the whole reason it works against
+ *   SKY: a coloured ring alone is a mid-tone against a bright cloud and it
+ *   disappears. The backing gives both edges of the colour a hard dark border,
+ *   which is what makes it read on cloud AND on the dark side of a roof. Not
+ *   additive blending, for the same reason — additive against a bright sky is
+ *   invisible, which is exactly where a drone lives.
+ *   IT HOLDS AN ANGULAR SIZE. The world radius scales with camera distance
+ *   (`HALO_PER_M`), floored and capped, so the mark is legible at 120 m without
+ *   swallowing the drone at 8 m.
+ *   IT IS OCCLUDED. `depthTest` is left ON: this marks a drone you can SEE, and
+ *   an x-ray ring through a roof would be a wallhack rather than a highlight.
+ *   The HUD's own drone mark (`ui/markers.js`) is the one that tracks it out of
+ *   sight, which is a HUD's job and not the world's.
+ *
+ * AND WHEN IT IS COMING AT YOU (item 1), a second ring CONVERGES onto it — the
+ * same grammar `WorldMarkers.updateDanger` uses for incoming air, where a
+ * converging ring reads as something arriving and an expanding one reads as
+ * something that has already gone off — and the halo itself beats. That fires
+ * on `target.isPlayer` in `lock` or `dive`, which is the drone's own definition
+ * of coming at you rather than a guess made from a distance.
+ *
+ * ──────────────────────────────────────────────────────────────────────────
+ * THE COLOURS ARE RELATIVE TO THE PLAYER, NOT TO TEAM IDENTITY
+ * ──────────────────────────────────────────────────────────────────────────
+ * These are `ui/style.js`'s own `--friend` / `--enemy`, and they are NOT
+ * `TEAM_COLOR`, which is the bug this file used to have in its strobe:
+ * `RULES.playerTeam` is `TEAM.RED` = 0 and `TEAM_COLOR[0]` is `#ff6a52`, the hex
+ * the HUD reserves for HOSTILES — so painting by team index put the player's own
+ * drones in enemy red and the ones hunting him in friendly blue. That exact
+ * inversion shipped once on the zone markers and was caught; `sitemark.js` and
+ * `MatchSystem._publishObjectives` both carry the fixed rule and now so does the
+ * airframe. The hexes are literals here for the same reason they are literals
+ * there: `src/match` may not import `src/ui`.
+ */
+const HALO_FRIEND = 0x8fc8ff;
+const HALO_ENEMY = 0xff7a63;
+/** Halo world radius per metre of camera distance, before the clamp. */
+const HALO_PER_M = 0.017;
+const HALO_MIN = 0.55;
+const HALO_MAX = 2.4;
+
 let _nextId = 1;
 
 class Drone {
@@ -208,7 +295,17 @@ class Drone {
     this.scanT = 0;
     this.recoverT = 0;
     this.rotor = 0;
+    /** Halo beat/converge phase, integrated so a paused game freezes it. */
+    this.markT = 0;
+    /** From the LOCAL player's point of view, fixed at launch. @see `HALO_*`. */
+    this.hostile = true;
+    /** True while it is locked on or diving at the local player. */
+    this.atPlayer = false;
     this.group = null;
+    /** The billboarded halo group, and its two rings. @see `_mark`. */
+    this.mark = null;
+    this.halo = null;
+    this.aim = null;
     this.rotors = null;
     this.collider = null;
     /** Ground under it, refreshed on the scan tick — one ray, not one per frame. */
@@ -224,6 +321,13 @@ export class Drones {
     this.rng = opts.rng ?? ctx.rng.fork();
     this.ready = false;
     this.enabled = true;
+    /**
+     * WHICH SIDE THE CAMERA IS ON. Every colour on a drone is relative to this
+     * and never to the team index — @see the note on `HALO_FRIEND`. `match`
+     * overwrites it with its own `playerTeam` at wiring time, exactly as it does
+     * for `sitemark`; the default keeps a standalone harness honest.
+     */
+    this.playerTeam = RULES.playerTeam;
 
     /** Installed by `match`: fill `out` with the live hostiles of `team`. */
     this.enemies = null;
@@ -345,12 +449,21 @@ export class Drones {
     const disc = mk(new THREE.CircleGeometry(0.115, 14));
     const head = mk(new THREE.SphereGeometry(0.072, 10, 8));
     const strobe = mk(new THREE.BoxGeometry(0.03, 0.016, 0.03));
+    /**
+     * The halo, at unit radius: the colour is an annulus and the backing is a
+     * WIDER annulus that overlaps it on both edges, so the colour always has a
+     * dark border on the inside and the outside. @see the note on `HALO_FRIEND`.
+     */
+    const haloRing = mk(new THREE.RingGeometry(0.74, 1.0, 30));
+    const haloBack = mk(new THREE.RingGeometry(0.6, 1.15, 30));
 
     /**
-     * Two paints, one per side, plus the shared airframe. The airframe is a
-     * matt composite that reads dark against the sky and the strobe is the only
-     * thing on it with any emission — a drone must be seen as a SHAPE moving
-     * against the cloud, and a shiny one disappears into the specular.
+     * Two paints, FRIEND THEN HOSTILE — relative to the local player and never
+     * indexed by team, @see the note on `HALO_FRIEND` — plus the shared
+     * airframe. The airframe is a matt composite that reads dark against the sky
+     * and the strobe is the only thing on it with any emission: a drone must be
+     * seen as a SHAPE moving against the cloud, and a shiny one disappears into
+     * the specular.
      */
     const shell = new THREE.MeshStandardMaterial({
       color: 0x23262a, roughness: 0.78, metalness: 0.18,
@@ -367,18 +480,62 @@ export class Drones {
     });
     this.materials.push(shell, metal, blade, warhead);
     const strobes = [];
-    for (let t = 0; t < 2; t++) {
-      const m = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(TEAM_COLOR[t]),
-        emissive: new THREE.Color(TEAM_COLOR[t]),
+    const halos = [];
+    for (let s = 0; s < 2; s++) {
+      const hex = s === 0 ? HALO_FRIEND : HALO_ENEMY;
+      const st = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(hex),
+        emissive: new THREE.Color(hex),
         emissiveIntensity: 5.5,
         roughness: 0.4,
         metalness: 0,
       });
-      strobes.push(m);
-      this.materials.push(m);
+      strobes.push(st);
+      /**
+       * FRIENDLY IS QUIETER. Both sides get a ring — the player asked to tell
+       * them apart, and a mark that only appears on hostiles cannot say "that
+       * one is ours" — but his own side's is half the opacity and, in `_mark`,
+       * four fifths the size. Ten friendly drones a match at full weight would
+       * be ten more things in a sky he has to clear before he finds the one
+       * that matters.
+       */
+      const hl = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(hex),
+        transparent: true,
+        opacity: s === 0 ? 0.5 : 0.95,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      halos.push(hl);
+      this.materials.push(st, hl);
     }
+    /** Near-black, so the colour has a hard edge on cloud and on brick alike. */
+    const haloEdge = new THREE.MeshBasicMaterial({
+      color: 0x05080b,
+      transparent: true,
+      opacity: 0.5,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    /** The converging ring, hostile-only by definition. @see `_mark`. */
+    const aimMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(HALO_ENEMY),
+      transparent: true,
+      opacity: 0.55,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    this.materials.push(haloEdge, aimMat);
     this._strobes = strobes;
+    this._halos = halos;
+    /** The halos live OUTSIDE the airframe groups: those yaw and bank, and a
+     *  billboard inside a rotating parent has to undo the parent every frame. */
+    this.markGroup = new THREE.Group();
+    this.markGroup.name = 'match-drone-marks';
+    this.group.add(this.markGroup);
 
     for (const d of this.list) {
       const g = new THREE.Group();
@@ -418,6 +575,29 @@ export class Drones {
       }
       d.group = g;
       this.group.add(g);
+
+      /* ---- the halo: three coplanar rings on one billboard ------------- */
+      const m = new THREE.Group();
+      m.name = `drone-mark-${d.slot}`;
+      m.visible = false;
+      const back = new THREE.Mesh(haloBack, haloEdge);
+      // A hair BEHIND the colour along the billboard's own normal: two coplanar
+      // transparent rings with depthWrite off otherwise z-fight on the overlap.
+      back.position.z = -0.004;
+      back.renderOrder = 3;
+      m.add(back);
+      const halo = new THREE.Mesh(haloRing, halos[1]);
+      halo.renderOrder = 4;
+      m.add(halo);
+      const aim = new THREE.Mesh(haloRing, aimMat);
+      aim.position.z = 0.004;
+      aim.renderOrder = 4;
+      aim.visible = false;
+      m.add(aim);
+      d.mark = m;
+      d.halo = halo;
+      d.aim = aim;
+      this.markGroup.add(m);
     }
     this.ctx.scene.add(this.group);
     this.ready = true;
@@ -521,7 +701,19 @@ export class Drones {
     d.rotor = this.rng.range(0, Math.PI * 2);
     d.group.visible = true;
     d.group.position.copy(d.position);
-    d.strobe.material = this._strobes[team];
+    /**
+     * WHOSE IT IS, FROM THE SEAT — one index, decided here and read by both the
+     * strobe and the halo, so the two can never disagree. Fixed at launch
+     * because a drone cannot change sides mid-flight. @see `HALO_FRIEND`.
+     */
+    d.hostile = team !== this.playerTeam;
+    const paint = d.hostile ? 1 : 0;
+    d.strobe.material = this._strobes[paint];
+    d.halo.material = this._halos[paint];
+    d.markT = 0;
+    d.atPlayer = false;
+    d.aim.visible = false;
+    d.mark.visible = true;
 
     const phys = this.physics;
     if (phys?.addCollider) {
@@ -569,6 +761,13 @@ export class Drones {
       case 'recover': this._recover(d, dt, scan); break;
       default: break;
     }
+
+    /**
+     * COMING AT YOU, in the drone's own terms rather than a guess made from a
+     * range: it has CHOSEN the man behind the camera and is either counting out
+     * his warning or already committed. Read by `_mark` and by nothing else.
+     */
+    d.atPlayer = d.target?.isPlayer === true && (d.state === 'lock' || d.state === 'dive');
 
     this._integrate(d, dt);
   }
@@ -804,6 +1003,47 @@ export class Drones {
     d.rotor += ROTOR_SPIN * dt;
     for (let i = 0; i < 4; i++) d.rotors[i].rotation.z = d.rotor * (i & 1 ? -1 : 1);
     d.collider?.setSphere(d.position.x, d.position.y, d.position.z, 0.31);
+    this._mark(d, dt);
+  }
+
+  /**
+   * THE HALO, ONE DRONE, ONE FRAME. @see the note on `HALO_FRIEND` for what it
+   * is for and why the colour is relative to the player rather than to a team.
+   *
+   * Four writes and no allocation: a position, the camera's own quaternion (the
+   * billboard — the mark hangs off `markGroup`, which has no transform of its
+   * own, precisely so that copy is the whole of it), a scale, and the converging
+   * ring's scale when there is one.
+   */
+  _mark(d, dt) {
+    const m = d.mark;
+    if (!m) return;
+    const cam = this.ctx.camera;
+    m.position.copy(d.position);
+    if (!cam) return;
+    m.quaternion.copy(cam.quaternion);
+    d.markT += dt;
+    // Held angular size: a ring that is a true 0.6 m across is four pixels at
+    // 120 m, which is the range at which finding it matters most.
+    const dist = cam.position.distanceTo(d.position);
+    let s = Math.min(HALO_MAX, Math.max(HALO_MIN, dist * HALO_PER_M));
+    // His own side's, smaller — @see the note on the friendly halo material.
+    if (!d.hostile) s *= 0.8;
+    const at = d.atPlayer;
+    if (at) {
+      // The beat is the same information the lock strip's pulse carries, for an
+      // eye that is on the sky rather than on the top of the screen.
+      s *= 1 + 0.17 * Math.sin(d.markT * (d.state === 'dive' ? 22 : 11));
+    }
+    m.scale.setScalar(s);
+    if (d.aim.visible !== at) d.aim.visible = at;
+    if (at) {
+      // CONVERGING, never expanding: the grammar `WorldMarkers.updateDanger`
+      // uses for incoming air, and it means the same thing here.
+      const ph = (d.markT * (d.state === 'dive' ? 2.4 : 1.3)) % 1;
+      const r = 3.2 - 2.2 * (1 - (1 - ph) * (1 - ph) * (1 - ph));
+      d.aim.scale.setScalar(r);
+    }
   }
 
   /* ---------------------------------------------------------- the eyes -- */
@@ -935,6 +1175,9 @@ export class Drones {
     d.target = null;
     if (d.warning) this._reportLock(null);
     d.group.visible = false;
+    d.mark.visible = false;
+    d.aim.visible = false;
+    d.atPlayer = false;
     if (d.collider && this.physics?.removeCollider) this.physics.removeCollider(d.collider);
     d.collider = null;
   }
