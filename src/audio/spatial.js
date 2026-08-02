@@ -4,7 +4,7 @@
  * A pool of reusable 3D emitter chains. Each chain is:
  *
  *   input ─► occlusionLP ─► airLP ─► distanceGain ─┬─► panner (HRTF) ─► bus
- *                                                  └─► sendGain ─► reverb send
+ *                                                  └─► sendDelay ─► sendGain ─► reverb send
  *
  * Notes on the design decisions, because they are not the obvious ones:
  *
@@ -311,6 +311,105 @@ export function stepOcclusionFilter(occ) {
   };
 }
 
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE NEAR FIELD, WHICH IS THE PART THAT IS STILL WET — 「まだ音が近い時の銃声や
+ * 爆撃がリバーブかかって遠くでなっている感じがある」.
+ * ════════════════════════════════════════════════════════════════════════════
+ *
+ * The previous pass cut the SENDS globally (distance growth capped at 48 m,
+ * occlusion boost ×1.7 → ×1.25) and the per-bus live send did fall — weapons
+ * 19.3 → 5.6, foley 17.3 → 8.4. What it did not do is change the SHAPE of the
+ * curve in the first fifteen metres, and that is what he is describing now: a
+ * shot at 8 m is not "a bit too wet", it is arriving as though it happened
+ * somewhere else.
+ *
+ * Read the old law at the distances that matter. `send × (0.5 + d×0.022) ×
+ * (1 + occ×0.25)`, and remember the occlusion census: ~90 % of spatialised
+ * voices sit at occ ≥ 0.9, INCLUDING a man three metres away behind a knee-high
+ * wall, because the raycast does not care how tall the wall is.
+ *
+ *              factor on the voice's own send
+ *    1.9 m occ 0     0.542    <- his own boot, the one he says is right
+ *    5   m occ 0.9   0.747    +2.8 dB wetter than that
+ *   10   m occ 0.9   0.882    +4.2 dB
+ *   15   m occ 0.9   1.017    +5.5 dB
+ *
+ * So the thing he calls "close" was going into the convolvers at up to twice
+ * the level of the one reference in the mix he has approved. Two corrections,
+ * and BOTH ARE NO-OPS ON HIS OWN STEP by construction:
+ *
+ *  1. `sendDistance` warps the distance the send law sees. It is the IDENTITY
+ *     below `NEAR_DRY` (3 m — his own foley lives at 1.9 m and `_onFootstep`
+ *     calls anything under 2.6 m his own foot) and the IDENTITY again at
+ *     `SEND_FAR`, so neither his boot nor the far field moves by a single bit;
+ *     in between, the near field grows at `NEAR_SLOPE` of its old rate. A shot
+ *     at 10 m now sends at 0.620 instead of 0.720, at 15 m 0.658 instead of
+ *     0.830. Monotone throughout — a nearer sound is still drier than a farther
+ *     one, which is the cue that survived every previous pass and must.
+ *
+ *  2. the occlusion boost is gated on distance. A wall between you and a rifle
+ *     two streets away really does mean you are hearing the reflected path and
+ *     nothing else; a wall between you and a rifle eight metres away means you
+ *     are hearing the rifle, through the wall, and inflating its send by 25 %
+ *     is the census's 90 % figure turning "behind cover" into "far away" for
+ *     the entire near field. The boost now fades in from `OCC_WET_NEAR` and is
+ *     only at full strength past `OCC_WET_FAR`. At occ = 0 it is ×1 either way,
+ *     which is the own-step case, so that path is untouched however this reads.
+ */
+const NEAR_DRY = 3;
+const NEAR_END = 20;
+const NEAR_SLOPE = 0.35;
+/** Where the distance factor stops growing. Unchanged from the previous pass. */
+const SEND_FAR = 48;
+const NEAR_KNEE = NEAR_DRY + (NEAR_END - NEAR_DRY) * NEAR_SLOPE;
+
+/** Exported so the send law can be measured without a live field. */
+export function sendDistance(dist) {
+  const d = Math.max(0, dist);
+  if (d <= NEAR_DRY) return d;
+  if (d <= NEAR_END) return NEAR_DRY + (d - NEAR_DRY) * NEAR_SLOPE;
+  return NEAR_KNEE +
+    (Math.min(d, SEND_FAR) - NEAR_END) * (SEND_FAR - NEAR_KNEE) / (SEND_FAR - NEAR_END);
+}
+
+const OCC_WET_NEAR = 8;
+const OCC_WET_FAR = 30;
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND THE OTHER HALF OF "IT SOUNDS FAR AWAY": WHEN the reflections arrive.
+ * ────────────────────────────────────────────────────────────────────────────
+ *
+ * A send with no pre-delay puts the convolver's first output sample on the same
+ * sample as the muzzle transient. The ear resolves distance-to-source largely
+ * from the GAP between the direct sound and the first reflections, and a gap of
+ * zero is what a source in the far field sounds like — direct and reflected
+ * arrive together because both have travelled about the same way. That is why a
+ * close shot can be correct in send LEVEL and still read as distant: the
+ * reverb is smeared into the transient instead of following it.
+ *
+ * The gap is a function of geometry, and it is not monotone in distance:
+ *
+ *   - your own boot at 1.9 m reflects off the ground you are standing on, and
+ *     that reflection is immediate. Gap ~0. THIS IS THE CASE HE APPROVED, and
+ *     `sendPreDelay` returns exactly 0 below 2.6 m so it stays bit-identical.
+ *   - a rifle at 8 m across a street: the direct path is 23 ms, the facade
+ *     behind you answers at 60-90 ms. Gap 30-60 ms. This is the case that is
+ *     broken.
+ *   - a rifle at 120 m: everything you hear of it is already reflected. Gap
+ *     collapses again, and the floor below is what is left.
+ *
+ * So: zero at the listener, rising over a few metres, then decaying back to a
+ * small floor by ~30 m. One DelayNode per emitter, built at boot, sitting in
+ * the SEND path only — the dry direct sound is not delayed by a sample.
+ */
+export function sendPreDelay(dist) {
+  const d = Math.max(0, dist);
+  const ramp = clamp((d - 2.6) / 3.4, 0, 1);
+  return ramp * clamp(0.036 - d * 0.0009, 0.008, 0.036);
+}
+
 const nowWall = () =>
   (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
 
@@ -323,6 +422,14 @@ class Emitter {
     this.occHS = biquad(actx, 'highshelf', 2200, 0.7, 0);
     this.airLP = biquad(actx, 'lowpass', 20000, 0.5);
     this.distGain = gain(actx, 1);
+    /**
+     * EARLY-REFLECTION GAP, IN THE SEND PATH ONLY. @see sendPreDelay.
+     * 0.08 s of buffer for a value that never exceeds 0.036. A DelayNode
+     * outside a feedback cycle adds no latency of its own at delayTime 0, so
+     * the near-field voices that ask for zero are unaffected.
+     */
+    this.sendDelay = actx.createDelay(0.08);
+    this.sendDelay.delayTime.value = 0;
     this.sendGain = gain(actx, 0);
 
     const p = actx.createPanner();
@@ -339,7 +446,8 @@ class Emitter {
     this.occHS.connect(this.airLP);
     this.airLP.connect(this.distGain);
     this.distGain.connect(this.panner);
-    this.distGain.connect(this.sendGain);
+    this.distGain.connect(this.sendDelay);
+    this.sendDelay.connect(this.sendGain);
 
     this.free = true;
     this.endTime = 0;
@@ -432,6 +540,7 @@ class Emitter {
     this.occHS.disconnect();
     this.airLP.disconnect();
     this.distGain.disconnect();
+    this.sendDelay.disconnect();
     this.sendGain.disconnect();
     this.panner.disconnect();
   }
@@ -802,6 +911,14 @@ export class SpatialField {
     em.occLP.frequency.setValueAtTime(of.lp, t);
     em.occHS.gain.setValueAtTime(of.shelf, t);
     em.distGain.gain.setValueAtTime(clamp(atten * (opts.gain ?? 1), 0, 4), t);
+    /**
+     * The early-reflection gap, set once for the life of the voice. @see
+     * sendPreDelay. It is deliberately NOT re-set in `refresh` — sliding a
+     * DelayNode's time under a running signal is a pitch shift, and a bed that
+     * has moved twenty metres does not need its send re-timed.
+     */
+    em.sendDelay.delayTime.cancelScheduledValues(t);
+    em.sendDelay.delayTime.setValueAtTime(sendPreDelay(dist), t);
 
     this._applySend(em, opts.send ?? 0.25);
 
@@ -837,8 +954,18 @@ export class SpatialField {
    * near-field dry/wet he approved is the same arithmetic to the last bit.
    * (His own rifle is `_playDry`, head-locked, and never passes through here.)
    */
+  /**
+   * SIXTH PASS, AND THIS ONE IS THE NEAR FIELD ONLY — 「まだ音が近い時の銃声や爆撃
+   * がリバーブかかって遠くでなっている感じがある」. @see sendDistance for the
+   * arithmetic and for why his own step comes out bit-identical: `sendDistance`
+   * is the identity below 3 m and at 48 m, and the occlusion gate multiplies by
+   * occ, which is 0 on his own foot. Nothing in this function moves for a voice
+   * at 1.9 m with occlusion 0.
+   */
   _applySend(em, send) {
-    const v = send * (0.5 + Math.min(em.dist ?? 0, 48) * 0.022) * (1 + (em.occ ?? 0) * 0.25);
+    const d = em.dist ?? 0;
+    const occGate = clamp((d - OCC_WET_NEAR) / (OCC_WET_FAR - OCC_WET_NEAR), 0, 1);
+    const v = send * (0.5 + sendDistance(d) * 0.022) * (1 + (em.occ ?? 0) * 0.25 * occGate);
     em.sendGain.gain.setValueAtTime(clamp(v, 0, 3), em.startAt ?? this.actx.currentTime);
   }
 
