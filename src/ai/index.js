@@ -62,6 +62,81 @@ import { Radio } from './radio.js';
 import { GroundShadows } from './grounding.js';
 
 /**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE THIRD FACTION — 「民間軍を投入して」
+ * ════════════════════════════════════════════════════════════════════════════
+ * `src/match/civilians.js` owns WHO they are, HOW MANY there are, WHERE they
+ * come out and what a dead one costs. `ai` owns exactly three facts about them,
+ * because all three are things `match` may not reach in and set:
+ *
+ *   1. WHAT KIND OF SOLDIER a civilian is (`drawCivilPersona`). A persona is
+ *      an archetype, six traits, a gun and a marksmanship draw, and it is
+ *      DRAWN INSIDE THE `Agent` CONSTRUCTOR — the mesh depends on the gun — so
+ *      it cannot be applied afterwards. `match` says WHICH KIND by passing
+ *      `role`, which `Agent` assigns before it asks for the persona.
+ *   2. THAT AN UNARMED ONE NEVER FIGHTS (`aiPacifist`, read in exactly one
+ *      place: the top of `pickVisibleHostile`).
+ *   3. THAT NONE OF THEM ARE ON THE RADAR (`aiCivil`, read in exactly one
+ *      place: `getHudActors`).
+ *
+ * Everything else about them — hiding, ambushing, staying indoors, fleeing —
+ * falls out of code that already exists. @see `AiSystem._civilise`.
+ *
+ * THE ROLE STRINGS ARE A CONTRACT WITH `src/match`, spelled the same way at
+ * both ends and agreed the way `AI_ROLE_FIELD` already is: `match` may not
+ * import from `ai`, so the literal is the interface.
+ */
+const CIVIL_ROLE = Object.freeze({ armed: 'civil', unarmed: 'civilUnarmed' });
+
+/**
+ * WHAT AN AMBUSHER IS, AS A PERSONA.
+ *
+ * 「AI性能としては中の下くらいにして」 — lower-middle, and that is a statement
+ * about MARKSMANSHIP, which in this file is one number: `skill` drives the
+ * cone, the tracking rate, the hand shake, the burst length, the reaction time
+ * and the settle. `RULES.botSkill` is 0.44 with a gaussian of sd 0.19, so an
+ * ordinary soldier ranges 0.12-0.95 around 0.44. A civilian is drawn from
+ * 0.20-0.44 with a mean near 0.30: worse than an ordinary man essentially
+ * always, never so bad he cannot hit somebody who walks into the room.
+ *
+ * THE TRAITS ARE THE `anchor`'s, PUSHED FURTHER. He does not close (aggression
+ * 0.18 against the anchor's 0.30), he waits (patience 0.88), he wants the fight
+ * at 9 m rather than 28 — which is a ROOM — and he will not stand in the open
+ * (exposure 0.14) or manoeuvre (flank 0.04). `trigger` stays high: he does not
+ * spray, he shoots when somebody is actually there. Read against
+ * `_pickHoldSpot` and `_combat` in agent.js, that set of numbers IS an ambush:
+ * a man who holds one angle in a small room and fires first at short range.
+ *
+ * THE GUN IS THE REQUEST'S: 「民間軍はAKとグレネードのみ装備」. AK for everyone,
+ * and it is not sampled — `ARCHETYPE_ARMS` would hand out submachine guns and
+ * belts, and the AK is the one the militiaman's mesh is holding.
+ *
+ * An unarmed one still gets a persona because `Agent` requires one, and it is
+ * the same one: none of it is ever reached, because he never acquires a target.
+ */
+function drawCivilPersona(rng, unarmed) {
+  const t = (v, sd) => Math.min(1, Math.max(0.02, v + rng.gauss() * sd));
+  return {
+    archetype: 'anchor',
+    weapon: 'ak',
+    traits: {
+      aggression: t(0.18, 0.08),
+      patience: t(0.88, 0.07),
+      exposure: t(0.14, 0.06),
+      flank: t(0.04, 0.03),
+      trigger: t(0.74, 0.10),
+      /** METRES. A room, not a street. */
+      range: 9 * rng.range(0.8, 1.5),
+    },
+    elite: false,
+    skill: unarmed ? 0.2 : Math.min(0.44, Math.max(0.20, 0.30 + rng.gauss() * 0.07)),
+  };
+}
+
+/** HP for every one of them. 「民間人は体力５０です 武装しているが防弾はない」 */
+const CIVIL_HEALTH = 50;
+
+/**
  * THE ARMOUR CONSTANTS, all in the hull's own frame and all read off the
  * collider boxes `Armour._buildColliders` registers. @see `AiSystem.armourWorth`
  * for what each one is doing and for the derivation of `DECK_PLUNGE`.
@@ -1332,6 +1407,18 @@ export class AiSystem {
       agent.armourWorth = 0;
       return null;
     }
+    /**
+     * AN UNARMED MAN ACQUIRES NOBODY — 「民間人は…攻撃してこない」. @see
+     * `AiSystem._civilise`. This is the whole of it: `Agent.target` has exactly
+     * one source and it is this function, so a null here is no shooting, no
+     * grenade, no suppression, no cover rush and no peek, permanently and
+     * without a second flag anywhere in the behaviour tree. He is blind in the
+     * same sense a flashed man is, for ever, and by the same mechanism.
+     */
+    if (agent.aiPacifist === true) {
+      agent.armourWorth = 0;
+      return null;
+    }
     const list = this.hostilesOf(agent.team);
     const n = list.length;
     if (!n) return null;
@@ -1581,6 +1668,17 @@ export class AiSystem {
     for (let i = 0; i < this.agents.length; i++) {
       const a = this.agents[i];
       if (!a.alive) continue;
+      /**
+       * NO CIVILIAN IS EVER ON THE RADAR — 「これはゲーム上アナウンスなし」, and it
+       * applies to the ARMED ones as well, which is the part that matters.
+       * Suppressing only the unarmed would make the HUD itself the answer to
+       * the one question the player is supposed to have to look at a man to
+       * answer; suppressing the whole faction makes finding one a thing that
+       * only happens with your eyes. It costs nothing else: the minimap blip,
+       * the world contact bracket and `match._publishEnemyMarkers` are all this
+       * one list. @see `AiSystem._civilise`.
+       */
+      if (a.aiCivil === true) continue;
       const friendly = a.team === this.playerTeam;
       if (!friendly && now - (a.spottedAt ?? -1e9) > 3) continue;
       let rec = this._blips[out.length];
@@ -1945,6 +2043,9 @@ export class AiSystem {
   personaFor(agent) {
     const rng = this._personaRng ?? (this._personaRng = this.rng.fork());
     const mean = this.skill ?? 0.5;
+    if (agent.role === CIVIL_ROLE.armed || agent.role === CIVIL_ROLE.unarmed) {
+      return drawCivilPersona(rng, agent.role === CIVIL_ROLE.unarmed);
+    }
     /**
      * `elite` IS PART OF THE KEY, not just of the draw. `src/match` reuses the
      * field roster's callsign namespace for the paradrop, and a cache keyed only
@@ -2040,9 +2141,80 @@ export class AiSystem {
 
   spawn(variantName, position, yaw = 0, opts = {}) {
     const a = new Agent(this, { variant: variantName, position, yaw, ...opts });
+    if (a.role === CIVIL_ROLE.armed || a.role === CIVIL_ROLE.unarmed) {
+      this._civilise(a, a.role === CIVIL_ROLE.unarmed);
+    }
     this.agents.push(a);
     this._noteVariantTeam(a.variantName, a.team);
     return a;
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * EVERYTHING ELSE A CIVILIAN IS, AS SIX WRITES ON A FRESHLY BUILT `Agent`
+   * ══════════════════════════════════════════════════════════════════════════
+   * All six are things the constructor has already decided and none of them can
+   * be expressed through the persona, so they are set here rather than reached
+   * in from `src/match` — @see `CIVIL_ROLE`.
+   *
+   * NO SQUAD IS NOT AN OVERSIGHT, IT IS THREE RULES FOR FREE. `_spawnTeam` puts
+   * every soldier in a `Squad`; `civilians.js` deliberately does not, and
+   * `Agent` guards every use of `this.squad`, so a civilian:
+   *   - can never take a window post (`_wantPost` opens with `!this.squad`),
+   *     which is what would otherwise send him up a staircase on a quota he is
+   *     not part of;
+   *   - can never FLANK (the manoeuvre is behind `sq && sq.canFlank`), which is
+   *     the one behaviour that would walk him out of his building and across
+   *     the street — 「逃走以外で屋外に逃げることはない」;
+   *   - is not counted by, and does not consume, the two sides' fireteam,
+   *     grenade, smoke and peek rations.
+   *
+   * NO OBJECTIVE IS THE AMBUSH. `Agent._think`'s IDLE branch is `desiredSpeed =
+   * 0` and then "if I have a target, fight; else if I have an objective,
+   * advance; else if I have a patrol route, patrol". A man with neither stands
+   * exactly where `civilians.js` put him — in a room, not where a bot patrol
+   * expects — until somebody walks into his line, and then he opens fire at the
+   * range his traits want, which is 9 m. That is the whole of 「基本的に隠れる
+   * こと、不意打ちをしてきます」 and it is written already.
+   */
+  _civilise(a, unarmed) {
+    /** 「民間人は体力５０です 武装しているが防弾はないので」 — no armour, so no more HP. */
+    a.health = CIVIL_HEALTH;
+    a.maxHealth = CIVIL_HEALTH;
+    /** 「AKとグレネードのみ」. The flashbang, the smoke and the mine are soldier's stores. */
+    a.hasFlash = false;
+    a.hasSmoke = false;
+    /**
+     * OFF THE RADIO. `Radio.say` refuses a speaker who transmitted less than
+     * `SPEAKER_GAP` ago and `_radioAt` is the field it compares, so `Infinity`
+     * is a permanent refusal — no contact reports, no "MOVING UP", no "MAN
+     * DOWN" from a militiaman. Two reasons and both are the request's:
+     * 「アナウンスなし」 means a civilian must not be able to announce himself,
+     * and fifteen extra speakers would otherwise compete for the enemy net's
+     * rate-limited slots and thin out the traffic between the actual squads.
+     */
+    a._radioAt = Infinity;
+    /** Kept off the minimap and out of the contact brackets. @see `getHudActors`. */
+    a.aiCivil = true;
+    if (!unarmed) return;
+    /**
+     * 「民間人は見つけられた場合は逃走します（攻撃してこない）」 — TWO separate rules
+     * and this is the second one. He never fights: `pickVisibleHostile` returns
+     * null for him unconditionally, so he acquires nobody, and every branch that
+     * shoots, throws or takes cover is downstream of having a target. The
+     * FLEEING half is `match`'s, because being seen is a fact about the player
+     * and `ai` has no opinion about it.
+     */
+    a.aiPacifist = true;
+    /**
+     * …AND NOBODY SHOOTS HIM ON PURPOSE EITHER. `protect` is "not a valid
+     * target" and not damage immunity — the exact distinction spawn protection
+     * already draws — so a bot never CHOOSES to fire at an unarmed civilian
+     * while the player always can, which is what keeps the score penalty a
+     * decision the player makes rather than a tax his own side levies on him
+     * from across the map. A stray round or a grenade still kills him.
+     */
+    this.protect(a, 1e9);
   }
 
   /**

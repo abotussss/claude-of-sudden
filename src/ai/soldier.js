@@ -246,10 +246,40 @@ for (const key of Object.keys(VARIANTS)) {
  */
 export const CIVIL_VARIANTS = Object.freeze({ armed: 'civilArmed', unarmed: 'civilUnarmed' });
 
-/** Cloth tint per kind. Multiplies the ONE `camo_civil` bake. @see CAMO.civil. */
+/**
+ * Cloth tint per kind. Multiplies the ONE `camo_civil` bake. @see CAMO.civil.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHY GREEN AND CREAM AND NOT "DARK" AND "LIGHT" — PHOTOGRAPHED, NOT ASSERTED
+ * ────────────────────────────────────────────────────────────────────────────
+ * The first pass was near-neutral: 0.44/0.42/0.36 and 3.05/3.00/2.82, on the
+ * theory that a 7:1 VALUE ratio was enough on its own. Looked at
+ * (`_civread.mjs`, four men in one line at 12 m, 16:30, sun behind them), it was
+ * not, and the failure was not the one being guarded against. Both civilians
+ * came back BLUE — militiaman rgb 77/73/68 reading navy on screen, civilian
+ * 101/99/99 reading pale blue — because a low-chroma albedo standing in its own
+ * shadow is lit by SKY FILL, and the sky fill on this map is blue. The frame
+ * therefore had four men in it of whom three read as some value of the
+ * FRIENDLY's slate, and the friendly's slate is the one colour on the map that
+ * means "do not shoot".
+ *
+ * So the hue is now carried by the tint rather than left to the light:
+ *
+ *   MILITIAMAN, DARK OLIVE. Green is the one hue neither army uses — the
+ *   friendly is slate (cool) and the hostile is crimson (warm) — so it cannot
+ *   be confused with either at the value it sits at, and enough chroma survives
+ *   the sky fill for the shadow side to still read green. It is also simply
+ *   what a militia work jacket is. ~0.051 linear: under both armies' 0.078-0.085.
+ *
+ *   CIVILIAN, WARM CREAM. ~0.34 linear, four times either army and brighter
+ *   than the sunlit plaster he stands against (~0.05-0.09 on screen; @see the
+ *   measurement table in textures.js). At that albedo his own colour dominates
+ *   the sky fill instead of the other way round, and value alone separates him
+ *   from every other figure in the frame at any range.
+ */
 const CIVIL_CLOTH = {
-  armed: [0.44, 0.42, 0.36], // dark olive-brown work jacket, ~0.045 linear
-  unarmed: [3.05, 3.00, 2.82], // unbleached cotton shirt, ~0.33 linear
+  armed: [0.34, 0.58, 0.24], // dark olive work jacket, ~0.051 linear
+  unarmed: [3.62, 3.24, 2.52], // unbleached cotton shirt, ~0.34 linear
 };
 
 {
@@ -271,8 +301,9 @@ const CIVIL_CLOTH = {
     ...base,
     ...undress,
     clothTint: CIVIL_CLOTH.armed,
-    // webbing and boots go with the jacket: a militiaman's kit is his own
-    gearTint: [0.86, 0.84, 0.74],
+    // the wrap, the bandolier, the belt and the boots go with the jacket:
+    // a militiaman's kit is his own and it stays out of both armies' hues
+    gearTint: [0.74, 0.92, 0.52],
     skinTint: [0.84, 0.78, 0.72],
     headWrap: true,
     faceWrap: true,
@@ -286,8 +317,10 @@ const CIVIL_CLOTH = {
     ...base,
     ...undress,
     clothTint: CIVIL_CLOTH.unarmed,
-    gearTint: [0.78, 0.74, 0.68],
-    skinTint: [0.96, 0.88, 0.80],
+    // his belt and shoes are the only dark things on him, which is what stops
+    // the pale shirt reading as a single flat slab
+    gearTint: [0.92, 0.84, 0.68],
+    skinTint: [1.00, 0.90, 0.80],
     // BARE. No wrap over the head, nothing across the face, nothing in either
     // hand — this is the man the score penalty is about and he must never be
     // mistaken for the one beside him.
