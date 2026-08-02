@@ -77,28 +77,86 @@ import { gunRangeGain } from './spatial.js';
  * 2584, ak 2578, shotgun 2629, smg 2701, lmg 2728, rifle 2747 Hz — a 9% spread
  * across a 9 mm and a .338. The profiles differed everywhere except in the one
  * layer that arrives first and loudest.
+ *
+ * ───────────────────────────────────────────────────────────────────────────
+ * `subLevel`/`bodyLevel`/`crackLevel`/`midLevel`/`tailLevel` — THE BALANCE, and
+ * they are the third cause: 「メイン武器ごとの銃声のユニークさがない」.
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ * Everything above tunes each layer's PITCH and LENGTH per weapon. What no
+ * weapon could express until now is which layer it is MOSTLY MADE OF, because
+ * the seven layer levels were fixed constants times one global `level` trim.
+ * Every gun in the game therefore had the same silhouette — the same crack-led
+ * envelope with the same proportion of sub under it and the same proportion of
+ * tail after it — differing only in where each layer sat. That is audible as
+ * "they are all the same shot at different pitches", which is what he is
+ * describing, and it is exactly what a real rack does NOT do: an AK is a body
+ * you feel with a crack on top, an MP-X is nearly all crack and action noise
+ * with no bottom at all, a .338 is a tail with a report in front of it, and a
+ * belt gun is a wall of low end.
+ *
+ * These are multipliers on the shared constants, default 1, so a profile that
+ * does not set one is bit-identical to before. They stack with `level`.
+ *
+ *              sub   body  crack  mid   tail    the sentence it makes
+ *   rifle      0.80  0.95  1.12   0.90  0.85    tight, crack-led, dry
+ *   ak         1.10  1.22  0.92   1.16  1.00    thump first, crack second
+ *   smg        0.45  0.80  1.15   0.75  0.70    all snap and action
+ *   sniper     1.35  1.15  0.95   1.05  1.45    a report, then the county
+ *   lmg        1.45  1.30  1.00   1.15  1.35    the heaviest thing out there
+ *
+ * `mechThump` IS ALSO NEW and it is the other half of "heavy": a reciprocating
+ * mass arriving at the end of its travel is a low knock, not a metallic tick,
+ * and the resonator layer could only produce the tick. It is a close-range
+ * detail (it lives inside the existing `dist < 14` mech gate) and it is what a
+ * belt gun's carrier, a bolt gun's lugs and an AK's slab of steel sound like
+ * when they stop.
  */
 export const WEAPON_PROFILES = {
+  /**
+   * M4A1, 5.56, 800 rpm. THE REFERENCE, and the one that must stay recognisable
+   * as what the mix was staged against — so its numbers are untouched except
+   * for the balance, which tightens it: less bottom, less tail, more crack. A
+   * carbine's identity is that it is FAST and DRY next to everything else here.
+   */
   rifle: {
     level: 1.0, bodyF: 148, bodyF2: 56, bodyDecay: 0.085, subF: 62, subDecay: 0.12,
     crackF: 2450, crackQ: 0.95, crackDecay: 0.055, drive: 6, asym: 0.35,
-    midF: 780, midDecay: 0.05, tailDecay: 0.3, tailF: 5200, tailEndF: 700,
+    midF: 780, midDecay: 0.05, tailDecay: 0.27, tailF: 5200, tailEndF: 700,
     mechDelay: 0.028, mechLevel: 0.42, mechPartials: [1880, 3260, 5400], send: 0.16,
     transF: 2600, transPk: 6200, transTop: 9500, transLevel: 0.9, clickF: 1750,
+    subLevel: 0.8, bodyLevel: 0.95, crackLevel: 1.12, midLevel: 0.9, tailLevel: 0.85,
   },
+  /**
+   * AKM, 7.62x39, 600 rpm. The opposite reading of the same job: a heavier,
+   * slower bullet out of a shorter barrel, and a receiver made of stamped steel
+   * with a very audible slab of a carrier in it. Body-led, and the ACTION is
+   * part of the sound rather than a detail under it — hence the mech level and
+   * the thump. At 600 rpm you hear the individual mechanism between rounds.
+   */
   ak: {
     level: 1.1, bodyF: 124, bodyF2: 46, bodyDecay: 0.105, subF: 52, subDecay: 0.15,
     crackF: 1680, crackQ: 0.9, crackDecay: 0.07, drive: 7.5, asym: 0.5,
     midF: 640, midDecay: 0.06, tailDecay: 0.42, tailF: 4200, tailEndF: 560,
-    mechDelay: 0.034, mechLevel: 0.55, mechPartials: [1420, 2650, 4300], send: 0.18,
+    mechDelay: 0.034, mechLevel: 0.72, mechPartials: [1420, 2650, 4300], send: 0.18,
     transF: 1780, transPk: 4200, transTop: 6500, transLevel: 0.96, clickF: 1150,
+    subLevel: 1.1, bodyLevel: 1.22, crackLevel: 0.92, midLevel: 1.16, tailLevel: 1.0,
+    mechThump: { f: 126, level: 0.34, decay: 0.05 },
   },
+  /**
+   * MPX-9, 9 mm, 950 rpm. The smallest primary: a short barrel with nothing
+   * under it, and at 950 rpm the ear mostly integrates the ACTION into one
+   * mechanical stutter. Almost no sub on purpose — that absence is the
+   * identity, and it is what tells you across the map that the man is carrying
+   * the SMG and not the carbine.
+   */
   smg: {
     level: 0.84, bodyF: 172, bodyF2: 72, bodyDecay: 0.06, subF: 78, subDecay: 0.08,
     crackF: 3350, crackQ: 1.05, crackDecay: 0.04, drive: 5, asym: 0.3,
-    midF: 900, midDecay: 0.035, tailDecay: 0.19, tailF: 6200, tailEndF: 900,
-    mechDelay: 0.021, mechLevel: 0.5, mechPartials: [2200, 3900, 6300], send: 0.13,
+    midF: 900, midDecay: 0.035, tailDecay: 0.17, tailF: 6200, tailEndF: 900,
+    mechDelay: 0.021, mechLevel: 0.64, mechPartials: [2200, 3900, 6300], send: 0.13,
     transF: 4400, transPk: 9800, transTop: 17000, transLevel: 0.8, clickF: 2600,
+    subLevel: 0.45, bodyLevel: 0.8, crackLevel: 1.15, midLevel: 0.75, tailLevel: 0.7,
   },
   pistol: {
     level: 0.74, bodyF: 186, bodyF2: 84, bodyDecay: 0.05, subF: 92, subDecay: 0.07,
@@ -115,19 +173,73 @@ export const WEAPON_PROFILES = {
     transF: 1450, transPk: 3400, transTop: 5800, transLevel: 1.0, clickF: 900,
     pellets: 6,
   },
+  /**
+   * M91-SR, bolt-action .338, 48 rpm. One round every 1.25 s, so unlike every
+   * other weapon here it is never a texture — each shot is an EVENT and gets to
+   * own the mix for a second afterwards. Tail-led: the report is the small part
+   * and the county answering is the big one. The bolt is worked between rounds
+   * and its thump is slow, heavy and late (`mechDelay` 0.19).
+   */
   sniper: {
     level: 1.3, bodyF: 96, bodyF2: 34, bodyDecay: 0.16, subF: 38, subDecay: 0.24,
     crackF: 1320, crackQ: 0.8, crackDecay: 0.11, drive: 10, asym: 0.55,
-    midF: 470, midDecay: 0.1, tailDecay: 0.95, tailF: 3300, tailEndF: 380,
+    midF: 470, midDecay: 0.1, tailDecay: 1.25, tailF: 3300, tailEndF: 380,
     mechDelay: 0.19, mechLevel: 0.65, mechPartials: [1150, 2050, 3400], send: 0.24,
     transF: 1250, transPk: 2900, transTop: 5200, transLevel: 1.05, clickF: 780,
+    subLevel: 1.35, bodyLevel: 1.15, crackLevel: 0.95, midLevel: 1.05, tailLevel: 1.45,
+    mechThump: { f: 88, level: 0.4, decay: 0.075 },
   },
+  /**
+   * ════════════════════════════════════════════════════════════════════════
+   * MK-46, belt-fed, 750 rpm — 「LMGは、もっと重厚な音だと思うし」.
+   * ════════════════════════════════════════════════════════════════════════
+   *
+   * THE HEAVIEST THING ON THE FIELD, and it was not: the old profile sat
+   * between the rifle and the AK on every axis that carries weight (crack
+   * 2250 Hz against the AK's 1680, sub 44 Hz against the AK's 52, body 118 Hz
+   * against 124) and only won on `level`, which is loudness, not mass. A gun
+   * that is merely 2 dB louder than the carbine reads as the carbine.
+   *
+   * Everything that says "heavy" moved DOWN and everything that says "big"
+   * moved LONGER:
+   *
+   *                    was      now
+   *   bodyF           118      104     the thump you feel
+   *   bodyDecay      0.135    0.175    and it holds instead of snapping
+   *   subF             44       36     under the AK, under everything
+   *   subDecay       0.22     0.32
+   *   crackF         2250     2050     darker than the carbine, above the AK
+   *   tailDecay      0.72     1.05     a long barrel and a lot of gas
+   *   tailF/EndF   4000/520 3500/420
+   *   transF/Top   2500/9200 2150/7600 the pressure step of a bigger port
+   *   mechPartials  1330..    880..    a carrier made of considerably more steel
+   *   mechLevel      0.6      0.85
+   *
+   * plus `mechThump` at 82 Hz — the belt-fed detail. At 750 rpm with a bot
+   * holding the trigger down that knock lands every 80 ms and is what turns a
+   * stream of reports into a MACHINE running. It is the single most identifying
+   * thing about this weapon and nothing else on the rack has it this low.
+   *
+   * `send` goes DOWN, 0.19 -> 0.17: the weight is the gun, not the room. Making
+   * a heavy weapon wetter is the mistake this file's history is made of.
+   *
+   * WHAT THE LONGER TAIL COSTS THE POOL, because the bots are about to fire
+   * roughly three times as often: nothing that scales with the bots. The near
+   * path is gated at ten shots a second GLOBALLY (`_rate.shot` in index.js), so
+   * the weapons bus's bill is rate x voice life however many men are shooting —
+   * 1.42 s at close range here against 0.99 s before, i.e. ~14 of its 32
+   * entitled slots in the worst case where every one of those ten shots a
+   * second is an MK-46. That fits, and it is the reason the tail could be
+   * lengthened at all.
+   */
   lmg: {
-    level: 1.22, bodyF: 118, bodyF2: 44, bodyDecay: 0.135, subF: 44, subDecay: 0.22,
-    crackF: 2250, crackQ: 0.85, crackDecay: 0.085, drive: 8, asym: 0.45,
-    midF: 610, midDecay: 0.065, tailDecay: 0.72, tailF: 4000, tailEndF: 520,
-    mechDelay: 0.03, mechLevel: 0.6, mechPartials: [1330, 2480, 4100], send: 0.19,
-    transF: 2500, transPk: 5900, transTop: 9200, transLevel: 0.99, clickF: 1680,
+    level: 1.32, bodyF: 104, bodyF2: 38, bodyDecay: 0.175, subF: 36, subDecay: 0.32,
+    crackF: 2050, crackQ: 0.85, crackDecay: 0.095, drive: 8.5, asym: 0.5,
+    midF: 560, midDecay: 0.08, tailDecay: 1.05, tailF: 3500, tailEndF: 420,
+    mechDelay: 0.026, mechLevel: 0.85, mechPartials: [880, 1680, 2950], send: 0.17,
+    transF: 2150, transPk: 5000, transTop: 7600, transLevel: 1.05, clickF: 1380,
+    subLevel: 1.45, bodyLevel: 1.3, crackLevel: 1.0, midLevel: 1.15, tailLevel: 1.35,
+    mechThump: { f: 82, level: 0.52, decay: 0.085 },
   },
   /**
    * ADDITIVE ONLY — two sidearm profiles for the weapons roster's new
@@ -298,7 +410,9 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
 
   /* ---- 2. body + sub -------------------------------------------- */
   {
-    const bodyLevel = (0.85 + far * 0.5) * jL * profile.level;
+    // @see the BALANCE block on WEAPON_PROFILES — these five multipliers are
+    // what lets a weapon say which layer it is mostly made of. Default 1.
+    const bodyLevel = (0.85 + far * 0.5) * jL * profile.level * (profile.bodyLevel ?? 1);
     const b1 = osc(actx, 'sine', profile.bodyF * jB);
     const b2 = osc(actx, 'triangle', profile.bodyF * jB * 0.5);
     const bg = gain(actx, 0);
@@ -319,7 +433,8 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
     const sg = gain(actx, 0);
     s.connect(sg); sg.connect(out);
     sweep(s.frequency, t0, profile.subF * jB * 1.5, profile.subF * jB * 0.8, profile.subDecay);
-    ad(sg.gain, t0, (0.5 + far * 0.55) * profile.level, 0.004, profile.subDecay * 1.3);
+    ad(sg.gain, t0, (0.5 + far * 0.55) * profile.level * (profile.subLevel ?? 1),
+      0.004, profile.subDecay * 1.3);
     s.start(t0); s.stop(t0 + profile.subDecay * 2 + 0.05);
     end = Math.max(end, t0 + profile.subDecay * 2 + 0.05);
   }
@@ -361,7 +476,8 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
     series(src, bp, res, drv, top, cg).connect(out);
     // The crack's own band sweeps down a little: the shock front decays.
     sweep(bp.frequency, t0, profile.crackF * jC * 1.35, profile.crackF * jC * 0.8, profile.crackDecay * 2);
-    ad(cg.gain, t0, 1.05 * nearP * jL * profile.level, 0.0015, profile.crackDecay * rng.range(0.85, 1.2));
+    ad(cg.gain, t0, 1.05 * nearP * jL * profile.level * (profile.crackLevel ?? 1),
+      0.0015, profile.crackDecay * rng.range(0.85, 1.2));
     src.start(t0, src._offset, profile.crackDecay * 3 + 0.05);
     end = Math.max(end, t0 + profile.crackDecay * 3);
   }
@@ -372,7 +488,8 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
     const bp = biquad(actx, 'bandpass', profile.midF * v.mid, 1.1);
     const mg = gain(actx, 0);
     series(src, bp, mg).connect(out);
-    ad(mg.gain, t0, (0.5 + far * 0.35) * jL * profile.level, 0.002, profile.midDecay * 1.4);
+    ad(mg.gain, t0, (0.5 + far * 0.35) * jL * profile.level * (profile.midLevel ?? 1),
+      0.002, profile.midDecay * 1.4);
     src.start(t0, src._offset, profile.midDecay * 4 + 0.05);
   }
 
@@ -385,7 +502,8 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
     const tg = gain(actx, 0);
     series(src, hp, lp, tg).connect(out);
     sweep(lp.frequency, t0, profile.tailF * lerp(1, 0.35, far), profile.tailEndF * lerp(1, 0.6, far), tailDur);
-    ad(tg.gain, t0, (0.42 + far * 0.5) * jL * profile.level, 0.006, tailDur);
+    ad(tg.gain, t0, (0.42 + far * 0.5) * jL * profile.level * (profile.tailLevel ?? 1),
+      0.006, tailDur);
     src.start(t0, src._offset, tailDur * 1.3 + 0.05);
     end = Math.max(end, t0 + tailDur * 1.3);
   }
@@ -417,6 +535,28 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
     ad(hg.gain, t0 + md * 0.6, 0.12 * lvl, 0.006, 0.05);
     hs.start(t0 + md * 0.6, hs._offset, 0.12);
     end = Math.max(end, t0 + md * 2.1 + 0.1);
+
+    /* ---- 6b. the mass, not the metal --------------------------------
+     * A reciprocating carrier reaching the end of its travel is a KNOCK. The
+     * resonator above is bandpassed noise at 0.9-6 kHz and can only produce the
+     * tick of the lugs; the thump of the steel arriving is an octave below
+     * anything in it, and its absence is why a belt gun and a carbine had the
+     * same mechanical weight. Two nodes, only on profiles that declare a mass
+     * worth hearing. @see WEAPON_PROFILES.lmg
+     */
+    if (profile.mechThump) {
+      const m = profile.mechThump;
+      const f0 = m.f * rng.range(0.94, 1.07);
+      const kn = osc(actx, 'sine', f0);
+      const kg = gain(actx, 0);
+      kn.connect(kg); kg.connect(out);
+      sweep(kn.frequency, t0 + md, f0 * 1.3, f0 * 0.78, m.decay * 1.6);
+      ad(kg.gain, t0 + md, m.level * lvl * profile.level, 0.0018,
+        m.decay * rng.range(0.9, 1.2));
+      const kEnd = t0 + md + m.decay * 2.4 + 0.03;
+      kn.start(t0 + md); kn.stop(kEnd);
+      end = Math.max(end, kEnd);
+    }
   }
 
   /* ---- 7. distant rolling boom ---------------------------------- */
