@@ -49,10 +49,22 @@ for (const SEED of SEEDS) {
      * killed was killed inside a hundred. Watching to the score target trebles
      * the wall clock and adds nothing to "did it survive".
      */
+    /**
+     * FIRED BY HAND, forty game-seconds in — the same thing `_tanklife.mjs`
+     * does and for the same reason. `MatchSystem` arms the armour on the
+     * CATHEDRAL coming down (`RULES.tankAfterCathedral`), which on this map is
+     * later than any window a headless probe can afford: a first pass that
+     * simply watched reported both hulls "SURVIVED 0 s" because neither had
+     * ever left its pocket. Forty seconds is enough that the lanes are
+     * populated and the men are forward, which is what the hull has to survive.
+     */
     const start = performance.now();
-    const until = m.roundClock - 220;
+    const fireAt = m.roundClock - 40;
+    const until = m.roundClock - 240;
+    let fired = false;
     while (performance.now() - start < 900000) {
       await new Promise((r) => requestAnimationFrame(r));
+      if (!fired && m.roundClock <= fireAt) { fired = true; armour.fire(); }
       if (m.phase !== 'live' || m.roundClock <= until) break;
       for (const t of armour.tanks) {
         const p = per[t.id];
