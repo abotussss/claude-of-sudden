@@ -690,13 +690,50 @@ export const RULES = {
    *
    * HEALTH IS AGAINST THE ARMOUR TABLE, NOT AGAINST A RIFLE. `PART_MUL` in
    * tank.js is 0.22 on the glacis, 0.4 on the turret and 1.7 on the engine deck,
-   * so at 2600 a 34-damage rifle round takes ~348 hits into the front and ~45
-   * into the deck — a magazine and a half from behind kills it, a magazine into
-   * the nose does nothing. A frag (`grenadeDamage` at `EXPLOSION_MUL` 1.35) is
-   * worth ~240 at contact, so three well-placed grenades or one airstrike
-   * (260 × 1.35 = 351 at the centre, and it is a 15 m radius) also does it.
+   * and what a round is really worth is MEASURED by `_tankttk.mjs` against the
+   * real colliders rather than multiplied out of that table.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * 2600 -> 4000 — 「戦車の体力はもっと増やして 簡単に破壊されないように」
+   * ──────────────────────────────────────────────────────────────────────────
+   * AND IT CANNOT MAKE THE HULL INVULNERABLE, WHICH IS WHY IT IS SAFE TO RAISE.
+   * The other half of the player's own brief is 「ただし簡単に壊れたら面白くない」,
+   * and before the infantry could see armour at all three matches in four ended
+   * with neither hull ever destroyed. The reason this number cannot take us back
+   * there is STRUCTURAL rather than tuned: `airMul` and `fragMul` in tank.js are
+   * RATIOS OF THIS FIGURE —
+   *
+   *     airMul  = 2 * tankHealth / damage    a bomb inside half its own blast
+   *                                          radius destroys a full hull
+   *     fragMul = tankHealth / 6 / damage    a frag ON the hull is worth a sixth
+   *
+   * — so a bomb and a squad's grenades cost EXACTLY what they cost at 2600, at
+   * any health this line is ever set to. The only thing raising it moves is the
+   * RIFLE, and the rifle astern is precisely what the player is reacting to:
+   * measured at 2600, the engine deck was 58 M4 rounds, which is A MAGAZINE AND
+   * A HALF, and a bolt gun looking down on it from one of `world.features`'
+   * roof vantages was EIGHT.
+   *
+   * 4000 is derived from that, not picked: 44.83 per M4 round into the deck puts
+   * the deck at THREE FULL MAGAZINES (90 rounds of the 240 a man carries), and
+   * the bolt gun at 13. Measured after the change by `_tankttk.mjs`:
+   *
+   *     M4 into the deck      90 rounds  (3.0 magazines)   was 58
+   *     AKM into the deck     73 rounds  (2.4 magazines)   was 47
+   *     bolt into the deck    13 rounds                    was 8
+   *     M4 into the glacis   687 rounds  — a man carries 240: still not a route
+   *     frags at contact       7                           unchanged, by ratio
+   *     one bomb at half its radius   a kill               unchanged, by ratio
+   *
+   * IF `Armour.oneWoundPerRound` IS EVER TURNED ON, THIS NUMBER MUST COME BACK
+   * DOWN. A penetrating round is currently counted at both faces of the collider
+   * box, so the astern deck's EFFECTIVE multiplier is 3.49 against the 1.70 in
+   * the table. Switching that boolean multiplies deck damage by 1.70/3.49 =
+   * 0.487, which is another health rise of the same size on top of this one — so
+   * the figure that keeps the deck at three magazines would be 4000 x 0.487, or
+   * about 2000. That decision is the player's and the boolean stays false.
    */
-  tankHealth: 2600,
+  tankHealth: 4000,
   /**
    * What killing one is worth to the side that did it, in DOMINATION points.
    *
