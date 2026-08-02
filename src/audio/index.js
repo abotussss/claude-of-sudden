@@ -1436,8 +1436,23 @@ export class AudioSystem {
      */
     const occ = this.field.occlusionAt(pos.x, pos.y, pos.z) *
       clamp(0.55 - radius / 34, 0.12, 0.5);
+    /**
+     * NO `send` OVERRIDE — the explosion's own send must be the one that plays.
+     *
+     * This used to pass `send: 1.0`, and `hold()` prefers the caller's send over
+     * the voice's (`o.send ?? voice.send`), so the third reverb pass — which
+     * moved the blast's tail INTO the synthesis precisely so its send could be
+     * closed from 0.85–1.35 to 0.26–0.56 — never actually applied on the live
+     * path. Every blast in the game sent at 1.0 into the convolvers, and then
+     * `_applySend` multiplied that by its distance and occlusion terms: a 90 m
+     * detonation was sending at ~2.5. The loudest events in the match being the
+     * wettest is 「またリバーブが強いので」 in one number. With the override gone
+     * the voice's authored 0.26–0.56 carries, exactly as the airstrike voices
+     * already do; the blast's LENGTH is unchanged because the roll is
+     * synthesised, not convolved.
+     */
     this._playAt('explosion', pos.x, pos.y, pos.z, {
-      radius, level, send: 1.0, gain: blastRangeGain(dist, radius), occlusion: occ,
+      radius, level, gain: blastRangeGain(dist, radius), occlusion: occ,
     }, 'weapons', 1);
     this.mixer.duck(clamp(0.8 + radius / 90, 0.8, 0.95), 0.35);
     // Concussion reaches as far as the blast does, rather than a fixed 22 m.

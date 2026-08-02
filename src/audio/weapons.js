@@ -129,6 +129,34 @@ export const WEAPON_PROFILES = {
     mechDelay: 0.03, mechLevel: 0.6, mechPartials: [1330, 2480, 4100], send: 0.19,
     transF: 2500, transPk: 5900, transTop: 9200, transLevel: 0.99, clickF: 1680,
   },
+  /**
+   * ADDITIVE ONLY — two sidearm profiles for the weapons roster's new
+   * handguns. Selected by the def's `audio` key ('magnum' / 'machinepistol'),
+   * which `_onFire` reads before the id, so no resolver regex changes.
+   *
+   * magnum: a .44 out of a 6" barrel is a shotgun-family BOOM, not a 9 mm
+   * snap — low corner (1.5 kHz), heavy drive, a real tail, and almost no mech
+   * layer because a revolver has no cycling action to hear.
+   */
+  magnum: {
+    level: 1.05, bodyF: 112, bodyF2: 42, bodyDecay: 0.11, subF: 46, subDecay: 0.16,
+    crackF: 1550, crackQ: 0.75, crackDecay: 0.08, drive: 8.5, asym: 0.55,
+    midF: 560, midDecay: 0.07, tailDecay: 0.45, tailF: 3800, tailEndF: 500,
+    mechDelay: 0.05, mechLevel: 0.25, mechPartials: [1200, 2300, 3800], send: 0.2,
+    transF: 1550, transPk: 3600, transTop: 6200, transLevel: 1.0, clickF: 950,
+  },
+  /**
+   * machinepistol: the opposite pole — the smallest, brightest report in the
+   * set (a 108 mm barrel, corner at 4.8 kHz) with a LOUD mech layer arriving
+   * 16 ms in: at 1050 rpm what you mostly hear is the tiny slide hammering.
+   */
+  machinepistol: {
+    level: 0.7, bodyF: 195, bodyF2: 90, bodyDecay: 0.042, subF: 100, subDecay: 0.06,
+    crackF: 3600, crackQ: 1.2, crackDecay: 0.03, drive: 4.2, asym: 0.26,
+    midF: 1050, midDecay: 0.028, tailDecay: 0.13, tailF: 7400, tailEndF: 1100,
+    mechDelay: 0.016, mechLevel: 0.6, mechPartials: [2700, 4600, 7400], send: 0.11,
+    transF: 4800, transPk: 10500, transTop: 17500, transLevel: 0.75, clickF: 2900,
+  },
   suppressed: {
     level: 0.5, bodyF: 132, bodyF2: 64, bodyDecay: 0.055, subF: 70, subDecay: 0.07,
     crackF: 900, crackQ: 0.6, crackDecay: 0.03, drive: 2.5, asym: 0.2,

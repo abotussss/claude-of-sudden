@@ -537,8 +537,23 @@ if (args.ear) {
     hp.frequency.value = 2000;
     hp.Q.value = 0.7;
     a.mixer.masterGain.connect(hp);
+    /**
+     * A SECOND BAND AT 700 Hz, because the footstep timbre claim lives between
+     * the two: a leather heel's body is the 92 Hz thud, its "lightness" is the
+     * texture/kit content from ~700 Hz up. The occlusion response moved from a
+     * 420 Hz low-pass to 2.1 kHz, which `hf` (>2 kHz) alone under-reads —
+     * everything between 700 Hz and 2 kHz that the old filter removed and the
+     * new one passes is invisible to it. `mf`/`hf` together are the coarse
+     * spectrum a timbre before/after needs.
+     */
+    const hpMid = actx.createBiquadFilter();
+    hpMid.type = 'highpass';
+    hpMid.frequency.value = 700;
+    hpMid.Q.value = 0.7;
+    a.mixer.masterGain.connect(hpMid);
     const rec = {
       out: mkRec(a.mixer.masterGain), world: mkRec(a.mixer.worldSum), bright: mkRec(hp),
+      mid: mkRec(hpMid),
     };
 
     // Every emitter the field hands out during a capture, with the two numbers
@@ -621,13 +636,15 @@ if (args.ear) {
       },
       stop() {
         for (const k in rec) rec[k].on = false;
-        const o = rec.out, w = rec.world, b = rec.bright;
+        const o = rec.out, w = rec.world, b = rec.bright, m = rec.mid;
         const orms = Math.sqrt(o.sumSq / Math.max(1, o.n));
         const brms = Math.sqrt(b.sumSq / Math.max(1, b.n));
+        const mrms = Math.sqrt(m.sumSq / Math.max(1, m.n));
         return {
           peak: +o.peak.toFixed(5),
           rms: +orms.toFixed(6),
           hf: +(brms / Math.max(orms, 1e-9)).toFixed(3),
+          mf: +(mrms / Math.max(orms, 1e-9)).toFixed(3),
           worldPeak: +w.peak.toFixed(5),
           samples: o.n,
           grabs: grabs.slice(0, 12),
@@ -676,9 +693,29 @@ if (args.ear) {
         const p = this.at(dist, b);
         p.y = a.field.listenerPos.y - 1.6;
         const lvl = 0.45 + 0.35 * Math.max(0, Math.min(1, dist / 40));
+        // `tag: 'step'` because the live path (`BattleLayer._step`) tags every
+        // remote footfall; anything in `acquire` keyed on the tag must be
+        // exercised here or this control measures a path the game never takes.
         return a._playAt('step', p.x, p.y, p.z, {
           surface: 'concrete', gait: 'walk', level: lvl, gear: 0.22, occlusion: occ,
+          tag: 'step',
         }, 'foley', 0.28);
+      },
+      /**
+       * THE PLAYER'S OWN BOOT, exactly as `_onFootstep` classifies and plays it:
+       * the real event, the real payload shape (src/player/index.js), so the
+       * `own` branch (level 1.05, gear 0.45/0.9, occlusion 0, priority 0.99) is
+       * what renders. The timbre complaint (「革靴っぽい音に戻して」) needs this
+       * measured separately from a remote step — they take different levels,
+       * different gear and a different occlusion path.
+       */
+      stepOwn(running = true) {
+        const lp = a.field.listenerPos;
+        e.ctx.events.emit('player:footstep', {
+          position: { x: lp.x, y: lp.y - 1.6, z: lp.z },
+          surface: 'concrete', running, left: true,
+          speed: running ? 5.6 : 3.0, stance: 'stand',
+        });
       },
       blast(dist, radius) {
         const p = this.at(dist, 0);
@@ -854,21 +891,36 @@ if (args.ear) {
       () => page.evaluate(() => window.__EAR__.blast(12, 15)), 3.0);
     await runCase(`blast r15 @35m${sfx}`,
       () => page.evaluate(() => window.__EAR__.blast(35, 15)), 3.0);
+    // 「爆撃や銃撃、グレネードの爆破音は遠くても聞こえるように」 — the far half of
+    // that sentence, which no case measured: a charge at 100 and at 200 m
+    // against the ambience bed. 200 m is the far corner of the map plus air.
+    await runCase(`blast r15 @100m${sfx}`,
+      () => page.evaluate(() => window.__EAR__.blast(100, 15)), 3.0);
+    await runCase(`blast r15 @200m${sfx}`,
+      () => page.evaluate(() => window.__EAR__.blast(200, 15)), 3.0);
     await runCase(`grenade r6 @10m${sfx}`,
       () => page.evaluate(() => window.__EAR__.blast(10, 6)), 2.5);
+    await runCase(`grenade r6 @80m${sfx}`,
+      () => page.evaluate(() => window.__EAR__.blast(80, 6)), 2.5);
     // The wall, isolated: identical voice and gain, occlusion 0 against 1.
     for (const occ of [0, 1]) {
       await runCase(`shot @40m occ=${occ}${sfx}`,
         (b) => page.evaluate(([dd, bb, oo]) => window.__EAR__.forced(dd, bb, oo), [40, b, occ]), 1.6);
     }
-    for (const [d, occ] of [[8, 0], [20, 0], [20, 1], [40, 0]]) {
+    // The player's own boot — the head-adjacent step the timbre report is
+    // about. `mf`/`hf` are its coarse spectrum; the level must not move.
+    await runCase(`step own walk${sfx}`,
+      () => page.evaluate(() => window.__EAR__.stepOwn(false)), 1.2);
+    await runCase(`step own run${sfx}`,
+      () => page.evaluate(() => window.__EAR__.stepOwn(true)), 1.2);
+    for (const [d, occ] of [[8, 0], [12, 0.9], [20, 0], [20, 1], [40, 0]]) {
       await runCase(`step @${d}m occ=${occ}${sfx}`,
         (b) => page.evaluate(([dd, bb, oo]) => window.__EAR__.step(dd, bb, oo), [d, b, occ]), 1.2);
     }
   }
 
   console.log('\n[ear] AT THE OUTPUT — one event at a time, simulation frozen');
-  console.log('  label                        outPeak    vs own     hf>2k   emitter dist/occ/gain');
+  console.log('  label                        outPeak    vs own     mf>700  hf>2k   emitter dist/occ/gain');
   // The reference is THIS BLOCK's own rifle, not the run's. Both blocks fire the
   // same head-locked shot and `occlusionEnabled` cannot touch it, so any gap
   // between the two is measurement error — and it belongs to the block it was
@@ -880,7 +932,7 @@ if (args.ear) {
     const g = c.grabs.filter((x) => x.bus === 'weapons').slice(0, 2)
       .map((x) => (x.refused ? 'REFUSED' : `${x.dist}m occ${x.occ} x${x.ug} g${x.g}`)).join(' ; ');
     console.log(
-      `  ${c.label.padEnd(26)} ${c.peak.toFixed(5)}  ${rel.padStart(8)}   ${String(c.hf).padStart(5)}   ${g}`
+      `  ${c.label.padEnd(26)} ${c.peak.toFixed(5)}  ${rel.padStart(8)}   ${String(c.mf ?? '-').padStart(5)}  ${String(c.hf).padStart(5)}   ${g}`
     );
   }
   // The control's own scatter, so the table can be read with the right number of
@@ -1362,10 +1414,21 @@ if (args.battle) {
       const f = a.field;
       if (!f) return;
       const bus = { weapons: 0, foley: 0, voice: 0, ambience: 0, ui: 0 };
+      /**
+       * THE REVERB SEND, PER BUS, AS THE GRAPH IS ACTUALLY RUNNING IT. The
+       * `sendGain` on each live emitter is the one gain between every
+       * spatialised voice and the convolvers, after `_applySend`'s distance and
+       * occlusion terms — so its per-bus sum over a match is the honest
+       * "how much reverb is each category feeding" number, and a reverb cut
+       * has to move it without moving foley's near-field share (the player
+       * likes his own boots' reverb as it is).
+       */
+      const snd = { weapons: 0, foley: 0, voice: 0, ambience: 0 };
       let tracked = 0;
       for (const em of f.emitters) {
         if (em.free) continue;
         bus[em.busName] = (bus[em.busName] ?? 0) + 1;
+        if (em.busName in snd) snd[em.busName] += em.sendGain.gain.value;
         if (em.tracked) tracked++;
       }
       const m = e.ctx.peek('match');
@@ -1376,6 +1439,8 @@ if (args.battle) {
         state: a.actx?.state ?? 'none',
         act: f.stats.active, cap: f.stats.cap,
         wpn: bus.weapons, fol: bus.foley, voi: bus.voice, amb: bus.ambience, trk: tracked,
+        sw: +snd.weapons.toFixed(3), sf: +snd.foley.toFixed(3),
+        sv: +snd.voice.toFixed(3), sa: +snd.ambience.toFixed(3),
         deficit: +f.stats.deficit.toFixed(3),
         behind: +f.stats.behind.toFixed(3),
         dropped: f.stats.dropped, stolen: f.stats.stolen, expired: f.stats.expired,
@@ -1469,6 +1534,37 @@ if (args.battle) {
   console.log(`\n  voices stolen ${num(last.stolen)}   dropped ${num(last.dropped)}   expired-early ${num(last.expired)}   errors ${num(last.errors)}`);
   console.log(`  weapon:fire offered over ${secs.toFixed(0)}s of game — ${JSON.stringify(last.fires)}`);
   if (last.bat) console.log(`  battle layers played — ${JSON.stringify(last.bat)}`);
+  /**
+   * THE NUMBER THE THIRD GUNFIRE COMPLAINT IS ABOUT. Three passes fixed real
+   * admission bugs and the player still hears a quiet war, so the honest
+   * statistic is DENSITY from his seat: how many distinct remote-fire events
+   * per minute of game time actually rendered. `farVoices` is one audible
+   * burst each (its rounds are scheduled inside the voice); near remote shots
+   * are counted from the offered split net of the >60 m band the far layer
+   * owns. If a 40-man battle yields single digits here, no level tweak fixes
+   * the feeling — that is the claim under test.
+   */
+  {
+    const b0 = warm[0]?.bat, b1 = last.bat, f0 = warm[0]?.fires, f1 = last.fires;
+    if (b0 && b1) {
+      const mins = Math.max(0.01, secs / 60);
+      const farPerMin = (num(b1.farVoices) - num(b0.farVoices)) / mins;
+      const roundsPerMin = (num(b1.farRounds) - num(b0.farRounds)) / mins;
+      const stepsPerMin = (num(b1.steps) - num(b0.steps)) / mins;
+      const offered = f0 && f1
+        ? (num(f1.far) + num(f1.beyond) - num(f0.far) - num(f0.beyond)) / mins : NaN;
+      console.log('\n[audiotest] REMOTE-FIRE DENSITY, from the player\'s ear (steady state)');
+      console.log(`  far-fire voices rendered   ${farPerMin.toFixed(1)} /min   (${roundsPerMin.toFixed(0)} rounds/min)`);
+      console.log(`  far shots offered          ${Number.isFinite(offered) ? offered.toFixed(0) : '-'} /min`);
+      console.log(`  remote footfalls rendered  ${stepsPerMin.toFixed(1)} /min`);
+    }
+  }
+  {
+    const s = (k) => stat(k);
+    const sw = s('sw'), sf = s('sf'), sv = s('sv'), sa = s('sa');
+    console.log('[audiotest] REVERB SEND per bus (sum of live sendGain values, mean/p95)');
+    console.log(`  weapons ${sw.mean}/${sw.p95}   foley ${sf.mean}/${sf.p95}   voice ${sv.mean}/${sv.p95}   ambience ${sa.mean}/${sa.p95}`);
+  }
   if (last.wd) console.log(`  watchdog (all should be 0 in a healthy match) — ${JSON.stringify(last.wd)}`);
   console.log('\n[audiotest] final', JSON.stringify(await sampleOrNull(page)));
   console.log('[audiotest] page errors', pageErrors.slice(0, 8));

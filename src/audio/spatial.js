@@ -225,6 +225,38 @@ export function occlusionFilter(occ, dist) {
   };
 }
 
+/**
+ * FOOTSTEPS KEEP THE OLD WALL — 「足音がなんか軽くなった？前みたいな革靴の音っぽく
+ * なくなってる 革靴っぽい音に戻して」.
+ *
+ * The softening above was aimed at gunfire and it stated "remote footsteps do
+ * not move" — but that was proven with a LEVEL measurement (±0.5 dB at
+ * 8/20/40 m) and the filter is not a level. The footstep synthesis has not
+ * changed since the first commit and neither has the own-step path; what
+ * changed is that a footfall behind geometry used to render through a 420 Hz
+ * low-pass — nothing left but the 92 Hz heel thud, which reads as a heavy
+ * leather boot — and after the softening renders through ~2.6 kHz, which lets
+ * the texture band, the scuff and the kit jingle through: the same step, now
+ * "light". The occlusion census says this is nearly every remote step there is
+ * (foley voices measured 97% fully occluded on this map).
+ *
+ * The physics argument that justified softening gunfire does not apply here: a
+ * rifle report two streets over is a 160 dB impulse whose flanking paths carry
+ * real information, and a boot is a 60 dB tap that does not survive the trip
+ * over the roof at all — what you hear of a step behind a wall really is only
+ * the structure-borne low end. So the step keeps the pre-softening response,
+ * exactly as it was (420 Hz / −26 dB at a full block), and the LEVEL term in
+ * `acquire` stays shared and untouched, because the level was tuned on request
+ * (−5.7 dB near / −2.0 dB far) and 「敵味方の足音は今の音響くらいで良いです」 says
+ * it is now right.
+ */
+export function stepOcclusionFilter(occ) {
+  return {
+    lp: clamp(20000 * Math.pow(0.021, occ), 300, 20000),
+    shelf: -26 * occ,
+  };
+}
+
 const nowWall = () =>
   (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
 
@@ -709,8 +741,10 @@ export class SpatialField {
 
     // Air absorption + occlusion filtering. @see occlusionFilter — the level
     // term below is the geometry's; the filtering is no longer a telephone.
+    // Except for footsteps, which keep the dark pre-softening response on
+    // purpose. @see stepOcclusionFilter
     em.airLP.frequency.setValueAtTime(airCutoff(dist), t);
-    const of = occlusionFilter(occ, dist);
+    const of = em.kindTag === 'step' ? stepOcclusionFilter(occ) : occlusionFilter(occ, dist);
     em.occLP.frequency.setValueAtTime(of.lp, t);
     em.occHS.gain.setValueAtTime(of.shelf, t);
     em.distGain.gain.setValueAtTime(clamp(atten * (opts.gain ?? 1), 0, 4), t);
@@ -727,8 +761,30 @@ export class SpatialField {
    * `AudioSystem._playAt`), so the voice's own send character arrives one step
    * later, in `hold`. The arithmetic and the schedule time are unchanged.
    */
+  /**
+   * THE FIFTH REVERB CUT — 「またリバーブが強いのでリバーブは小さくして 自分の足との
+   * リバーブ感は今ので良い」 — and this time it is the SENDS, not the return.
+   *
+   * Four cuts have taken `reverbReturn` 0.9 → 0.09 and the complaint still
+   * stands, which says the remaining wet is not in the one global gain: it is
+   * in the two multipliers below, which grow every spatialised voice's send
+   * with distance (×2.48 at 90 m) and with occlusion (×1.7 at a full block).
+   * The occlusion census says ~90 % of voices in a match sit at occ >= 0.9, so
+   * in practice nearly EVERY remote sound was sending at close to double its
+   * authored character into the convolvers — that is where "still too much
+   * reverb" lives. The distance factor now stops growing at 48 m and the
+   * occlusion boost falls to ×1.25.
+   *
+   * THE SECOND CLAUSE OF HIS SENTENCE IS A CONSTRAINT ON THIS EDIT: the own
+   * step's reverb must not move. His boot renders at ~1.9 m with occlusion 0,
+   * where both changed terms are outside the path — dist < 48 leaves the
+   * distance factor bit-identical and occ = 0 zeroes the boost either way. The
+   * return, the bus trims and the voice's own send are untouched, so the
+   * near-field dry/wet he approved is the same arithmetic to the last bit.
+   * (His own rifle is `_playDry`, head-locked, and never passes through here.)
+   */
   _applySend(em, send) {
-    const v = send * (0.5 + Math.min(em.dist ?? 0, 90) * 0.022) * (1 + (em.occ ?? 0) * 0.7);
+    const v = send * (0.5 + Math.min(em.dist ?? 0, 48) * 0.022) * (1 + (em.occ ?? 0) * 0.25);
     em.sendGain.gain.setValueAtTime(clamp(v, 0, 3), em.startAt ?? this.actx.currentTime);
   }
 
@@ -742,7 +798,7 @@ export class SpatialField {
     const atten = this.attenuation(dist) * (1 - 0.62 * occ);
     em.occ = occ;
     em.dist = dist;
-    const of = occlusionFilter(occ, dist);
+    const of = em.kindTag === 'step' ? stepOcclusionFilter(occ) : occlusionFilter(occ, dist);
     em.airLP.frequency.setTargetAtTime(airCutoff(dist), t, 0.12);
     em.occLP.frequency.setTargetAtTime(of.lp, t, 0.12);
     em.occHS.gain.setTargetAtTime(of.shelf, t, 0.12);

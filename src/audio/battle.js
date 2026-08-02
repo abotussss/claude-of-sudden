@@ -71,9 +71,25 @@ const BINS = 8;
 /** How long a bin may collect before it has to be heard. Longer = laggy. */
 const BIN_WINDOW = 0.34;
 /** Rounds one voice will carry. Past this the bin flushes early. */
-const BIN_ROUNDS = 6;
-/** Voices a second, all bins together. */
-const FAR_RATE = 5;
+const BIN_ROUNDS = 8;
+/**
+ * Voices a second, all bins together. 9, up from 5 — the THIRD round of
+ * 「銃声が全然聞こえない、銃声が方方でなっている感じが戦争です」, and this round the
+ * number under complaint is DENSITY, not level: MEASURED through a live 20v20
+ * with the pool pinned healthy (`--battle --clamp=72`), ~290 far shots a minute
+ * were offered and 11.6 far voices a minute rendered. A battle of forty men was
+ * reaching the player as one distant burst every five seconds; no level tweak
+ * makes that feel like war from every direction. The rate was never the only
+ * gate (see `_updateFar` on refusals) but at 5 it capped a dense fight at well
+ * under one voice per bearing per second. A far voice is ~7 nodes a round on
+ * one emitter, so nine a second is still cheaper than one near `weaponShot`.
+ */
+const FAR_RATE = 9;
+/**
+ * How stale a bin may go while its bus is busy before its rounds are dropped.
+ * @see _updateFar — a refusal used to throw the whole bin away.
+ */
+const BIN_STALE = 1.4;
 /** Nothing past this is worth a slot; `ambience` carries the rest of the war. */
 const FAR_MAX = 230;
 /**
@@ -284,7 +300,23 @@ export class BattleLayer {
       const age = now - this._binT[b];
       if (age < BIN_WINDOW && n < BIN_ROUNDS) continue;
       if (now < this._farNext) return;                 // over rate; keep collecting
-      if (!this._room('weapons', 0.7)) { this._binN[b] = 0; continue; }
+      /**
+       * A REFUSAL NO LONGER EMPTIES THE BIN. It used to (`_binN[b] = 0`), and
+       * MEASURED at a healthy pool that discard was the dominant filter on the
+       * far war, not the rate: the weapons bus rides its own firefight above
+       * the 0.7 share for whole engagements, and every scan that landed there
+       * threw a full bearing's worth of rounds away — ~290 offered a minute
+       * became 11.6 voices a minute. The rounds now WAIT for the bus (they are
+       * four numbers in a bin, they cost nothing), and only rounds older than
+       * `BIN_STALE` are dropped, because a burst replayed a second and a half
+       * late is no longer the battle that is happening. The share rises to
+       * 0.85: the far layer still yields to the fight in front of you, still
+       * fades with the governor's `head`, and still cannot grow the pool.
+       */
+      if (!this._room('weapons', 0.85)) {
+        if (age > BIN_STALE) this._binN[b] = 0;
+        continue;
+      }
       this._binCursor = (b + 1) % BINS;
       this._farNext = now + 1 / FAR_RATE;
       const rounds = Math.min(BIN_ROUNDS, n);
