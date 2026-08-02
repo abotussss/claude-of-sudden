@@ -3,7 +3,7 @@ import { RULES, TEAM_COLOR } from './rules.js';
 
 /**
  * ══════════════════════════════════════════════════════════════════════════
- * THE SUICIDE DRONES — 「ドローンは自爆系のドローンで…１試合に敵味方合わせて３０機」
+ * THE SUICIDE DRONES — 「ドローンは自爆系のドローンで…全部で２０機まで登場」
  * ══════════════════════════════════════════════════════════════════════════
  *
  * A loitering munition. It launches from a side's own base, climbs above the
@@ -43,15 +43,16 @@ import { RULES, TEAM_COLOR } from './rules.js';
  *    in neither `MASK.CHARACTER` nor `MASK.SIGHT`, so a moving object in the
  *    air can never cost anybody a route — with `owner: drone`, so a round that
  *    lands on it arrives as the canonical `damage:dealt` with the shooter
- *    attached and the player gets his hitmarker. 60 HP is three rounds of a
- *    21-damage rifle or one of the bolt gun, against a target the size of a
- *    dinner plate crossing at 10 m/s.
+ *    attached and the player gets his hitmarker. `HEALTH` is 50, which is TWO
+ *    rounds of a 21-damage rifle once the collider's double-count is counted —
+ *    @see the note on that constant — against a target the size of a dinner
+ *    plate crossing at 10 m/s.
  *
- * 3. THE PACING. Thirty is the player's own figure and it is thirty PER MATCH,
- *    both sides, which at `droneLife` 45 s is 2.25 in the air at any moment and
- *    a hard ceiling of `droneMaxAloft` 4. Launches alternate sides so the split
- *    is 15/15 and they are paced on `_matchProgress` rather than the clock —
- *    @see `RULES.droneLaunchPad` for why that is what makes the thirty real.
+ * 3. THE PACING. Twenty PER MATCH, both sides, which at `droneLife` 45 s is 1.5
+ *    in the air at any moment under a ceiling of `droneMaxAloft` 4. Launches
+ *    alternate sides so the split is 10/10 and they are paced on
+ *    `_matchProgress` rather than the clock — @see `BUDGET` for the arithmetic
+ *    and `RULES.droneLaunchPad` for why progress is what makes the twenty real.
  *
  * ──────────────────────────────────────────────────────────────────────────
  * THE BLAST IS A GRENADE'S, THROUGH THE GRENADE'S OWN PATH
@@ -86,6 +87,62 @@ import { RULES, TEAM_COLOR } from './rules.js';
  * `navcheck` and `sitecheck` cannot see it. Nothing here allocates after
  * `build()`.
  */
+
+/**
+ * ══════════════════════════════════════════════════════════════════════════
+ * THE TWO NUMBERS THE PLAYER RE-CUT, AND WHY THEY LIVE HERE
+ * ══════════════════════════════════════════════════════════════════════════
+ * 「体力は５０くらいにしてほしい」「全部で２０機まで登場」
+ *
+ * `RULES.droneHealth` (90) and `RULES.droneBudget` (30) still carry the old
+ * figures, and `src/match/rules.js` is ANOTHER AGENT'S FILE this session — a
+ * two-line edit there is a merge conflict on a 1700-line file for nothing.
+ * Nothing outside this module reads either constant (checked: the only hits in
+ * `src/` are in this file), so these two are the authority and the RULES
+ * entries are dead. Move them back into RULES the moment that file is free.
+ */
+
+/**
+ * HP, 90 -> 50, AND WHAT THAT ACTUALLY COSTS IT.
+ *
+ * A rifle round lands on the proxy as TWO `damage:dealt` events — the entry and
+ * the exit face of the collider box, the double-count `tank.js` documents under
+ * `oneWoundPerRound` — so a 21-damage round is measured at ~30 on a drone
+ * (`_droneshot.mjs`: 2 rounds, 4 events, 30.0 per round).
+ *
+ *   90 HP  3 rounds   (60 leaves it at 30 and flying)
+ *   50 HP  2 rounds   (60 kills it with 10 to spare)
+ *
+ * So the airframe is now a two-round target and, with a 3.4 m/s handling of the
+ * gun on a crossing target, that is roughly a second of tracked fire instead of
+ * a second and a half. It matters more than 33% suggests, because the bots are
+ * about to start shooting at them too: a drone that crosses one alert squad now
+ * dies to the first man who gets two rounds into it rather than needing two men
+ * to agree. Expect fewer of the twenty to reach a lock — which is the trade the
+ * player asked for, and the reason the LAUNCH count came down with it.
+ */
+const HEALTH = 50;
+
+/**
+ * TWENTY A MATCH, both sides, 10/10 — 「全部で２０機まで登場」, down from 30.
+ *
+ * RE-PACED, NOT JUST RE-COUNTED. The schedule is unchanged in shape — drone n
+ * is owed at progress `(n + droneLaunchPad) / BUDGET`, so the budget empties
+ * whichever way the match ends — but the arithmetic underneath it moves:
+ *
+ *   30 a match   one launch per 0.033 of the match, ~20 s, 2.25 aloft average
+ *   20 a match   one launch per 0.050 of the match, ~30 s, 1.5 aloft average
+ *
+ * Thirty seconds apart is still INSIDE `droneLife` (45 s), which is the whole
+ * test of whether twenty reads as a recurring threat or as twenty incidents:
+ * the next one launches while the last is still up, so the sky is rarely empty
+ * and the rotor is never a novelty. What it stops being is a swarm — with
+ * `droneMaxAloft` 4 the old count could stack four over one street, and at 1.5
+ * average the ceiling is now almost never the thing that binds. `droneGap` (8 s)
+ * still holds the floor for the one case that matters, a scoring run that jumps
+ * `_matchProgress` several drones' worth in a frame.
+ */
+const BUDGET = 20;
 
 /** How often a drone re-asks who it should be looking at. */
 const SCAN_EVERY = 0.25;
@@ -137,6 +194,8 @@ class Drone {
     this.vec = new THREE.Vector3();
     this.vector = null;
     this.health = 0;
+    /** What it launched with. The HUD mark draws `health / maxHealth`. */
+    this.maxHealth = HEALTH;
     this.life = 0;
     this.target = null;
     /** Seconds of unbroken sight on `target`. */
@@ -178,7 +237,7 @@ export class Drones {
     this.list = [];
     for (let i = 0; i < POOL; i++) this.list.push(new Drone(i));
 
-    /** Launches spent. `_budget[t]` is per side; the sum is `RULES.droneBudget`. */
+    /** Launches spent. `_spent[t]` is per side; the sum is `BUDGET`. */
     this._spent = [0, 0];
     /** Which side launches next. Alternates, so the split is exact. */
     this._nextTeam = 0;
@@ -260,9 +319,9 @@ export class Drones {
     return n;
   }
 
-  /** Launches still owed this match. */
+  /** Launches still owed this match. @see `BUDGET` */
   get left() {
-    return RULES.droneBudget - this._spent[0] - this._spent[1];
+    return BUDGET - this._spent[0] - this._spent[1];
   }
 
   /* ====================================================================== */
@@ -409,8 +468,8 @@ export class Drones {
   _schedule(dt, progress) {
     this._gap -= dt;
     const spent = this._spent[0] + this._spent[1];
-    if (spent >= RULES.droneBudget) return;
-    const owed = (spent + RULES.droneLaunchPad) / RULES.droneBudget;
+    if (spent >= BUDGET) return;
+    const owed = (spent + RULES.droneLaunchPad) / BUDGET;
     if (progress < owed) return;
     if (this._gap > 0) return;
     if (this.aloft >= RULES.droneMaxAloft) { this.stats.deferred++; return; }
@@ -440,7 +499,8 @@ export class Drones {
     d.name = `${team === 0 ? 'HORNET' : 'WASP'}-${this._spent[team] + 1}`;
     d.alive = true;
     d.state = 'climb';
-    d.health = RULES.droneHealth;
+    d.health = HEALTH;
+    d.maxHealth = HEALTH;
     d.life = RULES.droneLife;
     d.target = null;
     d.lockT = 0;
