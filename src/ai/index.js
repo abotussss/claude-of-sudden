@@ -214,6 +214,8 @@ const DRONE_NOTICE = 18;
  */
 const SMOKE_MAX = 6;
 const SMOKE_CORE = 0.78;
+/** How much of his own flash a man who was warned about it takes. */
+const FLASH_OWN_SIDE = 0.3;
 
 /**
  * THE ZONE PULL. @see `AiSystem.divertZoneFor`.
@@ -467,7 +469,7 @@ export class AiSystem {
      * The two non-lethal payloads, preallocated and REUSED — the same contract
      * `match`'s air events publish under. @see `_detonateThrown`.
      */
-    this._throwEvent = { position: new THREE.Vector3(), radius: 0, duration: 0 };
+    this._throwEvent = { position: new THREE.Vector3(), radius: 0, duration: 0, team: -1 };
     this._blastEvent = {
       position: new THREE.Vector3(), radius: 0, damage: 0, impulse: 0,
     };
@@ -814,13 +816,26 @@ export class AiSystem {
       if (!e || !e.position) return;
       const radius = e.radius ?? 16;
       const dur = e.duration ?? 4.2;
+      /**
+       * `team` IS ADDITIVE AND OPTIONAL, and it is the difference between a
+       * flashbang and a mistake. A bot throws his at a man 6-22 m away and the
+       * blind radius is 16, so without this he is inside his own bang every
+       * single time — a squad that assaults a door by blinding itself. The side
+       * that threw it was TOLD ("FRAG OUT" goes out on the net before it
+       * lands), so they get `FLASH_OWN_SIDE` of it rather than none: turning
+       * your head is not immunity. The player's own grenade carries no `team`
+       * at all and therefore blinds everybody fully, which is correct — nobody
+       * warned them.
+       */
+      const from = e.team === 0 || e.team === 1 ? e.team : -1;
       for (const a of this.agents) {
         if (!a.alive) continue;
         const d = a.position.distanceTo(e.position);
         if (d > radius) continue;
         if (this.phys && !this.phys.lineOfSight(e.position, a.eye, this.phys.MASK.EXPLOSION)) continue;
         const see = 1 - d / radius;
-        a.blind(dur * (0.35 + see * 0.65));
+        const mine = from >= 0 && a.team === from ? FLASH_OWN_SIDE : 1;
+        a.blind(dur * (0.35 + see * 0.65) * mine);
       }
     });
 
@@ -2280,9 +2295,16 @@ export class AiSystem {
    * is the same distance-and-line-of-sight test, because a flashbang the human
    * is standing next to has to blind the human.
    */
-  _detonateThrown(kind, p) {
+  _detonateThrown(kind, p, team = -1) {
     const ev = this._throwEvent;
     ev.position.set(p.x, p.y + 0.14, p.z);
+    /**
+     * ADDITIVE AND OPTIONAL, exactly as `team` on an `explosion` is: whose bang
+     * this is, so the side that threw it (and was told on the net) is not
+     * blinded by its own assault. @see the `weapon:flash` listener. The player's
+     * own grenades carry no `team` and blind everybody, which is right.
+     */
+    ev.team = team;
     if (kind === 'smoke') {
       ev.radius = 6.5;
       ev.duration = 14;
@@ -2435,7 +2457,7 @@ export class AiSystem {
       if (g.fuse > 0) continue;
       const p = g.body?.position ?? g.mesh.position;
       if (g.kind === 'flash' || g.kind === 'smoke') {
-        this._detonateThrown(g.kind, p);
+        this._detonateThrown(g.kind, p, g.agent?.team ?? -1);
         this.phys?.removeRigidBody(g.body);
         this.root.remove(g.mesh);
         this._grenades.splice(i, 1);

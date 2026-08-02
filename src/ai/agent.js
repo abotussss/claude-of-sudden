@@ -2054,7 +2054,26 @@ export class Agent {
       this.wantFire = false;
       return;
     }
-    if (this.hasTarget) {
+    /**
+     * A MAN BEING SHOT AT IS IN A FIGHT WHETHER HE FOUND IT OR NOT.
+     *
+     * `hasTarget` was the only door out of ADVANCE, and it means "I have SEEN
+     * somebody in the last 6.5 s". A man taking rounds from a window he has not
+     * spotted keeps walking with his weapon down — 62.7 % of all actor-time is
+     * this state, so it is the largest single block of silence left on the map
+     * after the two `_firegate.mjs` found. `applyDamage` and the near-miss
+     * suppression have already put a bearing in `lastKnown`, so what he needs
+     * is permission to stop and use it, and `_combat` does the rest.
+     *
+     * DELIBERATELY NOT `lastKnownAge`, which is what the obvious version of
+     * this reads: `Squad.update` refreshes every man's `lastKnown` to 0.9-1.7 s
+     * whenever ANY squadmate has eyes on anybody, and on a twenty-man side
+     * somebody always does — so a freshness test would hold the entire roster
+     * in COMBAT for the whole match and nobody would ever take a capture point.
+     * Suppression is first-hand by construction: it comes from rounds that
+     * actually cracked past THIS man.
+     */
+    if (this.hasTarget || this.suppression > 0.5) {
       this._enterCombat();
       return;
     }
