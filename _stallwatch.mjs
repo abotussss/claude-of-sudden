@@ -91,17 +91,25 @@ await page.evaluate(({ FOLLOW }) => {
     const player = e.ctx.peek('player');
     const ph = e.ctx.peek('physics');
     if (!t || t.state === 'parked') return false;
-    const a = t.yaw + Math.PI * 0.82; // behind-left
-    const d = 13;
+    /**
+     * ELEVATED, AND THAT IS NOT A TASTE DECISION. A chase camera at hull height
+     * behind the tank spends half the sortie INSIDE something — the cathedral's
+     * own rubble field, a plough pile, a kerb — and a photograph of the inside
+     * of a rock is not evidence about a tank. The eye goes up and looks down,
+     * which is also the angle that shows what the hull has driven through.
+     */
+    const a = t.yaw + Math.PI * 0.86; // behind-left
+    const d = 15;
     const x = t.position.x + Math.sin(a) * d;
     const z = t.position.z + Math.cos(a) * d;
     const g = ph.groundHeight(x, z, 60);
-    const y = (Number.isFinite(g) ? g : t.position.y) + 0.1;
+    const base = Number.isFinite(g) ? g : t.position.y;
+    const y = Math.max(base, t.position.y) + 6.5;
     const v = m.sites[0].position.clone().set(x, y, z);
     const dx = t.position.x - x;
     const dz = t.position.z - z;
-    const dy = t.position.y + 1.8 - (y + 1.62);
-    player.respawnAt(v, Math.atan2(-dx, -dz));
+    const dy = t.position.y + 1.4 - (y + 1.62);
+    player.respawnAt(v, Math.atan2(dx, dz));
     player.movement.pitch = Math.asin(dy / Math.hypot(dx, dy, dz));
     return true;
   };
