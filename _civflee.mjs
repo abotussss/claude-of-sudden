@@ -116,6 +116,66 @@ const flee = await page.evaluate(async () => {
 });
 console.log('\nFLEE  ', JSON.stringify(flee));
 
+/* ── 1b. THE OTHER HALF: 「武装している人は攻撃してきます」 ─────────────────── */
+const engage = await page.evaluate(async () => {
+  const e = window.__ENGINE__;
+  const ctx = e.ctx;
+  const ai = ctx.peek('ai');
+  const phys = ctx.peek('physics');
+  const m = ctx.peek('match');
+  const V3 = ctx.camera.position.constructor;
+  const rec = m.civilians.list.find((r) => !r.unarmed && r.agent.alive);
+  if (!rec) return { err: 'no armed civilian alive' };
+  const a = rec.agent;
+  /**
+   * A soldier of the PLAYER's side, in the SAME ROOM, 4-8 m away. The first cut
+   * of this searched a ring on `physics.groundHeight` and found nothing at all
+   * — which is itself the indoor rule working: every spot on an 8 m ring around
+   * a militiaman is on the other side of his wall. So the candidates come off
+   * the nav grid's own `indoor` cells, exactly as `civilians.js` places them.
+   */
+  const g = ai.grid;
+  let spot = null;
+  for (const reach of [6, 8, 4.5, 10]) {
+    for (let d = 0; d < 48 && !spot; d++) {
+      const th = (d / 48) * Math.PI * 2;
+      const ci = g.nearest(a.position.x + Math.sin(th) * reach,
+        a.position.z + Math.cos(th) * reach, a.position.y, 1, 1.0);
+      if (ci < 0) continue;
+      const p = new V3(g.worldX(ci % g.nx), g.floor[ci] + 0.02, g.worldZ((ci / g.nx) | 0));
+      if (p.distanceTo(a.position) < 3) continue;
+      const eye = new V3(p.x, p.y + 1.5, p.z);
+      const q = new V3(a.position.x, a.position.y + 1.35, a.position.z);
+      if (phys.lineOfSight(eye, q, phys.MASK.SIGHT)) spot = p;
+    }
+    if (spot) break;
+  }
+  if (!spot) return { err: 'no clear line to an armed civilian' };
+  const bait = ai.spawn('vanguard', spot,
+    Math.atan2(a.position.x - spot.x, a.position.z - spot.z),
+    { team: ai.playerTeam, name: 'BAIT', role: 'field' });
+  let wantFire = 0, hasTarget = 0, aimedAtBait = 0;
+  await new Promise((done) => {
+    let i = 0;
+    const t = () => {
+      if (a.wantFire) wantFire++;
+      if (a.hasTarget) hasTarget++;
+      if (a.targetActor === bait) aimedAtBait++;
+      return ++i >= 200 ? done() : requestAnimationFrame(t);
+    };
+    requestAnimationFrame(t);
+  });
+  const out = {
+    wantFireFrames: wantFire, hasTargetFrames: hasTarget, aimedAtBaitFrames: aimedAtBait,
+    baitHealth: bait.health, weapon: a.weaponId, skill: +a.skill.toFixed(2),
+    archetype: a.archetype, wantsFightAt: +a.traits.range.toFixed(1),
+    hasFlash: a.hasFlash, hasSmoke: a.hasSmoke, hasGrenade: a.hasGrenade,
+  };
+  bait.applyDamage(999, 'torso', bait.position.clone(), null, null);
+  return out;
+});
+console.log('ENGAGE', JSON.stringify(engage));
+
 /* ── 2. THE PRICE ──────────────────────────────────────────────────────── */
 const price = await page.evaluate(() => {
   const ctx = window.__ENGINE__.ctx;
