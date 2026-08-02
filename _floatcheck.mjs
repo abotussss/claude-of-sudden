@@ -102,9 +102,16 @@
  * therefore a sweep of half the ruin, and it is exactly the half that was
  * already known to be fine.
  *
- *   --fire=cath   run the real collapse: let the match reach `live`, call
- *                 `callCathedralCollapse`, raze the shell, wait past `SETTLE_AT`
- *                 so the settled pose is baked and its collision is on, sweep.
+ *   --fire=cath   run the real collapse — and RUN IT AS THE SCHEDULE RUNS IT.
+ *                 It holds the round clock and the win check open, lets
+ *                 `_matchProgress` carry the match to `cathedralOpenProgress`,
+ *                 and waits for the state the beat sheet leaves: razed, with
+ *                 every cathedral site baked. It used to force the beats — set
+ *                 `_cathedralCalled`, call the salvo and `_razeCathedral()` on
+ *                 ONE frame — which made `world`'s ruin solid before a chunk had
+ *                 left the wall and so came back clean by construction. That is
+ *                 how this gate passed four boot states while the player was
+ *                 looking at the bug. @see `_cathwatch.mjs`.
  *   --fire=all    the above plus `callEverything` — every site and every
  *                 district block, which is the state `--region=all` wants.
  *
@@ -191,39 +198,57 @@ if (FIRE) {
   // on the map, and forcing the phase skips `_beginRound`. @see `_postcheck.mjs`.
   await page.evaluate(() => (window.__ENGINE__.time.scale = 8));
   await page.waitForFunction("window.__ENGINE__.ctx.peek('match').phase==='live'", null, { timeout: 180000 });
-  await page.evaluate(() => (window.__ENGINE__.time.scale = 1));
   await sleep(400);
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE SCHEDULE PLAYS IT. THIS ONLY KEEPS THE MATCH ALIVE LONG ENOUGH.
+   * ──────────────────────────────────────────────────────────────────────────
+   * This used to set `_cathedralCalled`, call the salvo and `_razeCathedral()`
+   * ON ONE FRAME, which is not a path anything in the game ever takes and it
+   * MASKED THE BUG THIS FLAG EXISTS TO FIND: razing the shell on the fire frame
+   * makes `world`'s ruin solid before a single chunk has left the wall, so every
+   * settled pose lands on ground and the sweep is clean by construction.
+   *
+   * What the player plays is `_updateCathedralEvent`'s beat sheet, where the
+   * salvo goes at `cathedralLead` and the shell only follows
+   * `cathedralRazeDelay` later — and a site fired by ANYTHING ELSE in between
+   * drops its mass onto a ruin that is neither drawn nor solid yet. That was
+   * measured (`_cathwatch.mjs`): the `CATHEDRAL` demolition site was not
+   * `scheduled`, `_scheduleNext`'s weighted draw took it at t=211.4 s, and the
+   * event began at t=216 s with 2151 chunks already hanging over a floor.
+   *
+   * So: hold the clock and the win check open, let progress carry the match to
+   * `cathedralOpenProgress`, and wait for the state the beat sheet leaves —
+   * razed, and every cathedral site baked.
+   */
   await page.evaluate(() => {
-    const e = window.__ENGINE__;
-    const m = e.ctx.peek('match');
+    const m = window.__ENGINE__.ctx.peek('match');
     m.roundClock = 1e6;
     m._checkWinConditions = () => {};
     m.airstrike.enabled = true;
-    m._cathedralCalled = true;
-    m.airstrike.callCathedralCollapse();
-    // Forcing `_cathedralCalled` skips the branch that arms `_razeIn`, so
-    // without these two the sweep runs on a map whose church is still standing.
-    m._razeCathedral();
-    m._openCathedral();
-    e.time.scale = 4;
+    window.__ENGINE__.time.scale = 8;
   });
+  await page.waitForFunction("window.__ENGINE__.ctx.peek('match')._cathedralCalled===true", null, { timeout: 300000 });
+  await page.evaluate(() => (window.__ENGINE__.time.scale = 4));
   /**
-   * 1.34 s of stagger + `SETTLE_AT` 6.5 s of match time, at 4x, with slack —
-   * `_bakeSettled` is what turns the mound's collision on, so a sweep run
-   * before it has fired measures a map the event has not finished happening to.
-   *
-   * EVERY STRUCK SITE, NOT THREE OF THEM. `_razeCathedral` now brings a fourth
-   * site down with the shell — the building's own 2100-chunk mass — and a wait
-   * that counted to three returned while it was still in the air.
+   * `_bakeSettled` is what turns a mound's collision on, so a sweep run before
+   * it has fired measures a map the event has not finished happening to. EVERY
+   * CATHEDRAL SITE, NOT THREE OF THEM: the raze brings a fourth down with the
+   * shell — the building's own 2151-chunk mass — and a wait that counted to
+   * three returned while it was still in the air.
    */
   await page.waitForFunction(
     () => {
-      const s = window.__ENGINE__.ctx.peek('match').airstrike.sites;
-      const struck = s.filter((x) => x.struck);
-      return struck.length >= 3 && struck.every((x) => x.baked);
+      const e = window.__ENGINE__;
+      const cath = e.ctx.peek('match').airstrike.sites.filter((x) => /^CATH/.test(x.id));
+      return (
+        e.ctx.peek('world').cathedral?.razed === true &&
+        cath.length >= 4 &&
+        cath.every((x) => x.struck && x.baked)
+      );
     },
     null,
-    { timeout: 60000 }
+    { timeout: 300000 }
   );
   if (FIRE === 'all') {
     await page.evaluate(() => {
@@ -953,8 +978,17 @@ const drawn = CHUNKS
       const q = e.camera.quaternion.clone();
       const rows = [];
       let checked = 0;
+      /**
+       * A STRUCK SITE THAT HAS NOT BAKED IS NOT A SWEPT SITE, and saying so is
+       * the difference between a gate and a rubber stamp. `userData.settled` is
+       * where a chunk is GOING; until `_bakeSettled` copies it into
+       * `instanceMatrix` the screen shows the vertex shader's curve instead, so
+       * a run that ends while masonry is in the air has measured a future.
+       */
+      const unsettled = [];
       for (const s of sites) {
         if (!s.struck) continue;
+        if (!s.baked) unsettled.push(s.id);
         let n = 0;
         let worst = 0;
         let hiY = -Infinity;
@@ -983,7 +1017,7 @@ const drawn = CHUNKS
         }
         if (n) rows.push({ id: s.id, kind: s.kind, chunks: s.chunkCount, n, worst, at });
       }
-      return { rows, checked, struck: sites.filter((s) => s.struck).length };
+      return { rows, checked, unsettled, struck: sites.filter((s) => s.struck).length };
     }, { CAIR })
   : null;
 
@@ -1045,6 +1079,12 @@ if (args.json) {
   /* ---- and the drawn mass, which carries no collision at all ------------- */
   if (drawn === null) {
     console.log('  drawn mass: not swept (--chunks=0, or no strike has fired)');
+  } else if (drawn.unsettled.length) {
+    console.log(
+      `  drawn mass: ${drawn.unsettled.length} STRUCK SITE(S) HAVE NOT SETTLED — ${drawn.unsettled.join(', ')}.\n` +
+        '    Their chunks are still on the vertex shader\'s curve, so what was swept is where they\n' +
+        '    are GOING and not what is drawn. Wait past SETTLE_AT and run it again.\n'
+    );
   } else if (!drawn.rows.length) {
     console.log(
       `  drawn mass: ${drawn.checked} settled chunks over ${drawn.struck} struck sites — ` +

@@ -160,12 +160,49 @@ const sweep = () =>
     };
   }, { CAIR });
 
+/**
+ * THE THREE MOMENTS, AND THEY ARE KEYED OFF STATE RATHER THAN OFF A STOPWATCH.
+ * The first version slept 3 / 17 / 77 s and caught all three `CATH-*` bays with
+ * their chunks still in the air (`baked=false`, 8-12 m of "float" each), which
+ * is masonry mid-flight and is not the bug. The salvo does not even leave the
+ * aircraft until `cathedralLead` and the settle is `SETTLE_AT` after that.
+ */
 const marks = [];
-marks.push({ label: 'IN FLIGHT (+3s from the event beginning)', ...(await (async () => { await sleep(3000); return sweep(); })()) });
-await sleep(14000);
-marks.push({ label: 'AT THE SETTLE (+17s)', ...(await sweep()) });
-await sleep(LATE * 1000);
-marks.push({ label: `A MINUTE LATER (+${17 + LATE}s)`, ...(await sweep()) });
+await page.waitForFunction(
+  () => window.__ENGINE__.ctx.peek('match').airstrike.sites.some((s) => s.id === 'CATH-E' && s.struck),
+  null,
+  { timeout: 180000 }
+);
+marks.push({ label: 'IN FLIGHT — the salvo has just gone off', ...(await sweep()) });
+await page.waitForFunction(
+  () => {
+    const m = window.__ENGINE__.ctx.peek('match');
+    const s = m.airstrike.sites;
+    const cath = s.filter((x) => /^CATH/.test(x.id));
+    return (
+      window.__ENGINE__.ctx.peek('world').cathedral?.razed === true &&
+      cath.length >= 4 &&
+      cath.every((x) => x.struck && x.baked)
+    );
+  },
+  null,
+  { timeout: 180000 }
+);
+await sleep(500);
+const settleMark = await sweep();
+marks.push({ label: 'AT THE SETTLE — razed, and every cathedral site baked', ...settleMark });
+/**
+ * …AND `LATE` SECONDS OF MATCH TIME, NOT OF WALL TIME. Headless renders this
+ * map at a handful of frames a second, so a 60 s `sleep` advanced the engine's
+ * own clock by nine and photographed a ruin the salvo's dust was still standing
+ * over. The dust is 28 s of it.
+ */
+await page.waitForFunction(
+  (until) => window.__ENGINE__.ctx.time.elapsed >= until,
+  settleMark.t + LATE,
+  { timeout: 600000, polling: 1000 }
+);
+marks.push({ label: `${LATE} s OF MATCH TIME AFTER THE DUST`, ...(await sweep()) });
 
 const rec = await page.evaluate(() => window.__CW__);
 
@@ -176,27 +213,34 @@ if (SHOTS) {
     e.input.frozen = true;
     e.input.enabled = false;
     e.ctx.peek('player')?.setControlEnabled?.(false);
-    e.ctx.peek('ui')?.debugState?.('clean');
+    const ui = e.ctx.peek('ui');
+    ui?.debugState?.('clean');
+    // The weapon and the whole chrome layer, off: the question is what is in the
+    // SKY over the ruin and a viewmodel across the bottom third answers none of it.
+    ui?.setHudVisible?.(false);
+    e.ctx.peek('weapons')?.viewmodel?.group && (e.ctx.peek('weapons').viewmodel.group.visible = false);
   });
   const centre = await page.evaluate(() => {
     const w = window.__ENGINE__.ctx.peek('world');
     const k = w.cathedral;
     const v = w.interiorVolumes.find((x) => x.building === k.id);
-    return { x: v.cx, z: v.cz, y: k.floorY ?? 0 };
+    return { x: v.cx, z: v.cz, y: k.floorY ?? 0, c: v.c, s: v.s };
   });
+  /** A level-space offset, in world coordinates. The plan is 30 x 45 m and it is
+   *  rotated by `levelYaw`; a world-axis ring stands the camera inside the
+   *  neighbours' blocks on four of its eight bearings. */
+  const at = (u, y, v) => [centre.x + u * centre.c + v * centre.s, centre.y + y, centre.z - u * centre.s + v * centre.c];
   const poses = [];
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2;
-    poses.push({
-      id: `ring${i}`,
-      from: [centre.x + Math.cos(a) * 62, centre.y + 20, centre.z + Math.sin(a) * 62],
-      to: [centre.x, centre.y + 9, centre.z],
-    });
+    poses.push({ id: `ring${i}`, from: at(Math.cos(a) * 56, 30, Math.sin(a) * 56), to: at(0, 8, 0) });
   }
-  poses.push({ id: 'over', from: [centre.x, centre.y + 78, centre.z + 1], to: [centre.x, centre.y, centre.z] });
-  poses.push({ id: 'inside_up', from: [centre.x, centre.y + 1.7, centre.z], to: [centre.x + 18, centre.y + 16, centre.z] });
-  poses.push({ id: 'low_n', from: [centre.x, centre.y + 2.2, centre.z - 46], to: [centre.x, centre.y + 11, centre.z] });
-  poses.push({ id: 'low_e', from: [centre.x + 46, centre.y + 2.2, centre.z], to: [centre.x, centre.y + 11, centre.z] });
+  poses.push({ id: 'over', from: at(0, 78, 1), to: at(0, 0, 0) });
+  poses.push({ id: 'inside_up', from: at(0, 1.7, -2), to: at(3, 14, 24) });
+  poses.push({ id: 'nave_low', from: at(0, 2.2, -26), to: at(0, 10, 10) });
+  poses.push({ id: 'aisle_low', from: at(11, 2.2, -18), to: at(-4, 9, 12) });
+  poses.push({ id: 'skyline_w', from: at(-40, 6, -34), to: at(0, 12, 0) });
+  poses.push({ id: 'skyline_e', from: at(40, 6, 34), to: at(0, 12, 0) });
   for (const p of poses) {
     await page.evaluate((pose) => {
       const e = window.__ENGINE__;
@@ -208,7 +252,7 @@ if (SHOTS) {
     await page.waitForTimeout(700);
     await page.screenshot({ path: `${OUT}/${p.id}.png` });
   }
-  console.log(`  photographs: ${OUT}/ring0..7, over, inside_up, low_n, low_e`);
+  console.log(`  photographs: ${OUT}/ — ${poses.map((p) => p.id).join(", ")}`);
 }
 
 await browser.close();
