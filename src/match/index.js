@@ -4297,26 +4297,63 @@ export class MatchSystem {
   /* ------------------------------------------------------------- drones -- */
 
   /**
-   * WHERE A SIDE'S DRONES COME OUT OF — its own base spawn cluster, which is
-   * the one piece of ground that side always holds. Written into the caller's
-   * vector; nothing here allocates.
+   * ═══════════════════════════════════════════════════════════════════════
+   * WHERE A SIDE'S DRONES COME OUT OF — 「ドローンはいろんなサイトに登場させて」
+   * ═══════════════════════════════════════════════════════════════════════
+   * This was the base spawn cluster and NOTHING ELSE, and the argument for that
+   * was a real one: a loitering munition that appears on top of a contested
+   * zone is an artillery piece, and the flight in from the back of the map is
+   * most of what makes the rotor a warning rather than a surprise.
    *
-   * It is the BASE and never a forward spawn on purpose: a loitering munition
-   * that appears on top of a contested zone is an artillery piece, and the
-   * flight in from the back of the map is most of what makes the sound a
-   * warning rather than a surprise.
+   * What it also was, though, is TWENTY DRONES OUT OF TWO DOORS. Every launch
+   * on a side came from one point, so every drone crossed the map on the same
+   * bearing, arrived over the same rooftops and was answered by looking in the
+   * same direction — which turns the second one into scenery.
+   *
+   * So the pad now ROTATES over the ground that side actually holds: its base,
+   * plus every zone it OWNS outright. Three things keep the original argument
+   * intact:
+   *
+   *   OWNED, NEVER CONTESTED. `z.owner === team` is settled ground, so this can
+   *   never put a warhead over a zone that is being fought for — the case the
+   *   original note was really about.
+   *   IT STILL HAS TO CLIMB. `Drones._climb` takes it to `droneAltitude` (22 m)
+   *   at 10 m/s before it may hunt, so even a zone launch is two seconds of
+   *   rotor over a roof before anybody is in danger, and the lock is still 2.2 s
+   *   of warning on top of that.
+   *   THE ROTATION IS DETERMINISTIC, not random: `_droneTurn[team]` steps one
+   *   pad per launch, so the twenty are spread across the sites by construction
+   *   rather than on average, and a capture replay reproduces exactly.
+   *
+   * Written into the caller's vector. `_dronePads` and `_droneTurn` are built
+   * once on the first launch and rewritten in place; nothing here allocates
+   * per launch, let alone per frame.
    */
   _droneLaunchPoint(team, out) {
-    const c = this._spawnCentre[team === this.attackers ? 'attack' : 'defend'];
-    if (!c) return null;
-    out.copy(c);
+    const pads = this._dronePads ?? (this._dronePads = []);
+    pads.length = 0;
+    const base = this._spawnCentre[team === this.attackers ? 'attack' : 'defend'];
+    if (base) pads.push(base);
+    // DOMINATION only: in demolition `this.sites` are bomb sites with no owner
+    // and drones do not fly that mode anyway (@see the `update` call site).
+    if (this.domination) {
+      for (const z of this.sites) {
+        if (z.owner === team && z.position) pads.push(z.position);
+      }
+    }
+    if (!pads.length) return null;
+    const turn = this._droneTurn ?? (this._droneTurn = [0, 0]);
+    const from = pads[turn[team] % pads.length];
+    turn[team]++;
+    out.copy(from);
     out.y = this.ai.groundAt(out.x, out.z, out.y + 4);
+    pads.length = 0;
     return out;
   }
 
   /**
    * ONE LAUNCHED. It is announced only to the side it is coming FOR, and only
-   * as a killfeed row rather than a banner: thirty of these a match through the
+   * as a killfeed row rather than a banner: twenty of these a match through the
    * banner would bury the plant, the capture and the kill it is already
    * carrying. The rotor is the real announcement — @see `Drones._sound`.
    */

@@ -6,8 +6,11 @@ import { RULES, TEAM_COLOR } from './rules.js';
  * THE SUICIDE DRONES — 「ドローンは自爆系のドローンで…全部で２０機まで登場」
  * ══════════════════════════════════════════════════════════════════════════
  *
- * A loitering munition. It launches from a side's own base, climbs above the
- * roofline, flies to where the fighting is, picks the nearest enemy it can
+ * A loitering munition. It launches from one of the pads that side holds — its
+ * base or any zone it owns outright, rotated per launch so the twenty do not
+ * all cross the map on one bearing (@see `MatchSystem._droneLaunchPoint`, which
+ * is where the list is decided; this file only asks for a point) — climbs above
+ * the roofline, flies to where the fighting is, picks the nearest enemy it can
  * SEE, holds that sight for `RULES.droneLockTime` while the man it has chosen
  * is told about it in as many words, and then dives into him.
  *
