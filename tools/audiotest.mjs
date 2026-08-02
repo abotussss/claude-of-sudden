@@ -466,6 +466,8 @@ if (args.occwhy) {
 if (args.ear) {
   const MATCHSECS = Number(args.matchsecs ?? 120);
 
+  await page.evaluate((old) => { window.__OLDOCC__ = old; }, !!args.oldocc);
+  if (args.oldocc) console.log('[ear] OLDOCC control: 420 Hz / -26 dB occlusion response restored at runtime');
   await page.evaluate(() => {
     const e = window.__ENGINE__;
     const a = e.ctx.peek('audio');
@@ -494,7 +496,13 @@ if (args.ear) {
      * is the only one in a page that cannot skip.
      */
     const mkRec = (node) => {
-      const sp = actx.createScriptProcessor(2048, 2, 1);
+      // 16384 and not 2048: a ScriptProcessorNode is serviced on the MAIN thread
+      // and its buffers are dropped when that thread is busy. At 2048 (43 ms) a
+      // frame that overruns loses blocks, and the loss is invisible — it reads as
+      // a quieter event. Measured cost of that: the player's own rifle, which
+      // nothing in this mode can legitimately change, came out 8 dB apart in two
+      // consecutive blocks of one run. 16384 is 341 ms of slack per callback.
+      const sp = actx.createScriptProcessor(16384, 2, 1);
       const acc = { peak: 0, sumSq: 0, n: 0, on: false };
       sp.onaudioprocess = (ev) => {
         if (!acc.on) return;
@@ -518,7 +526,20 @@ if (args.ear) {
       sink.connect(actx.destination);
       return acc;
     };
-    const rec = { out: mkRec(a.mixer.masterGain), world: mkRec(a.mixer.worldSum) };
+    /**
+     * BRIGHTNESS, because 「音がこもっている時が多い」 is a claim about a spectrum and
+     * a peak cannot answer it. `bright` is the same output run through a 2 kHz
+     * high-pass first; `bright.rms / out.rms` is the share of the event that
+     * survived above 2 kHz. A 420 Hz low-pass leaves almost nothing there.
+     */
+    const hp = actx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 2000;
+    hp.Q.value = 0.7;
+    a.mixer.masterGain.connect(hp);
+    const rec = {
+      out: mkRec(a.mixer.masterGain), world: mkRec(a.mixer.worldSum), bright: mkRec(hp),
+    };
 
     // Every emitter the field hands out during a capture, with the two numbers
     // the bench cannot see: the occlusion the raycasts found, and the gain that
@@ -535,6 +556,15 @@ if (args.ear) {
       const far = 0.055 * Math.pow(60 / Math.max(d, 60), 0.55);
       return Math.max(near, d > 45 ? far : 0);
     };
+    /**
+     * `--oldocc` IS THE A/B CONTROL for the occlusion softening, in the spirit of
+     * `--legacy` and `--off` above: it writes the OLD response — a 420 Hz
+     * low-pass and a -26 dB shelf at a full block — back onto each emitter the
+     * instant it is handed out, so before and after are two runs of one build on
+     * one machine rather than a comparison across checkouts. It restores only
+     * the two filter parameters that changed; the level term never moved.
+     */
+    const OLDOCC = /[?&]oldocc=1/.test(location.search) || window.__OLDOCC__ === true;
     const grabs = [];
     /**
      * THE OCCLUSION CENSUS — 「音がこもっている時が多い」 as a percentage.
@@ -552,6 +582,14 @@ if (args.ear) {
     f.acquire = (opts) => {
       const em = origAcquire(opts);
       if (em) {
+        if (OLDOCC) {
+          const t = em.startAt ?? actx.currentTime;
+          em.occLP.frequency.cancelScheduledValues(t);
+          em.occLP.frequency.setValueAtTime(
+            Math.min(20000, Math.max(300, 20000 * Math.pow(0.021, em.occ))), t);
+          em.occHS.gain.cancelScheduledValues(t);
+          em.occHS.gain.setValueAtTime(-26 * em.occ, t);
+        }
         const g = atten(em.dist) * (1 - 0.62 * em.occ) * (em.userGain ?? 1);
         grabs.push({
           tag: em.kindTag ?? opts.tag ?? null, bus: em.busName,
@@ -583,10 +621,13 @@ if (args.ear) {
       },
       stop() {
         for (const k in rec) rec[k].on = false;
-        const o = rec.out, w = rec.world;
+        const o = rec.out, w = rec.world, b = rec.bright;
+        const orms = Math.sqrt(o.sumSq / Math.max(1, o.n));
+        const brms = Math.sqrt(b.sumSq / Math.max(1, b.n));
         return {
           peak: +o.peak.toFixed(5),
-          rms: +Math.sqrt(o.sumSq / Math.max(1, o.n)).toFixed(6),
+          rms: +orms.toFixed(6),
+          hf: +(brms / Math.max(orms, 1e-9)).toFixed(3),
           worldPeak: +w.peak.toFixed(5),
           samples: o.n,
           grabs: grabs.slice(0, 12),
@@ -613,6 +654,31 @@ if (args.ear) {
           e.ctx.events.emit('weapon:fire', { weapon: 'rifle', origin: p, dir: { x: 0, y: 0, z: -1 } });
         }
         return p;
+      },
+      /**
+       * A shot with the occlusion FORCED, so the wall's own contribution is a
+       * controlled difference rather than whatever the bearing happened to have
+       * a building on. Same voice, same gain, same distance — only `occ` moves.
+       */
+      forced(dist, b, occ) {
+        const p = this.at(dist, b);
+        return a._playAt('shot', p.x, p.y, p.z, {
+          firstPerson: false, echoBoost: 0.12, occlusion: occ, gain: 2,
+        }, 'weapons', 0.9);
+      },
+      /**
+       * ANOTHER MAN'S BOOT, at the trim `BattleLayer` gives it. It is here as a
+       * REGRESSION CONTROL and not as a target: footsteps were made quieter on
+       * request (「敵味方の足音はもう少し小さくしてください」) and a pass aimed at making
+       * gunfire louder is exactly the kind that quietly hands that back.
+       */
+      step(dist, b, occ) {
+        const p = this.at(dist, b);
+        p.y = a.field.listenerPos.y - 1.6;
+        const lvl = 0.45 + 0.35 * Math.max(0, Math.min(1, dist / 40));
+        return a._playAt('step', p.x, p.y, p.z, {
+          surface: 'concrete', gait: 'walk', level: lvl, gear: 0.22, occlusion: occ,
+        }, 'foley', 0.28);
       },
       blast(dist, radius) {
         const p = this.at(dist, 0);
@@ -743,8 +809,10 @@ if (args.ear) {
    * the honest way round, because the claim under test is "even the best case is
    * too quiet".
    */
+  let block = 0;
   const runCase = async (label, fire, sec, trials = 3) => {
     let best = null;
+    const all = [];
     for (let b = 0; b < trials; b++) {
       await page.evaluate(() => { window.__EAR__.resetMix(); window.__EAR__.clearGates(); });
       await page.evaluate((s) => window.__EAR__.waitAudio(s), 0.6);
@@ -753,13 +821,15 @@ if (args.ear) {
       await fire(b * 3 + 1);
       await page.evaluate((s) => window.__EAR__.waitAudio(s), sec);
       const r = await page.evaluate(() => window.__EAR__.stop());
+      all.push(r.peak);
       if (!best || r.peak > best.peak) best = r;
     }
-    cases.push({ label, ...best });
+    cases.push({ label, block, spread: all, ...best });
     return best;
   };
 
   for (const occOn of [true, false]) {
+    block = occOn ? 0 : 1;
     await page.evaluate((on) => {
       window.__ENGINE__.time.scale = 0;
       window.__EAR__.occlusion(on);
@@ -786,18 +856,38 @@ if (args.ear) {
       () => page.evaluate(() => window.__EAR__.blast(35, 15)), 3.0);
     await runCase(`grenade r6 @10m${sfx}`,
       () => page.evaluate(() => window.__EAR__.blast(10, 6)), 2.5);
+    // The wall, isolated: identical voice and gain, occlusion 0 against 1.
+    for (const occ of [0, 1]) {
+      await runCase(`shot @40m occ=${occ}${sfx}`,
+        (b) => page.evaluate(([dd, bb, oo]) => window.__EAR__.forced(dd, bb, oo), [40, b, occ]), 1.6);
+    }
+    for (const [d, occ] of [[8, 0], [20, 0], [20, 1], [40, 0]]) {
+      await runCase(`step @${d}m occ=${occ}${sfx}`,
+        (b) => page.evaluate(([dd, bb, oo]) => window.__EAR__.step(dd, bb, oo), [d, b, occ]), 1.2);
+    }
   }
 
   console.log('\n[ear] AT THE OUTPUT — one event at a time, simulation frozen');
-  console.log('  label                        outPeak    vs own    worldPk   emitter dist/occ/gain');
-  const own = cases.find((c) => c.label === 'own rifle')?.peak ?? 0;
+  console.log('  label                        outPeak    vs own     hf>2k   emitter dist/occ/gain');
+  // The reference is THIS BLOCK's own rifle, not the run's. Both blocks fire the
+  // same head-locked shot and `occlusionEnabled` cannot touch it, so any gap
+  // between the two is measurement error — and it belongs to the block it was
+  // measured in rather than being spread across the other one's ratios.
+  const ownOf = (b) => cases.find((c) => c.block === b && c.label.startsWith('own rifle'))?.peak ?? 0;
   for (const c of cases) {
+    const own = ownOf(c.block);
     const rel = own > 0 && c.peak > 0 ? `${(20 * Math.log10(c.peak / own)).toFixed(1)} dB` : '   -  ';
     const g = c.grabs.filter((x) => x.bus === 'weapons').slice(0, 2)
       .map((x) => (x.refused ? 'REFUSED' : `${x.dist}m occ${x.occ} x${x.ug} g${x.g}`)).join(' ; ');
     console.log(
-      `  ${c.label.padEnd(26)} ${c.peak.toFixed(5)}  ${rel.padStart(8)}  ${c.worldPeak.toFixed(5)}   ${g}`
+      `  ${c.label.padEnd(26)} ${c.peak.toFixed(5)}  ${rel.padStart(8)}   ${String(c.hf).padStart(5)}   ${g}`
     );
+  }
+  // The control's own scatter, so the table can be read with the right number of
+  // significant figures. Both blocks fire the identical head-locked shot.
+  for (const b of [0, 1]) {
+    const c = cases.find((x) => x.block === b && x.label.startsWith('own rifle'));
+    if (c) console.log(`  [own rifle control, block ${b}] trials ${c.spread.map((v) => v.toFixed(4)).join(' ')}`);
   }
 
   /* ---- 4. the muffle through a real match ------------------------- */

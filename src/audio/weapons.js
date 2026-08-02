@@ -28,6 +28,9 @@ import {
   ad, biquad, clamp, gain, hit, lerp, osc, saturationCurve, semis, series, shaper,
   struckResonator, sweep,
 } from './dsp.js';
+// The range law lives beside the curve it multiplies. `spatial.js` imports only
+// `dsp.js`, so this cannot close a cycle.
+import { gunRangeGain } from './spatial.js';
 
 /**
  * Per-weapon character. Frequencies in Hz, times in seconds.
@@ -524,9 +527,30 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
  * seconds from `_distantVolley`. What it adds is not loudness, it is presence —
  * it happens continuously, in the direction the actual fight is in, at the rate
  * the actual fight is firing.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND IT WAS STILL INAUDIBLE, BECAUSE THOSE NUMBERS ARE NOT WHAT ARRIVES.
+ * ────────────────────────────────────────────────────────────────────────────
+ * The peaks above come from `src/audio/selftest.js`, which renders a voice
+ * through the mixer and a REBUILT distance chain: `airLP -> distGain -> bus`.
+ * The live chain is `airLP -> occLP -> occHS -> distGain -> PannerNode(HRTF)`,
+ * and the player's own rifle — the reference every one of those ratios is
+ * against — is head-locked and goes through none of it. So the bench was
+ * comparing a remote shot missing two filters and a panner against a local one
+ * that never had them, and it flattered the remote shot in exactly the way
+ * nobody would notice until the player said he could not hear it.
+ *
+ * MEASURED AT THE OUTPUT OF A RUNNING GAME instead (`--ear`), same reference:
+ * 90 m was -25.8 dB under his rifle, not -12.5, and 150 m was -26.8 dB against
+ * an ambience bed at -35. Thirteen decibels of the shortfall were never in the
+ * bench at all.
+ *
+ * The range law is now one function for both halves of the gunfire path — this
+ * one and the full `weaponShot` inside 60 m — so the two cannot disagree at the
+ * seam. @see gunRangeGain in src/audio/spatial.js
  */
 export function farGain(dist) {
-  return clamp(0.85 * Math.pow(90 / Math.max(dist, 40), 0.55), 0.45, 1.0);
+  return gunRangeGain(dist);
 }
 
 /**

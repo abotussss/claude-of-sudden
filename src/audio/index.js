@@ -38,7 +38,7 @@
 
 import { NoiseBank, SPEED_OF_SOUND, clamp, lerp, gain as mkGain } from './dsp.js';
 import { Mixer } from './mixer.js';
-import { SpatialField } from './spatial.js';
+import { SpatialField, gunRangeGain, blastRangeGain } from './spatial.js';
 import { Ambience, ambientOneShot, ONE_SHOTS } from './ambience.js';
 import {
   WEAPON_PROFILES, resolveProfile, weaponShot, bulletWhizz, dryFire, boltCycle,
@@ -1239,8 +1239,16 @@ export class AudioSystem {
       const shotPriority = clamp(0.95 - dist * 0.006, 0.4, 0.95);
       // One upward ray from the muzzle decides whether this shot is a rifle in
       // a room or a rifle in the street. See `_wetnessAt`.
+      /**
+       * `gain: gunRangeGain(dist)` — the near half of 「距離離れていてももっと
+       * 聞こえていい」. It is a GUNFIRE trim and not a change to the shared
+       * attenuation curve, so the footsteps that ride the same curve keep the
+       * level they were explicitly asked to have. It is 1.0 inside 12 m, so a
+       * man shooting at you across a room is untouched. @see gunRangeGain
+       */
       this._playAt('shot', x, y, z, {
         profile, firstPerson: false, echoBoost: this._wetnessAt(x, y, z),
+        gain: gunRangeGain(dist),
       }, 'weapons', shotPriority);
       this.mixer.duck(clamp(0.5 - dist * 0.004, 0.12, 0.5), 0.08);
       // Enemies opening fire get occasional chatter, so firefights feel alive
@@ -1404,7 +1412,33 @@ export class AudioSystem {
      * street, the other is the round ending three metres from your face.
      */
     const level = clamp(0.85 + radius / 26, 0.85, 1.8);
-    this._playAt('explosion', pos.x, pos.y, pos.z, { radius, level, send: 1.0 }, 'weapons', 1);
+    /**
+     * `gain: blastRangeGain(...)` — 「爆風の音が小さい」, and it was not a synthesis
+     * problem. MEASURED at the output of a running game, a 15 m airstrike
+     * detonating 12 m away peaked 2.7 dB above the player's own rifle and at
+     * 35 m it was 9.2 dB BELOW it, because the shared near-field 1/r curve was
+     * scaling a charge whose fireball is wider than the distance to the ear.
+     * @see blastRangeGain
+     */
+    /**
+     * A PRESSURE WAVE GOES ROUND THE CORNER; A FOOTSTEP DOES NOT.
+     *
+     * MEASURED: the same 15 m blast at 35 m was 7 dB quieter with a building in
+     * the line than without, because `acquire` was giving it the same treatment
+     * as a boot — 8.4 dB of level and a low-pass. That is wrong for the one
+     * source in the game whose energy is almost all below 200 Hz, where a wall
+     * is a diffraction edge rather than a barrier, and it is the same argument
+     * `_playCollapse` already makes when it passes `occlusion: 0.12`.
+     *
+     * The geometry is still READ — a grenade in the next room must not be as
+     * loud as one in the street — it just counts for much less, and less again
+     * the bigger the charge.
+     */
+    const occ = this.field.occlusionAt(pos.x, pos.y, pos.z) *
+      clamp(0.55 - radius / 34, 0.12, 0.5);
+    this._playAt('explosion', pos.x, pos.y, pos.z, {
+      radius, level, send: 1.0, gain: blastRangeGain(dist, radius), occlusion: occ,
+    }, 'weapons', 1);
     this.mixer.duck(clamp(0.8 + radius / 90, 0.8, 0.95), 0.35);
     // Concussion reaches as far as the blast does, rather than a fixed 22 m.
     const near = clamp(1 - dist / Math.max(12, radius * 1.3), 0, 1);

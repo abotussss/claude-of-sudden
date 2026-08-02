@@ -103,6 +103,128 @@ export function attenuationAt(dist) {
   return clamp(Math.max(near, dist > 45 ? far : 0), 0.0, 1);
 }
 
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHAT A GUNSHOT'S RANGE IS WORTH, AS A MULTIPLIER ON THE CURVE ABOVE.
+ * ════════════════════════════════════════════════════════════════════════════
+ *
+ * `attenuationAt` is shared by every spatialised sound in the game, and that is
+ * why it is NOT the lever for 「銃声が全然聞こえない（距離離れていてももっと聞こえて
+ * いい）」. Footsteps ride the same curve, they were made quieter at the player's
+ * explicit request (「敵味方の足音はもう少し小さくしてください」), and a curve change
+ * would hand that back. Every previous pass that reached for a global knob is in
+ * this file's history and none of them reached him.
+ *
+ * So the range law is per-category, and this is gunfire's. It is flatter than
+ * the shared curve for the same reason a rifle carries across a valley and a
+ * boot does not: a muzzle blast is a 160 dB impulse and what reaches you at
+ * 150 m is still an event, not a texture.
+ *
+ * MEASURED at the output of a running game (`tools/audiotest.mjs --ear`), peak
+ * at `masterGain`, against the player's own rifle at 0.268:
+ *
+ *              before            with this
+ *   40 m       0.0317  -18.5 dB
+ *   55 m       0.0336  -18.0 dB
+ *   90 m       0.0137  -25.8 dB
+ *  150 m       0.0122  -26.8 dB
+ *
+ * and the ambience bed sits at -35 dB, so 150 m of war was arriving eight
+ * decibels above the wind. The "after" column is filled in by the same tool.
+ *
+ * The shape: unchanged inside `HINGE` — the near field is already right and
+ * making a man shooting at ten metres louder is nobody's request — then a
+ * gentle power law from there, so the falloff stays MONOTONE and a firefight
+ * still tells you roughly how far away it is. Flattening it to a constant would
+ * make 150 m as loud as 40 and destroy the only distance cue in the mix.
+ */
+const GUN_HINGE = 12;
+const GUN_FALL = 0.36;
+export function gunRangeGain(dist) {
+  const d = Math.max(dist, GUN_HINGE);
+  const want = attenuationAt(GUN_HINGE) * Math.pow(GUN_HINGE / d, GUN_FALL);
+  return clamp(want / Math.max(attenuationAt(d), 1e-6), 1, 4.5);
+}
+
+/**
+ * THE SAME ARGUMENT FOR A BLAST, WHICH HAD IT WORSE — 「爆風の音が小さい」.
+ *
+ * MEASURED: a 15 m airstrike detonating 12 m from the player peaked at 0.364
+ * against his own rifle's 0.268 — 2.7 dB. Two and a half decibels is the
+ * difference between a rifle and a rifle; it is not the difference between a
+ * rifle and a bomb. At 35 m the same blast was 9.2 dB BELOW his rifle.
+ *
+ * The cause is that `attenuationAt` is a near-field 1/r law tuned for a point
+ * source, and it was being applied to a charge whose fireball is bigger than the
+ * distance to the listener: at 12 m it scaled the blast to 0.19, i.e. took 14 dB
+ * off it, for standing just outside the crater. A blast is not a point source at
+ * that range and its low end barely obeys 1/r at any range.
+ *
+ * Two terms, because the two failures are different:
+ *
+ *   HEFT is absolute and scales with the charge. It is what was missing at 12 m,
+ *   where the distance law is not the problem — the blast simply was not big.
+ *   A 6 m frag gets +1.3 dB, a 15 m airstrike +5.4 dB, so the two stop sounding
+ *   like the same event, which they already did not in `explosion()`'s synthesis.
+ *
+ *   FLAT is the range law, and it hinges at the charge's own scale rather than
+ *   at 12 m: what is left of a big charge at a hundred metres is its low end,
+ *   and the low end is the part that obeys 1/r least.
+ */
+export function blastRangeGain(dist, radius = 6) {
+  const r = clamp(radius, 4, 26);
+  const heft = clamp(0.75 + r / 10, 1, 2.4);
+  const hinge = clamp(r * 0.8, 8, 16);
+  const d = Math.max(dist, hinge);
+  const flat = attenuationAt(hinge) * Math.pow(hinge / d, 0.5) /
+    Math.max(attenuationAt(d), 1e-6);
+  return clamp(heft * clamp(flat, 1, 5), 1, 6);
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHAT A WALL DOES TO A SOUND — 「音がこもっている時が多い」.
+ * ════════════════════════════════════════════════════════════════════════════
+ *
+ * MEASURED over a live match (`tools/audiotest.mjs --ear`, the occlusion
+ * census): of 1963 spatialised voices, **90.1 % were at occlusion >= 0.9**, and
+ * `--occwhy` confirms that is not a broken raycast — the rays are hitting real
+ * concrete a fifth of the way to the source. The map is a city, the fight is on
+ * the other side of a building, and the model was answering that with a 420 Hz
+ * low-pass, a -26 dB shelf above 2.2 kHz and 8.4 dB of level. Nine sounds out of
+ * ten in this game were arriving through a telephone. That is the complaint, in
+ * one number, and it is also half of why the gunfire could not be heard.
+ *
+ * The model was wrong about the physics, not merely about the taste. A rifle
+ * fired two streets away does not reach you THROUGH the masonry; it reaches you
+ * over the roofs and down the street, diffracted and reflected, having lost its
+ * top end and some level but none of its identity. Treating the direct line as
+ * the only path is what threw all of that away.
+ *
+ * Two changes, and the LEVEL TERM IS DELIBERATELY UNTOUCHED at `1 - 0.62*occ`:
+ *
+ *  1. the filtering is softened — 2.1 kHz instead of 420 Hz at a full block,
+ *     and a -13 dB shelf instead of -26. Still unmistakably behind something;
+ *     no longer a different sound.
+ *  2. the geometry's grip relaxes past 40 m, because that is where the flanking
+ *     paths start to dominate the direct one. It starts at 40 and not at 20 so
+ *     that REMOTE FOOTSTEPS ARE NOT AFFECTED AT ALL: `STEP_RANGE` in battle.js
+ *     is 40 m, the level term does not move, and a man behind a wall at 15 m is
+ *     as muted as he was. Footsteps were made quieter on request and none of
+ *     that is being handed back here.
+ *
+ * @param {number} occ  0..1 from `occlusionAt`
+ * @param {number} dist metres
+ * @returns {{lp: number, shelf: number}} low-pass Hz and high-shelf dB
+ */
+export function occlusionFilter(occ, dist) {
+  const eff = occ * clamp(1 - (dist - 40) / 110, 0.5, 1);
+  return {
+    lp: clamp(20000 * Math.pow(0.105, eff), 900, 20000),
+    shelf: -13 * eff,
+  };
+}
+
 const nowWall = () =>
   (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
 
@@ -585,11 +707,12 @@ export class SpatialField {
     em.wallEnd = nowWall() + (em.endTime - now) + WALL_SLACK;
     em._setPos(opts.x, opts.y, opts.z, t);
 
-    // Air absorption + occlusion filtering.
+    // Air absorption + occlusion filtering. @see occlusionFilter — the level
+    // term below is the geometry's; the filtering is no longer a telephone.
     em.airLP.frequency.setValueAtTime(airCutoff(dist), t);
-    const occCut = 20000 * Math.pow(0.021, occ); // 1.0 -> ~420 Hz
-    em.occLP.frequency.setValueAtTime(clamp(occCut, 300, 20000), t);
-    em.occHS.gain.setValueAtTime(-26 * occ, t);
+    const of = occlusionFilter(occ, dist);
+    em.occLP.frequency.setValueAtTime(of.lp, t);
+    em.occHS.gain.setValueAtTime(of.shelf, t);
     em.distGain.gain.setValueAtTime(clamp(atten * (opts.gain ?? 1), 0, 4), t);
 
     this._applySend(em, opts.send ?? 0.25);
@@ -619,9 +742,10 @@ export class SpatialField {
     const atten = this.attenuation(dist) * (1 - 0.62 * occ);
     em.occ = occ;
     em.dist = dist;
+    const of = occlusionFilter(occ, dist);
     em.airLP.frequency.setTargetAtTime(airCutoff(dist), t, 0.12);
-    em.occLP.frequency.setTargetAtTime(clamp(20000 * Math.pow(0.021, occ), 300, 20000), t, 0.12);
-    em.occHS.gain.setTargetAtTime(-26 * occ, t, 0.12);
+    em.occLP.frequency.setTargetAtTime(of.lp, t, 0.12);
+    em.occHS.gain.setTargetAtTime(of.shelf, t, 0.12);
     em.distGain.gain.setTargetAtTime(clamp(atten * (em.userGain ?? 1), 0, 4), t, 0.1);
   }
 
