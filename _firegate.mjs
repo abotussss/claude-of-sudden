@@ -42,7 +42,8 @@ await p.evaluate(() => {
     /* of the men WITH a target, what stopped the trigger */
     gate: {
       notVisible: 0, outOfRange: 0, notPeeking: 0, movingToCover: 0,
-      armour: 0, reloading: 0, dryMag: 0, post: 0, working: 0, notCombat: 0, firing: 0,
+      armour: 0, reloading: 0, magEmpty: 0, outOfAmmo: 0, post: 0, working: 0,
+      notCombat: 0, firing: 0, blind: 0,
     },
     state: {},
     /* how far the fight is, for the men who have one */
@@ -70,7 +71,12 @@ await p.evaluate(() => {
       if (a.working) { g.working++; continue; }
       if (a.state !== 'combat' && a.state !== 'suppressed') { g.notCombat++; continue; }
       if (a.animator?.reloading) { g.reloading++; continue; }
-      if (a.ammo <= 0) { g.dryMag++; continue; }
+      // The two are completely different problems: `outOfAmmo` is a man whose
+      // POUCH is empty and who can only be fixed by a crate, `magEmpty` is the
+      // frame between running the magazine out and the reload starting.
+      if (a.dry) { g.outOfAmmo++; continue; }
+      if (a.ammo <= 0) { g.magEmpty++; continue; }
+      if (a.blindT > 0) { g.blind++; continue; }
       if (a.targetActor?.isVehicle === true) { g.armour++; continue; }
       const atCover = a.cover ? a.position.distanceTo(a.coverPos) < 0.85 : false;
       if (a.cover && !atCover) { g.movingToCover++; continue; }

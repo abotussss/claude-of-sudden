@@ -165,6 +165,22 @@ const SNIPER_MIN = 16;
 const RESERVE_MUL = 2.0;
 
 /**
+ * HOW STALE A LAST-KNOWN MAY BE AND STILL BE WORTH ROUNDS.
+ *
+ * `_firegate.mjs` on the build after the advancing-fire pass: only **17.3 %**
+ * of contact time has a clear line of sight, and 16.2 % of it is a man at cover,
+ * leaning out, with a contact whose last-known has gone stale — the largest
+ * remaining block after the walk. It was 4 s, chosen when a burst was two rounds
+ * long; `hasTarget` itself survives 6.5 s of lost sight, so a man who still
+ * COUNTS somebody as his target and will not put a round on the doorway he
+ * counts him behind is holding two contradictory opinions. 6 s lines the two up.
+ *
+ * It costs the player nothing — rounds into a wall are rounds not into him —
+ * and it is most of 「銃声が鳴り響きまくるのが理想」.
+ */
+const SUPPRESS_WINDOW = 6;
+
+/**
  * HOW OFTEN A MAN ASKS WHETHER THERE IS A NEARER FIGHT. Jittered per man on top
  * of this, so forty of them do not all re-decide on the same frame. `match`
  * re-plans at 2 s; this is deliberately slower than that, because the plan is
@@ -1770,7 +1786,7 @@ export class Agent {
     this.wantFire = this.peeking && this.targetVisible && this.hasTarget
       && dist < this.weaponRange
       && (!armour || this.armourWorth === 1 || this.armourWorth === 3);
-    if (!this.wantFire && !armour && this.hasTarget && this.lastKnownAge < 4 && this.peeking) {
+    if (!this.wantFire && !armour && this.hasTarget && this.lastKnownAge < SUPPRESS_WINDOW && this.peeking) {
       this.wantFire = this.rng.float() < 0.4 + (1 - this.traits.trigger) * 0.55;
     }
     if (!t) this._scan(dt, null);
@@ -3171,7 +3187,7 @@ export class Agent {
        * "もっと戦争らしく撃ち合いまくって" asks for and it costs the player nothing,
        * because rounds into a wall are rounds not into him.
        */
-      if (!this.wantFire && !armour && this.hasTarget && this.lastKnownAge < 4 && this.peeking) {
+      if (!this.wantFire && !armour && this.hasTarget && this.lastKnownAge < SUPPRESS_WINDOW && this.peeking) {
         /**
          * 0.12 + (1-t)*0.62 IS 0.17 FOR A MARKSMAN, and the marksman family is
          * most of this roster. What that produced is a line of men leaning out
