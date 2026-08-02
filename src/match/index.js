@@ -3521,6 +3521,15 @@ export class MatchSystem {
       name,
       // Must match `_spawnTeam`, or the persona cache draws a different man.
       role: this.domination ? AI_ROLE_FIELD : roleOf(team, this.round),
+      /**
+       * 「増援部隊はリスポーンはないけどAIとしての強さはマックスにして 一人で４人は
+       * キルできるくらいには」 — the one flag `noRespawn` earns. `src/ai` owns what
+       * "max" means (its own archetype, its own skill draw, its own cone and
+       * health multipliers — @see the `spearhead` block in src/ai/agent.js);
+       * `match` owns only the fact that THIS man is one of the ten, which is
+       * the same fact `roster[].noRespawn` two lines below records.
+       */
+      elite: true,
     });
     this._squads[team]?.add(agent);
     this._stampSpawn(agent);

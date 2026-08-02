@@ -93,6 +93,27 @@ const SITE_HOLD_R = 9;
 const LEAD_SLACK = 9;
 
 /**
+ * THE UPPER POST'S TWO NUMBERS. @see `Agent._runPost` and `StairMap`.
+ *
+ * `POST_PHASE_T` is the abandon clock on every phase of the climb and it is the
+ * only thing standing between "two men hold a window" and the doorway epidemic
+ * in a new costume: a man who cannot make the next waypoint in twelve seconds
+ * gives the post back and rejoins the fight. `POST_REACH` keeps a man from
+ * walking the length of the map to a staircase — the whole point is that the
+ * building is already where he is fighting.
+ */
+const POST_PHASE_T = 12;
+const POST_REACH = 55;
+
+/**
+ * INSIDE THIS, A BOLT GUN IS THE WRONG WEAPON AND HE LEAVES. 16 m is a little
+ * over the map's street width, and it is deliberately well outside the 6.5 m at
+ * which a man who has already closed would simply be executed while turning
+ * round. @see the break in `_combat`.
+ */
+const SNIPER_MIN = 16;
+
+/**
  * PERSONALITY — and why one `skill` scalar was not enough.
  *
  * `skill` says how well a man SHOOTS: cone, tracking rate, reaction, settle. It
@@ -151,6 +172,28 @@ const ARCHETYPES = {
    * this archetype. @see the bolt-gun block there.
    */
   sniper: { aggression: 0.12, patience: 0.95, range: 52, exposure: 0.10, flank: 0.14, trigger: 0.97 },
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE PARADROP — 「増援部隊はリスポーンはないけどAIとしての強さはマックスにして
+   *  一人で４人はキルできるくらいには銃の精度や行動力、立ち回りなどを強くすること」
+   * ────────────────────────────────────────────────────────────────────────
+   * The ten men `src/match/reinforce.js` puts on the ground NEVER RESPAWN —
+   * `roster[].noRespawn` is the whole rule — so they are the one arrival in the
+   * game whose value is not amortised over a life and a half. Each of them has
+   * to be worth about four ordinary men on the way in, and then he is gone.
+   *
+   * IT IS ITS OWN ARCHETYPE AND NOT A MULTIPLIER ON A SHARED ONE, deliberately:
+   * every other man on the map draws from `ARCHETYPE_MIX` and must not move by
+   * a single point because of this. `drawPersona` reaches this table only when
+   * `match` passes `elite` to `ai.spawn`, and the constructor's elite block is
+   * likewise keyed on the man rather than on the archetype name.
+   *
+   * The traits are a spearhead: he closes (0.82), he does not sit (0.45), he
+   * fights at 24 m — the distance at which a tight cone actually kills — he
+   * will stand in the open (0.72) and he manoeuvres (0.75). The trigger is
+   * mid: he is not a sprayer, because his rounds are worth something.
+   */
+  spearhead: { aggression: 0.82, patience: 0.45, range: 24, exposure: 0.72, flank: 0.75, trigger: 0.50 },
 };
 
 /**
@@ -257,6 +300,25 @@ const ARCHETYPE_ARMS = {
   anchor: ['lmg', 'ak', 'carbine', 'magnum'],
   marksman: ['ak', 'carbine', 'ak', 'magnum'],
   sniper: ['sniper'],
+  /** The best of the rack, and one bolt gun in the stick. @see `spearhead`. */
+  spearhead: ['ak', 'lmg', 'carbine', 'smg', 'ak', 'carbine', 'lmg', 'smg', 'ak', 'sniper'],
+};
+
+/**
+ * WHAT "MAXED OUT" MEANS, AS MULTIPLIERS ON THE MAN HE WOULD OTHERWISE BE.
+ * Applied in the constructor after the weapon, so an elite with a belt is still
+ * a belt gunner — he is simply the best one on the map. @see `spearhead`.
+ *
+ * `health` is the honest half of "worth four men": 150 against 100 is roughly
+ * a second longer in the open under fire, and a second is what a 0.55x cone and
+ * a 0.4x settle need to convert. Everything else is marksmanship — cone,
+ * settle, tracking, hand shake and reaction — plus the ammunition to keep using
+ * it, because a man who cannot respawn also cannot walk to a crate and back.
+ */
+const ELITE = {
+  skillFloor: 0.88, skillCap: 0.98,
+  cone: 0.55, settle: 0.40, track: 1.7, wobble: 0.45,
+  health: 150, reserve: 1.75, view: 1.25, range: 1.15,
 };
 
 /**
@@ -271,9 +333,10 @@ const ARCHETYPE_ARMS = {
  * the defence gets better on average without becoming uniform — there is still a
  * 0.2 conscript in it.
  */
-export function drawPersona(rng, role, meanSkill, defenderBonus = 0) {
+export function drawPersona(rng, role, meanSkill, defenderBonus = 0, elite = false) {
   const mix = ARCHETYPE_MIX[role === 'defend' || role === 'attack' ? role : 'any'];
-  const name = mix[rng.int(0, mix.length - 1)];
+  // A paradropped man is not drawn from the roster mix at all. @see `spearhead`.
+  const name = elite ? 'spearhead' : mix[rng.int(0, mix.length - 1)];
   const a = ARCHETYPES[name];
   const t = (v, sd) => Math.min(1, Math.max(0.02, v + rng.gauss() * sd));
   /**
@@ -296,8 +359,17 @@ export function drawPersona(rng, role, meanSkill, defenderBonus = 0) {
       /** METRES, not 0..1 — the distance this man wants the fight at. */
       range: a.range * rng.range(0.82, 1.24),
     },
-    skill: Math.min(0.95, Math.max(0.12,
-      meanSkill + (role === 'defend' ? defenderBonus : 0) + rng.gauss() * 0.19)),
+    elite,
+    /**
+     * A PARADROPPED MAN IS DRAWN FROM THE TOP OF THE DISTRIBUTION, NOT FROM ITS
+     * MIDDLE: 0.88-0.98 rather than a gaussian around `RULES.botSkill`. The
+     * spread is kept — a stick of ten identical shooters is as unreadable as a
+     * roster of them — it is simply a different, much narrower distribution.
+     */
+    skill: elite
+      ? Math.min(ELITE.skillCap, ELITE.skillFloor + Math.abs(rng.gauss()) * 0.06)
+      : Math.min(0.95, Math.max(0.12,
+        meanSkill + (role === 'defend' ? defenderBonus : 0) + rng.gauss() * 0.19)),
   };
 }
 
@@ -549,6 +621,13 @@ export class Agent {
     this.name = opts.name ?? `BOT-${this.id}`;
     /** 'attack' | 'defend' — informational; the objective carries the verb. */
     this.role = opts.role ?? null;
+    /**
+     * PARADROPPED. Set by `src/match`'s `ai.spawn(variant, pos, yaw, { elite })`
+     * and read by `AiSystem.personaFor` on the very next lines, which is why it
+     * is up here with the other `opts` fields rather than beside the block that
+     * uses it. @see the `spearhead` archetype and `ELITE`.
+     */
+    this._elite = opts.elite === true;
 
     /* ---------------- fireteam (owned by `Squad`) ---------------- */
     /**
@@ -802,6 +881,29 @@ export class Agent {
       if (x.weaponRange) this.weaponRange = x.weaponRange[0] + k * x.weaponRange[1];
       if (x.viewRange) this.viewRange = x.viewRange;
     }
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * AND THE TEN WHO CANNOT COME BACK. @see `ELITE` / the `spearhead` block.
+     * ══════════════════════════════════════════════════════════════════════
+     * Everything above is the ordinary soldier this man would have been; this
+     * is what "AIとしての強さはマックス" costs, applied as multipliers so an elite
+     * with a belt-fed gun is still a belt-fed gunner. It is keyed on `elite`
+     * and nothing else on the map reads that flag, so no ordinary bot's numbers
+     * move by a single point.
+     */
+    this.elite = persona.elite === true;
+    if (this.elite) {
+      this.spread *= ELITE.cone;
+      this.settleTime *= ELITE.settle;
+      this.trackRate *= ELITE.track;
+      this.aimWobble *= ELITE.wobble;
+      this.weaponRange *= ELITE.range;
+      this.viewRange *= ELITE.view;
+      this.reserve = Math.round(this.reserve * ELITE.reserve);
+      this.startReserve = this.reserve;
+      this.health = ELITE.health;
+      this.maxHealth = ELITE.health;
+    }
     this.aimTarget = new THREE.Vector3();
     this.aimActual = new THREE.Vector3();
     this.aimWeight = 0;
@@ -842,6 +944,16 @@ export class Agent {
      */
     this._holdSpot = new THREE.Vector3();
     this._hasHoldSpot = false;
+    /**
+     * THE WINDOW UPSTAIRS, or null. @see `_runPost` — `postPhase` is
+     * 0 approach / 1 climb / 2 hold / 3 come down, `postWp` indexes
+     * `StairMap`'s route and `postTimer` is the abandon clock on the phase.
+     */
+    this.post = null;
+    this.postPhase = 0;
+    this.postWp = 0;
+    this.postTimer = 0;
+    this._postCool = 0;
     this.holdTimer = 0;
     /**
      * WATCHING AN ANGLE IS NOT STARING AT A DOT. A man stood in his sector sweeps
@@ -910,6 +1022,11 @@ export class Agent {
   /* ================================================================== */
   /* frame                                                              */
   /* ================================================================== */
+
+  /** True while `_runPost` is walking him up or down a flight. @see `_move`. */
+  get postClimbing() {
+    return this.post !== null && (this.postPhase === 1 || this.postPhase === 3);
+  }
 
   get eye() {
     return this._eye.set(this.position.x, this.position.y + this.eyeHeight, this.position.z);
@@ -1134,8 +1251,283 @@ export class Agent {
     if (s !== STATE.COMBAT && s !== STATE.SUPPRESSED) this.peeking = false;
   }
 
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * TWO OR THREE MEN UPSTAIRS — "屋内にAI入るけど2階とか屋上には来ないね ちゃんと
+   * 行動させて、そこにも 上から打つのは強いから"
+   * ──────────────────────────────────────────────────────────────────────────
+   * `StairMap` measured one route per building at boot; this walks it. It owns
+   * the man completely while it runs — `_think` returns the moment this says
+   * yes — because every other behaviour in this file is written against the
+   * height field and HE IS NOT ON IT above the ground storey. `_offGrid` is
+   * true for him, `_goTo` would refuse to plan, `_descend` would try to throw
+   * him off the landing and `_pickHoldSpot` would send him back to the street.
+   *
+   * FOUR PHASES AND EVERY ONE OF THEM HAS A CLOCK. The clock is the whole
+   * safety argument: a man who cannot get up the stairs, or who is jammed on a
+   * landing by a squadmate, drops the post and becomes an ordinary soldier
+   * again — no rung of `_unstick` is consulted, nothing repeats, and the worst
+   * case is bounded by `POST_PHASE_T` seconds of one man in four hundred
+   * standing in a stairwell.
+   *
+   *   0 APPROACH   A* to `route[0]`, which `StairMap` snapped onto the height
+   *                field precisely so this leg is an ordinary walk.
+   *   1 CLIMB      the route, one waypoint at a time, as DETOURS. There is no
+   *                path and there cannot be one; the capsule's own 0.42 m step
+   *                offset walks 0.19 m treads and always could.
+   *   2 HOLD       stand at a firing position, peek, and shoot. No cover
+   *                selection: `CoverMap` is indexed by cell and a cell up here
+   *                describes the shop floor six metres below him.
+   *   3 DESCEND    the same route backwards. A step graph is symmetric, so the
+   *                way up IS the way down.
+   */
+  _wantPost(dt) {
+    if (this.post || !this.squad) return false;
+    if (this.ctx.time.elapsed < this._postCool) return false;
+    const stairs = this.ai.stairs;
+    if (!stairs || !stairs.posts.length) return false;
+    if (!this.squad.canPost(this)) return false;
+    // Not while he is bleeding, and not while he has nothing to shoot with.
+    if (this.health < 55 || this.dry) return false;
+    /**
+     * THE SNIPER TAKES ONE ON SIGHT AND EVERYBODY ELSE HAS TO WANT IT.
+     * 「スナイパーは立ち回りちゃんと屋内から撃ったり安全圏から遠くから撃つように」 —
+     * a window on the first floor IS the indoor firing position that sentence
+     * asks for, and it is the one place on this map where his 52 m preferred
+     * range and a roof over his head are the same decision. Everybody else who
+     * qualifies (`Squad.canPost` — the marksman and the anchor) takes one at a
+     * trickle, so the two tokens are usually his and are never idle if he is
+     * dead.
+     */
+    if (!this.sniper && this.rng.float() > dt * 0.2) return false;
+    let best = null, bestD = POST_REACH * POST_REACH;
+    for (const p of stairs.posts) {
+      if (p.held >= 0) continue;
+      const dx = p.foot.x - this.position.x, dz = p.foot.z - this.position.z;
+      const d = dx * dx + dz * dz;
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    if (!best) return false;
+    if (!this._goTo(best.foot) && !this.pathPending) return false;
+    best.held = this.id;
+    this.post = best;
+    this.postPhase = 0;
+    this.postWp = 0;
+    /**
+     * THE APPROACH CLOCK IS A WALK AND THE OTHERS ARE A MANOEUVRE. Twelve
+     * seconds is right for one waypoint of a staircase and wrong for fifty-five
+     * metres of street: at 4 m/s that is fourteen seconds before anything goes
+     * wrong at all, and the first run gave up on 7 of 29 for exactly that.
+     */
+    this.postTimer = POST_PHASE_T + Math.sqrt(bestD) / 2.6;
+    this.squad.claimPost(this);
+    if (this.ai.postStats) this.ai.postStats.taken++;
+    this.cover = null;
+    this.ai.cover?.release(this.id);
+    return true;
+  }
+
+  /** Give the window back and go and be an ordinary soldier. */
+  _dropPost(why = 'timeout') {
+    /**
+     * COUNTED, because a climb that silently never completes looks exactly like
+     * a climb that was never attempted: both put nobody upstairs. `postStats`
+     * is report-time only and `_sixboot.mjs` reads it.
+     */
+    const st = this.ai.postStats;
+    if (st) st.drop[`${this.postPhase}:${why}`] = (st.drop[`${this.postPhase}:${why}`] ?? 0) + 1;
+    if (this.post) {
+      if (this.post.held === this.id) this.post.held = -1;
+      this.post = null;
+    }
+    this.squad?.releasePost(this);
+    this._detourTimer = 0;
+    this.hasMoveTarget = false;
+    // Long enough that a man who fails a climb does not spend the round trying
+    // it, short enough that a side which loses both posters fills them again.
+    this._postCool = this.ctx.time.elapsed + this.rng.range(25, 55);
+    this.repathTimer = 0;
+    this._setState(STATE.ADVANCE);
+  }
+
+  /** @returns true while the post owns this man's movement. */
+  _runPost(dt) {
+    const p = this.post;
+    if (!p) return false;
+    if (this.ai.combatEnabled === false) { this._dropPost('freeze'); return false; }
+    this.postTimer -= dt;
+    if (this.postTimer <= 0) { this._dropPost('timeout'); return false; }
+
+    const t = this.hasTarget || this.lastKnownAge < 3 ? this.lastKnown : null;
+
+    if (this.postPhase === 0) {
+      this.crouch = false;
+      this.aimWeight = 0.45;
+      this.wantFire = false;
+      this.desiredSpeed = 4.0;
+      const dx = p.foot.x - this.position.x, dz = p.foot.z - this.position.z;
+      if (dx * dx + dz * dz < 2.2 * 2.2) {
+        this.postPhase = 1;
+        this.postWp = 1;
+        this.postTimer = POST_PHASE_T;
+        this.hasMoveTarget = false;
+        return true;
+      }
+      if (!this.hasMoveTarget && !this.pathPending && this.repathTimer <= 0) {
+        this.repathTimer = 1.4;
+        /**
+         * A DEFERRED PATH IS NOT A FAILED PATH. `_goTo` returns false in two
+         * completely different situations — A* found nothing, and the frame's
+         * A* ration was already spent (`pathPending`, retried next frame) — and
+         * reading the second as "there is no way in" threw away 13 of the first
+         * 29 posts anybody tried to take. @see `_goTo`'s own note on the budget.
+         */
+        if (!this._goTo(p.foot) && !this.pathPending) { this._dropPost('no-route'); return false; }
+      }
+      return true;
+    }
+
+    if (this.postPhase === 1 || this.postPhase === 3) {
+      const up = this.postPhase === 1;
+      const wp = p.route[this.postWp];
+      if (!wp) { this._dropPost('bad-waypoint'); return false; }
+      this.crouch = false;
+      this.aimWeight = 0.4;
+      this.wantFire = false;
+      this.desiredSpeed = 2.9;
+      this.hasMoveTarget = false;
+      // Steered, not planned. Refreshed every frame so `_move` never falls back
+      // to a path that does not exist. @see `_commitDetour`, which this
+      // deliberately does NOT call: it would push `repathTimer` out and this
+      // manoeuvre re-arms itself anyway.
+      this._detour.copy(wp);
+      this._detourTimer = Math.max(this._detourTimer, 0.5);
+      /**
+       * THE CURSOR LOOKS AHEAD, because a man does not arrive at a waypoint —
+       * he arrives NEAR one, gets pushed off it by the two squadmates on the
+       * same flight, and walks past the next two while he recovers. A strict
+       * "within one metre of exactly the next one" cursor stalled every single
+       * climb: measured, 7 of 16 posts died on the stairs having reached 4.68 m,
+       * i.e. standing on the first floor with the counter still pointing at a
+       * tread. Three ahead is the length of one landing.
+       */
+      for (let n = 0; n <= 4; n++) {
+        const k = this.postWp + (up ? n : -n);
+        if (k < 0 || k >= p.route.length) break;
+        const w = p.route[k];
+        const ddx = w.x - this.position.x, ddz = w.z - this.position.z;
+        /**
+         * TIGHT, AND IT HAS TO BE. Waypoints are 0.8 m apart on the flood's own
+         * lattice, so a tolerance of 1.1 m horizontally and 0.9 m vertically is
+         * satisfied BY A MAN STANDING AT THE BOTTOM OF THE FLIGHT looking at the
+         * second tread: he ticks it off, the cursor runs three ahead, and he
+         * spends the clock steering at a point over his head. Traced twice.
+         * 0.8 / 0.5 is "I am on this tread", which is the question being asked.
+         */
+        if (ddx * ddx + ddz * ddz < 0.8 * 0.8 && Math.abs(this.position.y - w.y) < 0.5) {
+          this.postWp = k + (up ? 1 : -1);
+          this.postTimer = POST_PHASE_T;
+        }
+      }
+      /**
+       * AND THE COMPLETION TEST IS HIS HEIGHT, NOT HIS CURSOR. The question the
+       * whole manoeuvre asks is "is he upstairs"; a route index is a means to
+       * it. This is also what makes the last waypoint's exact reachability stop
+       * mattering — it is chosen at the edge of the footprint, against a wall,
+       * which is the one place a capsule with three men behind it cannot always
+       * stand.
+       */
+      /**
+       * HEIGHT ALONE FINISHES THE CLIMB. A cursor that has run off the end of
+       * the route without the man having gained a storey is a FAILED climb, not
+       * a finished one — the first version treated the two as the same and put
+       * a man into the hold phase standing on the ground floor with his firing
+       * position three metres over his head, where the horizontal-only arrival
+       * test below then declared him to have arrived at it.
+       */
+      if (up && this.postWp >= p.route.length && this.position.y < p.top - 1.2) {
+        this._dropPost('climb-ran-out');
+        return false;
+      }
+      if (up && this.position.y > p.top - 1.2) {
+        this.postPhase = 2;
+        this.postTimer = this.rng.range(35, 75) + this.traits.patience * 40;
+        if (this.ai.postStats) this.ai.postStats.reachedTop++;
+        this._hasHoldSpot = true;
+        this._holdSpot.copy(p.stand[this.id % p.stand.length]);
+      } else if (!up && (this.position.y < p.route[0].y + 0.9 || this.postWp < 0)) {
+        this._dropPost('home');
+        return false;
+      }
+      return true;
+    }
+
+    /* ---- 2: he is up, and this is the whole reason for the walk ---- */
+    const stand = this._holdSpot;
+    const dx = stand.x - this.position.x, dz = stand.z - this.position.z;
+    const far = dx * dx + dz * dz;
+    // HEIGHT IS PART OF "AM I THERE". A firing position on the first floor is
+    // 3.3 m directly over the shop floor, and a horizontal-only test says a man
+    // standing under it has arrived.
+    if (Math.abs(stand.y - this.position.y) > 1.4) {
+      this.postPhase = 3;
+      this.postWp = p.route.length - 1;
+      this.postTimer = POST_PHASE_T;
+      return true;
+    }
+    if (far > 1.1 * 1.1) {
+      this.desiredSpeed = 1.9;
+      this._detour.copy(stand);
+      this._detourTimer = Math.max(this._detourTimer, 0.5);
+    } else {
+      this.desiredSpeed = 0;
+      this._detourTimer = 0;
+    }
+    this.hasMoveTarget = false;
+
+    if (this.peekTimer <= 0) {
+      this.peeking = this.targetVisible !== false;
+      this.peekTimer = this.peeking
+        ? this.rng.range(1.2, 2.2) + this.traits.exposure * this.rng.range(0.8, 2.6)
+        : this.rng.range(0.3, 0.9);
+      // A bolt gun has to outlast its own settle, exactly as it does in cover.
+      if (this.sniper && this.peeking) {
+        this.peekTimer = Math.max(this.peekTimer, this.settleTime + 1 / this.fireRate + 0.35);
+      }
+    }
+    this.crouch = !this.peeking;
+    this.aimWeight = this.peeking ? 1 : 0.6;
+    const armour = this.targetActor?.isVehicle === true;
+    const dist = t ? this.position.distanceTo(t) : Infinity;
+    this.wantFire = this.peeking && this.targetVisible && this.hasTarget
+      && dist < this.weaponRange
+      && (!armour || this.armourWorth === 1 || this.armourWorth === 3);
+    if (!this.wantFire && !armour && this.hasTarget && this.lastKnownAge < 4 && this.peeking) {
+      this.wantFire = this.rng.float() < 0.4 + (1 - this.traits.trigger) * 0.55;
+    }
+    if (!t) this._scan(dt, null);
+
+    /**
+     * WHEN HE COMES DOWN. The clock is the ordinary case; the other three are
+     * the ones that matter, and every one of them is "this window has stopped
+     * being worth a man": he is out of ammunition, he is hurt, or somebody has
+     * this angle ranged and he is being shot at through it.
+     */
+    if (this.dry || this.health < 40 || this.suppression > 1.35) {
+      this.postPhase = 3;
+      this.postWp = p.route.length - 1;
+      this.postTimer = POST_PHASE_T;
+    }
+    return true;
+  }
+
   _think(dt) {
     const sq = this.squad;
+    // THE WINDOW OUTRANKS THE STATE MACHINE, and it has to: above the ground
+    // storey this man is off the height field and every branch below assumes he
+    // is on it. @see `_runPost`.
+    if (this.post) { if (this._runPost(dt)) return; }
+    else if (!this.working && this._wantPost(dt)) return;
 
     // Working the charge outranks everything: both hands are on it, so no
     // walking, no shooting, and a crouched silhouette that reads as "busy".
@@ -1933,6 +2325,32 @@ export class Agent {
      * of them should be conservative" means in practice: the anchor breaks
      * contact at half health and comes back, the rusher dies where he stands.
      */
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * A SNIPER WHO IS BEING CLOSED ON BREAKS CONTACT — "無闇に突撃させない"
+     * ══════════════════════════════════════════════════════════════════════
+     * Everything else about him is a PREFERENCE — cover scored around 52 m, a
+     * long peek, an 8 m leash — and a preference loses to the man who is
+     * already inside it. At 0.9 rounds a second and a 1.4-1.9 s settle he
+     * cannot win a fight at twelve metres and should not be in one, so this is
+     * the one place his behaviour is a rule rather than a score: somebody
+     * visible inside `SNIPER_MIN` and he backs off, at full health, without
+     * being hurt first. It reuses the wounded fall-back below in every
+     * respect — same `_goTo`, same RETREAT, same re-entry — so there is no
+     * second manoeuvre to go wrong.
+     */
+    if (this.sniper && this.targetVisible && dist < SNIPER_MIN
+      && this.stateTime > 0.6 && this.rng.float() < dt * 1.6) {
+      const away = this._v
+        .copy(this.position).sub(target).setY(0).normalize()
+        .multiplyScalar(14).add(this.position);
+      if (this._goTo(away)) {
+        this.cover = null;
+        this.ai.cover?.release(this.id);
+        this._setState(STATE.RETREAT);
+        return;
+      }
+    }
     const breakHealth = 18 + (1 - tr.aggression) * 34;
     if (this.health < breakHealth && this.stateTime > 1.5
       && this.rng.float() < dt * (0.25 + (1 - tr.aggression) * 0.7)) {
@@ -2115,7 +2533,25 @@ export class Agent {
          * longer refuses a good position for being too close to the enemy,
          * which is not a thing a man holding a window does.
          */
-        minRange: Math.max(3, want * (isSniper ? 0.25 : 0.45)),
+        /**
+         * ════════════════════════════════════════════════════════════════════
+         * AND THE SNIPER'S FLOOR GOES BACK UP — "無闇に突撃させない"
+         * ════════════════════════════════════════════════════════════════════
+         * `want * 0.25` is 13 m for a sniper, and it was lowered to that
+         * deliberately, because the only indoor positions he could reach were
+         * ground storeys sitting ON the capture points and the range penalty
+         * was pushing him out of them. MEASURED with it in place (seed 7): his
+         * median engagement was 12.5 m and his median firing height was 0.05 m.
+         * That is a man with a bolt gun in a knife fight, in the street, which
+         * is exactly what the request says he must not be.
+         *
+         * `_runPost` is what pays for putting it back. He now has a first-floor
+         * window he can actually walk to, so "indoors" and "a long way from the
+         * contact" have stopped being the same trade-off, and 0.55 — 29 m for a
+         * 52 m preference — is the distance a scope is for. Nobody else's floor
+         * moves: 0.45 is untouched for every other archetype.
+         */
+        minRange: Math.max(3, want * (isSniper ? 0.55 : 0.45)),
         // The window has a floor: a rusher who wants the fight at 9 m would
         // rather have a wall at 22 m than no wall at all, and the range terms in
         // `CoverMap.pick` are a soft penalty, not a filter.
@@ -2438,6 +2874,20 @@ export class Agent {
    * special case here.
    */
   _trackProgress(dt) {
+    /**
+     * A MAN ON THE STAIRS IS NOT A MAN THE LADDER CAN HELP. Every rung of
+     * `_unstick` is written against the height field — a side-step to a cell, a
+     * re-path, a detour, a fall to the ground below — and he is on a landing
+     * that is not in it, so the best rung available would throw him back into
+     * the street he just left. `_runPost`'s own twelve-second clock per phase is
+     * the recovery, and it is stricter than this is: it gives the post up
+     * entirely rather than trying the same manoeuvre again.
+     */
+    if (this.post) {
+      this._progTime = 0;
+      this._progFrom.copy(this.position);
+      return;
+    }
     if (this.desiredSpeed <= 0.1 || this.working) {
       this._progTime = 0;
       this._progFrom.copy(this.position);
@@ -2886,8 +3336,14 @@ export class Agent {
     if (this.speed < 0.05) this.speed = 0;
 
     // facing: look where we are going, or at the threat when engaged
-    const engaged =
-      this.state === STATE.COMBAT || this.state === STATE.SUPPRESSED || this.hasTarget;
+    /**
+     * …EXCEPT ON THE STAIRS. Facing the threat while climbing turns the capsule
+     * sideways to the flight, and both of the moves that get a man over a tread
+     * — the controller's own step offset and `_tryVault` — are cast along his
+     * FACING. A man going upstairs looks upstairs. @see `_runPost`.
+     */
+    const engaged = !this.postClimbing &&
+      (this.state === STATE.COMBAT || this.state === STATE.SUPPRESSED || this.hasTarget);
     if (engaged && this.lastKnownAge < 8) {
       this.targetYaw = Math.atan2(this.lastKnown.x - this.position.x, this.lastKnown.z - this.position.z);
     } else if (this.speed > 0.2) {
@@ -3322,6 +3778,13 @@ export class Agent {
     this.wantFire = false;
     this.animator.enabled = false;
     this.ai.cover?.release(this.id);
+    // The window has to go back on the board the frame he falls out of it, or
+    // his side spends the rest of the round two men short of its own tokens.
+    if (this.post) {
+      if (this.post.held === this.id) this.post.held = -1;
+      this.post = null;
+      this.squad?.releasePost(this);
+    }
     if (this.controller) this.phys.removeCharacter(this.controller);
     this.controller = null;
     for (const c of this.colliders) this.phys?.removeCollider(c);

@@ -77,6 +77,19 @@ export class Squad {
     /** ids currently out wide. Size is capped by `flankTokens`. */
     this.flankers = new Set();
     this.flankTokens = 1;
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * THE UPPER FLOORS — "全員がそういう行動取るんじゃなくて２人や３人くらい"
+     * ────────────────────────────────────────────────────────────────────────
+     * The request has a number in it and the number is the point: shooting down
+     * from a window is strong, so a side that ALL went upstairs would be a side
+     * that stopped taking capture points. Two tokens per side, hard, and they go
+     * to the men whose job is already an angle rather than a manoeuvre — the
+     * sniper first, then the marksman and the anchor. @see `Agent._runPost` and
+     * `StairMap` for the routes themselves.
+     */
+    this.posters = new Set();
+    this.postTokens = 2;
     this.contact = new THREE.Vector3();
     this.hasContact = false;
     this.contactAge = Infinity;
@@ -115,6 +128,15 @@ export class Squad {
     // rather than leaving a fireteam holding a seat nobody is in.
     this._ftTimer = 0;
     if (this.flanker && !this.flanker.alive) this.flanker = null;
+    // A post token held by a dead man is a window nobody is standing at.
+    // `Agent.die` releases it too; this is the belt to that pair of braces.
+    if (this.posters.size) {
+      for (const id of this.posters) {
+        let found = false;
+        for (const m of this.members) if (m.id === id && m.alive) { found = true; break; }
+        if (!found) this.posters.delete(id);
+      }
+    }
     for (const id of this.flankers) {
       let found = false;
       for (const m of this.members) if (m.id === id) { found = true; break; }
@@ -301,6 +323,32 @@ export class Squad {
   claimFlank(agent) {
     this.flanker = agent;
     this.flankers.add(agent.id);
+  }
+
+  /**
+   * May this man go and hold an upper floor? @see `postTokens`.
+   *
+   * The trait test is the same one `canFlank` uses, READ THE OTHER WAY ROUND:
+   * `flank` under 0.4 is the sniper, the marksman and the anchor — the men who
+   * are already trying to hold one angle for a long time, and therefore the men
+   * for whom a window is an upgrade rather than a cage. A rusher upstairs is a
+   * rusher taken out of the game.
+   */
+  canPost(agent) {
+    if (this.posters.has(agent.id)) return true;
+    if (this.posters.size >= this.postTokens) return false;
+    if (agent.traits && agent.traits.flank >= 0.4) return false;
+    // A side that is losing men faster than it can hold ground has no business
+    // putting two of them in an attic.
+    return this.members.length >= 6;
+  }
+
+  claimPost(agent) {
+    this.posters.add(agent.id);
+  }
+
+  releasePost(agent) {
+    this.posters.delete(agent.id);
   }
 
   requestGrenade() {

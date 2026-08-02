@@ -2211,11 +2211,14 @@ const POST_UP_MAX = 4.4;
 /** Surfaces per column. Ground, mid-flight, first floor — three is enough for
  *  one storey and it bounds the working set at nx*nz*3 nodes per volume. */
 const POST_SURF = 5;
-/** Route waypoints are thinned to this spacing; the detour's own arrival
- *  radius is 0.6 m, so anything tighter is a waypoint he is already standing on. */
-const POST_WP_GAP = 1.6;
+/**
+ * Route waypoints are the flood's own lattice, one per 0.8 m step, and they are
+ * deliberately NOT thinned. @see the note beside `const route = raw`.
+ */
 /** How many firing positions to keep per building, and how far apart. */
 const POST_STANDS = 3;
+/** Most one route waypoint may be above the last. @see the flood's link test. */
+const POST_RISE_MAX = 0.85;
 const POST_STAND_GAP = 3.0;
 
 export class StairMap {
@@ -2287,6 +2290,20 @@ export class StairMap {
     return Math.abs(y1 - prev) <= CLIMB_TREAD;
   }
 
+  /**
+   * Is there mass between these two standing surfaces? One ray at chest height
+   * over the lower of the two, out to the segment length. @see the call site.
+   */
+  _blocked(x0, z0, y0, x1, z1, y1) {
+    const phys = this.physics;
+    const dx = x1 - x0, dz = z1 - z0;
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-4) return false;
+    const fx = dx / len, fz = dz / len;
+    const base = Math.min(y0, y1);
+    return phys.raycastAny(x0, base + 0.95, z0, fx, 0, fz, len + 0.05, phys.MASK.WORLD);
+  }
+
   _one(v) {
     const d = { b: v.building, surfaces: 0, seeds: 0, reached: 0, maxRel: 0, why: 'ok' };
     this.diag.push(d);
@@ -2353,6 +2370,20 @@ export class StairMap {
       const k = cell * POST_SURF;
       if (sy[k] === -Infinity) continue;
       if (sy[k] - v.floorY > 0.6) continue;      // not the ground storey
+      /**
+       * A SEED HAS TO BE A CELL A* CAN DELIVER A MAN TO, and this is the line
+       * that makes `route[0]` an honest handover point rather than a hope. The
+       * flood otherwise seeds from any ground-floor surface it found, so the
+       * parent chain could end on a square inside a stairwell that the height
+       * field does not have — and then the errand is "walk to the nearest cell
+       * to a place you cannot walk to", which `NavGrid.nearest` answers by
+       * searching RINGS and cheerfully returning a cell on the far side of a
+       * party wall. Traced (`_sixtrace.mjs`), a man handed that route ground
+       * along the wall at 0.12 m/s for the whole twelve-second clock.
+       */
+      const gi = g.index(g.cellX(wx[cell]), g.cellZ(wz[cell]));
+      if (!g.inside(g.cellX(wx[cell]), g.cellZ(wz[cell]))) continue;
+      if (!g.flags[gi] || Math.abs(g.floor[gi] - sy[k]) > 0.6) continue;
       parent[k] = -1;
       queue[tail++] = k;
     }
@@ -2391,8 +2422,38 @@ export class StairMap {
            * not, and a roof over a void does not.
            */
           const dy = Math.abs(sy[j] - y);
-          if (dy > STEP && (dy > CLIMB_MAX * 2
+          /**
+           * AND THE RISE PER LINK IS CAPPED AT `POST_RISE_MAX`. `_treads` will
+           * pass a link of up to four 0.40 m treads — 1.6 m across one 0.8 m
+           * lattice step — and physically that is fine; it is the ROUTE it
+           * ruins. Consecutive waypoints 1.6 m apart in height force
+           * `_runPost`'s cursor to accept a metre and a half of slack, and on a
+           * tower stair, where the waypoints stack almost vertically, that
+           * cursor then skips three treads at once and leaves the man steering
+           * at a point two metres over his head. Traced on the cathedral. A
+           * 32° flight rises 0.55 m across an 0.8 m sample, so 0.85 refuses
+           * nothing that is actually a staircase.
+           */
+          if (dy > STEP && (dy > POST_RISE_MAX
             || !this._treads(wx[cell], wz[cell], y, wx[jc], wz[jc], sy[j]))) continue;
+          /**
+           * AND THERE MUST BE NOTHING STANDING BETWEEN THEM.
+           *
+           * `_treads` casts DOWN and asks about the surface; it cannot see a
+           * wall. `NavGrid._measureClimbs` has `_canStep` beside it for exactly
+           * this reason and this pass had nothing. Traced (`_sixtrace.mjs`) on
+           * the cathedral: the flood walked THROUGH the campanile's own wall
+           * into the stair on the other side of it, and the man handed that
+           * route stood at 0.34 m from a face that answered a ray at every
+           * height from 0.15 m to 1.40 m, grinding, for the whole clock.
+           *
+           * One chest-height ray over the segment. It is the cheapest question
+           * that distinguishes "one step up a flight" from "one step through a
+           * party wall", and it is asked on every link rather than only on the
+           * climbing ones, because a partition between two cells of the same
+           * room is the same lie.
+           */
+          if (this._blocked(wx[cell], wz[cell], y, wx[jc], wz[jc], sy[j])) continue;
           parent[j] = k;
           queue[tail++] = j;
         }
@@ -2427,14 +2488,21 @@ export class StairMap {
       if (raw.length > 4096) return;             // cannot happen; not trusted to
     }
     raw.reverse();
-    // Thin it. The first and last are always kept: the first is the handover
-    // from A*, the last is the position itself.
-    const route = [raw[0]];
-    for (let i = 1; i < raw.length - 1; i++) {
-      const p = route[route.length - 1];
-      if (raw[i].distanceToSquared(p) >= POST_WP_GAP * POST_WP_GAP) route.push(raw[i]);
-    }
-    route.push(raw[raw.length - 1]);
+    /**
+     * IT IS NOT THINNED, AND THE FIRST VERSION OF THIS WAS.
+     *
+     * Dropping waypoints closer than 1.6 m to the last one kept is the right
+     * move on open ground and exactly the wrong one on a staircase, because a
+     * flight TURNS: the thinned CATH route went straight from the bottom tread
+     * to a point 3.76 m away and 1.67 m up, across the newel. Traced
+     * (`_sixtrace.mjs`), the man steered at that point, walked into the wall
+     * under the landing, slid along it at 1.2 m/s and timed out on the ground
+     * floor without ever gaining a step — which is 6 of every 15 posts anybody
+     * took. The lattice IS the route; every consecutive pair is one 0.8 m step
+     * the flood already proved a capsule can make, and a corner cut across two
+     * of them is a corner cut through masonry.
+     */
+    const route = raw;
 
     /**
      * THE HANDOVER HAS TO BE ON THE HEIGHT FIELD or `_goTo` cannot deliver
@@ -2443,10 +2511,26 @@ export class StairMap {
      * assumption, and a building whose foot does not snap is dropped instead of
      * becoming an order nobody can fill.
      */
-    const foot = route[0];
-    const ci = g.nearest(foot.x, foot.z, foot.y, 4, 1.6);
+    const ci = g.nearest(route[0].x, route[0].z, route[0].y, 2, 0.9);
     if (ci < 0) { d.why = 'foot of the flight is not on the height field'; return; }
-    foot.set(g.worldX(ci % g.nx), g.floor[ci], g.worldZ((ci / g.nx) | 0));
+    /**
+     * `foot` IS A SEPARATE POINT FROM `route[0]` AND THAT IS THE WHOLE OF IT.
+     *
+     * The first version wrote the snapped cell back over `route[0]`, and
+     * `nearest` searches RINGS: it will happily return a cell 3 m away on the
+     * far side of a party wall, because a height field has no idea there is one.
+     * Traced (`_sixtrace.mjs`), the man handed that route started outside the
+     * stairwell, steered at a waypoint through the masonry, and slid along the
+     * wall at 1.2 m/s for the whole twelve-second clock without gaining a step.
+     *
+     * So the two jobs are separated: `foot` is WHERE A* IS ASKED TO DELIVER HIM
+     * — it must be a real cell or the errand is a lie — and `route[0]` stays
+     * where the flood actually started, which is the bottom of the flight.
+     * `_runPost` hands over between them on a 2.2 m radius.
+     */
+    const foot = new THREE.Vector3(
+      g.worldX(ci % g.nx), g.floor[ci], g.worldZ((ci / g.nx) | 0)
+    );
 
     /* ---- two or three places to stand once he is up ---- */
     cand.sort((a, b) => {

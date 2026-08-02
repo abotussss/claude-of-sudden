@@ -1257,6 +1257,8 @@ export class AiSystem {
      * `Agent._runPost` walks it. Same volumes, same capsule, one boot pass.
      */
     this.stairs = new StairMap(phys, this.grid).build(world?.interiorVolumes ?? null);
+    /** Report-time only. @see `Agent._dropPost`. */
+    this.postStats = { taken: 0, reachedTop: 0, drop: {} };
     this._bakeCover(phys, world);
     this.stats.navMs = performance.now() - t0;
     this.stats.walkable = this.grid.walkableCount;
@@ -1516,13 +1518,21 @@ export class AiSystem {
   personaFor(agent) {
     const rng = this._personaRng ?? (this._personaRng = this.rng.fork());
     const mean = this.skill ?? 0.5;
+    /**
+     * `elite` IS PART OF THE KEY, not just of the draw. `src/match` reuses the
+     * field roster's callsign namespace for the paradrop, and a cache keyed only
+     * on team + callsign + role would hand a reinforcement the ordinary man's
+     * persona (or, worse, hand the ordinary man the spearhead's on his next
+     * respawn). @see the `spearhead` archetype in agent.js.
+     */
+    const elite = agent._elite === true;
     if (!agent.name || agent.name.startsWith('BOT-')) {
-      return drawPersona(rng, agent.role, mean, this.defenderSkill);
+      return drawPersona(rng, agent.role, mean, this.defenderSkill, elite);
     }
-    const key = `${agent.team}:${agent.name}:${agent.role}`;
+    const key = `${agent.team}:${agent.name}:${agent.role}${elite ? ':elite' : ''}`;
     let p = this._personas.get(key);
     if (!p) {
-      p = drawPersona(rng, agent.role, mean, this.defenderSkill);
+      p = drawPersona(rng, agent.role, mean, this.defenderSkill, elite);
       this._personas.set(key, p);
     }
     return p;
