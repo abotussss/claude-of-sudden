@@ -91,6 +91,7 @@ import { Drones } from './drone.js';
 import { AmmoDrops } from './ammo.js';
 import { Caches } from './caches.js';
 import { Reinforcements } from './reinforce.js';
+import { Civilians } from './civilians.js';
 
 const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', MATCH_OVER: 'matchover' };
 
@@ -406,6 +407,18 @@ export class MatchSystem {
       this.capture.onCapture = (z, previous, byPlayer) => this._onCaptured(z, previous, byPlayer);
       this.capture.onScoreTick = null; // silent on purpose; the HUD already shows it
     }
+    /**
+     * THE CIVILIAN FORCE — 「民間軍を投入して」. Fifteen men who live in the
+     * buildings and belong to neither army's roster; ten of them shoot and five
+     * of them run, and killing one of the five takes capture score off your own
+     * side. @see src/match/civilians.js for all four decisions.
+     *
+     * DOMINATION ONLY, and that is the penalty rather than the faction: the
+     * price of a dead civilian is expressed in capture points, and demolition
+     * has none to take. Its rooms are MEASURED against `ai.grid`, which does not
+     * exist yet at `init`, so `place()` is deferred to the first live frame.
+     */
+    this.civilians = this.domination ? new Civilians(ctx, { rng: this.rng.fork() }) : null;
     /** Forward vs base spawns actually used, per team. Reported, not gameplay. */
     this._forwardSpawns = [0, 0];
     this._baseSpawns = [0, 0];
@@ -1175,6 +1188,13 @@ export class MatchSystem {
      * RED again. It is idempotent and costs five array writes.
      */
     this.drones?.reset();
+    /**
+     * AND THE FIFTEEN. `ai.clearAgents()` above has already deleted the men
+     * themselves, so this only forgets the roster and re-arms the arrival
+     * schedule — the rooms measured off `ai.grid` are the LEVEL's and survive a
+     * restart. @see src/match/civilians.js.
+     */
+    this.civilians?.reset();
     /**
      * ──────────────────────────────────────────────────────────────────────
      * AND THE CACHE HOUSES GET THEIR WALLS BACK
@@ -2585,6 +2605,34 @@ export class MatchSystem {
   _onActorDeath(e) {
     const victim = e?.actor;
     if (!victim) return;
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * A CIVILIAN IS NOT ON THE ROSTER, AND THE WHOLE OF WHAT THAT MEANS
+     * ══════════════════════════════════════════════════════════════════════
+     * No scoreboard line, no respawn, no killfeed row (`_pushKillfeed` already
+     * refuses a victim it cannot name) — and, deliberately, no re-task of both
+     * armies: a man in a back room going down is not a reason for thirty
+     * soldiers to reconsider the map.
+     *
+     * WHAT IT DOES MEAN is `civilians.onActorDeath`, which is the ONE place the
+     * score penalty lives: 「武装していない民間人の場合は占領ポイントを下げて」, and
+     * only when the local player himself pulled the trigger. @see
+     * src/match/civilians.js for the size of it and the argument for it.
+     *
+     * AN ARMED ONE STILL LEAVES HIS MAGAZINES, because he had some — the same
+     * "EVERY BODY" rule in src/match/ammo.js that both armies get. An unarmed
+     * one was carrying nothing, so there is nothing on the floor.
+     */
+    if (this.civilians?.owns(victim)) {
+      this.civilians.onActorDeath(victim, e.by ?? null, this.player);
+      if (victim.aiPacifist !== true && this.phase === PHASE.LIVE && victim.position) {
+        this.ammoDrops.drop(
+          victim.position,
+          this.ai.groundAt(victim.position.x, victim.position.z, victim.position.y + 2)
+        );
+      }
+      return;
+    }
     const vr = this._record(victim);
     if (vr) {
       vr.alive = false;
@@ -2657,7 +2705,10 @@ export class MatchSystem {
       const att = this._playerLastAttacker ??
         (kill.actor && !kill.environmental ? kill.actor : null);
       // Same as `_onActorDeath`: a tank has no roster row but is a real killer.
-      const killer = this._record(att) ?? (att?.isTank ? att : null);
+      // So is a militiaman, for exactly the same reason — he has a `name` and a
+      // `team`, and "WORLD killed you" for the man who was waiting in the room
+      // is the same lie. @see src/match/civilians.js.
+      const killer = this._record(att) ?? (att?.isTank || att?.aiCivil ? att : null);
       if (killer && killer !== pr && killer.kills !== undefined) killer.kills++;
       this._pushKillfeed(killer, pr, false);
       this._queueRespawn(pr);
@@ -2858,6 +2909,25 @@ export class MatchSystem {
      * term and is two divides and a compare. @see `RULES.droneLaunchPad`.
      */
     this.drones?.update(dt, live && this.domination, this._matchProgress());
+    /**
+     * AND THE FIFTEEN IN THE BUILDINGS. `place()` is deferred to the first live
+     * frame because what "indoors" means here is `ai.grid.indoor`, and the nav
+     * grid is built on a frame of `ai`'s choosing after both systems have
+     * initialised — the same reason `caches.prove` is not an `init` call. It is
+     * idempotent and does its A* work once. @see src/match/civilians.js.
+     */
+    if (this.civilians) {
+      if (!this.civilians.placed && this.ai.grid) {
+        this.civilians.place(
+          this.ai,
+          this.ctx.peek('world'),
+          this.spawns,
+          this.capture,
+          1 - this.playerTeam
+        );
+      }
+      this.civilians.update(dt, live, this.player?.dead ? null : this.player);
+    }
 
     // Dead players watch. Written here, in update(), so it lands before `ui`
     // and `render` read the camera this frame.
