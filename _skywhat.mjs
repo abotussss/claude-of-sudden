@@ -76,9 +76,21 @@ const out = await page.evaluate((RECT) => {
   const V3 = e.camera.position.constructor;
   const M4 = e.camera.matrixWorld.constructor;
   // Same quiesce and same pose as `_skyshots.mjs`'s `crossing-north`.
-  if (m && !m.__skyshotStopped) { m.update = () => {}; m.lateUpdate = () => {}; m.__skyshotStopped = true; }
+  /**
+   * THE MATCH KEEPS RUNNING. `Airstrike`, `Bomber` and `Strafe` are all driven
+   * from `match.update`, so stubbing it freezes whatever is in the air — which
+   * is how the first run of this file produced a sky full of debris and then
+   * named it. @see the same note in `_skyshots.mjs`.
+   */
+  if (m) {
+    m.roundClock = 1e6;
+    m._checkWinConditions = () => {};
+    if (m.airstrike) m.airstrike.enabled = false;
+    if (m.bomber) m.bomber.enabled = false;
+    if (m.strafe) m.strafe.enabled = false;
+  }
   if (ai) { ai.combatEnabled = false; try { ai.clearAgents(); } catch { /* ok */ } }
-  if (pl) { pl.alive = true; pl.movementLocked = false; }
+  if (pl) { pl.alive = true; pl.movementLocked = false; pl.health?.heal?.(999); }
   const k = w.cathedral;
   const eye = w.levelToWorld(k.level.x + 0, 0, k.level.z + -2, new V3());
   const h0 = ph.raycast(eye.x, 44, eye.z, 0, -1, 0, 60, ph.MASK.WORLD);
@@ -119,27 +131,40 @@ const out = await page.evaluate((RECT) => {
     byMesh.set(name, (byMesh.get(name) ?? 0) + 1);
   };
 
+  /**
+   * `instanceMatrix` IS IN THE MESH'S OWN SPACE, NOT THE WORLD'S — and the
+   * first run of this file forgot it, projected local offsets as if they were
+   * world points, and confidently named four meshes that were not in the
+   * photograph at all. Every instance is composed through `o.matrixWorld`
+   * exactly as the renderer composes it.
+   */
+  const wm = new M4();
+  e.ctx.scene.updateMatrixWorld(true);
   e.ctx.scene.traverse((o) => {
     if (!o.visible) return;
+    // A hidden ancestor hides the whole branch; `o.visible` alone does not say so.
+    for (let a = o.parent; a; a = a.parent) if (!a.visible) return;
     if (o.isInstancedMesh) {
       const arr = o.instanceMatrix.array;
       const n = o.count;
       for (let i = 0; i < n; i++) {
         mat.fromArray(arr, i * 16);
-        mat.decompose(p, q, sc);
+        wm.multiplyMatrices(o.matrixWorld, mat);
+        wm.decompose(p, q, sc);
         const size = Math.max(sc.x, sc.y, sc.z);
         // Only what is off the deck — the pile itself is not the question.
         if (p.y < 2.0) continue;
         consider(o.name || '(instanced)', p.x, p.y, p.z, size);
       }
-    } else if (o.isPoints) {
-      const pos = o.geometry?.getAttribute?.('position');
-      if (!pos) return;
-      for (let i = 0; i < pos.count; i++) {
-        const y = pos.getY(i);
-        if (y < 2.0) continue;
-        consider(`${o.name || '(points)'}#pts`, pos.getX(i), y, pos.getZ(i), 0.2);
-      }
+    } else if (o.isMesh && o.geometry?.boundingSphere !== undefined) {
+      // A plain mesh counts as ONE candidate at its own centre: the drawn ruin
+      // masses and the world batches are what the swarm has to be told from.
+      if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+      const bs = o.geometry.boundingSphere;
+      if (!bs) return;
+      p.copy(bs.center).applyMatrix4(o.matrixWorld);
+      if (p.y < 2.0) return;
+      consider(o.name || '(mesh)', p.x, p.y, p.z, bs.radius * 2);
     }
   });
   rows.sort((a, b) => a.d - b.d);

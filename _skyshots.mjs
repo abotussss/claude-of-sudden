@@ -89,9 +89,19 @@ await sleep(2500);
  * was the inside of a rubble pile. That is the same defect the commit
  * "The ground camera was inside the rubble" fixed on another harness.
  *
- * So the match is STOPPED (`update` stubbed, exactly as `tools/floorcheck.mjs`
- * quiesces), the agents are cleared, the player is put back on his feet, and
- * the HUD and the viewmodel are taken out of frame — the subject is the sky.
+ * AND THE MATCH IS NOT STOPPED, WHICH IS THE SECOND HALF OF THE LESSON.
+ * The obvious quiesce is `tools/floorcheck.mjs`'s — stub `match.update` — and
+ * on THIS subject it manufactures the very bug being photographed:
+ * `Airstrike.update` is driven from `match.update`, so a site that is still
+ * in the air on the frame the stub lands is frozen there for ever and the
+ * photograph is a sky full of chunks that the running game would have settled.
+ * A gate has already been fooled twice on this defect; a harness fooling
+ * itself the same way would be the third.
+ *
+ * So the cameraman is protected instead of the world being frozen: the agents
+ * are cleared (nobody left to shoot him), no NEW strike may be called
+ * (`airstrike.enabled = false`), the clock keeps running so everything in the
+ * air lands, and the HUD and the viewmodel come out of frame.
  */
 await page.evaluate(() => {
   const e = window.__ENGINE__;
@@ -99,10 +109,12 @@ await page.evaluate(() => {
   const ai = e.ctx.peek('ai');
   const pl = e.ctx.peek('player');
   const ui = e.ctx.peek('ui');
-  if (m && !m.__skyshotStopped) {
-    m.update = () => {};
-    m.lateUpdate = () => {};
-    m.__skyshotStopped = true;
+  if (m) {
+    m.roundClock = 1e6;
+    m._checkWinConditions = () => {};
+    if (m.airstrike) m.airstrike.enabled = false;
+    if (m.bomber) m.bomber.enabled = false;
+    if (m.strafe) m.strafe.enabled = false;
   }
   if (ai) { ai.combatEnabled = false; try { ai.clearAgents(); } catch { /* ok */ } }
   if (pl) {
@@ -119,6 +131,32 @@ await page.evaluate(() => {
   if (ui?.root) ui.root.style.display = 'none';
   for (const o of e.ctx.viewScene?.children ?? []) o.visible = false;
 });
+/**
+ * …and then WAIT FOR EVERY SITE THAT HAS FIRED TO HAVE SETTLED, by the
+ * engine's own flag, rather than by a sleep. This is the check that says
+ * whether a chunk in the sky is a bug or a frame.
+ */
+const settleState = await page.evaluate(async () => {
+  const e = window.__ENGINE__;
+  const m = e.ctx.peek('match');
+  const sites = () => m.airstrike?.sites ?? [];
+  const pending = () => sites().filter((s) => s.struck && !s.baked);
+  const t0 = performance.now();
+  while (pending().length && performance.now() - t0 < 20000) {
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return {
+    struck: sites().filter((s) => s.struck).length,
+    baked: sites().filter((s) => s.baked).length,
+    stillFlying: pending().map((s) => s.id),
+    anim: sites().filter((s) => s.struck && s.uniforms?.uAnim?.value !== 0).map((s) => s.id),
+  };
+});
+console.log(
+  `  settle state: ${settleState.baked}/${settleState.struck} struck sites baked` +
+    `${settleState.stillFlying.length ? ` — STILL IN THE AIR: ${settleState.stillFlying.join(', ')}` : ''}` +
+    `${settleState.anim.length ? ` — still animating: ${settleState.anim.join(', ')}` : ''}`
+);
 
 /* ---- the census: every settled chunk off the ground, and what holds it --- */
 const census = await page.evaluate(() => {
