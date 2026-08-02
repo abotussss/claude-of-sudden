@@ -126,6 +126,13 @@ class Drone {
     this.vel = new THREE.Vector3();
     /** Where it is trying to be this frame. */
     this.want = new THREE.Vector3();
+    /**
+     * The waypoint: the nearest hostile's position as of the last scan, COPIED.
+     * Per drone rather than shared scratch — four drones sharing one vector fly
+     * at one man. `vector` is this, or null when there is nobody. @see `_scan`.
+     */
+    this.vec = new THREE.Vector3();
+    this.vector = null;
     this.health = 0;
     this.life = 0;
     this.target = null;
@@ -409,6 +416,17 @@ export class Drones {
     this._launch(this._nextTeam);
   }
 
+  /**
+   * LAUNCH ONE NOW, ignoring the schedule — the same hand-fire hook
+   * `Armour.fire()` publishes and for the same reason: a probe cannot afford to
+   * wait for `_matchProgress` to come round, and a screenshot needs a drone in
+   * the air on a known frame. It still spends the budget, so a probe that fires
+   * thirty gets thirty and no more.
+   */
+  fire(team = this._nextTeam) {
+    return this._launch(team);
+  }
+
   _launch(team) {
     let d = null;
     for (const s of this.list) if (!s.alive) { d = s; break; }
@@ -427,6 +445,7 @@ export class Drones {
     d.lockT = 0;
     d.blindT = 0;
     d.recoverT = 0;
+    d.vector = null;
     d.warning = false;
     // Off one shoulder of the spawn cluster rather than out of its middle, so
     // two drones on the same side do not launch through each other.
@@ -554,27 +573,38 @@ export class Drones {
   }
 
   /**
-   * TOWARD THE FIGHT, AND LOOKING. `focus` is `MatchSystem._airFocus` — the
-   * centroid of the fight with the player's own eye weighted as four men, which
-   * is the same aim every air weapon in this file takes and for the same reason
-   * (@see `_updateAirFocus`): fixed geography on a 114x141 m map puts the median
-   * event 71 m from the one seat that has to see it.
+   * ────────────────────────────────────────────────────────────────────────
+   * TOWARD THE ENEMY, NOT TOWARD THE FIGHT — and that is a fix, not a taste
+   * ────────────────────────────────────────────────────────────────────────
+   * This flew to `MatchSystem._airFocus`, which is the aim every OTHER air
+   * weapon in this file takes and is right for all of them: they pick from
+   * fixed geography and the focus is what stops a strike landing where nobody
+   * is. A drone is not fixed geography, and the focus is the centroid of the
+   * fight WITH THE PLAYER'S OWN EYE WEIGHTED AS FOUR MEN — so a player standing
+   * still (in his spawn, at a cache, in the capture harness) drags the point
+   * every drone on the map is flying to onto his own back line, where by
+   * definition his enemies are not.
+   *
+   * Measured, seed 7, on the focus: over 119 hunting samples the nearest
+   * hostile averaged 94 m and 0.95 of them were inside the 55 m acquire range,
+   * of which ZERO were visible; 6 of 12 drones died on their life clock without
+   * ever seeing anybody, and a full match scuttled 14 of 26.
+   *
+   * A loitering munition has an OPERATOR and a datalink, so it flies at the
+   * enemy rather than searching at random: `_scan` picks the nearest live
+   * hostile with no sight test at all and that is the waypoint. What is NOT
+   * given away is the kill — the lock still needs `droneAcquireRange`, an
+   * unbroken `MASK.SIGHT` ray and 2.2 s of warning, so cover works exactly as
+   * before and the drone can be flown past a man in a doorway all day.
+   *
+   * `focus` is kept as the fallback for the one case that has no hostiles at
+   * all (a side wiped out between respawns), because a drone with nowhere to be
+   * should still be over the town.
    */
   _hunt(d, dt, scan) {
-    const f = this.focus;
     const ceil = d.groundY + RULES.droneAltitude;
-    if (f) {
-      // It circles rather than parks: a drone hanging still over the fight is a
-      // target, and the orbit is what makes the sound move.
-      const t = this.ctx.time.elapsed * 0.22 + d.slot;
-      d.want.set(f.x + Math.cos(t) * 16, ceil, f.z + Math.sin(t) * 16);
-    } else {
-      d.want.set(d.position.x, ceil, d.position.z);
-    }
-    this._steer(d, dt, RULES.droneSpeed);
-    this._avoid(d);
     if (scan) {
-      const t = this._acquire(d);
+      const t = this._scan(d);
       if (t) {
         d.target = t;
         d.lockT = 0;
@@ -582,8 +612,21 @@ export class Drones {
         d.state = 'lock';
         this.stats.locks++;
         this._emit('lock', d);
+        return;
       }
     }
+    const aim = d.vector ?? this.focus;
+    if (aim) {
+      // Offset rather than dead on: a drone that flies exactly at a man arrives
+      // over his head with nothing in sight, and the drift is what makes the
+      // sound move across the street rather than sit still.
+      const t = this.ctx.time.elapsed * 0.35 + d.slot * 1.9;
+      d.want.set(aim.x + Math.cos(t) * 9, ceil, aim.z + Math.sin(t) * 9);
+    } else {
+      d.want.set(d.position.x, ceil, d.position.z);
+    }
+    this._steer(d, dt, RULES.droneSpeed);
+    this._avoid(d);
   }
 
   /**
@@ -756,25 +799,43 @@ export class Drones {
 
   /* ---------------------------------------------------------- the eyes -- */
 
-  /** Nearest live hostile it can see. Called at 4 Hz, never per frame. */
-  _acquire(d) {
+  /**
+   * ONE PASS, TWO ANSWERS, at 4 Hz and never per frame:
+   *
+   *   the return value  the nearest hostile inside `droneAcquireRange` that it
+   *                     can actually SEE — the only thing it may lock on to
+   *   `d.vector`        the nearest hostile at ANY range and behind anything —
+   *                     where the operator is flying it. @see `_hunt`
+   *
+   * The sight ray is only fired for candidates already inside the range and
+   * already closer than the best so far, so the worst case is a handful of rays
+   * per drone per quarter second and the common case is one or none.
+   */
+  _scan(d) {
     const out = this._foe;
     out.length = 0;
     this.enemies?.(d.team, out);
     let best = null;
     let bestD = RULES.droneAcquireRange * RULES.droneAcquireRange;
+    let near = null;
+    let nearD = Infinity;
     for (let i = 0; i < out.length; i++) {
       const a = out[i];
       const p = a?.position;
       if (!p) continue;
       const dx = p.x - d.position.x, dy = p.y + CHEST - d.position.y, dz = p.z - d.position.z;
       const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < nearD) { nearD = d2; near = p; }
       if (d2 >= bestD) continue;
       this._v2.set(p.x, p.y + CHEST, p.z);
       if (!this._sees(d, this._v2)) continue;
       bestD = d2;
       best = a;
     }
+    // A POSITION, COPIED, not the actor's own vector: he may be a corpse by the
+    // next scan and a waypoint that follows a ragdoll is a drone flying at the
+    // floor. Refreshed every quarter second, which is all a waypoint needs.
+    if (near) { d.vec.copy(near); d.vector = d.vec; } else d.vector = null;
     out.length = 0;
     return best;
   }
