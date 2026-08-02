@@ -81,8 +81,13 @@ const sample = () => page.evaluate(() => {
     const inside = i >= 0 && g.indoor && g.indoor[i] === 1;
     if (inside) indoors++; else outdoors++;
     if (!inside && !r.fleeing) {
+      const ai2 = i >= 0 ? `cell indoor=${g.indoor ? g.indoor[i] : '?'}` : 'off-grid';
       wheres.push(`${r.unarmed ? 'U' : 'A'}@${r.agent.position.x.toFixed(0)},${r.agent.position.z.toFixed(0)}` +
-        ` ${r.agent.position.distanceTo(r.anchor).toFixed(0)}m from home`);
+        ` ${r.agent.position.distanceTo(r.anchor).toFixed(1)}m from home` +
+        ` leashed=${r.leashed} obj=${r.agent.objective?.mode ?? '-'}` +
+        ` blocked=${r.agent.objectiveBlocked === true} tgt=${r.agent.hasTarget === true}` +
+        ` spd=${(r.agent.desiredSpeed ?? 0).toFixed(1)} ${ai2}` +
+        ` anchorIndoor=${(() => { const j = g.nearest(r.anchor.x, r.anchor.z, r.anchor.y, 2, 1.4); return j >= 0 && g.indoor && g.indoor[j] === 1; })()}`);
     }
   }
   return {

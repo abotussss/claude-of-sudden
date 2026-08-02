@@ -184,7 +184,36 @@ const SPAWN_CLEAR_CIVIL = 5;
  * through the wall he is being brought back inside.
  */
 const LEASH_R = 13;
+/**
+ * HOME, AND IT HAS TO ANSWER THE SAME QUESTION THE ARM DOES.
+ *
+ * The first cut armed the leash on `far > LEASH_R || !indoors` and dropped it on
+ * `far < LEASH_HOME` alone — two different questions, so a man standing 2 m from
+ * his anchor on a doorstep cell (walkable, but `indoor = 0`, because
+ * `_carveInteriors` is strict about the apron) unleashed on the distance test
+ * and re-armed on the indoor test in the SAME tick, for ever. Measured over one
+ * headless match: 163 leash events against a roster of fifteen, and the same two
+ * men reported three to five metres from home in nine consecutive samples,
+ * shuffling in a doorway.
+ *
+ * So the drop is the arm's negation, plus one escape: `far < 1.2` is AT the
+ * anchor, and the anchor is by construction a cell `grid.indoor` called a room —
+ * if the flag disagrees at that range it is a lattice artefact and standing on
+ * the spot he was placed on is as indoors as this man is ever going to be.
+ */
 const LEASH_HOME = 3.5;
+/**
+ * …AND A FIGHT ONLY BUYS YOU THIS LONG IN THE OPEN.
+ *
+ * The leash is normally suspended while a man has a target, because dragging
+ * somebody out of cover mid-firefight is the one thing that would make him look
+ * scripted. Measured with that as the only rule, one militiaman held a doorway
+ * OUTDOORS for the whole of a headless match — his fight never ended, so the
+ * leash never ran, and 「屋外に逃げることはない」 was false for him specifically.
+ * Six seconds is the difference between stepping out to take a shot and having
+ * moved house: past it he goes back inside whether or not he is being shot at.
+ */
+const OUT_GRACE = 6;
 
 /**
  * FLEEING — 「民間人は見つけられた場合は逃走します」.
@@ -454,6 +483,8 @@ export class Civilians {
         fleeUntil: 0,
         fleeAt: 0,
         leashed: false,
+        /** Elapsed time he was first found outdoors, or 0. @see `OUT_GRACE`. */
+        outSince: 0,
       });
       this.stats.spawned[unarmed ? 1 : 0]++;
       return true;
@@ -575,9 +606,14 @@ export class Civilians {
       /**
        * THE LEASH. Not while he is in a fight — a man backing off two rooms
        * under fire is not a man who has wandered off, and dragging him out of
-       * cover mid-firefight is the one thing that would make him look scripted.
+       * cover mid-firefight is the one thing that would make him look scripted
+       * — UNLESS the fight has had him outdoors for `OUT_GRACE`, which is not a
+       * fight any more, it is a move. @see that constant for the measurement.
        */
-      if (a.hasTarget) continue;
+      const inside = this._indoors(a.position);
+      c.outSince = inside ? 0 : (c.outSince || now);
+      const overstayed = !inside && now - c.outSince > OUT_GRACE;
+      if (a.hasTarget && !overstayed) continue;
       const far = a.position.distanceTo(c.anchor);
       /**
        * OUT OF THE ROOM IS OUT OF POSITION, AND DISTANCE ALONE DID NOT SAY SO.
@@ -590,11 +626,11 @@ export class Civilians {
        * what indoors means, `NavGrid.indoor`, which is written by
        * `_carveInteriors` and is strict about the doorstep apron.
        */
-      if (!c.leashed && (far > LEASH_R || !this._indoors(a.position))) {
+      if (!c.leashed && (far > LEASH_R || !inside)) {
         c.leashed = true;
         this.stats.leashed++;
         a.setObjective('pickup', c.anchor);
-      } else if (c.leashed && far < LEASH_HOME) {
+      } else if (c.leashed && (far < 1.2 || (far < LEASH_HOME && inside))) {
         c.leashed = false;
         // Back to no orders at all, which is back to being an ambush.
         a.setObjective('hold', null);
