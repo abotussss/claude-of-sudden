@@ -63,14 +63,22 @@
  *     men are pathing through, on a grid baked at boot, is how you get thirty
  *     men stuck against it — and a wreck that stops where a capture point is is
  *     the "blocks a zone permanently" failure by another name.
- *   • ITS ROUTE NEVER ENTERS A ZONE. Measured at boot and printed: the closest
- *     approach of either route to any capture circle is reported in the boot
- *     log, and both routes now stop 24 m off D — sixteen metres outside the 8 m
- *     circle they are shelling, and 58 m or further from every other point. A
- *     sortie is finite anyway — it advances, holds, and reverses back out — so
- *     nothing of it is standing anywhere when it is over. The number in this
- *     paragraph was 27 m for six commits after the map had moved it to 55-77;
- *     believe the boot log, not this comment. @see `ROUTES`.
+ *   • IT STANDS ONLY ON THE POINT IT IS ATTACKING. This is the guarantee that
+ *     CHANGED, and it changed because the player asked for the thing it
+ *     forbade: 「戦車自体も占領できる物体として、つまり占領サイトにいたら占領％を加算
+ *     できるようにして」. A hull that may never be inside a circle cannot add to
+ *     one. So the stand-off is now per zone and per leg — `ZONE_ENTER` on the
+ *     spoke's OWN target so the hull ends up in the circle and counts as
+ *     `CAPTURE_BODIES` men (@see `captureBodies`), and the full
+ *     `ZONE_STANDOFF` on every other point, applied to where a leg may END
+ *     rather than to where it may pass. The approach is excused nothing, so
+ *     the HUB is still 16 m or more off every zone including D and no hull
+ *     ever stands in the cathedral's circle. It was never a NAV obstacle in
+ *     any of this — three `LAYER.SHOOT_ONLY` boxes, in `MASK.BULLET` and in
+ *     neither `MASK.CHARACTER` nor `MASK.WORLD`, so A* and the height field
+ *     cannot see a hull or a wreck wherever it stops. The boot log prints
+ *     every leg's true closest approach and the zone it is to; believe it, not
+ *     this comment. @see `ROUTES` and `_trimToStandoff`.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * NOTHING IS COMPUTED IN THE FRAME IT DIES
@@ -88,6 +96,9 @@
  * PUBLIC API   const a = ctx.get('match').armour
  * ────────────────────────────────────────────────────────────────────────────
  *   a.tanks                  [{ id, team, name, alive, health, position }]
+ *   a.captureBodies(t, out)  append this side's hulls that are STANDING on a
+ *                            point, as capture bodies. `match` folds it into
+ *                            `capture.update`'s presence lists.
  *   a.call()                 launch the sortie (both sides) with its telegraph
  *   a.fire()                 launch it now, no telegraph
  *   a.enemies = (team, out)  installed by `match`: fill `out` with live hostiles
@@ -212,7 +223,18 @@ const ROUTES = [
        * mid street and south through the diagonal; it clears every non-target
        * circle by more than the stand-off.
        */
-      { zone: 'B', points: [L(0.5, 15), L(9, 15), L(13.5, 10.5), L(28.5, 10.5), L(33, 9), L(34.5, 7.5), L(34.5, -18), L(40.5, -24), L(46.5, -24), L(51, -28.5), L(51, -34.5), L(52.5, -36), L(55.5, -37.5), L(69, -37.5)] },
+      /**
+       * …AND ITS FIRST CORNER IS NOW E'S. Measured at boot with the stop
+       * reason the drop path now prints: the old `L(0.5,15) -> L(9,15) ->
+       * L(13.5,10.5)` cut the corner off the hub straight into a 1.7 m pinch at
+       * world (25, 11) — eleven samples, under `MIN_ROUTE`, so the whole
+       * destination was thrown away and a RED hull whose enemy held only B had
+       * nowhere to go. The E spoke leaves the hub through the same mouth and
+       * bakes 107 m clean, so B borrows the two waypoints that open it and
+       * rejoins its own corridor at `L(13.5, 10.5)`, which the two already
+       * share. Nothing after that point moved.
+       */
+      { zone: 'B', points: [L(0.5, 15), L(4.5, 15), L(9, 12), L(13.5, 10.5), L(28.5, 10.5), L(33, 9), L(34.5, 7.5), L(34.5, -18), L(40.5, -24), L(46.5, -24), L(51, -28.5), L(51, -34.5), L(52.5, -36), L(55.5, -37.5), L(69, -37.5)] },
     ],
   },
   {
@@ -246,8 +268,31 @@ const ROUTES = [
 /** +Z forward, +X right, +Y up, origin on the ground between the tracks. */
 const HULL_W = 3.3;
 const HULL_L = 6.9;
-/** Metres of street the hull needs on top of its own width to drive somewhere. */
-const CLEARANCE = 1.1;
+/**
+ * Metres of street the hull needs ON TOP OF ITS OWN WIDTH to drive somewhere.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * 1.1 -> 0.25 — 「戦車はとにかく踏破力と走破力を高めて スタックとかしないようにする
+ * ことが優先」
+ * ────────────────────────────────────────────────────────────────────────────
+ * THIS NUMBER IS WHAT A PINCH IS. `_bakePath` ends a leg the moment the
+ * measured span drops under `HULL_W + CLEARANCE`, so at 1.1 the hull demanded
+ * 4.40 m of clear street — and the pinches that have actually killed spokes on
+ * this map were measured at 3.4 m, and the one the map agent has since widened
+ * came back at 4.05, WHICH IS STILL UNDER 4.40. The hull was being stopped by
+ * lanes it fits down, which is the whole content of the stuck reports.
+ *
+ * 0.25 makes the bar 3.55 m: 12 cm of shoulder either side of a 3.3 m hull
+ * after `_bakePath` has slid the sample onto the middle of the span it found.
+ * That is a squeeze rather than a comfortable street, and a squeeze is what a
+ * tank in a town does. IT IS NOT A COLLISION RISK IN EITHER DIRECTION — the
+ * hull carries no `MASK.CHARACTER` collision and is not simulated against the
+ * world at all; it is posed along a baked centreline, so the cost of a tight
+ * fit is a track edge visually grazing a kerb, and the cost of a loose one is a
+ * hull that never leaves the square. Under `HULL_W` itself the span test still
+ * ends the leg, because that is a wall rather than a squeeze.
+ */
+const CLEARANCE = 0.25;
 /** How far a sample may be slid sideways onto the measured centreline. */
 const LATERAL_MAX = 3.0;
 /** Spacing of the baked path samples. */
@@ -373,14 +418,34 @@ const PLOUGH_MIN = 0.3;
  *  hull either erases it (@see `PLOUGH_TOP`) or drives over it. */
 const PASS_TOP = PLOUGH_TOP;
 /**
- * The step the hull gets its nose over — RAISED 1.0 -> 1.6 on the same third
- * report: 「戦車は乗り越え性能高くして」. 1.6 is over any sandbag line, barrier,
- * crate stack or rubble crest this map dresses a street with, and short of the
- * 2.6 m masonry shed class that `_trimAtBlockers` now stops the route at.
- * Measured before and after with `_climbmax.mjs`, which walks a hull up a real
- * step on the real map rather than trusting the constant.
+ * ────────────────────────────────────────────────────────────────────────────
+ * RAISED 1.6 -> 2.6 — 「戦車はもっと瓦礫を乗り越えていいし家や壁は破壊できるように
+ * して」, THE FOURTH REPORT IN THIS DIRECTION
+ * ────────────────────────────────────────────────────────────────────────────
+ * 1.0 -> 1.6 -> 2.6, and each of the first two passes raised the ceiling by
+ * exactly enough to clear the thing he had just driven into. The reading that
+ * survives four reports is not "one more knob": the mass this map is dressed
+ * and RUINED with — district demolition rubble, the cathedral's own collapse,
+ * the debris fields an airstrike settles — is TERRAIN to a 40 t tracked
+ * vehicle, and the only things that may still stop a hull are the three the
+ * brief names: an enterable building's standing structure, the cathedral while
+ * it stands, and the map boundary. All three are measured over `PASS_TOP` and
+ * are therefore untouched by this number:
+ *
+ *     boundary cordon      3.3 - 4.6 m   (`src/world/cordon.js`, every panel)
+ *     enterable storeys    3.2 m per floor, walls to 9.6 m
+ *     cathedral            3.39 m piers, a 4.30 m plinth run, 8.99 m shells
+ *
+ * WHAT IT COSTS, HONESTLY: the (CLIMB_TOP, PASS_TOP] band that `_bakeRide`'s
+ * horizontal ray and `_trimAtBlockers` police is now 2.6-3.0 rather than
+ * 1.6-3.0, so the 2.6 m merged-masonry shed class that used to TRIM a leg is
+ * now mass the hull rides over instead. That is the request, stated in the
+ * file's own units — it is climbed, not ghosted through, because the two-point
+ * ride in `_sample` puts the track run on top of it and the pitch limit still
+ * applies (2.6 m over the 5.8 m track run is 24 degrees, inside `CLIMB_PITCH`).
+ * Anything the hull cannot climb AND cannot erase still stops the route.
  */
-const CLIMB_TOP = 1.6;
+const CLIMB_TOP = 2.6;
 /** Nose up or down the ride is allowed to reach. ~30 degrees (was 24). */
 const CLIMB_PITCH = 0.52;
 /** How far fore and aft of the origin the track run bears on the ground. */
@@ -398,6 +463,13 @@ const PLOUGH_MERGE = 2.4;
  *  clipped corner. 3 x `STEP` is 3.75 m — wider than the hull. @see
  *  `_trimAtBlockers`, which measured why one sample is not enough. */
 const BLOCK_RUN = 3;
+/** How often the hull knocks on the town it is driving through. @see `_contact`.
+ *  Three `damageAt` calls and three atlas-cell sweeps per tick, both of which
+ *  answer "nothing here" in a handful of compares on almost every one. */
+const BREACH_EVERY = 0.15;
+/** Radius of the glacis's own erase, round each of the three contact points.
+ *  Together they cover the hull's width plus a shoulder. @see `_contact`. */
+const CONTACT_RAZE_R = 1.9;
 /** Seconds of drag on the hull while it shoves a pile aside. */
 const PLOUGH_DRAG = 0.7;
 /** How much of its speed the hull keeps while ploughing. */
@@ -417,6 +489,30 @@ const SPEED_REVERSE = 3.4;
  * is still counted down so anything reading `tank.hold` sees a sane value.
  */
 const HOLD_TIME = 30;
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * …AND "ARRIVED" IS NOT A STATE IT MAY DIE IN — 「スタックとかしないようにすることが
+ * 優先」
+ * ────────────────────────────────────────────────────────────────────────────
+ * MEASURED, AND THE MEASUREMENT IS WHY THIS EXISTS: the hull was NOT stalling
+ * on the numbers — 3-6 % of its advance under walking pace and no stall over
+ * three seconds — and it still ended every watched run parked in the west
+ * courtyard for the rest of the match. `hold` is terminal by design
+ * (「戦車は登場したら帰さないで」) and the wheel only ever re-lays a course when
+ * `_wantZone` NAMES A DIFFERENT POINT, so a hull whose side owns everything it
+ * can drive to, or whose only enemy point lost its spoke at boot, is given
+ * nothing to want and stands still until the whistle. From the player's seat a
+ * tank that has not moved for four minutes is a stuck tank, whatever the
+ * throttle trace says.
+ *
+ * So a hull that has been holding this long WITH NOTHING TO SHOOT goes
+ * somewhere else — the next station on its own wheel. It is not a withdrawal
+ * and not a despawn: the exits from a live tank are still `_destroy` and the
+ * round reset, and every destination is a capture point it was already allowed
+ * to stand off. A hull that is FIGHTING is never restless: `tank.target` holds
+ * it where it is, which is the 「そこが占領し返すまで戦闘する」 half.
+ */
+const RESTLESS = 20;
 /** Seconds of telegraph before the engine note becomes a tank in the street. */
 const TANK_LEAD = 6.0;
 
@@ -440,6 +536,43 @@ const TANK_LEAD = 6.0;
  * whether men can walk.)
  */
 const ZONE_STANDOFF = 16;
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * …AND THE ONE ZONE IT IS ATTACKING IS NOW AN EXCEPTION — 「戦車自体も占領できる
+ * 物体として、つまり占領サイトにいたら占領％を加算できるようにして」
+ * ────────────────────────────────────────────────────────────────────────────
+ * A HULL THAT MAY NEVER BE IN A CIRCLE CANNOT ADD TO ONE. The 16 m stand-off
+ * above is measured against EVERY capture centre, target or not, so as written
+ * the request was unimplementable: the hull stood eight metres outside the
+ * circle it was shelling and `capture.js` counts presence, not intent.
+ *
+ * THE TRIM IS NOW PER ZONE RATHER THAN GLOBAL, and only for the leg's OWN
+ * target: the spoke to A may run into A's circle, and it is still cut at the
+ * full `ZONE_STANDOFF` off B, C, E and D. So the guarantee that changed is
+ * exactly one — a hull may stand on THE POINT IT IS ATTACKING — and the one
+ * that did not is the one that matters: it can never park on a point it is not
+ * fighting for, and the HUB (the approach's end, in the cathedral square) is
+ * trimmed at the full stand-off off every zone INCLUDING D, so no hull ever
+ * stands in the cathedral's circle. @see `_trimToStandoff`.
+ *
+ * DERIVED FROM THE CIRCLE, NOT TYPED. The trim cuts at the first sample inside
+ * this radius, so the hull's origin comes to rest between this and this plus
+ * one sample step; both have to be inside `RULES.captureRadius` for the hull to
+ * count at all. Two steps of margin, and a floor so a hull is never parked on
+ * the exact centre of a point thirty men are fighting over.
+ */
+const ZONE_ENTER = Math.max(3.5, (RULES.captureRadius ?? 8) - STEP * 2 - 0.5);
+/**
+ * WHAT A HULL IS WORTH ON A POINT, in men. `capture.js` counts bodies and
+ * scales the rate by the crowd (`RULES.captureCrowdBonus`), so this is the one
+ * number that says how much a tank sitting on a circle is worth: at 2 it takes
+ * an empty point in `captureTime / 1.42` — about 6.3 s against a rifleman's 9 —
+ * and it outnumbers ONE defender rather than freezing against him. It cannot
+ * flip a point on its own against a garrison, which is the same 「簡単に壊れたら
+ * 面白くない」 trade the frag multiplier makes: armour on the objective is
+ * decisive, not automatic.
+ */
+const CAPTURE_BODIES = 2;
 /** A leg whose trimmed end is further than this from the point it was authored
  *  at is not a route to that point, and is dropped rather than kept as a lie. */
 const ZONE_ARRIVE = 34;
@@ -537,21 +670,61 @@ const RAZE_BIND = 1.6;
 /** A prop this far above the burst is on something the shell never reached. */
 const RAZE_UP = 6.0;
 
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「戦車自体はもっと敵に打たれたり補足したらすぐ打ち返してね」 — THE CREW ANSWERS AT ONCE
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT THE DELAY ACTUALLY WAS, ADDED UP RATHER THAN GUESSED AT. Between a round
+ * landing on the hull and the first round leaving it there were FOUR serial
+ * waits, and the gun was only one of them:
+ *
+ *     up to 0.40 s   `ACQUIRE_EVERY` — the crew did not even look until the
+ *                    next re-selection tick, however hard it had been hit
+ *     up to 5.07 s   traverse at 0.62 rad/s — 180 degrees took FIVE SECONDS,
+ *                    which is most of a main-gun reload spent turning
+ *          1.50 s    `COAX_REST` on a COLD coax: a fresh target set `coaxLeft`
+ *                    and then waited out a whole rest before the first burst,
+ *                    so the machine gun answered later than the main gun did
+ *     up to 5.50 s   `RULES.tankMainReload`, which is not this file's to move
+ *
+ * So the answer is the first three, in the order they cost. The tick halves,
+ * the traverse nearly doubles, a SNAP rate on top of that is what the crew does
+ * when the thing it is laying on is the thing that just hit it, and the coax
+ * opens on the frame it is roughly aligned instead of after a rest it has not
+ * earned. `_wound` also drops `acquireIn` to zero, so a round on the hull is
+ * re-acquired on the NEXT FRAME rather than at the next tick.
+ */
 /** Turret traverse and gun elevation, radians/second. */
-const TRAVERSE = 0.62;
-const ELEVATE = 0.5;
+const TRAVERSE = 1.05;
+const ELEVATE = 0.8;
+/** …and the rate the crew lays at when the target IS the man who just hit it.
+ *  180 degrees in 1.5 s. @see `_acquire`'s `snap`. */
+const TRAVERSE_SNAP = 2.1;
+const ELEVATE_SNAP = 1.5;
 /** Gun elevation limits. */
 const GUN_UP = 0.30;
 const GUN_DOWN = -0.16;
 /** How far off the target the gun has to be before the crew will fire. */
 const AIM_TOL = 0.035;
-/** Seconds between target re-selections. Cheap, but not every frame. */
-const ACQUIRE_EVERY = 0.4;
+/**
+ * …and how far off it will accept while snapping onto whoever hit it. A moving
+ * man on a 2.1 rad/s traverse can sit inside 0.035 for less than a frame, which
+ * is a gun that lays perfectly and never fires; 0.07 rad at 40 m is 2.8 m and
+ * `RULES.tankMainRadius` is 9. Certainty, which is what was asked for.
+ */
+const AIM_SNAP = 0.07;
+/** Seconds between target re-selections. Cheap, but not every frame — and a
+ *  round on the hull re-acquires immediately rather than waiting for it. */
+const ACQUIRE_EVERY = 0.2;
 
 /** Coaxial burst shape: rounds, and the gap between them. */
 const COAX_ROUNDS = 9;
 const COAX_GAP = 0.085;
 const COAX_REST = 1.5;
+/** How far off the bore the coax will still open up. It aims at the target
+ *  itself rather than down the barrel (@see `_coax`), so this is only "the
+ *  turret is round far enough that we are not shooting our own hull". */
+const COAX_ARC = 0.35;
 
 /**
  * WHERE THE ARMOUR IS, as a damage multiplier per box.
@@ -625,10 +798,16 @@ const PART_COUNT = { hull: 'nHull', turret: 'nTurret', deck: 'nDeck' };
  */
 const HULL_HALF = 2.8;
 
-/** How long a man who hit the hull stays the crew's problem. @see `_acquire`. */
-const RETALIATE = 6.0;
-/** …and how much nearer he counts than he is while he does. */
-const RETALIATE_BIAS = 0.5;
+/**
+ * How long a man who hit the hull stays the crew's problem. @see `_acquire`.
+ * 6 -> 9 s: `RULES.tankMainReload` is 5.5, so at six seconds a shooter could
+ * fall out of the window BETWEEN two rounds of the gun answering him.
+ */
+const RETALIATE = 9.0;
+/** …and how much nearer he counts than he is while he does. 0.5 -> 0.3: he now
+ *  beats anybody less than 3.3x closer instead of 2x. 「補足したらすぐ打ち返して」
+ *  is a statement about WHO as much as about how fast. */
+const RETALIATE_BIAS = 0.3;
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
@@ -789,6 +968,47 @@ export class Armour {
     return false;
   }
 
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * 「戦車自体も占領できる物体として、つまり占領サイトにいたら占領％を加算できるように
+   * して」 — THE HULL AS A BODY ON THE POINT
+   * ────────────────────────────────────────────────────────────────────────
+   * WHAT A CAPTURE POINT COUNTS IS PRESENCE, and `src/match/capture.js` counts
+   * it by walking two lists of things that have `alive` and `position`. A tank
+   * has both and means the same thing by both — `alive` is exactly "out of its
+   * pocket and shootable" — so the whole of this feature is: put the hull in
+   * the list. No new rule, no second code path, no capture arithmetic in this
+   * file, and the circle test, the crowd scaling, the contest freeze and the
+   * bleed-back are the ones every man on the map already obeys.
+   *
+   * `match` calls it (@see the `capture.update` call in `src/match/index.js`)
+   * because `match` owns the roster and this file may not touch the zones. It
+   * appends `CAPTURE_BODIES` references per live hull, which is how "a tank is
+   * worth two men" is expressed to a counter that counts entries.
+   *
+   * A WRECK IS NOT A BODY. `alive` goes false the frame the hull brews up, so a
+   * knocked-out tank standing in a circle contributes nothing and — being three
+   * `LAYER.SHOOT_ONLY` boxes that `MASK.CHARACTER` and `MASK.WORLD` cannot see
+   * — blocks nothing either. It is scenery on the point, which is the only part
+   * of the old "never in a circle" guarantee this change spends.
+   *
+   * AND NEITHER IS A HULL DRIVING PAST. `hold` is the state a tank has ARRIVED
+   * in, and it is the only state that does not move. That is not a nicety: the
+   * stand-off is now a rule about where a leg may END rather than where it may
+   * pass (@see `_trimToStandoff`), precisely so that a corridor to A which
+   * clips B on the way is a route instead of a dropped spoke — and a hull that
+   * counted while transiting would be flipping points it drove past. A tank
+   * captures by standing on the objective, which is also what it looks like.
+   */
+  captureBodies(team, out) {
+    if (!out) return out;
+    for (const t of this.tanks) {
+      if (!t.alive || t.team !== team || t.state !== 'hold') continue;
+      for (let k = 0; k < CAPTURE_BODIES; k++) out.push(t);
+    }
+    return out;
+  }
+
   get _coBusy() {
     const c = this.coBusy;
     if (!c) return false;
@@ -891,9 +1111,11 @@ export class Armour {
     const d = this._bv2 ?? (this._bv2 = new THREE.Vector3());
     const MASK = physics.MASK.WORLD;
     let travelled = 0;
-    // 6 resumes, not 4: with `PASS_TOP` at 3.2 a dressed street can put more
-    // passable mass in one probe's way than the old ceiling ever could.
-    for (let iter = 0; iter < 6; iter++) {
+    // 9 resumes, not 4: with `PASS_TOP` at 3.0 and `CLIMB_TOP` at 2.6 a dressed
+    // street can put far more passable mass in one probe's way than the old
+    // ceiling ever could, and a probe that runs out of resumes UNDER-reports the
+    // span — which trims a leg for a street the hull fits down.
+    for (let iter = 0; iter < 9; iter++) {
       o.set(ox + dx * travelled, oy, oz + dz * travelled);
       d.set(dx, 0, dz);
       const h = physics.raycast(o, d, max - travelled, MASK);
@@ -1069,6 +1291,14 @@ export class Armour {
       pz.push(z);
       kept++;
     }
+    /**
+     * WHY, EVEN WHEN THERE IS NO PATH TO HANG IT ON. A leg that dies inside its
+     * first four samples used to be reported as "no drivable route off the hub"
+     * and nothing else, so the one failure a route author most needs to read —
+     * WHICH pinch, and how wide — was the one the log threw away. @see
+     * `_bakeLegs`, which prints it.
+     */
+    this._lastStop = `${stop} (${kept} samples kept)`;
     if (kept < 4) return null;
 
     /* ---- bake yaw and arc length --------------------------------------- */
@@ -1234,9 +1464,33 @@ export class Armour {
       const wp = sp.points.map((p, i) =>
         i === 0 ? hub.clone() : world.levelToWorld(p[0], 0, p[1], w.clone())
       );
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * AND THE SPOKE IS AIMED AT THE CENTRE OF THE POINT, NOT AT ITS DOORSTEP
+       * ────────────────────────────────────────────────────────────────────
+       * Every spoke was scouted under the 16 m stand-off, so its authored last
+       * point is where a hull was allowed to STOP rather than where the point
+       * is: dropping `ZONE_ENTER` in without this trims nothing, because the
+       * polyline never reaches the circle in the first place and the hull would
+       * still be parked outside a zone it is now supposed to be capturing.
+       *
+       * The centre is appended as one more authored point and PROVED like every
+       * other — `_bakePath` runs its own ground and span tests over the new
+       * segment and stops the leg at the first pinch exactly as it always has,
+       * and it can only ever ADD samples to the end. A spoke whose last few
+       * metres are not drivable is therefore no shorter than it was before this
+       * line existed, and one that is drivable now ends in the circle.
+       */
+      const lastP = wp[wp.length - 1];
+      if (Math.hypot(lastP.x - target.x, lastP.z - target.z) > ZONE_ENTER) {
+        wp.push(new THREE.Vector3(target.x, lastP.y, target.z));
+      }
       const path = this._bakePath(wp, world, physics, props);
       if (!path) {
-        console.warn(`[tank] ${spec.id}->${sp.zone}: SPOKE DROPPED — no drivable route off the hub.`);
+        console.warn(
+          `[tank] ${spec.id}->${sp.zone}: SPOKE DROPPED — no drivable route off the hub: ` +
+            `${this._lastStop ?? 'no reason recorded'}`
+        );
         continue;
       }
       const why = path.stop;
@@ -1359,28 +1613,69 @@ export class Armour {
   }
 
   /**
-   * Cut the path at the first sample inside `ZONE_STANDOFF` of ANY capture
-   * centre. The target's own circle is not excused — a hull that stops 16 m
-   * short of the point it is shelling is the whole guarantee.
+   * Cut the path at the first sample inside the stand-off of ANY capture
+   * centre — `ZONE_STANDOFF` for every zone except the one this leg was
+   * authored AT, which gets `ZONE_ENTER` so the hull ends up INSIDE the circle
+   * it is attacking and counts toward taking it. @see `ZONE_ENTER`, and
+   * `captureBodies` for what it is worth once it is there.
+   *
+   * `target` null is the APPROACH, and the approach is excused nothing: the hub
+   * is trimmed at the full stand-off off every zone including D, so the
+   * cathedral's circle never has a hull standing in it whatever the wheel does.
    */
   _trimToStandoff(p, zones, target) {
-    let cut = p.n;
-    let which = '';
-    for (let i = 0; i < p.n; i++) {
-      for (const z of zones) {
-        if (Math.hypot(p.X[i] - z.x, p.Z[i] - z.z) < ZONE_STANDOFF) {
-          if (i < cut) { cut = i; which = z.id; }
+    const cutTo = (k, why) => {
+      p.n = Math.max(0, k);
+      p.length = p.n > 0 ? p.S[p.n - 1] : 0;
+      p.stop = why;
+      p.trimmed = true;
+    };
+
+    /* ---- the point it is attacking: the leg ends INSIDE the circle ------ */
+    if (target) {
+      for (let i = 0; i < p.n; i++) {
+        if (Math.hypot(p.X[i] - target.x, p.Z[i] - target.z) < ZONE_ENTER) {
+          cutTo(i, `trimmed at the ${ZONE_ENTER.toFixed(1)} m entry on ${target.id}`);
           break;
         }
       }
-      if (cut < p.n) break;
     }
-    if (cut >= p.n) return;
-    p.n = cut;
-    p.length = cut > 0 ? p.S[cut - 1] : 0;
-    p.stop = `trimmed at the ${ZONE_STANDOFF} m stand-off on ${which}`;
-    p.trimmed = true;
-    void target;
+
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * EVERY OTHER CIRCLE IS A RULE ABOUT WHERE A LEG MAY END, NOT WHERE IT MAY
+     * PASS — 「スタックとかしないようにすることが優先」
+     * ────────────────────────────────────────────────────────────────────────
+     * THE OLD RULE CUT AT THE FIRST SAMPLE INSIDE ANY CIRCLE, and that is what
+     * dropped spokes at boot: a corridor to A that clips sixteen metres past B
+     * on its way there was cut AT B, came out under `MIN_ROUTE` or outside
+     * `ZONE_ARRIVE`, and the whole destination was thrown away — so a hull
+     * whose enemy held only that point had nowhere to go and stood in the
+     * square, which is what the stuck reports look like from the player's seat.
+     * The scout (`_hullpath.mjs`) has to route round five circles at once on a
+     * map that only has so many streets, and on this one they are not all
+     * avoidable.
+     *
+     * The guarantee those cuts were protecting is about a HULL STANDING on a
+     * point it is not fighting for, and a hull only ever stands at the END of a
+     * leg — `hold` is the only state that does not move. So the end is walked
+     * BACK until it is clear of every non-target circle, and the middle of the
+     * leg is left alone. A hull driving past B on its way to A is a tank in a
+     * street; a hull parked on B is the thing that was never wanted. (It adds
+     * nothing to B's capture bar in passing either — @see `captureBodies`,
+     * which counts a hull only once it has arrived.)
+     */
+    for (let guard = p.n + 2; guard > 0 && p.n > 0; guard--) {
+      const ex = p.X[p.n - 1];
+      const ez = p.Z[p.n - 1];
+      let bad = null;
+      for (const z of zones) {
+        if (target && z.id === target.id) continue;
+        if (Math.hypot(ex - z.x, ez - z.z) < ZONE_STANDOFF) { bad = z; break; }
+      }
+      if (!bad) break;
+      cutTo(p.n - 1, `end pulled back off ${bad.id}'s ${ZONE_STANDOFF} m stand-off`);
+    }
   }
 
   _buildTank(spec, world, physics, props) {
@@ -1493,6 +1788,11 @@ export class Armour {
       /** Metres travelled along the current leg. */
       s: 0,
       hold: 0,
+      /** Seconds it has been standing at a station with nothing to do. The
+       *  restless test in `_drive` reads it; @see `RESTLESS`. */
+      holdT: 0,
+      /** The gun is laying on the man who just hit us. @see `_acquire`. */
+      snap: false,
       health: RULES.tankHealth,
       alive: false,
       /** World position of the hull centre, kept in step every frame. */
@@ -2248,7 +2548,7 @@ export class Armour {
    * being solid, in one pass over the cells the blast touches — no search, no
    * allocation, and collision only ever removed.
    */
-  _razeAt(x, y, z, r) {
+  _razeAt(x, y, z, r, up = RAZE_UP, dn = RAZE_UP) {
     const a = this._atlas;
     if (!a) return 0;
     const sw = this.physics?.staticWorld;
@@ -2265,7 +2565,10 @@ export class Armour {
           if (rec.fired) continue;
           const dx = rec.x - x, dz = rec.z - z, dy = rec.y - y;
           if (dx * dx + dz * dz > r2) continue;
-          if (dy > RAZE_UP || dy < -RAZE_UP) continue;
+          // The vertical window is a parameter because the two callers mean
+          // different things by "near": a shell reaches six metres either way,
+          // and the glacis reaches only what is standing on the road it is on.
+          if (dy > up || dy < -dn) continue;
           this._eraseRec(rec, sw);
           a.fired.push(rec);
           n++;
@@ -2929,7 +3232,9 @@ export class Armour {
     tank.health = RULES.tankHealth;
     tank.alive = true;
     tank.hold = HOLD_TIME;
+    tank.holdT = 0;
     tank.target = null;
+    tank.snap = false;
     tank.acquireIn = 0;
     tank.reload = 2.5;
     tank.coax = 0;
@@ -3074,6 +3379,56 @@ export class Armour {
   }
 
   /**
+   * ────────────────────────────────────────────────────────────────────────
+   * …AND WHAT TO DO WHEN THE ANSWER IS "NOTHING" — the other half of never
+   * being stuck
+   * ────────────────────────────────────────────────────────────────────────
+   * `_wantZone` only ever names a point THIS WHEEL HAS A SPOKE TO, and there
+   * are three ordinary ways for it to come back null: our side holds every
+   * point we can drive to, the only enemy point had its spoke dropped at boot,
+   * or the map is between captures. In every one of them the old code left
+   * `targetZone` where it was and the hull stood still for the rest of the
+   * match. THAT is what the stuck reports are looking at.
+   *
+   * So a hull with nothing to want goes to the station NEAREST THE FIGHT — the
+   * end of whichever leg finishes closest to the nearest point the enemy holds
+   * or nobody does, INCLUDING points this wheel has no spoke to, because
+   * "twenty metres nearer the fight down a street I can actually drive" is a
+   * real answer to "I cannot get there". If even that is where it already is,
+   * `restless` drops the current leg from the running and it takes the next
+   * best one instead, which is the difference between a hull that has arrived
+   * and a hull that has stopped.
+   */
+  _wantFallback(tank, restless) {
+    if (tank.legs.length < 2) return null;
+    const m = this.ctx.peek('match');
+    const zones = m?.allZones;
+    let goal = null;
+    let goalD = Infinity;
+    for (const z of zones ?? []) {
+      if (z.locked || z.owner === tank.team || !z.position) continue;
+      const d = Math.hypot(z.position.x - tank.position.x, z.position.z - tank.position.z);
+      if (d < goalD) { goalD = d; goal = z; }
+    }
+    let best = null;
+    let bestD = Infinity;
+    for (let i = 1; i < tank.legs.length; i++) {
+      if (restless && i === tank.legIx) continue;
+      const leg = tank.legs[i];
+      if (!leg.n) continue;
+      const ex = leg.X[leg.n - 1];
+      const ez = leg.Z[leg.n - 1];
+      // No enemy point anywhere: the wheel is walked in order instead, so the
+      // hull is still a tank moving through a town rather than a monument.
+      const d = goal
+        ? Math.hypot(ex - goal.position.x, ez - goal.position.z)
+        : (i - tank.legIx + tank.legs.length) % tank.legs.length;
+      if (d < bestD) { bestD = d; best = leg.zone; }
+    }
+    return best;
+  }
+
+  /**
    * LAY IN A COURSE. At most three legs: finish the approach if we are still on
    * it, come back down the spoke we are on, then go out the new one. A spoke is
    * driven in reverse by driving it FORWARDS with the hull turned round — the
@@ -3130,10 +3485,86 @@ export class Armour {
     const leg = tank.legs[tank.legIx];
     if (!(keepS && same)) tank.s = step.dir > 0 ? 0 : leg.length;
     tank.state = 'advance';
+    tank.holdT = 0;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * 「家や壁は破壊できるようにして」 — WHAT THE HULL ITSELF TAKES OFF THE MAP
+   * ────────────────────────────────────────────────────────────────────────
+   * Two erasures, on one clock, at the hull's own nose. Neither is new
+   * machinery — both are the primitives this file already owns, moved off the
+   * baked corridor and onto the vehicle:
+   *
+   *   THE BREACH. `world.damageAt` is the cache houses' own entry point and the
+   *   shell has always fired it (@see `_mainGun`) — but a shell goes where a
+   *   TARGET is, and a baseline match measured every breachable wall on the map
+   *   still standing at the whistle. There are now TEN breachable elevations,
+   *   the reach is 3.4 m, and a hull passes inside that of several of them, so
+   *   the nose knocks: a wall inside the glacis's sweep comes open ON CONTACT.
+   *   THREE points rather than one — the nose and both front corners — because
+   *   a hull driving ALONG a house front never puts its centreline within reach
+   *   of the wall beside it, which is most of how a tank meets a house.
+   *
+   *   THE CONTACT RAZE. The plough can only ever flatten piles BAKED ON THE
+   *   CORRIDOR at boot, so anything the route bake did not classify — dressing
+   *   the hull meets after a slide, a pile the other hull claimed, a lamp post
+   *   the corridor sweep's radius missed — survived being driven through by a
+   *   40 t vehicle. `_razeAt` is the same erase over the WHOLE-MAP atlas the
+   *   gun already uses, so the glacis now takes what it touches whether or not
+   *   anybody predicted it at boot. Collision is only ever REMOVED, so a nav
+   *   grid baked at boot can only become more walkable and `stuckcheck` cannot
+   *   regress on account of it.
+   *
+   * IT RUNS IN EVERY STATE, not only in `advance`. A hull that has arrived
+   * beside a house and stopped used to stop knocking, which is exactly the
+   * moment a player walks up and asks why the wall is still there.
+   */
+  _contact(tank, dt) {
+    tank.breachIn -= dt;
+    if (tank.breachIn > 0) return;
+    tank.breachIn = BREACH_EVERY;
+    const world = this._world ?? (this._world = this.ctx.peek('world'));
+    const s = Math.sin(tank.yaw);
+    const c = Math.cos(tank.yaw);
+    const at = this._v;
+    for (let k = -1; k <= 1; k++) {
+      const lat = k * PLOUGH_HALF;
+      at.set(
+        tank.position.x + s * PLOUGH_NOSE + c * lat,
+        tank.position.y + 1.0,
+        tank.position.z + c * PLOUGH_NOSE - s * lat
+      );
+      const razed = this._razeAt(at.x, tank.position.y, at.z, CONTACT_RAZE_R, 2.6, 1.2);
+      if (razed) {
+        tank.stats.razed += razed;
+        tank.ploughDrag = PLOUGH_DRAG;
+        const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
+        fx?.dust?.(at.x, tank.position.y + 0.5, at.z, 1.8);
+      }
+      const breach = world?.damageAt?.(at, 1) ?? null;
+      if (!breach) continue;
+      tank.stats.breaches++;
+      tank.ploughDrag = PLOUGH_DRAG;
+      const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
+      if (fx && breach.position) {
+        fx.dust?.(breach.position.x, breach.position.y + 1.0, breach.position.z, 2.6);
+        fx.hazeRing?.(breach.position.x, breach.position.y + 0.6, breach.position.z, 2.4, 14, 0.45, 1.6);
+      }
+      const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+      audio?.play?.('strike_rubble', breach.position ?? tank.position, {
+        level: 0.8, dur: 2.0, maxDist: 200, gain: 1.4, occlusion: 0.3,
+      });
+      console.info(
+        `[tank] ${tank.name} BREACHED ${breach.name ?? breach.id} BY CONTACT at ` +
+          `${at.x.toFixed(1)}, ${at.z.toFixed(1)}`
+      );
+    }
   }
 
   /** Advance along the leg the course is on. No raycast, no allocation. */
   _drive(tank, dt) {
+    this._contact(tank, dt);
     /**
      * WHERE IT SHOULD BE, ASKED TWICE A SECOND — AND WHILE IT IS STILL DRIVING.
      * This used to sit in the `hold` branch, with a copy of it in a second
@@ -3148,9 +3579,25 @@ export class Armour {
       tank.retarget -= dt;
       if (tank.retarget <= 0) {
         tank.retarget = RETARGET_EVERY;
-        const want = this._wantZone(tank);
-        if (want && want !== tank.targetZone) this._setCourse(tank, want);
-        else if (!want && tank.state === 'hold') tank.targetZone = null;
+        /**
+         * A HULL WITH NOTHING TO WANT IS GIVEN SOMETHING. @see `_wantFallback`:
+         * `restless` is a hull that has been standing still for `RESTLESS`
+         * seconds with nothing in its sights, and it drops the station it is
+         * already at from the running so the answer is always somewhere else.
+         */
+        const restless = tank.state === 'hold' && !tank.target && tank.holdT > RESTLESS;
+        let want = this._wantZone(tank);
+        // The fallback is not consulted mid-drive on a course we already laid:
+        // its `goal` is the nearest enemy point TO THE HULL, so a hull that is
+        // moving would re-rank it every two seconds and could hunt between two
+        // stations. A hull that has arrived is not moving and cannot.
+        if (!want && (restless || tank.state === 'hold' || !tank.targetZone)) {
+          want = this._wantFallback(tank, restless);
+        }
+        if (want && (want !== tank.targetZone || restless)) {
+          if (this._setCourse(tank, want)) tank.holdT = 0;
+          else if (restless) tank.holdT = 0; // already going there: stop asking
+        }
       }
     }
     const p = tank.legs[tank.legIx];
@@ -3186,52 +3633,6 @@ export class Armour {
       }
       tank.s += speed * dt * tank.legDir;
       this._checkPlough(tank);
-      /**
-       * ────────────────────────────────────────────────────────────────────
-       * 「家なども砲撃で破壊して」 — AND THE GLACIS GETS THE HOUSES THE SHELLS MISS
-       * ────────────────────────────────────────────────────────────────────
-       * `world.damageAt` is the cache houses' own breach entry point and the
-       * shell already fires it (@see `_mainGun`) — but a shell goes where a
-       * TARGET is, and the baseline measured a whole match with six breachable
-       * walls on the map and not one opened. The hull itself passes within
-       * `reach` (3.4 m) of one of those walls on its own routes, so the nose
-       * now knocks: a breachable elevation inside the glacis's sweep comes
-       * open ON CONTACT, exactly as a 40 t vehicle scraping a house front
-       * should read. Four times a second while moving, and `damageAt` is six
-       * clamped distance tests that answer null on almost all of them —
-       * nothing is searched for and nothing allocated.
-       */
-      tank.breachIn -= dt;
-      if (tank.breachIn <= 0) {
-        tank.breachIn = 0.25;
-        const world = this._world ?? (this._world = this.ctx.peek('world'));
-        if (world?.damageAt) {
-          const nose = this._v;
-          nose.set(
-            tank.position.x + Math.sin(tank.yaw) * PLOUGH_NOSE,
-            tank.position.y + 1.0,
-            tank.position.z + Math.cos(tank.yaw) * PLOUGH_NOSE
-          );
-          const breach = world.damageAt(nose, 1);
-          if (breach) {
-            tank.stats.breaches++;
-            tank.ploughDrag = PLOUGH_DRAG;
-            const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
-            if (fx && breach.position) {
-              fx.dust?.(breach.position.x, breach.position.y + 1.0, breach.position.z, 2.6);
-              fx.hazeRing?.(breach.position.x, breach.position.y + 0.6, breach.position.z, 2.4, 14, 0.45, 1.6);
-            }
-            const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
-            audio?.play?.('strike_rubble', breach.position ?? tank.position, {
-              level: 0.8, dur: 2.0, maxDist: 200, gain: 1.4, occlusion: 0.3,
-            });
-            console.info(
-              `[tank] ${tank.name} BREACHED ${breach.name ?? breach.id} BY CONTACT at ` +
-                `${nose.x.toFixed(1)}, ${nose.z.toFixed(1)}`
-            );
-          }
-        }
-      }
       tank.wheelSpin -= (speed * dt) / 0.44;
       const done = tank.legDir > 0 ? tank.s >= p.length : tank.s <= 0;
       if (done) {
@@ -3284,7 +3685,12 @@ export class Armour {
        * only to stand on ANOTHER one, and the exits from a live tank are still
        * `_destroy` and the round reset. What changed is that standing still is
        * no longer the end of the sortie.
+       *
+       * `holdT` is HOW LONG IT HAS BEEN STANDING THERE, and it is the input to
+       * the restless test above rather than to any withdrawal. Cleared by
+       * `_startPlanStep` the moment a course is laid.
        */
+      tank.holdT += dt;
     }
   }
 
@@ -3483,9 +3889,19 @@ export class Armour {
       wantPitch = clamp(Math.atan2(dy, Math.hypot(dx, dz)), GUN_DOWN, GUN_UP);
       const dyaw = wrapPi(wantYaw - tank.turretYaw);
       const dpitch = wantPitch - tank.gunPitch;
-      tank.turretYaw += clamp(dyaw, -TRAVERSE * dt, TRAVERSE * dt);
-      tank.gunPitch += clamp(dpitch, -ELEVATE * dt, ELEVATE * dt);
-      onTarget = Math.abs(dyaw) < AIM_TOL && Math.abs(dpitch) < AIM_TOL;
+      /**
+       * THE CREW LAYS FASTER ON THE MAN WHO IS SHOOTING AT IT. `snap` is set by
+       * `_acquire` and means "this target is the one inside `RETALIATE`" — the
+       * emergency traverse and the wider firing tolerance are what
+       * 「打たれたらすぐ打ち返して」 asks for, and they are OFF for a routine
+       * target so the ordinary sweep of the gun still reads as a laid shot.
+       */
+      const trav = tank.snap ? TRAVERSE_SNAP : TRAVERSE;
+      const elev = tank.snap ? ELEVATE_SNAP : ELEVATE;
+      const tol = tank.snap ? AIM_SNAP : AIM_TOL;
+      tank.turretYaw += clamp(dyaw, -trav * dt, trav * dt);
+      tank.gunPitch += clamp(dpitch, -elev * dt, elev * dt);
+      onTarget = Math.abs(dyaw) < tol && Math.abs(dpitch) < tol;
     } else {
       // Nothing to shoot: the turret returns to the way it is driving.
       const dyaw = wrapPi(-tank.turretYaw);
@@ -3503,17 +3919,29 @@ export class Armour {
       tank.coax = 0.35;
     }
 
-    /* ---- the coax ------------------------------------------------------ */
+    /**
+     * ---- the coax ------------------------------------------------------
+     *
+     * IT OPENS UP ON THE FRAME IT IS ROUGHLY LAID, not a rest later. The old
+     * chain set `coaxLeft` and then WAITED OUT `COAX_REST` before the first
+     * round of the first burst, so a hull that had just been shot answered with
+     * its machine gun a second and a half after it could have — and `COAX_REST`
+     * is meant to be the gap BETWEEN bursts, which is where it is spent now.
+     * The rest is charged when a burst runs dry rather than before it starts.
+     */
     if (target) {
+      const aligned = onTarget || Math.abs(wrapPi(wantYaw - tank.turretYaw)) < COAX_ARC;
       tank.coax -= dt;
       if (tank.coax <= 0) {
         if (tank.coaxLeft > 0) {
-          this._coax(tank, target);
-          tank.coaxLeft--;
-          tank.coax = COAX_GAP;
-        } else if (onTarget || Math.abs(wrapPi(wantYaw - tank.turretYaw)) < 0.2) {
+          if (aligned) {
+            this._coax(tank, target);
+            tank.coaxLeft--;
+            tank.coax = tank.coaxLeft > 0 ? COAX_GAP : COAX_REST;
+          }
+          // Not laid yet: hold the burst rather than rake our own hull.
+        } else if (aligned) {
           tank.coaxLeft = COAX_ROUNDS;
-          tank.coax = COAX_REST;
         }
       }
     }
@@ -3530,6 +3958,7 @@ export class Armour {
     this.enemies?.(tank.team, out);
     if (!out.length) {
       tank.target = null;
+      tank.snap = false;
       return;
     }
     const phys = this.physics;
@@ -3569,7 +3998,17 @@ export class Armour {
       best = e;
       bestScore = score;
     }
+    /**
+     * A NEW TARGET IS ANSWERED ON THIS FRAME. The coax's own clock is cleared so
+     * the burst opens as soon as the turret is round far enough, instead of the
+     * hull carrying a leftover `COAX_REST` from whoever it was shooting at
+     * before. `snap` is the emergency-traverse flag: it is true only while the
+     * man the gun is laying on is the man who put a round on the hull inside
+     * `RETALIATE`. @see `_fight`.
+     */
+    if (best && best !== tank.target) tank.coax = 0;
     tank.target = best;
+    tank.snap = !!best && avengeOk && best === avenge;
   }
 
   /** World position of the muzzle. Written into `out`; allocates nothing. */
@@ -3933,6 +4372,16 @@ export class Armour {
       // WHEN, so the crew can turn on a man who is still shooting at it rather
       // than on whoever happens to be nearest. @see `_acquire`.
       tank.lastHitAt = this.ctx.time.elapsed;
+      /**
+       * …AND IT LOOKS NOW RATHER THAN AT THE NEXT TICK — 「打たれたらすぐ打ち返して」.
+       * `_fight` re-acquires the moment this goes non-positive, so a round on
+       * the hull costs at most ONE FRAME of "the crew has not noticed" instead
+       * of up to `ACQUIRE_EVERY`. It is an assignment, not a call: `_takeRound`
+       * runs inside `physics`'s own emit and a penetrating round arrives as
+       * three of them, so acquiring HERE would fire three sets of sight rays
+       * inside one frame for one bullet.
+       */
+      tank.acquireIn = 0;
     }
     if (tank.health > 0) return;
     this._destroy(tank, tank.lastHitBy);
@@ -4109,6 +4558,9 @@ export class Armour {
       tank.health = RULES.tankHealth;
       tank.firedAt = -1e9;
       tank.breachIn = 0;
+      tank.holdT = 0;
+      tank.snap = false;
+      tank.target = null;
       tank.root.visible = false;
       tank.uniforms.uT.value = -1;
       tank.uniforms.uAnim.value = 1;
