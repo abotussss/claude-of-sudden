@@ -2136,17 +2136,77 @@ export function scatterDebris(A, rng) {
       else if (pick < 0.9) id = rng.pick(['tyre', 'tyre_small']);
       else if (pick < 0.95) id = rng.pick(['box_card_a', 'box_card_b', 'bucket', 'jerry_can']);
       else id = rng.pick(['slab_shard', 'rebar', 'gas_bottle']);
-      // Anything that carries collision is barred from the plant areas and the
-      // spawn pockets. Ask the prototype rather than pattern-matching the id:
-      // the list of solid props lives in props.js and nowhere else.
-      const solid = A.isSolid(id);
-      if (solid && !keepClear(x, z)) continue;
-      const y = groundY(x, z);
-      A.put(id, x, y + 0.015, z, rng.float() * 6.28, rng.range(0.7, 1.2), [
-        1,
-        rng.range(1.0, 1.5),
-        1,
-      ]);
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * A CRATE STANDING ON ITS OWN IN THE MIDDLE OF A LANE IS A TARGET, NOT
+       * A CITY — 「壊すためだけのオブジェが多いので、そういう無駄なものもあっても
+       * いいけど露骨ではなく自然にマップに溶け込ませて」
+       * ────────────────────────────────────────────────────────────────────
+       * The pick table above is nine kinds of thing and it treated all nine
+       * the same way: one instance, upright, on a uniform random point of the
+       * lane. For LITTER, brick, rock, weeds and planks that is right — wind
+       * and traffic really do leave those anywhere, and they read as ground.
+       * For a CRATE, a BARREL, a TYRE STACK, a carton or a jerry can it is
+       * not: those are things somebody PUT somewhere, and a lone one on open
+       * gravel with clear ground all round it reads as scenery placed for the
+       * player to shoot. That is exactly 露骨 — blatant.
+       *
+       * So the manufactured half of the table gets two rules that the natural
+       * half does not, and NOTHING IS DELETED — the same roll that used to
+       * stand a crate in the open now stands one against a wall instead, or
+       * spends itself on ground junk:
+       *
+       *   IT HAS TO BE AGAINST SOMETHING. Goods are stacked where a wall, a
+       *   corner or a doorway cheek can take their weight. Beyond `MANUF_WALL`
+       *   of the nearest facade the roll is re-spent on natural ground litter
+       *   rather than dropped, so the lane keeps its density.
+       *
+       *   AND IT COMES IN A HUDDLE, NOT A UNIT. Two or three pieces shoved
+       *   together against the wall, pushed the last few centimetres INTO it,
+       *   spread along the face rather than across the lane, each with its own
+       *   yaw near the wall's own bearing, its own scale and its own lean.
+       *   That is what a stack somebody made looks like from six metres, and
+       *   it is why the eye stops reading them as a row of identical boxes.
+       */
+      const MANUF = 0.72; // the pick above which the table is manufactured goods
+      const MANUF_WALL = 2.6; // …and how near a facade they are allowed to be
+      const manufactured = pick >= MANUF;
+      if (manufactured && near.d > MANUF_WALL) {
+        // Re-spend the roll on ground junk: same instance count, no staging.
+        id = rng.pick(['litter', 'brick_a', 'brick_b', 'rock_a', 'rock_b', 'weeds', 'plank_b']);
+      }
+      const stack = manufactured && near.d <= MANUF_WALL ? rng.int(2, 3) : 1;
+      /** Along the wall face — the axis a stack spreads on. */
+      const ax = near.nz ? 1 : 0;
+      const az = ax ? 0 : 1;
+      const faceYaw = Math.atan2(near.nx, near.nz);
+      for (let k = 0; k < stack; k++) {
+        // Shoved back into the wall and spread along it, not out into the lane.
+        const along = k === 0 ? 0 : rng.range(-0.85, 0.85);
+        const into = k === 0 ? rng.range(0, 0.35) : rng.range(0.05, 0.5);
+        const px = x + ax * along - near.nx * into;
+        const pz = z + az * along - near.nz * into;
+        if (inBuilding(px, pz, 0.25) || !isOpen(px, pz, 0.1)) continue;
+        // Anything that carries collision is barred from the plant areas and
+        // the spawn pockets. Ask the prototype rather than pattern-matching the
+        // id: the list of solid props lives in props.js and nowhere else.
+        const pid = k === 0 ? id : rng.pick(['crate_a', 'crate_b', 'crate_flat', 'pallet', 'box_card_a', 'box_card_b', 'bucket', 'tyre', 'sandbag_a']);
+        if (A.isSolid(pid) && !keepClear(px, pz)) continue;
+        const y = groundY(px, pz);
+        A.put(
+          pid,
+          px,
+          y + 0.015,
+          pz,
+          // Square to the wall it leans on, give or take — never a clean grid.
+          stack > 1 ? faceYaw + rng.range(-0.5, 0.5) : rng.float() * 6.28,
+          rng.range(0.7, 1.2),
+          [1, rng.range(1.0, 1.5), 1],
+          // A stacked crate settles; a lone one does not need to.
+          stack > 1 ? rng.range(-0.09, 0.09) : 0,
+          stack > 1 ? rng.range(-0.09, 0.09) : 0
+        );
+      }
     }
     // a skip-load of rubble at one end of each alley
     if (rng.float() < 0.7) {
