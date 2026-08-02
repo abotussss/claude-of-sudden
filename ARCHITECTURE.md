@@ -244,6 +244,38 @@ friendly/enemy distinction is a MIX decision — the player's own side is
 `match` drives nothing on it; `ai` listens to `match:capture` for the objective
 traffic like any other event.
 
+`role: 'civil' | 'civilUnarmed'` on `ai.spawn` IS THE THIRD FACTION — 「民間軍を
+投入して」 — and it is a new MEANING for an existing argument rather than a new
+hook, because the one thing `match` cannot do from outside is the one thing this
+needs: a persona (archetype, traits, gun, marksmanship) is drawn INSIDE the
+`Agent` constructor, since the mesh depends on the gun, so "he carries an AK and
+shoots like the lower-middle of the distribution" has to be decided from
+something the constructor already has. `role` is that something.
+
+```js
+ai.spawn('civilArmed',   p, yaw, { team, name, role: 'civil' })
+ai.spawn('civilUnarmed', p, yaw, { team, name, role: 'civilUnarmed' })
+```
+
+`AiSystem._civilise` then writes six fields the constructor has already
+decided — 50 HP, no flashbang, no smoke, no radio (`_radioAt = Infinity`, which
+is a permanent refusal in `Radio.say`), `aiCivil`, and for an unarmed one
+`aiPacifist` plus a permanent `ai.protect`. Exactly two places read the last
+two, and both are one line: `pickVisibleHostile` returns null for a pacifist (so
+he acquires nobody, which is the whole of "he never attacks"), and
+`getHudActors` drops the WHOLE faction, armed and unarmed alike, so the HUD
+never answers the question the player is supposed to have to look at a man to
+answer. Everything else — hiding, ambushing, staying indoors — falls out of code
+that already exists: no squad means no window post and no flank, and no
+objective means `Agent._think` leaves him standing exactly where he was put.
+
+`src/match/civilians.js` owns the rest: fifteen of them, ten armed and five not,
+placed a few at a time in rooms measured off `NavGrid.indoor` and proved with a
+real A*, leashed back indoors when a fight walks them out, and fleeing when the
+player's own eyes find one. Killing an unarmed one takes `CIVILIAN_PENALTY`
+(12) off your side's capture score, floored at zero, and only when the local
+player himself fired.
+
 ```js
 world.interiorVolumes // [{ building, cx, cz, c, s, hw, hd, floorY, probeY }]
 ```
