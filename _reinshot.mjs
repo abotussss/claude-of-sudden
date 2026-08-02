@@ -10,7 +10,7 @@ import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 const URL = process.argv[2] ?? 'http://127.0.0.1:4386/';
 const SEED = process.argv[3] ?? '11';
-const OUT = 'shots/reinaudit';
+const OUT = `shots/reinaudit/seed${SEED}`;
 mkdirSync(OUT, { recursive: true });
 const b = await chromium.launch({
   headless: true,
@@ -88,8 +88,22 @@ await page.evaluate(() => {
   e.ctx.peek('ui')?.debugState?.('clean');
   const run = window.__RUN__;
   const c = run.centre;
-  window.__CAM__ = { x: c.x + run.dir.x * 46, y: c.y + 18, z: c.z + run.dir.z * 46 };
-  window.__CAMLOW__ = { x: c.x + run.dir.x * 21, y: c.y + 6.5, z: c.z + run.dir.z * 21 };
+  /**
+   * THREE CAMERAS, BECAUSE THREE DIFFERENT THINGS HAVE TO BE LEGIBLE.
+   *
+   *  AIR — beside the run line rather than on it, at the aircraft's own
+   *  altitude: from behind the target the helicopter is a dot for eight seconds
+   *  and then it is overhead, and neither frame shows an aeroplane. Abeam at
+   *  32 m it crosses the lens at the size it really is.
+   *  WIDE — the same bearing, backed off and higher, so the whole stick of
+   *  canopies is in one frame instead of the two nearest.
+   *  GROUND — 15 m off the zone at head height, which is what a man standing on
+   *  the point would see arrive.
+   */
+  const px = run.dir.z, pz = -run.dir.x;
+  window.__CAMAIR__ = { x: c.x + px * 32 - run.dir.x * 10, y: c.y + 44, z: c.z + pz * 32 - run.dir.z * 10 };
+  window.__CAMWIDE__ = { x: c.x + px * 62 - run.dir.x * 30, y: c.y + 34, z: c.z + pz * 62 - run.dir.z * 30 };
+  window.__CAMLOW__ = { x: c.x + px * 15, y: c.y + 2.6, z: c.z + pz * 15 };
 });
 
 const place = (mode) =>
@@ -100,48 +114,79 @@ const place = (mode) =>
     const run = window.__RUN__;
     const c = run.centre;
     let tx = c.x, ty = c.y + 8, tz = c.z;
-    if (m2 === 'heli' && r.run) {
-      const el = r.heli.matrix.elements;
+    const el = r.heli.matrix.elements;
+    if ((m2 === 'heli' || m2 === 'wide') && r.run) {
       tx = el[12]; ty = el[13]; tz = el[14];
-    } else if (m2 === 'air') {
+    }
+    if (m2 === 'air' || (m2 === 'wide' && r.run?.out > 0)) {
       let n = 0, sx = 0, sy = 0, sz = 0;
       for (const t of r.troops)
         if (t.state === 'fall' || t.state === 'canopy') { n++; sx += t.at.x; sy += t.at.y; sz += t.at.z; }
       if (n) { tx = sx / n; ty = sy / n; tz = sz / n; }
     } else if (m2 === 'ground') {
-      ty = c.y + 1.2;
+      /**
+       * AT THE MEN, NOT AT THE ZONE. They land on the zone's `stand` ring, which
+       * is up to eight metres off the centre and in a rubble field is eight
+       * metres of rubble — aiming at the middle of the point photographed the
+       * masonry in front of them. The centroid of the ten is where they are.
+       */
+      const m = e.ctx.peek('match');
+      let n = 0, sx = 0, sy = 0, sz = 0;
+      for (const rec of m.roster)
+        if (rec.reinforcement && rec.alive && rec.actor?.position) {
+          n++; sx += rec.actor.position.x; sy += rec.actor.position.y; sz += rec.actor.position.z;
+        }
+      if (n) {
+        tx = sx / n; ty = sy / n + 1.0; tz = sz / n;
+        const px2 = run.dir.z, pz2 = -run.dir.x;
+        window.__CAMLOW__ = { x: tx + px2 * 13, y: ty + 1.6, z: tz + pz2 * 13 };
+      } else ty = c.y + 1.1;
     }
-    const cam = m2 === 'ground' ? window.__CAMLOW__ : window.__CAM__;
+    const cam =
+      m2 === 'ground' ? window.__CAMLOW__ : m2 === 'heli' ? window.__CAMAIR__ : window.__CAMWIDE__;
     e.camera.position.set(cam.x, cam.y, cam.z);
     e.camera.lookAt(new V3(tx, ty, tz));
     e.ctx.peek('player')?.teleport?.(e.camera.position, e.camera.rotation);
     const aloft = r.troops.filter((t) => t.state === 'fall' || t.state === 'canopy').length;
-    return { busy: !!r.run, out: r.run?.out ?? 0, landed: r.run?.landed ?? 0, aloft, heli: r.heli.visible };
+    return {
+      busy: !!r.run,
+      out: r.run?.out ?? 0,
+      landed: r.run?.landed ?? 0,
+      aloft,
+      heli: r.heli.visible,
+      /** Metres from the air camera to the airframe — when to press the shutter. */
+      heliDist: +Math.hypot(el[12] - window.__CAMAIR__.x, el[14] - window.__CAMAIR__.z).toFixed(1),
+    };
   }, mode);
 
 let shotHeli = false, shotAir = false, shotMid = false;
 for (let i = 1; i <= 200; i++) {
-  const s0 = await place(shotAir ? 'air' : 'heli');
-  await frames(5);
-  if (!shotHeli && s0.busy && s0.out === 0 && s0.heli) {
+  const s0 = await place(shotAir ? 'wide' : 'heli');
+  await frames(4);
+  if (!shotHeli && s0.busy && s0.heliDist < 42) {
     await place('heli');
     await frames(2);
     await page.screenshot({ path: `${OUT}/01-helicopter.png` });
     shotHeli = true;
-    console.log(`  helicopter shot at out=${s0.out}`);
+    console.log(`  helicopter shot at ${s0.heliDist}m, out=${s0.out}`);
   }
   if (!shotAir && s0.aloft >= 6) {
-    await place('air');
+    await place('wide');
     await frames(2);
     await page.screenshot({ path: `${OUT}/02-canopies.png` });
     shotAir = true;
     console.log(`  canopy shot with ${s0.aloft} in the air`);
   }
-  if (!shotMid && s0.landed >= 1 && s0.aloft >= 4) {
-    await place('air');
+  if (!shotMid && s0.landed >= 2 && s0.aloft >= 3) {
+    await place('wide');
     await frames(2);
     await page.screenshot({ path: `${OUT}/03-canopies-and-first-men-down.png` });
     shotMid = true;
+  }
+  if (s0.landed >= 9 && !s0.aloft) {
+    await place('ground');
+    await frames(2);
+    await page.screenshot({ path: `${OUT}/04-men-on-ground.png` });
   }
   console.log(`  t${i} busy=${s0.busy} out=${s0.out} landed=${s0.landed} aloft=${s0.aloft}`);
   if (!s0.busy && i > 3) break;

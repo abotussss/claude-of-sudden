@@ -85,6 +85,18 @@ const res = await page.evaluate(async () => {
       rec.__i = i;
       rec.__aliveLog = [];
       rec.__respawned = 0;
+      /**
+       * TEN MEN ARRIVING TOGETHER IS A CROWDING EVENT, which is what wedged 22
+       * of 29 men on nav islands the last time it went wrong. `stuckcheck`
+       * cannot see this one — it samples the opening of a match and these men
+       * do not exist yet — so the same rule is applied here to the ten
+       * themselves: a position every second of GAME time from the moment his
+       * boots are down, and the longest run of samples in which he wanted to
+       * move and did not.
+       */
+      rec.__from = { x: p.x, y: p.y, z: p.z };
+      rec.__samples = [];
+      rec.__nextAt = e.time.elapsed;
     }
     d?.touchdowns.push({
       i,
@@ -154,6 +166,17 @@ const res = await page.evaluate(async () => {
         })();
       }
     }
+    /** 1 Hz of GAME time, per man, for as long as he is alive. */
+    for (const r of recs) {
+      if (!r.alive || !r.actor?.position || e.time.elapsed < r.__nextAt) continue;
+      r.__nextAt = e.time.elapsed + 1;
+      /** `wants` is `stuckcheck`'s own test, so the two numbers mean one thing. */
+      r.__samples.push([
+        +r.actor.position.x.toFixed(2),
+        +r.actor.position.z.toFixed(2),
+        (r.actor.desiredSpeed ?? r.actor.speed ?? 1) > 0.1 ? 1 : 0,
+      ]);
+    }
     /** RESPAWN WATCH: any reinforcement whose `alive` goes false -> true. */
     for (const r of recs) {
       const a = !!r.alive;
@@ -170,7 +193,31 @@ const res = await page.evaluate(async () => {
   }
 
   const rein = m.roster.filter((r) => r.reinforcement);
+  /**
+   * `stuckcheck`'s own rule, applied to the ten: five consecutive one-second
+   * samples inside a metre is stuck. Reported with how far he got in total from
+   * the cell he landed on, because a man who walks 200 m is not a man on an
+   * island however he looked in any one window.
+   */
+  const walk = recs.map((r) => {
+    const s = r.__samples;
+    let worst = 0, run = 0, total = 0;
+    for (let i = 1; i < s.length; i++) {
+      const d = Math.hypot(s[i][0] - s[i - 1][0], s[i][1] - s[i - 1][1]);
+      total += d;
+      if (s[i][2] && d < 0.15) { run++; if (run > worst) worst = run; } else run = 0;
+    }
+    return { name: r.name, n: s.length, worst, total: +total.toFixed(1) };
+  });
   return {
+    walk,
+    /**
+     * A man who is killed thirty seconds in has six samples and no chance to
+     * walk anywhere; counting him as stuck would report the firefight rather
+     * than the nav grid. Only men with `stuckcheck`'s own sample budget count.
+     */
+    stuck: walk.filter((w) => w.n >= 20 && w.worst >= 5).length,
+    walkers: walk.filter((w) => w.n >= 20).length,
     seed: e.levelSeed,
     end: t(),
     phase: m.phase,
@@ -219,6 +266,11 @@ console.log(
   `  roster ${res.rosterTotal} (per team ${JSON.stringify(res.perTeamRoster)}) · reinforcements ${res.rein}` +
     ` · alive at end ${res.reinAlive} · deaths ${res.reinDeaths} · kills ${res.reinKills}`
 );
+if (res.walk?.length)
+  console.log(
+    `  AFTER LANDING: ${res.stuck}/${res.walkers} stuck by stuckcheck's rule (>=5 samples wanting to move, <0.15 m each) · ` +
+      `metres walked ${res.walk.map((w) => `${w.total}${w.n < 20 ? '*' : ''}`).join(', ')}  (* killed early)`
+  );
 console.log(
   `  NO-RESPAWN: allNoRespawn=${res.allNoRespawn} · alive false->true transitions ${res.respawnedAny} · frames with a reinforcement in the respawn queue ${res.queuedRein}`
 );
