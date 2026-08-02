@@ -145,7 +145,7 @@ export function buildMpistol() {
   barrel.dispose();
   /** Two-port compensator: a squared block past the slide with top vents. */
   const comp = box(slideW - 0.002, slideH - 0.002, compLen, 0.0016, 2);
-  body.add(comp, 'steel_black', { y: bore + 0.0042, z: zSlideFront - compLen / 2 + 0.002 });
+  body.add(comp, 'steel_enamel', { y: bore + 0.0042, z: zSlideFront - compLen / 2 + 0.002 });
   comp.dispose();
   for (let i = 0; i < 2; i++) {
     const port = box(0.012, 0.004, 0.0095, 0.0006, 1);
@@ -164,14 +164,14 @@ export function buildMpistol() {
     w: slideW,
     h: slideH,
     len: slideLen,
-    mat: 'steel_black',
+    mat: 'steel_enamel',
     zRear: zSlideRear,
     sightTop,
   });
   // Cocking wings at the rear of the slide — the machine-pistol tell.
   for (const sx of [-1, 1]) {
     const wing = blob(0.0052, 0.012, 0.018, 0.0015, 2);
-    slideAsm.add(wing, 'steel_black', { x: sx * (slideW / 2 + 0.0022), y: 0.004, z: zSlideRear - 0.014 });
+    slideAsm.add(wing, 'steel_enamel', { x: sx * (slideW / 2 + 0.0022), y: 0.004, z: zSlideRear - 0.014 });
     wing.dispose();
   }
 
@@ -224,17 +224,29 @@ export function buildMpistol() {
         z0: 0.017,
         z1: 0.017 + 0.118 * Math.sin(gripAngle),
       },
-      /** Seeded from the P-19's searched solve (same grip geometry, 2 deg less
-       *  rake), then refined with tools/gripfit.mjs. */
+      /**
+       * SEARCHED — tools/gripfit.mjs, seeded from the P-19's own searched
+       * solve (same grip section, 2 deg less rake) and then re-run against
+       * THIS weapon's geometry, because a seed is not a measurement.
+       *
+       *   before  gaps [0.8 0.1 0.1 0.0] mm  wrist 41.4 deg  pen 4.7 mm
+       *   after   gaps [0.8 0.4 0.2 0.5] mm  wrist 27.4 deg  pen 0.0 mm
+       *
+       * The 4.7 mm of burial was the slide passing through the web of the
+       * hand — a longer slide than the P-19's, seated 3 mm lower. Extension
+       * 0.385, so the elbow keeps a deep bend.
+       */
       gripR: {
-        pos: [-0.0295, -0.093, 0.1035],
-        finger: [-0.068, 0.3328, -0.9405],
-        back: [-0.9145, -0.2126, -0.3443],
+        pos: [-0.0295, -0.113, 0.1035],
+        finger: [-0.0424, 0.6079, -0.7929],
+        back: [-0.9545, -0.034, -0.2961],
       },
+      /** SEARCHED against `supportCylinder` below: gaps [0.3 0.3 0.5 0.5] mm
+       *  (worst 0.7 -> 0.5), wrist 39.8 deg, penetration 0.0 mm, ext 0.666. */
       gripL: {
-        pos: [0.0038, -0.0269, 0.0974],
+        pos: [0.0028, -0.0269, 0.1024],
         finger: [0.3989, 0.442, -0.8034],
-        back: [0.9127, 0.3412, -0.2248],
+        back: [0.9207, 0.309, -0.2386],
       },
       lhandPose: 'cup',
       supportCylinder: {

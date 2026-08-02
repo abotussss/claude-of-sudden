@@ -45,18 +45,18 @@ export function buildRevolver() {
     ],
     20
   );
-  body.add(barrel, 'steel_black', { y: bore, z: zBarrel0, ry: Math.PI });
+  body.add(barrel, 'steel_enamel', { y: bore, z: zBarrel0, ry: Math.PI });
   barrel.dispose();
   const boreHole = tubeZ(0.0054, 0.0038, 0.03, 12, 0.0002);
   body.add(boreHole, 'cavity', { y: bore, z: zMuz + 0.014 });
   boreHole.dispose();
   // Full underlug: shrouds the ejector rod all the way to the muzzle.
   const lug = extrude(roundRect(0.016, 0.017, 0.006, 3), zBarrel0 - zMuz - 0.006, { bevel: 0.001 });
-  body.add(lug, 'steel_black', { y: bore - 0.0165, z: zMuz + 0.002, rx: 0 });
+  body.add(lug, 'steel_enamel', { y: bore - 0.0165, z: zMuz + 0.002, rx: 0 });
   lug.dispose();
   // Vent rib with three slots.
   const rib = box(0.009, 0.005, zBarrel0 - zMuz - 0.008, 0.0008, 1);
-  body.add(rib, 'steel_black', { y: bore + 0.0115, z: (zBarrel0 + zMuz) / 2 });
+  body.add(rib, 'steel_enamel', { y: bore + 0.0115, z: (zBarrel0 + zMuz) / 2 });
   rib.dispose();
   for (let i = 0; i < 3; i++) {
     const slot = box(0.0092, 0.0028, 0.016, 0.0004, 1);
@@ -67,19 +67,19 @@ export function buildRevolver() {
   /* ---- frame ------------------------------------------------------------- */
   // Topstrap over the cylinder.
   const strap = box(0.0165, 0.009, 0.065, 0.0012, 2);
-  body.add(strap, 'steel_black', { y: bore + 0.008, z: -0.017 });
+  body.add(strap, 'steel_enamel', { y: bore + 0.008, z: -0.017 });
   strap.dispose();
   // Standing breech / recoil shield behind the cylinder.
   const breech = blob(0.034, 0.052, 0.02, 0.0035, 3);
-  body.add(breech, 'steel_black', { y: cylY + 0.004, z: cylZ0 + 0.011 });
+  body.add(breech, 'steel_enamel', { y: cylY + 0.004, z: cylZ0 + 0.011 });
   breech.dispose();
   // Frame under the cylinder, down to the trigger guard.
   const under = blob(0.026, 0.03, 0.05, 0.003, 3);
-  body.add(under, 'steel_black', { y: cylY - 0.022, z: -0.014 });
+  body.add(under, 'steel_enamel', { y: cylY - 0.022, z: -0.014 });
   under.dispose();
   // Crane bulge, left side (the cylinder swings out this way).
   const crane = blob(0.008, 0.024, 0.034, 0.0025, 2);
-  body.add(crane, 'steel_black', { x: -0.014, y: cylY - 0.006, z: -0.022 });
+  body.add(crane, 'steel_enamel', { x: -0.014, y: cylY - 0.006, z: -0.022 });
   crane.dispose();
   // Cylinder release latch on the left of the breech.
   const latch = box(0.004, 0.008, 0.018, 0.0008, 1);
@@ -128,7 +128,7 @@ export function buildRevolver() {
     [-0.017, -0.0175],
   ];
   const guard = extrude(guardOuter, 0.0145, { bevel: 0.0009, holes: [guardInner] });
-  body.add(guard, 'steel_black', { y: cylY - 0.033, z: -0.024 });
+  body.add(guard, 'steel_enamel', { y: cylY - 0.033, z: -0.024 });
   guard.dispose();
 
   /* ---- grip: rubber combat stocks ---------------------------------------- */
@@ -151,13 +151,13 @@ export function buildRevolver() {
     0.0032,
     { bevel: 0.0004 }
   );
-  body.add(front, 'steel_black', { y: sightY - 0.0035, z: zMuz + 0.012 });
+  body.add(front, 'steel_enamel', { y: sightY - 0.0035, z: zMuz + 0.012 });
   front.dispose();
   const rearBlade = extrude(roundRect(0.0165, 0.0042, 0.0008, 2), 0.0028, {
     bevel: 0.0004,
     holes: [roundRect(0.0034, 0.0036, 0.0004, 1)],
   });
-  body.add(rearBlade, 'steel_black', { y: sightY - 0.001, z: 0.012 });
+  body.add(rearBlade, 'steel_enamel', { y: sightY - 0.001, z: 0.012 });
   rearBlade.dispose();
 
   /* ---- moving parts ------------------------------------------------------ */
@@ -180,7 +180,7 @@ export function buildRevolver() {
     24
   );
   drum.translate(0, 0, -cylLen);
-  cylinder.add(drum, 'steel_black', {});
+  cylinder.add(drum, 'steel_enamel', {});
   drum.dispose();
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2;
@@ -229,8 +229,22 @@ export function buildRevolver() {
         z0: 0.022,
         z1: 0.022 + 0.102 * Math.sin(gripAngle),
       },
-      /** Seeded from the P-19's searched solve (same rake, grip 6 mm lower),
-       *  then refined with tools/gripfit.mjs. */
+      /**
+       * SEARCHED — and the search's answer was REFUSED, which is a measurement
+       * too. Seeded from the P-19's own searched solve (same rake to 2 deg,
+       * grip 6 mm lower and 0.6 mm slimmer), then re-run with
+       * tools/gripfit.mjs against this weapon's own geometry:
+       *
+       *   seed    gaps [0.8 0.2 0.1 0.0] mm  wrist 40.4 deg  pen 0.0 mm  ext 0.369
+       *   search  gaps [0.2 0.5 0.3 0.4] mm  wrist 39.0 deg  pen 0.0 mm  ext 0.421
+       *
+       * The search bought 1.4 degrees of wrist and 0.3 mm of worst gap by
+       * moving the whole hand 118 mm across the weapon — a completely
+       * different, unphotographed placement for a gain inside the noise. The
+       * seed already satisfies every threshold the tool scores on, so it
+       * stays. Same reasoning for `gripL` below: its search moved the support
+       * hand 70 mm for 2.1 degrees of wrist.
+       */
       gripR: {
         pos: [-0.0295, -0.099, 0.1085],
         finger: [-0.068, 0.3328, -0.9405],
