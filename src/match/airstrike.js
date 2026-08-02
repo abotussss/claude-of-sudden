@@ -2045,6 +2045,18 @@ export class Airstrike {
    * host owns — 30 of MID's 923 — and it is deliberately NOT on a fire frame:
    * a site firing does not run this, and a host falling is a different frame
    * from the strike that is landing on it.
+   *
+   * `isDown` IS THE COLLISION, NOT THE PICTURE, and the two are written
+   * together everywhere it reads from: `fire` flips a demolition's `down` and
+   * its `setCollision` on the same frame under the fireball, and `setRazed`
+   * does the shell and the ruin in one call. So there is no window in which a
+   * chunk is moved onto ground that is not there yet.
+   *
+   * THE ONE ROUGH EDGE, STATED: a host that falls inside the 6.5 s a site's own
+   * mass is still IN THE AIR moves that mass's target mid-curve, and the chunks
+   * this owns take a step of `dy · u` on that frame. It is at most the handful
+   * of chunks one host owns, it needs two events inside six seconds of each
+   * other, and the alternative is landing them on a roof that has gone.
    */
   _syncHosts() {
     const list = this._variants;
