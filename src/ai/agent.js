@@ -71,6 +71,28 @@ export const ARMOUR_FRAG_MIN = 6.5;
 export const ARMOUR_FRAG_MAX = 28;
 
 /**
+ * HOW BIG A CAPTURE POINT IS, AS FAR AS `ai` IS CONCERNED — 9 m.
+ *
+ * `src/match` owns the real radius (`RULES` puts every zone on this map at 8)
+ * and `ai` may not read it: `setObjective` hands over a mode, a position, a
+ * `site` handle and a facing, and deliberately nothing else. 9 is the 8 m circle
+ * plus a metre of sandbag, and it is the SAME assumption `_pickHoldSpot` has
+ * always made with its 4-11 m ring — this just writes it down once instead of
+ * twice. If `match` ever moves the radius, a man will hold a metre wide of the
+ * paint; nothing breaks.
+ */
+const SITE_HOLD_R = 9;
+
+/**
+ * METRES OF LEAD A MAN MAY HAVE ON HIS OWN FIRETEAM BEFORE HE IS BRAKED.
+ * `Squad.LANE_STEP` is 15 and a lane is a legitimate reason to be a long way
+ * from the centre of your team, so this is deliberately above it: what it
+ * catches is the man who is a whole street ahead, not the man on the far lane.
+ * @see the brake in `_advance`.
+ */
+const LEAD_SLACK = 9;
+
+/**
  * PERSONALITY — and why one `skill` scalar was not enough.
  *
  * `skill` says how well a man SHOOTS: cone, tracking rate, reaction, settle. It
@@ -657,6 +679,8 @@ export class Agent {
     // and that is half of what "全員異なる武器" buys the player.
     this.fireRate = (W.rpm / 60) * (0.86 + k * 0.2);
     this.burstLeft = 0;
+    /** Rounds sent in the current trigger pull. @see the bloom in `_fireRound`. */
+    this.burstFired = 0;
     this.fireCooldown = 0;
     this.burstCooldown = this.rng.range(0.4, 1.4);
     this.magSize = W.mag;
@@ -894,7 +918,19 @@ export class Agent {
   update(dt, ctx) {
     if (!this.alive) return;
     this.stateTime += dt;
-    this.suppression = Math.max(0, this.suppression - dt * 0.55);
+    /**
+     * SUPPRESSION IS AN INTEGRATOR AND THE INPUT TO IT JUST TRIPLED.
+     *
+     * 0.55/s was tuned against 12.3 rounds per man-minute. At 33 the same decay
+     * put the roster in SUPPRESSED for 14.8 % of all actor-time against 2.5 %
+     * before (measured, seed 7) — men crouched behind walls not shooting, which
+     * is the exact opposite of 「もっと撃ち合いの戦闘を起こして」 and is how a louder
+     * map became a quieter one. 1.25/s holds roughly the old EQUILIBRIUM against
+     * roughly the new volume of fire; every threshold that reads it, the flinch,
+     * the cone term and the duck are all untouched, so being shot at feels the
+     * same — it just stops being permanent.
+     */
+    this.suppression = Math.max(0, this.suppression - dt * 1.25);
     this.fireCooldown -= dt;
     this.burstCooldown -= dt;
     this.grenadeCooldown -= dt;
@@ -1416,6 +1452,39 @@ export class Agent {
       this.desiredSpeed = inSector ? 2.4 + this.traits.aggression * 1.6
         : (obj.mode === 'hold' ? 3.4 : 4.3) * haste;
       /**
+       * ══════════════════════════════════════════════════════════════════════
+       * NOBODY ARRIVES ALONE — "占領しにチームでいけ"
+       * ══════════════════════════════════════════════════════════════════════
+       * `Squad.regroup` cuts four men onto one job and `_laneVia` gives each
+       * team its own way in, so the ROUTES were already a fireteam's. What was
+       * never a fireteam's is the CLOCK: four men with `haste` between 0.92 and
+       * 1.26, four different distances to walk and four different amounts of
+       * cover on the way arrive up to fifteen seconds apart, so a four-man
+       * assault on a capture point is in practice four one-man assaults, each
+       * of which is killed by the men holding it before the next one lands.
+       * Measured: the mean fireteam had 0.35 of its four men inside the circle.
+       *
+       * THE FIX IS A BRAKE AND NEVER A STOP, which is the whole safety argument.
+       * A man ahead of his own team's centre walks at up to 0.55x — he keeps
+       * moving, keeps a route, keeps a desired speed, so nothing `stuckcheck`
+       * or `_unstick` reads changes sign — and a man behind it is not sped up,
+       * because pace is `haste`'s job. It only applies while the team is still
+       * more than a lane apart (`LEAD_SLACK`), so two men walking side by side
+       * are not braked for being 3 m apart, and it is off entirely inside the
+       * sector, where spreading out IS the order.
+       */
+      const ft = this.fireteam;
+      if (ft && !inSector && ft.members.length > 1) {
+        // How many metres closer to the destination he is than his team's own
+        // centre of mass. `ft.centre` counts HIM, so a four-man team damps this
+        // by a quarter on its own — which is the right direction: one man in
+        // front of three is braked harder than two abreast of two.
+        const lead = ft.centre.distanceTo(dest) - dist;
+        if (lead > LEAD_SLACK) {
+          this.desiredSpeed *= Math.max(0.55, 1 - (lead - LEAD_SLACK) * 0.05);
+        }
+      }
+      /**
        * WHEN TO ASK A* AGAIN. `stuckTimer` used to be true for everybody on
        * almost every frame (see `_move`), so in practice this gate was "the
        * repath timer expired" and a holder whose sector spot had just been
@@ -1793,7 +1862,33 @@ export class Agent {
      * objective pull turned up (see `toward` below). This is the difference
      * between a firing line and an assault.
      */
-    if (urgency && this.stateTime > breakOff * (1.4 + this.traits.patience * 3)) {
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * …AND IT DOES NOT APPLY TO THE MAN WHO IS ALREADY STANDING ON IT.
+     * ══════════════════════════════════════════════════════════════════════
+     * "行くけど、もっと占領するために敵を倒すというのがない"
+     *
+     * MEASURED (`_sixobj.mjs`, seed 7): 90.6 % of all orders on this map are
+     * `'defuse'` — `src/match`'s domination verb for TAKE / CONTEST, aimed at
+     * one of the zone's standing points — so the 2.5 s break-off above and this
+     * eight-to-twenty-five second stalemate break are not the narrow rule the
+     * header describes. They are the whole side's default, and this one fires
+     * WITH A TARGET IN SIGHT. A man in a stand-up fight nine metres from the
+     * point he was sent to take is therefore pulled out of it and told to walk
+     * to a place he is already at — which is the complaint, exactly: he goes,
+     * but there is no killing anybody in order to take it.
+     *
+     * The gate is DISTANCE and nothing else, so it needs to know nothing about
+     * which ruleset is running: within a circle and a half of a site objective,
+     * winning the firefight IS arriving. The ORDINARY break-off above is
+     * untouched and it is the one demolition depends on — it requires nothing
+     * visible for a beat, so the moment the angle is clear the planter walks in
+     * and plants. What this removes is only "leave a fight you are winning, on
+     * ground you were sent to, because a clock says so".
+     */
+    const nearSite = this.objective?.site != null
+      && this.position.distanceTo(this.objective.position) < SITE_HOLD_R + 5;
+    if (urgency && !nearSite && this.stateTime > breakOff * (1.4 + this.traits.patience * 3)) {
       this.cover = null;
       this.ai.cover?.release(this.id);
       this._setState(STATE.ADVANCE);
@@ -2037,6 +2132,23 @@ export class Agent {
         avoid: stale ? this.cover : null,
         toward: towardPt,
         towardWeight: towardW,
+        /**
+         * AND IF THE ORDER NAMED A SITE, THE FIGHT IS ON IT. @see the `holdAt`
+         * block in `CoverMap.pick`. `objective.site` is the capture point or the
+         * bomb site `match` handed him — the same field `Squad.regroup` cuts
+         * fireteams on — so this is on exactly the men whose job is a piece of
+         * ground and off everybody else.
+         *
+         * The bonus is BIGGER FOR THE MEN WHO SHOULD BE ON IT. An attacker
+         * taking a point and a defender holding one are both paid the full 6;
+         * a man doing anything else with a site attached is paid 3.5, which
+         * buys off the range penalty over about six metres and no further.
+         */
+        holdAt: this.objective?.site ? this.objective.position : null,
+        holdRadius: SITE_HOLD_R,
+        holdBonus: this.objective?.site
+          ? (pushing || mode2 === 'hold' ? 6 : 3.5)
+          : 0,
       });
       this.repathTimer = this.rng.range(1.1, 2.2) + tr.patience * this.rng.range(1.2, 3.6);
       if (pick && pick !== this.cover) {
@@ -3050,6 +3162,8 @@ export class Agent {
       const lo = Math.round((4 + (1 - t) * 6) * hold);
       const hi = lo + Math.round((4 + (1 - this.skill) * 8 + (1 - t) * 10) * hold);
       this.burstLeft = Math.max(1, Math.min(this.ammo, this.rng.int(lo, Math.max(lo, hi))));
+      /** Rounds sent in THIS pull. Drives the bloom. @see `_fireRound`. */
+      this.burstFired = 0;
       /**
        * AND THE GAP BETWEEN TWO PULLS IS HALVED. It was 0.55-1.8 s for the
        * disciplined man who is most of this roster, on top of a two-round
@@ -3080,6 +3194,7 @@ export class Agent {
       this.fireCooldown += 1 / this.fireRate;
       this.burstLeft--;
       this.ammo--;
+      this.burstFired = (this.burstFired ?? 0) + 1;
       this._fireRound();
       fired++;
     }
@@ -3102,7 +3217,25 @@ export class Agent {
      *   suppression being shot at makes it worse, as before
      */
     const settle = 1 + (1 - this.aimSettle) * 1.6;
-    const bloom = 1 + Math.min(6, this.magSize - this.ammo) * 0.055 * (1.4 - this.skill);
+    /**
+     * BLOOM IS PER TRIGGER PULL NOW, AND IT IS THE PRICE OF THE LONG BURST.
+     *
+     * It used to be `min(6, magSize - ammo)` — rounds gone from the MAGAZINE,
+     * capped at six — which was a sensible reading of "the first few rounds of a
+     * magazine are the accurate ones" while a burst was two or three rounds
+     * long. With the burst floor at four and a belt gunner holding down twenty,
+     * it is the wrong quantity twice over: it saturates a third of the way into
+     * the first pull, and it then reads zero again for a man who has just
+     * reloaded and is hosing.
+     *
+     * "当たらなくてもいい" IS AN EXPLICIT PART OF THE REQUEST, and this is where
+     * it is paid for. The cone opens with every round of the CURRENT pull, up to
+     * 16 of them and 2.2x at the bottom of the skill range, so a twenty-round
+     * burst genuinely walks off the target — the volume of fire goes up and the
+     * damage per second does not follow it. A disciplined four-round pull is
+     * almost exactly as accurate as it was.
+     */
+    const bloom = 1 + Math.min(16, this.burstFired ?? 0) * 0.075 * (1.4 - this.skill);
     /**
      * ADVANCING FIRE COSTS ACCURACY. A man who shoots while he walks (see
      * `shootMoving` in `_combat`) opens his cone by up to 1.5x, so the aggressive

@@ -161,6 +161,15 @@ const ARMOUR_OBJECTIVE_R = 26;
 const ARMOUR_HOSE = 0.62;
 const ARMOUR_SUPPRESS_BIAS = 1.35;
 
+/**
+ * AN ENEMY INSIDE MY OBJECTIVE'S CIRCLE SCORES AS THOUGH HE WERE THIS MUCH
+ * NEARER. @see `pickVisibleHostile`. 9 m is `Agent`'s `SITE_HOLD_R` — the 8 m
+ * capture radius `src/match` owns, plus a metre of sandbag — squared here so
+ * the test is a compare rather than a square root.
+ */
+const SITE_TARGET_BIAS = 0.55;
+const SITE_TARGET_R2 = 9 * 9;
+
 export class AiSystem {
   static id = 'ai';
   static deps = ['physics', 'world'];
@@ -1017,6 +1026,28 @@ export class AiSystem {
      * picked.
      */
     let bestScore = Infinity;
+    /**
+     * ════════════════════════════════════════════════════════════════════════
+     * THE MAN ON MY POINT IS THE MAN I AM SHOOTING — "占領するために敵を倒す"
+     * ════════════════════════════════════════════════════════════════════════
+     * Everything else here scores a MAN at his plain distance, i.e. "whoever is
+     * nearest". That is a sensible default and it is also why a capture point
+     * is contested by nobody in particular: the man standing in the circle and
+     * the man walking past a side street forty metres away are worth the same,
+     * so a bot sent to take the point shoots whichever of them he happened to
+     * look at. This makes an enemy inside the objective's own circle score as
+     * though he were `SITE_TARGET_BIAS` times closer.
+     *
+     * It is a BIAS AND NOT A FILTER, and the multiplier is deliberately mild:
+     * at 0.55, a contester at 30 m beats a rifleman at 17 m and loses to one at
+     * 15. A man with somebody in his face still fights the man in his face.
+     *
+     * Costs one hypot on a target that already passed the line-of-sight ray, and
+     * nothing at all for a man whose order carries no site (@see
+     * `Agent.setObjective`) — which is every bot in demolition's push phase and
+     * every bot on a map with no capture points.
+     */
+    const site = agent.objective?.site ? agent.objective.position : null;
     const cur = agent.targetActor;
     if (cur && cur.alive !== false && cur.dead !== true && this.targetable(cur) &&
         this.isHostile(agent, cur)) {
@@ -1028,7 +1059,7 @@ export class AiSystem {
         best = cur;
         bestScore = cur.isVehicle === true
           ? d * (curWorth === 3 ? ARMOUR_SUPPRESS_BIAS : ARMOUR_BIAS)
-          : d;
+          : d * this._siteBias(cur, site);
       }
     }
     let checks = 0;
@@ -1044,7 +1075,7 @@ export class AiSystem {
       if (d < 0) continue;
       const score = t.isVehicle === true
         ? d * (worth === 3 ? ARMOUR_SUPPRESS_BIAS : ARMOUR_BIAS)
-        : d;
+        : d * this._siteBias(t, site);
       if (score < bestScore) {
         best = t;
         bestScore = score;
@@ -1060,6 +1091,19 @@ export class AiSystem {
      */
     agent.armourWorth = best?.isVehicle === true ? this.armourWorth(agent, best) : 0;
     return best;
+  }
+
+  /**
+   * `SITE_TARGET_BIAS` if this actor is standing inside `site`'s circle, else 1.
+   * @see the block in `pickVisibleHostile`. `site` is null for every order that
+   * did not name one, and then this is a null test and a return.
+   */
+  _siteBias(actor, site) {
+    if (site === null) return 1;
+    const p = actor.position;
+    if (!p) return 1;
+    const dx = p.x - site.x, dz = p.z - site.z;
+    return dx * dx + dz * dz <= SITE_TARGET_R2 ? SITE_TARGET_BIAS : 1;
   }
 
   /** Distance to `target` if `agent` can see it, else -1. */

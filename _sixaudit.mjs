@@ -128,6 +128,13 @@ for (const seed of SEEDS) {
       highNames: {},
     };
     window.__S__ = S;
+    // LETHALITY. Tripling the volume of fire is only an improvement if the men
+    // firing it are still alive to fire more: a shorter mean life is more time
+    // walking from a spawn, which shows up as ADVANCE share and as an empty
+    // capture circle. Counted off the engine's own events.
+    S.deaths = 0; S.hits = 0;
+    e.events.on('actor:death', () => { S.deaths++; });
+    e.events.on('damage:dealt', () => { S.hits++; });
 
     // per-agent live instrumentation, installed by wrapping the AI step.
     const track = new Map();  // agent -> { burst, sinceReload, lastAmmo }
@@ -261,6 +268,9 @@ for (const seed of SEEDS) {
       gameSeconds: +(e.time.elapsed - S.t0).toFixed(1),
       frames: e.time.frame - S.f0,
       fires: S.fires,
+      deaths: S.deaths,
+      deathsPerMin: +(S.deaths / gm).toFixed(1),
+      hitsPerHundredRounds: +(S.hits / Math.max(1, S.fires) * 100).toFixed(1),
       roundsPerMinPerMan: +(S.fires / gm / Math.max(1, avg(S.aliveN))).toFixed(1),
       roundsPerTriggerPull: stat(S.bursts),
       burstEndReasons: S.burstEnd,

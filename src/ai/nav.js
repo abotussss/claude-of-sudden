@@ -2009,6 +2009,35 @@ export class CoverMap {
     const maxThreat = opts.maxThreat ?? 40;
     const heightBias = opts.heightBias ?? 0;
     const indoorBonus = opts.indoorBonus ?? 0;
+    /**
+     * ════════════════════════════════════════════════════════════════════════
+     * FIGHT FROM THE POINT — "行くけど、もっと占領するために敵を倒すというのがない"
+     * ════════════════════════════════════════════════════════════════════════
+     * `toward` is a GRADIENT and that is exactly why it could not do this job.
+     * It pays a man for every metre he gets nearer the objective, so it walks
+     * him at the circle and then keeps paying him for standing at its edge —
+     * and the range window fights it the whole way, because `traits.range` is 21
+     * to 44 m for most of this roster and a capture point is where the contacts
+     * are. MEASURED on the build before this: 16.9 % of live men were inside a
+     * capture circle at any moment and the mean fireteam had 0.35 of its four
+     * men on the paint. They arrive and then drift off to fight at the distance
+     * they like.
+     *
+     * A STEP FUNCTION IS THE HONEST SHAPE. Standing on the point is worth
+     * something and standing 2 m outside it is worth nothing: that is what a
+     * capture circle IS. So `holdBonus` is a flat award for a point inside
+     * `holdRadius` of `holdAt`, big enough to buy off the range penalty (0.55 a
+     * metre) over the ~10 m a man would otherwise back off, and it is bounded by
+     * `maxTravel` exactly as everything else here is — nobody is dragged across
+     * the map by it.
+     *
+     * The squad-spacing term below still applies inside the circle, which is
+     * what keeps this from re-making the ten-man blob: four men on one point are
+     * four men on four different sandbags of it.
+     */
+    const holdAt = opts.holdAt ?? null;
+    const holdR2 = (opts.holdRadius ?? 0) ** 2;
+    const holdBonus = opts.holdBonus ?? 0;
     const comp = opts.comp ?? -1;
     const compArr = comp >= 0 ? this.grid?.comp ?? null : null;
     const dTowardNow = toward ? Math.hypot(toward.x - pos.x, toward.z - pos.z) : 0;
@@ -2043,6 +2072,11 @@ export class CoverMap {
        */
       if (heightBias !== 0) score += Math.min(6, Math.max(0, p.y - pos.y)) * heightBias;
       if (indoorBonus !== 0 && p.indoor) score += indoorBonus;
+      // ON THE PAINT. A step, not a gradient. @see the `holdAt` note above.
+      if (holdBonus !== 0 && holdAt !== null) {
+        const hx = holdAt.x - p.x, hz = holdAt.z - p.z;
+        if (hx * hx + hz * hz <= holdR2) score += holdBonus;
+      }
       // Progress toward the objective, in metres gained, scaled.
       if (toward) {
         const gain = dTowardNow - Math.hypot(toward.x - p.x, toward.z - p.z);
