@@ -496,15 +496,25 @@ export class Civilians {
     return true;
   }
 
-  /** An A* from any base spawn of either side reaches this cell. */
+  /**
+   * An A* from a base spawn of either side reaches this cell.
+   *
+   * TWO SPAWN POINTS PER SIDE AND NOT ALL OF THEM, deliberately: a base cluster
+   * is a dozen points three metres apart, they are all in the same nav
+   * component, and this can be asked `SPAWN_TRIES` times inside ONE frame — the
+   * uncapped version is up to four hundred A* on the frame a wave lands, which
+   * is a visible hitch bought to re-prove a fact the first pair already
+   * answered. A pocket that two points of both bases cannot see is a pocket.
+   */
   _reachable(p) {
     const g = this.ai.grid;
     const sp = this.spawns;
     if (!g || !sp) return true;
     for (const kind of ['attack', 'defend']) {
       const list = sp[kind] ?? [];
-      for (const s of list) {
-        if (g.findPath(s.position, p, this._path) > 0) return true;
+      const n = Math.min(2, list.length);
+      for (let i = 0; i < n; i++) {
+        if (g.findPath(list[i].position, p, this._path) > 0) return true;
       }
     }
     return false;
