@@ -32,7 +32,31 @@ page.on('console', (m) => {
 await page.goto(`http://127.0.0.1:${PORT}/?capture=1`, { waitUntil: 'domcontentloaded' });
 await page.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
 
-await page.evaluate(() => { window.__ENGINE__.ctx.time.scale = 6; });
+await page.evaluate(() => {
+  const ctx = window.__ENGINE__.ctx;
+  ctx.time.scale = 6;
+  /**
+   * DID THE ARMED ONES ACTUALLY FIGHT — 「武装している人は攻撃してきます」 — and
+   * did an unarmed one ever so much as want to. `weapon:fire` carries no
+   * shooter (it is a reused payload for the flash), so this samples the two
+   * fields that decide a shot instead, once a frame, and counts the MEN rather
+   * than the frames: `shooters` is how many distinct militiamen ever pulled a
+   * trigger, which is the number the claim is about.
+   */
+  window.__CIVFIRE__ = { armedFrames: 0, unarmedFrames: 0, shooters: new Set(), engaged: new Set() };
+  const ai = ctx.peek('ai');
+  const tick = () => {
+    const c = window.__CIVFIRE__;
+    for (const a of ai.agents) {
+      if (!a.alive || a.aiCivil !== true) continue;
+      if (a.aiPacifist === true) { if (a.wantFire || a.hasTarget) c.unarmedFrames++; continue; }
+      if (a.hasTarget) c.engaged.add(a.id);
+      if (a.wantFire) { c.armedFrames++; c.shooters.add(a.id); }
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+});
 
 const pump = (n) => page.evaluate((k) => new Promise((done) => {
   let i = 0;
@@ -70,6 +94,12 @@ const sample = () => page.evaluate(() => {
     score: m.score ? `${m.score[0]}-${m.score[1]}` : '-',
     hp: c.list.length ? c.list[0].agent.maxHealth : null,
     wpn: c.list.map((r) => r.agent.weaponId).filter((v, i, a) => a.indexOf(v) === i).join(','),
+    fire: {
+      militiamenWhoFired: window.__CIVFIRE__.shooters.size,
+      militiamenWhoEngaged: window.__CIVFIRE__.engaged.size,
+      armedFireFrames: window.__CIVFIRE__.armedFrames,
+      unarmedWantedToFireFrames: window.__CIVFIRE__.unarmedFrames,
+    },
   };
 });
 
