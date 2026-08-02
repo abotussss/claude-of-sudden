@@ -81,7 +81,7 @@ import { RULES, MODE, TEAM, TEAM_NAME, TEAM_COLOR, ROLE, attackingTeam, roleOf, 
 import { resolveLayout } from './sites.js';
 import { CaptureZones } from './capture.js';
 import { Bomb, BOMB } from './bomb.js';
-import { Spectator } from './spectate.js';
+import { Spectator, describeKiller, KILLCAM_TIME } from './spectate.js';
 import { SiteMarks } from './sitemark.js';
 import { Airstrike, JET_LEAD } from './airstrike.js';
 import { Bomber } from './bomber.js';
@@ -1314,6 +1314,7 @@ export class MatchSystem {
     this.player.respawnAt(sp.position, sp.yaw);
     this.weapons.resetAmmo();
     this.spectator.stop();
+    this.ui.clearKillCam?.();
     this._playerWasDead = false;
   }
 
@@ -1597,6 +1598,9 @@ export class MatchSystem {
     const yawOut = this._yawOut ?? (this._yawOut = { yaw: 0, zone: '' });
     const pos = this._safeSpawn(this.playerTeam, role, yawOut);
     this.spectator.stop();
+    // He is on his feet: the answer to "what killed me" is no longer the thing
+    // he is looking at. @see src/ui/killcam.js.
+    this.ui.clearKillCam?.();
     this.player.respawnAt(pos, yawOut.yaw);
     this.player.setControlEnabled(true);
     this.weapons.resetAmmo();
@@ -2593,10 +2597,37 @@ export class MatchSystem {
 
   _onPlayerDeath() {
     const pr = this._record(this.player);
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * WHAT KILLED YOU, RESOLVED ONCE, AND READ BY BOTH THINGS THAT NEED IT
+     * ══════════════════════════════════════════════════════════════════════
+     * `player.lastDamage` is the wound that actually landed, whatever kind it
+     * was — @see the long note on that field for why `_playerLastAttacker`
+     * below could never answer for a blast. `describeKiller` turns it into a
+     * name, a cause and a PLACE; the camera frames the place and `ui.killCam`
+     * draws the words. Resolved BEFORE `_pushKillfeed` so the feed row and the
+     * cam can never disagree about who did it.
+     */
+    const kill = describeKiller(
+      this._killCam ?? (this._killCam = {}),
+      this.player.lastDamage,
+      this.playerTeam,
+      this.ctx.camera.position
+    );
     if (pr && pr.alive) {
       pr.alive = false;
       pr.deaths++;
-      const att = this._playerLastAttacker;
+      /**
+       * KILL CREDIT STILL COMES OFF `damage:dealt` AND IS UNCHANGED. The record
+       * above is richer but it is also willing to name a bomb, and a bomb has
+       * never scored in this game (@see `_onTankKill`: "it can be nothing at
+       * all"). The only thing added is that a killer the cam found and the old
+       * field did not is now used when the old field has nothing — which is a
+       * blast thrown by a MAN, i.e. exactly the case the killfeed used to
+       * credit to WORLD.
+       */
+      const att = this._playerLastAttacker ??
+        (kill.actor && !kill.environmental ? kill.actor : null);
       // Same as `_onActorDeath`: a tank has no roster row but is a real killer.
       const killer = this._record(att) ?? (att?.isTank ? att : null);
       if (killer && killer !== pr && killer.kills !== undefined) killer.kills++;
@@ -2616,9 +2647,18 @@ export class MatchSystem {
       });
     }
     this.player.setControlEnabled(false);
-    this.spectator.start(this.ctx.camera.position);
     this._playerWasDead = true;
     const q = this._respawnQueue.find((r) => r.rec === pr);
+    /**
+     * THE KILL CAM. `start` takes the resolved killer and the length of the
+     * wait; a killer with nowhere to be (a fall) makes it fall back to the
+     * orbit over the body this file has always had. `_killCamWait` is the
+     * respawn clock the HUD bar draws, and a round being played out with no
+     * respawn still gets the cam — the wait is simply not a countdown.
+     */
+    const wait = q ? RULES.respawnDelay : KILLCAM_TIME + 1.2;
+    this.spectator.start(this.ctx.camera.position, kill, wait);
+    this.ui.killCam?.(kill);
     this.ui.banner.show(
       'ELIMINATED',
       q ? `RESPAWN IN ${RULES.respawnDelay | 0}S` : 'NO RESPAWN — PLAY IT OUT',
@@ -5066,7 +5106,26 @@ export class MatchSystem {
     // if it wants to; the banner at the moment of death carries it either way.
     const mine = this._respawnQueue.find((q) => q.rec.isPlayer);
     h.respawnIn = mine ? Math.max(0, mine.at - this.ctx.time.elapsed) : 0;
-    h.spectating = this.spectator.active ? this.spectator.targetName : '';
+    /**
+     * NOT WHILE THE KILL CAM IS UP. The spectate bar's line is "SPECTATING
+     * <name>", and the kill cam's target is the thing that killed you — a bomb,
+     * a drone, the church — so it would read "SPECTATING AIRSTRIKE" underneath
+     * a strip that already says who did it. Blank makes the bar say ELIMINATED,
+     * which is the true statement for those three seconds.
+     */
+    h.spectating = this.spectator.active && !this.spectator.killCam
+      ? this.spectator.targetName
+      : '';
+    /**
+     * The kill cam's own bar: how much of the wait has gone. It is the respawn
+     * clock when there is one and the cam's own clock when there is not (a
+     * round being played out), so the strip always has something honest to draw.
+     */
+    h.killCamProgress = h.respawnIn > 0
+      ? 1 - h.respawnIn / Math.max(0.1, RULES.respawnDelay)
+      : this.spectator.kill
+        ? Math.min(1, this.spectator.killT / Math.max(0.1, this.spectator.killFor))
+        : 0;
     h.progress = b.progress;
     h.working = b.workKind ?? '';
     if (this.domination) {
