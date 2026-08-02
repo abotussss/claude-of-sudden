@@ -162,7 +162,36 @@ const SNIPER_MIN = 16;
  * WHAT A LIFE COSTS AT THE REQUESTED RATE. @see the reserve block in the
  * constructor for the arithmetic; this is the one number it turns on.
  */
-const RESERVE_MUL = 2.0;
+const RESERVE_MUL = 3.0;
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * HOW LONG A MAN MAY STAND ON THE SPOT HE WAS SENT TO BEFORE HE WORKS THE ROOM
+ * ════════════════════════════════════════════════════════════════════════════
+ * 「AIが屋内にいるとき、外にも出ないしその場で突っ立ったままです」 — and the post
+ * system turned out to be the SMALL half of it. `_idleindoors.mjs`, seed 7,
+ * 12287 bot samples: 10.3 % of all alive-bot time is a man standing still
+ * inside a building, and of the 1261 samples that make it up, **755 carry the
+ * `pickup` verb** — the cache errand — against 144 for the upper post. The
+ * longest single dwell was FIVE MINUTES on one man.
+ *
+ * The cause is in `_advance`'s arrival branch and it is one line: `desiredSpeed
+ * = 0`. `hold` and `retake` were given a sector to work (@see `_pickHoldSpot`,
+ * and the note above it about fifteen defenders converging on one dot), `push`
+ * was added to that list for the same reason — and `pickup` and `defuse` never
+ * were. A man sent to an ammunition crate therefore walks to it, stands ON it,
+ * and stays there: if the crate is on cooldown he has nothing to do and no
+ * reason to leave, and `match` re-issues the same order every two seconds.
+ *
+ * So arriving is a sector for EVERY verb, after a dwell. The dwell is what
+ * keeps this from breaking the two cases that genuinely need a man on a
+ * particular square: he takes what the crate holds, or works the charge, in the
+ * first `ARRIVE_ROAM` seconds, and only starts working the room afterwards.
+ * `_pickHoldSpot` keeps every spot on the nav grid and inside the sector, so
+ * this can never wander a man off his objective — and a man moving inside a
+ * building is a man the player can see fighting rather than a mannequin.
+ */
+const ARRIVE_ROAM = 5;
 
 /**
  * HOW STALE A LAST-KNOWN MAY BE AND STILL BE WORTH ROUNDS.
@@ -853,6 +882,8 @@ export class Agent {
      */
     this.divert = null;
     this._divertTimer = this.rng.float() * DIVERT_EVERY;
+    /** Seconds spent standing on the objective. @see `ARRIVE_ROAM`. */
+    this._inPosT = 0;
     /** Has the "IN POSITION" for THIS objective gone out yet. @see `_advance`. */
     this._saidSet = false;
     /** `ctx.time.elapsed` of this man's last transmission. @see `radio.js`. */
@@ -1000,7 +1031,18 @@ export class Agent {
      * So the whole rack scales together, in ONE place, rather than seven
      * numbers being edited in `WEAPONS`: the table still says what each gun's
      * load-out IS relative to the others, and this says what a life on this map
-     * now costs. 2.0 is "a life and a half at the new rate", the same rule
+     * now costs. 3.0 rather than the 2.0 the first pass reasoned its way to,
+     * and the correction is MEASURED: with the reserve already doubled and the
+     * map at 53.5 rounds per man-minute, `_firegate.mjs` reports **15.1 % of
+     * all contact time is a man whose POUCH is empty**, the second largest gate
+     * left — and a dry man stays dry for the rest of his life. It is also half
+     * of the standing-still-indoors complaint by another route: `match` sends
+     * every one of them on a cache errand, and 755 of the 1261 idle-indoor
+     * samples carry the `pickup` verb. The crate is still worth walking for —
+     * the top of the fire-rate distribution still empties a pouch inside a
+     * life, which is the asymmetry the paragraph below describes and the reason
+     * the errand exists. It is simply no longer the MEDIAN man's problem.
+     * It is "a life and a half at the new rate", the same rule
      * `W.spares` was chosen under. NOTHING ELSE CHANGES: `resupply` is still
      * capped at `startReserve`, running dry is still real and still recoverable
      * only at a crate, and the crate legs `match` writes are still worth
@@ -1417,6 +1459,7 @@ export class Agent {
       // objective has to roll a new one or the man holds the old site's ground.
       this._hasHoldSpot = false;
       this.holdTimer = 0;
+      this._inPosT = 0;
       // A DIVERSION IS AN OPINION ABOUT AN ORDER, so a new order ends it. It is
       // re-asked on the next `DIVERT_EVERY` tick against the new destination,
       // which is the only way `match`'s plan can stay the thing that converges.
@@ -2163,7 +2206,11 @@ export class Agent {
 
     const anchored = !div && (obj.mode === 'hold' || obj.mode === 'retake');
     const holdish = anchored
-      || (!div && obj.mode === 'push' && this.position.distanceTo(obj.position) < 9);
+      || (!div && obj.mode === 'push' && this.position.distanceTo(obj.position) < 9)
+      // …AND EVERY OTHER VERB, ONCE HE HAS BEEN STANDING THERE LONG ENOUGH TO
+      // have done whatever he was sent for. @see `ARRIVE_ROAM`.
+      || (!div && this._inPosT > ARRIVE_ROAM
+        && this.position.distanceTo(obj.position) < 9);
     let dest = div ? div.position : obj.position;
     if (holdish) {
       if (!this._hasHoldSpot || this.holdTimer <= 0) this._pickHoldSpot(obj);
@@ -2177,6 +2224,10 @@ export class Agent {
         : obj.mode === 'plant' ? 1.6
           : 2.2;
     const dist = this.position.distanceTo(dest);
+
+    // How long he has been standing on his objective. @see `ARRIVE_ROAM`.
+    if (dist > arrive) this._inPosT = 0;
+    else this._inPosT += dt;
 
     if (dist > arrive) {
       // Crossing the map is a run; moving inside a sector you already hold is a
