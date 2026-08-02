@@ -78,15 +78,46 @@ await sleep(10000);
 await page.evaluate(() => (window.__ENGINE__.time.scale = 1));
 await sleep(2500);
 
-/* ---- quiesce: nobody shooting through the photographs -------------------- */
+/**
+ * ──────────────────────────────────────────────────────────────────────────
+ * QUIESCE — AND THE FIRST RUN OF THIS FILE PROVES WHY IT IS NOT OPTIONAL
+ * ──────────────────────────────────────────────────────────────────────────
+ * A REAL scheduled match has twenty men in it and they shoot the cameraman.
+ * The first six frames this script wrote were the SPECTATOR's: the banner
+ * read ELIMINATED / SPECTATING ZENITH, `MatchSystem`'s own spectator camera
+ * had taken `ctx.camera` back the frame after every `teleport`, and the shot
+ * was the inside of a rubble pile. That is the same defect the commit
+ * "The ground camera was inside the rubble" fixed on another harness.
+ *
+ * So the match is STOPPED (`update` stubbed, exactly as `tools/floorcheck.mjs`
+ * quiesces), the agents are cleared, the player is put back on his feet, and
+ * the HUD and the viewmodel are taken out of frame — the subject is the sky.
+ */
 await page.evaluate(() => {
   const e = window.__ENGINE__;
+  const m = e.ctx.peek('match');
   const ai = e.ctx.peek('ai');
+  const pl = e.ctx.peek('player');
+  const ui = e.ctx.peek('ui');
+  if (m && !m.__skyshotStopped) {
+    m.update = () => {};
+    m.lateUpdate = () => {};
+    m.__skyshotStopped = true;
+  }
   if (ai) { ai.combatEnabled = false; try { ai.clearAgents(); } catch { /* ok */ } }
+  if (pl) {
+    pl.alive = true;
+    pl.movementLocked = false;
+    if (pl.movement) pl.movement.movementLocked = false;
+    pl.health?.heal?.(999);
+  }
   e.input.frozen = true;
   e.input.enabled = false;
-  e.ctx.peek('player')?.setControlEnabled?.(false);
-  e.ctx.peek('ui')?.debugState?.('clean');
+  pl?.setControlEnabled?.(false);
+  ui?.debugState?.('clean');
+  // The HUD is a DOM overlay; the weapon is its own scene drawn over the world.
+  if (ui?.root) ui.root.style.display = 'none';
+  for (const o of e.ctx.viewScene?.children ?? []) o.visible = false;
 });
 
 /* ---- the census: every settled chunk off the ground, and what holds it --- */
@@ -163,6 +194,10 @@ const POSES = [
   { id: 'east-flank', u: 24, v: -4, up: 9, tu: -6, tv: 2 },
   // The north end, looking south down the whole plan.
   { id: 'north-apse', u: 2, v: 33, up: 9, tu: 0, tv: -6 },
+  // …and two that put nothing but sky in the frame, because a mass 20 m up
+  // over the middle of a 45 m ruin is invisible from every horizontal pose.
+  { id: 'crossing-steep', u: 0, v: -4, up: 26, tu: 0, tv: 4 },
+  { id: 'west-steep', u: -20, v: -8, up: 24, tu: -4, tv: 2 },
 ];
 for (const p of POSES) {
   const info = await page.evaluate((pose) => {
