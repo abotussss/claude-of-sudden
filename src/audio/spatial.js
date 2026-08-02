@@ -139,11 +139,36 @@ export function attenuationAt(dist) {
  * make 150 m as loud as 40 and destroy the only distance cue in the mix.
  */
 const GUN_HINGE = 12;
-const GUN_FALL = 0.36;
+/**
+ * 0.36 -> 0.22, AND THE CAP 4.5 -> 6, on the THIRD round of this complaint.
+ *
+ * MEASURED on one instrument against one reference (`--foot`, which mutes the
+ * bed for the event and measures the bed by itself, so "over the ambience" is
+ * a ratio of two windows and not of two tools): a coalesced six-round burst
+ * arrived at +3.3 dB over the bed at 90 m, +2.7 at 150 m and +1.4 at 200 m.
+ * Three decibels over the wind is not 「銃声が方方でなっている感じが戦争です」 — it
+ * is a rumour of a war. That is what survived two passes of level work, because
+ * both of them were measured against his own rifle rather than against the
+ * thing the far shot has to be heard over.
+ *
+ * The shape argument in this file still holds and is why this is 0.22 and not
+ * 0.1: the falloff must stay MONOTONE or the map becomes one loudness and the
+ * only distance cue in the mix is gone. At 0.22 a burst still loses 3.1 dB
+ * between 40 m and 200 m; at 0.1 it would lose 1.4 dB, which is nothing.
+ * Inside `GUN_HINGE` this is still exactly 1.0 — a man shooting at you across
+ * a room is untouched, as before.
+ *
+ *          gain now   with this
+ *   40 m      2.12       2.51    +1.5 dB
+ *   90 m      2.10       2.78    +2.4 dB
+ *  150 m      2.31       3.29    +3.1 dB
+ *  200 m      2.44       3.61    +3.4 dB
+ */
+const GUN_FALL = 0.22;
 export function gunRangeGain(dist) {
   const d = Math.max(dist, GUN_HINGE);
   const want = attenuationAt(GUN_HINGE) * Math.pow(GUN_HINGE / d, GUN_FALL);
-  return clamp(want / Math.max(attenuationAt(d), 1e-6), 1, 4.5);
+  return clamp(want / Math.max(attenuationAt(d), 1e-6), 1, 6);
 }
 
 /**
@@ -171,14 +196,43 @@ export function gunRangeGain(dist) {
  *   at 12 m: what is left of a big charge at a hundred metres is its low end,
  *   and the low end is the part that obeys 1/r least.
  */
+/**
+ * THE RANGE EXPONENT 0.5 -> 0.25 AND THE CAP 6 -> 9 — 「また爆撃や銃撃、グレネードの
+ * 爆破音は遠くても聞こえるように」.
+ *
+ * Two things are being paid for here and they should be read together.
+ *
+ * FIRST, this pass closed a reverb-send override on the explosion voice (see
+ * `_onExplosion`: it passed `send: 1.0`, which beat the voice's own authored
+ * 0.26-0.56 and undid a whole earlier pass). That is right for 「リバーブが強い」
+ * and it cost the blast LEVEL, because a fraction of every blast was arriving
+ * through the convolvers — MEASURED over the bed: r15 at 100 m 31.6 -> 27.5 dB,
+ * at 200 m 28.9 -> 25.3, a 6 m frag at 80 m 19.5 -> 17.0. Taking wet out and
+ * paying it back dry, in the same commit, is what this file's history says to
+ * do and what the mixer's own notes did twice before.
+ *
+ * SECOND, he asked for far blasts to carry BETTER than they did, not merely as
+ * well. The exponent is the far end only: at the hinge it is exactly 1.0, so a
+ * charge going off in your face is bit-for-bit what it was.
+ *
+ *              gain now   with this   vs the build he played
+ *   r15  35 m    3.77       4.93       +0.5 dB
+ *   r15 100 m    3.58       6.08       +0.5 dB
+ *   r15 200 m    3.69       7.47       +2.5 dB
+ *   r6   80 m    2.55       4.54       +2.5 dB
+ *
+ * The cap has to move with it or the arithmetic is decorative: at 0.25 both
+ * 100 m and 200 m clamp at the old ceiling of 6 and the 200 m case would come
+ * out QUIETER than the 100 m one, which is not a range law at all.
+ */
 export function blastRangeGain(dist, radius = 6) {
   const r = clamp(radius, 4, 26);
   const heft = clamp(0.75 + r / 10, 1, 2.4);
   const hinge = clamp(r * 0.8, 8, 16);
   const d = Math.max(dist, hinge);
-  const flat = attenuationAt(hinge) * Math.pow(hinge / d, 0.5) /
+  const flat = attenuationAt(hinge) * Math.pow(hinge / d, 0.25) /
     Math.max(attenuationAt(d), 1e-6);
-  return clamp(heft * clamp(flat, 1, 5), 1, 6);
+  return clamp(heft * clamp(flat, 1, 5), 1, 9);
 }
 
 /**
