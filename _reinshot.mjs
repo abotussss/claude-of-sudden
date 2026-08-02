@@ -138,8 +138,15 @@ const place = (mode) =>
         }
       if (n) {
         tx = sx / n; ty = sy / n + 1.0; tz = sz / n;
+        /**
+         * ABOVE THE DEBRIS, NOT IN IT. At head height this camera ended up
+         * buried inside the cathedral rubble field — ZONE D is a pile of
+         * concrete and 1.6 m off the ground there is inside a slab. Three
+         * metres up clears the wreckage and still reads as a man's eye rather
+         * than a map view.
+         */
         const px2 = run.dir.z, pz2 = -run.dir.x;
-        window.__CAMLOW__ = { x: tx + px2 * 13, y: ty + 1.6, z: tz + pz2 * 13 };
+        window.__CAMLOW__ = { x: tx + px2 * 16, y: ty + 3.4, z: tz + pz2 * 16 };
       } else ty = c.y + 1.1;
     }
     const cam =
