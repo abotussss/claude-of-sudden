@@ -731,6 +731,8 @@ export class Agent {
     /** A hand-made destination that owns the steering while it lasts. */
     this._detour = new THREE.Vector3();
     this._detourTimer = 0;
+    /** Wall clock before which `_descend` will not try again. @see `_descend`. */
+    this._descendUntil = -1e9;
     /** Which way he tries first. Flipped on every side-step so a repeat differs. */
     this._detourSide = this.rng.float() < 0.5 ? 1 : -1;
     /** Rotating bearing for the blind step the grid cannot advise. @see `_sideStep` */
@@ -2253,6 +2255,19 @@ export class Agent {
       if (s) s.unstickRegain = (s.unstickRegain ?? 0) + 1;
       return;
     }
+    /**
+     * RUNG ZERO'S SECOND HALF, AND IT ONLY EVER POINTS DOWN. `_regainGrid` walks
+     * SIDEWAYS — the nearest cell within a stride of his own feet — and there is
+     * a whole surface on this map where nothing is: the roof of an enterable
+     * building, whose cells the interior pass re-sampled as the ground storey.
+     * @see `NavGrid.nearestGroundBelow` for the measurement. A man up there has
+     * no route, no cell, no drop edge and no level neighbour, and every rung
+     * below this one is a grid query that will return nothing.
+     */
+    if (this._descend()) {
+      if (s) s.unstickDescend = (s.unstickDescend ?? 0) + 1;
+      return;
+    }
     switch (this.stuckRung) {
       case 1:
         this._sideStep(2.6);
@@ -2346,6 +2361,60 @@ export class Agent {
     this._detour.set(g.worldX(ci % g.nx), g.floor[ci], g.worldZ((ci / g.nx) | 0));
     if (this.position.distanceToSquared(this._detour) < 0.9 * 0.9) return false;
     this._commitDetour(2.4);
+    return true;
+  }
+
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * GET OFF THE ROOF. 「屋上だとかにリスポーンしても階段降りるなり、飛び降りるなりして
+   * 戦闘に参加しに行って」 — the half of that request the drop graph cannot serve.
+   * ──────────────────────────────────────────────────────────────────────────
+   * `NavGrid.drop` / `escape` handle the roof A* CAN SEE, and they work: they
+   * are edges between two cells of the height field. This is for the man there
+   * is no edge for — off the field entirely (a vantage nest, whose cells the
+   * interior pass owns), or on a shelf whose component is not the ground's and
+   * has no fall out of it. Both look identical from inside the ladder: he wants
+   * to move, he is not moving, and every planner query returns nothing.
+   *
+   * THE TEST IS THAT THE GROUND UNDER HIM IS GROUND HE CANNOT WALK TO, and the
+   * component it compares against is the one he is STANDING ON rather than the
+   * one under his feet in plan — `_navComp` reads the cell at his x/z with no
+   * regard for height, and on a carved roof that is the SHOP FLOOR SIX METRES
+   * BELOW HIM, which compares equal to the landing and refused every rescue.
+   * The escape label is deliberately not consulted: a man whose component the
+   * graph says can fall to the floor, who has nevertheless spent the ladder's
+   * whole window going nowhere, is a man the graph is wrong about.
+   *
+   * The fall is right when he gets here — he takes no damage from it (@see
+   * `NavGrid`'s `DROP_MAX` note) and the alternative, measured, is four hundred
+   * seconds on a roof.
+   *
+   * It hands him a DETOUR and not a route, because a route is the thing that
+   * does not exist. He walks at the lip, `_stepOff` mantles the parapet when he
+   * reaches it, and `_move`'s integrator does the rest.
+   *
+   * AND IT MAY NOT OWN THE LADDER. A descent that does not work must not be the
+   * only thing this man ever tries, so it stands aside for six seconds after
+   * each attempt and the rungs below run in the meantime.
+   */
+  _descend() {
+    const g = this.ai.grid;
+    if (!g || !g.compSize?.length) return false;
+    if (this._detourTimer > 0) return false;
+    const now = this.ctx.time.elapsed;
+    if (now < this._descendUntil) return false;
+    const ci = g.nearestGroundBelow(this.position.x, this.position.z, this.position.y);
+    if (ci < 0) return false;
+    // Ground he can already walk to is ground he must walk to.
+    const hi = g.nearest(this.position.x, this.position.z, this.position.y, 3, OFFGRID_TOL);
+    if (hi >= 0 && g.comp[hi] === g.comp[ci]) return false;
+    this._descendUntil = now + 6;
+    this._detour.set(g.worldX(ci % g.nx), g.floor[ci], g.worldZ((ci / g.nx) | 0));
+    // Long enough to cross a roof at the detour's own 2.4 m/s floor. A man who
+    // arrives sooner clears it himself (@see `_move`), and one who runs out of
+    // clock re-sticks and asks again.
+    this._commitDetour(4.0);
+    this._detourSide = -this._detourSide;
     return true;
   }
 
@@ -2654,9 +2723,20 @@ export class Agent {
    * the parapet and dropped, and `Agent._move`'s own integrator does the fall.
    */
   _stepOff() {
-    // the route has to be the thing asking. A man near a ledge with a route
-    // along it is not jumping off it.
-    const wp = this.hasMoveTarget && this.pathIndex < this.pathLen ? this.path[this.pathIndex] : null;
+    /**
+     * The thing he is STEERING AT has to be the thing asking. A man near a ledge
+     * with a route along it is not jumping off it.
+     *
+     * A detour outranks the path here for the same reason it does in `_move`: a
+     * man off the height field has no path by definition (`_goTo` refuses to
+     * plan for him), so reading the path alone meant `_descend` could walk him
+     * to the parapet and then leave him leaning on it — the exact failure this
+     * move was written to prevent, arriving by the one route that has no
+     * waypoints. @see `_descend`.
+     */
+    const wp = this._detourTimer > 0
+      ? this._detour
+      : this.hasMoveTarget && this.pathIndex < this.pathLen ? this.path[this.pathIndex] : null;
     if (!wp) return false;
     const drop = this.position.y - wp.y;
     if (drop < 0.6 || drop > 7.5) return false;

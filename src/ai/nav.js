@@ -282,6 +282,13 @@ export class NavGrid {
      * is down there" — so it is one label per component and not a closure.
      */
     this.escape = new Int32Array(0);
+    /**
+     * How big a component has to be before `_labelEscapes` treats it as THE
+     * FLOOR — somewhere a man who lands on it is in the match rather than on a
+     * second shelf. Published because `nearestGroundBelow` has to ask the same
+     * question about a landing that is not a drop edge. @see `_labelEscapes`.
+     */
+    this.escapeFloor = DROP_LAND_MIN;
     /** Cell count per label, indexed by label. */
     this.compSize = [];
     this.components = 0;
@@ -629,6 +636,7 @@ export class NavGrid {
     if (this.escape.length !== C) this.escape = new Int32Array(C);
     this.escape.fill(-1);
     this.escapeComps = 0;
+    this.escapeFloor = Math.max(DROP_LAND_MIN, this.biggestComponent * 0.01);
     if (!C) return;
     /** to-component -> the components that can fall into it. Built once. */
     const rev = new Map();
@@ -650,7 +658,7 @@ export class NavGrid {
     const order = [];
     for (let c = 0; c < C; c++) order.push(c);
     order.sort((a, b) => this.compSize[b] - this.compSize[a]);
-    const floorSize = Math.max(DROP_LAND_MIN, this.biggestComponent * 0.01);
+    const floorSize = this.escapeFloor;
     const stack = [];
     for (const target of order) {
       if (this.compSize[target] < floorSize) break;
@@ -1078,6 +1086,63 @@ export class NavGrid {
           if (!okY(i) || !okC(i)) continue;
           let d = dx * dx + dz * dz;
           if (y !== null && Number.isFinite(this.floor[i])) d += (this.floor[i] - y) ** 2 * 4;
+          if (d < bestD) {
+            bestD = d;
+            best = i;
+          }
+        }
+      }
+      if (best >= 0) return best;
+    }
+    return -1;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * THE GROUND UNDER A MAN WHO IS NOT ON IT. Returns a cell index or -1.
+   * ────────────────────────────────────────────────────────────────────────────
+   * `drop` and `escape` are the graph's answer to "I am up here and the fight is
+   * down there", and they only exist BETWEEN TWO CELLS OF THIS GRID. There is a
+   * whole class of high ground where that is not enough, and it is not an
+   * accident: `_carveInteriors` overwrites every cell inside an enterable
+   * footprint with its GROUND STOREY, deliberately and for good reasons, which
+   * means the roofs of those eight buildings — the roofs with the vantage nests
+   * on them, the only roofs anything in this game puts a man on — are not in the
+   * height field AS ROOFS AT ALL. Measured on seed 1: all six vantage nests read
+   * `nearest(x, z, y=6.5, 3 rings, 1.5 m) === -1`, and four of the six are still
+   * -1 at TEN rings. A man standing in one is off the grid, `Agent._goTo`
+   * refuses to plan for him, `_regainGrid` has nowhere level to send him, and no
+   * drop edge can help because he is not on a cell that has any.
+   *
+   * So this asks the only question left, and it asks it of geometry rather than
+   * of the graph: IS THERE REAL GROUND BELOW HIM. Nearest first, and a landing
+   * has to be somewhere he is better off — `escapeFloor` cells of it, or a
+   * component that can fall its own way down — because a rescue that puts a man
+   * on a market stall's table top has moved the problem two metres.
+   *
+   * `minFall` keeps a kerb out of it and `maxFall` is the caller's judgement,
+   * NOT `DROP_MAX`: that constant is what a route may plan through, and this is
+   * a man who has no route. The AI takes no fall damage (@see `DROP_MAX`'s
+   * note), so the only cost of the tallest roof on this map is how it looks.
+   */
+  nearestGroundBelow(x, z, y, maxRings = 10, minFall = 1.6, maxFall = 12) {
+    const cx = this.cellX(x), cz = this.cellZ(z);
+    for (let ring = 0; ring <= maxRings; ring++) {
+      let best = -1, bestD = Infinity;
+      for (let dz = -ring; dz <= ring; dz++) {
+        for (let dx = -ring; dx <= ring; dx++) {
+          if (ring > 0 && Math.max(Math.abs(dx), Math.abs(dz)) !== ring) continue;
+          const ix = cx + dx, iz = cz + dz;
+          if (!this.walkable(ix, iz)) continue;
+          const i = this.index(ix, iz);
+          const fall = y - this.floor[i];
+          if (!(fall >= minFall && fall <= maxFall)) continue;
+          const c = this.comp[i];
+          if (c < 0) continue;
+          if (this.compSize[c] < this.escapeFloor && !(this.escape.length && this.escape[c] >= 0)) continue;
+          // Nearest, then shallowest: the roof next door beats the street when
+          // both are under him, and a man who can take one storey takes one.
+          const d = dx * dx + dz * dz + fall * 0.35;
           if (d < bestD) {
             bestD = d;
             best = i;
