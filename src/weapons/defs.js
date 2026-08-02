@@ -456,6 +456,119 @@ export const WEAPON_DEFS = {
     magLen: 0.078,
   },
 
+  lmg: {
+    /**
+     * MOVEMENT AND RECOIL CONTROL.
+     *
+     * THE SLOWEST FEET IN THE GAME, on purpose — 「LMGなので重厚な球数の多い、
+     * でも足がすごく遅くなるやつ」. Same mechanism as the knife's speed BONUS
+     * (`PlayerMovement.targetSpeed` reads `weapons.moveScale`), opposite sign:
+     * the knife is 1.18, the sniper 0.90, and this is 0.78 — carrying eight
+     * kilos of belt-fed gun costs you a fifth of your speed, which is the
+     * price of the hundred-round belt below.
+     *
+     * Recoil control: more of the kick stays than on the AK (0.55 vs 0.46) but
+     * it bleeds off on a similar clock — a heavy gun shoves hard and then the
+     * mass itself settles it, which is what makes long bursts its whole point.
+     */
+    moveScale: 0.78,
+    recoilControl: { residualShare: 0.55, residualTau: 0.42 },
+    id: 'lmg',
+    label: 'MK-46',
+    /* fx keys the muzzle flash off this string and has an `lmg` profile
+     * (fx/muzzle.js MUZZLE_PROFILES), audio keys off the ID and has an `lmg`
+     * profile too (audio/weapons.js WEAPON_PROFILES) — both existed unused
+     * until this weapon arrived. `primaryIds` derives the loadout picker from
+     * class, so `lmg` puts it on the rack with nothing else to change. */
+    class: 'lmg',
+    caliber: '5.56x45',
+    /* --- fire control ---
+     * An open-bolt belt gun has exactly one trigger setting. A single-entry
+     * `modes` makes `cycleFireMode` a no-op, the same way the knife's does. */
+    rpm: 750,
+    modes: ['auto'],
+    burstCount: 1,
+    burstRpm: 750,
+    burstDelay: 0.12,
+    /* --- ammunition ---
+     * THE DEEP MAGAZINE: a 100-round soft-pack belt, two more in reserve.
+     * The HUD's pip strip clamps at 30 pips and scales proportionally
+     * (ui/ammo.js MAX_PIPS), so a 100-round count reads as a full bar and the
+     * printed number carries the real figure. */
+    magSize: 100,
+    reserve: 200,
+    /* --- terminal ballistics ---
+     * The M4's round out of a longer, heavier barrel: same 5.9 body shots,
+     * a shade more velocity and noticeably more penetration — sustained fire
+     * THROUGH cover is what a support gun is for. */
+    muzzleVelocity: 900,
+    damage: 17,
+    penetration: 1.4,
+    dropoff: 0.66,
+    maxRange: 460,
+    dragK: 0.28,
+    /** Belts are linked 1-in-4 tracer. */
+    tracerEvery: 4,
+    /* --- accuracy (degrees) ---
+     * Poor snapshot, strong sustained: the hip cone is the worst of the
+     * automatics and the first shots bloom fast, but `spreadMax` is LOW and
+     * the decay slow — a long burst settles into a repeatable cone instead of
+     * spiralling, which is the trade that makes suppressive fire real. */
+    spreadHip: 3.4,
+    spreadAds: 0.38,
+    spreadPerShot: 0.3,
+    spreadMax: 2.9,
+    spreadDecay: 2.6,
+    /* --- recoil ---
+     * A heavy slow shove between the M4 and the sniper: 1.24x the M4's climb
+     * at 6.6 Hz (mass, not chatter), with a 40-long pattern so a third of the
+     * belt is a learnable snake rather than a loop. */
+    recoil: {
+      pitch: 0.0105,
+      yaw: 0.0035,
+      kickBack: 0.028,
+      kickUp: 0.0096,
+      roll: 0.042,
+      punch: 0.55,
+      freq: 6.6,
+      damping: 0.46,
+      patternLength: 40,
+      patternSeed: 0x6c4d47,
+      climbShape: [1.42, 1.3, 1.18, 1.08, 1.0],
+      drift: 0.65,
+    },
+    /* --- handling (seconds) ---
+     * Heavy everywhere: nearly twice the M4's time to the sights, the slowest
+     * draw of the automatics, and a reload that opens the tray, seats a fresh
+     * pouch and lays the belt — 4.8 s tactical, 5.6 s from bolt-open. That
+     * reload is the counterweight to the 100-round belt. */
+    adsTime: 0.4,
+    adsFov: 0.75,
+    viewFov: 0.86,
+    reloadTac: 4.8,
+    reloadEmpty: 5.6,
+    inspectTime: 3.6,
+    drawTime: 1.0,
+    holsterTime: 0.62,
+    /* --- pose ---
+     * The rifle's bore-derived solve (see there), pulled 30 mm further from
+     * the eye: the receiver is 62 mm deep and the pouch hangs another 130 mm
+     * under it, so at the M4's distance the pouch fell out of frame and the
+     * whole silhouette read as a black wall. */
+    hipPos: [0.121, -0.178, -0.33],
+    hipRot: [-0.05, 0.081, -0.135],
+    adsCant: [0, 0, 0.004],
+    /** Same 31 mm tube optic as the rifle, same aperture budget. */
+    eyeRelief: 0.115,
+    sprintPos: [0.093, -0.258, -0.305],
+    sprintRot: [-0.4, 0.6, 0.2],
+    lowReadyPos: [0.115, -0.276, -0.319],
+    lowReadyRot: [-0.46, 0.125, -0.09],
+    swayScale: 1.35,
+    bobScale: 1.22,
+    magLen: 0.14,
+  },
+
   smg: {
     /**
      * MOVEMENT AND RECOIL CONTROL.

@@ -7,6 +7,7 @@ import { WEAPON_DEFS, buildRecoilPattern, SPREAD_MODS } from './defs.js';
 import { buildRifle } from './models/rifle.js';
 import { buildAk } from './models/ak.js';
 import { buildSniper } from './models/sniper.js';
+import { buildLmg } from './models/lmg.js';
 import { buildSmg } from './models/smg.js';
 import { buildPistol } from './models/pistol.js';
 import { buildKnife } from './models/knife.js';
@@ -90,7 +91,7 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  * in, and the order the pause menu lists. Primaries first, then the sidearm,
  * then the blade.
  */
-const WEAPON_IDS = ['rifle', 'ak', 'sniper', 'smg', 'pistol', 'knife', 'grenade'];
+const WEAPON_IDS = ['rifle', 'ak', 'sniper', 'lmg', 'smg', 'pistol', 'knife', 'grenade'];
 
 export class WeaponSystem {
   static id = 'weapons';
@@ -249,6 +250,7 @@ export class WeaponSystem {
       rifle: buildRifle,
       ak: buildAk,
       sniper: buildSniper,
+      lmg: buildLmg,
       smg: buildSmg,
       pistol: buildPistol,
       knife: buildKnife,
