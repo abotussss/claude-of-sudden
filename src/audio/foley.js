@@ -234,23 +234,89 @@ export function surfaceImpact(actx, bank, rng, o = {}) {
 /* Footsteps                                                          */
 /* ------------------------------------------------------------------ */
 
-/** Per-surface footstep character. */
+/**
+ * Per-surface footstep character.
+ *
+ * `couple` is FLOOR COUPLING — how much of the man's mass the surface passes
+ * into the structure and back out as low end. @see the WEIGHT block on
+ * `footstep`. Concrete is the reference at 1.0: a slab is stiff, it radiates
+ * the heel strike efficiently and it is what most of this map is made of.
+ * Fabric and foliage are the other end — they absorb the strike instead of
+ * transmitting it, which is exactly why walking on them is quiet.
+ */
 const STEP = {
-  concrete: { bodyF: 92, bodyDecay: 0.055, texKind: 'white', texF: 2100, texQ: 0.7, texDecay: 0.045, texLevel: 0.5, scuff: 0.35, grit: 4 },
-  plaster:  { bodyF: 100, bodyDecay: 0.05, texKind: 'white', texF: 1800, texQ: 0.7, texDecay: 0.05, texLevel: 0.45, scuff: 0.3, grit: 4 },
-  metal:    { bodyF: 120, bodyDecay: 0.05, texKind: 'white', texF: 3200, texQ: 1.0, texDecay: 0.04, texLevel: 0.5, scuff: 0.3, grit: 2,
+  concrete: { bodyF: 92, bodyDecay: 0.055, couple: 1.0, texKind: 'white', texF: 2100, texQ: 0.7, texDecay: 0.045, texLevel: 0.5, scuff: 0.35, grit: 4 },
+  plaster:  { bodyF: 100, bodyDecay: 0.05, couple: 0.85, texKind: 'white', texF: 1800, texQ: 0.7, texDecay: 0.05, texLevel: 0.45, scuff: 0.3, grit: 4 },
+  metal:    { bodyF: 120, bodyDecay: 0.05, couple: 0.9, texKind: 'white', texF: 3200, texQ: 1.0, texDecay: 0.04, texLevel: 0.5, scuff: 0.3, grit: 2,
     ring: [{ f: 620, q: 16, g: 0.24, decay: 0.16 }, { f: 1480, q: 20, g: 0.16, decay: 0.11 }, { f: 2900, q: 14, g: 0.08, decay: 0.06 }] },
-  wood:     { bodyF: 110, bodyDecay: 0.06, texKind: 'white', texF: 1300, texQ: 0.8, texDecay: 0.04, texLevel: 0.4, scuff: 0.28, grit: 2,
+  wood:     { bodyF: 110, bodyDecay: 0.06, couple: 0.95, texKind: 'white', texF: 1300, texQ: 0.8, texDecay: 0.04, texLevel: 0.4, scuff: 0.28, grit: 2,
     ring: [{ f: 260, q: 12, g: 0.26, decay: 0.09 }, { f: 540, q: 9, g: 0.14, decay: 0.05 }] },
-  dirt:     { bodyF: 78, bodyDecay: 0.07, texKind: 'brown', texF: 620, texQ: 0.6, texDecay: 0.075, texLevel: 0.62, scuff: 0.45, grit: 6 },
-  sand:     { bodyF: 70, bodyDecay: 0.06, texKind: 'white', texF: 1500, texQ: 0.45, texDecay: 0.14, texLevel: 0.6, scuff: 0.7, grit: 3 },
-  glass:    { bodyF: 96, bodyDecay: 0.04, texKind: 'crackle', texF: 5200, texQ: 0.8, texDecay: 0.2, texLevel: 0.6, scuff: 0.3, grit: 9 },
-  water:    { bodyF: 88, bodyDecay: 0.045, texKind: 'white', texF: 1600, texQ: 0.7, texDecay: 0.17, texLevel: 0.8, scuff: 0.5, grit: 3, splash: true },
-  foliage:  { bodyF: 84, bodyDecay: 0.05, texKind: 'crackle', texF: 2400, texQ: 0.7, texDecay: 0.18, texLevel: 0.7, scuff: 0.5, grit: 6 },
-  fabric:   { bodyF: 82, bodyDecay: 0.05, texKind: 'white', texF: 800, texQ: 0.6, texDecay: 0.05, texLevel: 0.3, scuff: 0.35, grit: 0 },
-  flesh:    { bodyF: 86, bodyDecay: 0.055, texKind: 'white', texF: 520, texQ: 1.2, texDecay: 0.05, texLevel: 0.35, scuff: 0.2, grit: 0 },
-  rubber:   { bodyF: 96, bodyDecay: 0.04, texKind: 'white', texF: 1000, texQ: 0.8, texDecay: 0.03, texLevel: 0.28, scuff: 0.2, grit: 0 },
+  dirt:     { bodyF: 78, bodyDecay: 0.07, couple: 1.1, texKind: 'brown', texF: 620, texQ: 0.6, texDecay: 0.075, texLevel: 0.62, scuff: 0.45, grit: 6 },
+  sand:     { bodyF: 70, bodyDecay: 0.06, couple: 0.8, texKind: 'white', texF: 1500, texQ: 0.45, texDecay: 0.14, texLevel: 0.6, scuff: 0.7, grit: 3 },
+  glass:    { bodyF: 96, bodyDecay: 0.04, couple: 0.75, texKind: 'crackle', texF: 5200, texQ: 0.8, texDecay: 0.2, texLevel: 0.6, scuff: 0.3, grit: 9 },
+  water:    { bodyF: 88, bodyDecay: 0.045, couple: 0.85, texKind: 'white', texF: 1600, texQ: 0.7, texDecay: 0.17, texLevel: 0.8, scuff: 0.5, grit: 3, splash: true },
+  foliage:  { bodyF: 84, bodyDecay: 0.05, couple: 0.55, texKind: 'crackle', texF: 2400, texQ: 0.7, texDecay: 0.18, texLevel: 0.7, scuff: 0.5, grit: 6 },
+  fabric:   { bodyF: 82, bodyDecay: 0.05, couple: 0.4, texKind: 'white', texF: 800, texQ: 0.6, texDecay: 0.05, texLevel: 0.3, scuff: 0.35, grit: 0 },
+  flesh:    { bodyF: 86, bodyDecay: 0.055, couple: 0.5, texKind: 'white', texF: 520, texQ: 1.2, texDecay: 0.05, texLevel: 0.35, scuff: 0.2, grit: 0 },
+  rubber:   { bodyF: 96, bodyDecay: 0.04, couple: 0.6, texKind: 'white', texF: 1000, texQ: 0.8, texDecay: 0.03, texLevel: 0.28, scuff: 0.2, grit: 0 },
 };
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * WEIGHT — 「足音もなんかまだ軽い、重厚な音にしてもいいもう少し」.
+ * ════════════════════════════════════════════════════════════════════════════
+ *
+ * The previous pass restored the leather-boot TIMBRE by giving remote steps
+ * back the dark occlusion wall (420 Hz / -26 dB while gunfire keeps the
+ * softened one) — measured as the 1-4 kHz bands dropping 11-29 dB with rms
+ * unchanged. He can hear that and now wants more, and he has explicitly
+ * relaxed the loudness constraint that governed the last two passes
+ * (「もう少し」「してもいい」), which the earlier 「敵味方の足音はもう少し小さく
+ * してください」 had locked.
+ *
+ * Weight is not level. A step made 3 dB louder with the same envelope is a
+ * louder click, and that is what the last two attempts to "add weight" by
+ * trimming gains produced. What a heavy man in boots on a slab actually
+ * produces, and what this synthesis had none of:
+ *
+ *   HEEL MASS. The strike is a decaying 90 Hz body here, gone in 55 ms. A boot
+ *   heel is a lump of stacked leather or rubber with a resonance of its own an
+ *   octave up from the strike, and it is the layer that says "boot" rather than
+ *   "tap". `SHELL` below.
+ *
+ *   FLOOR COUPLING. A slab does not stop when the foot does. Below the strike
+ *   there is a slower component — the structure taking the load — which is most
+ *   of what you feel and about half of what you hear indoors. It is also the
+ *   only part of a step that survives a wall: `stepOcclusionFilter` low-passes a
+ *   fully-occluded step at 420 Hz, so weight put HERE is weight that reaches
+ *   you from the man in the next room, which is precisely where a footstep has
+ *   to do its job. `couple` above, and the sub layer below.
+ *
+ *   SUSTAIN. The body's own decay is stretched by `HEEL_DECAY` and lands
+ *   lower — the thud finishes rather than clicking off.
+ *
+ * ON HIS OWN STEP'S REVERB, which he has twice said is right and which the
+ * brief forbids moving: it does not move. The send is unchanged (0.3), the
+ * emitter's send arithmetic at ~1.9 m with occlusion 0 is unchanged, so the
+ * dry/wet RATIO is identical. And the mixer high-passes the reverb send at
+ * 170 Hz on purpose ("no sub into the convolvers"), so the sub layer added here
+ * is inaudible to the convolvers entirely: this is weight added to the dry
+ * signal only.
+ */
+const HEEL_BODY = 1.3;
+const HEEL_DECAY = 1.5;
+/**
+ * The boot's own low-mid resonance, relative to the surface's strike (`m` is a
+ * multiple of `bodyF`, so it tracks the surface rather than fighting it).
+ *
+ * `g` reads low because `struckResonator` applies a sqrt(Q) makeup: at Q 6.5
+ * these land at 0.43 and 0.16 against the strike's 0.55, i.e. UNDER the strike.
+ * A shell louder than the strike is a drum, not a boot.
+ */
+const SHELL = [
+  { m: 1.95, q: 6.5, g: 0.2, decay: 0.075 },
+  { m: 2.95, q: 4.5, g: 0.09, decay: 0.04 },
+];
 
 /**
  * @param {object} o { when, surface, gait: 'walk'|'run'|'sprint'|'crouch'|'land',
@@ -277,9 +343,44 @@ export function footstep(actx, bank, rng, o = {}) {
     const bg = gain(actx, 0);
     const drv = shaper(actx, saturationCurve(1.8, 0.5), '2x');
     b.connect(bg); series(bg, drv).connect(out);
-    sweep(b.frequency, ct, s.bodyF * jit * 1.7, s.bodyF * jit * 0.75, s.bodyDecay * 1.4);
-    ad(bg.gain, ct, 0.42 * lvl * cl, 0.0025, s.bodyDecay * rng.range(0.85, 1.2));
-    b.start(ct); b.stop(ct + s.bodyDecay * 2.4 + 0.02);
+    // Lands lower (0.75 -> 0.62 of the strike) and holds longer. @see HEEL_DECAY
+    sweep(b.frequency, ct, s.bodyF * jit * 1.7, s.bodyF * jit * 0.62, s.bodyDecay * 1.8);
+    ad(bg.gain, ct, 0.42 * HEEL_BODY * lvl * cl, 0.0025,
+      s.bodyDecay * HEEL_DECAY * rng.range(0.85, 1.2));
+    b.start(ct); b.stop(ct + s.bodyDecay * HEEL_DECAY * 2.4 + 0.02);
+    end = Math.max(end, ct + s.bodyDecay * HEEL_DECAY * 2.4 + 0.04);
+
+    /* ── the boot itself: heel mass, an octave over the strike ───────────
+       Two lightly-damped modes, not a ring — Q 6.5 is a thud with a pitch,
+       which is what stacked leather sounds like when a man's weight arrives on
+       it. Only on the heel contact; the toe has no mass behind it. */
+    if (c === 0 && s.couple > 0.05) {
+      struckResonator(actx, bank, rng, ct, SHELL.map((p) => ({
+        f: s.bodyF * jit * p.m * rng.range(0.95, 1.06),
+        q: p.q * rng.range(0.85, 1.2),
+        g: p.g * lvl * s.couple,
+        decay: p.decay * HEEL_DECAY * rng.range(0.85, 1.25),
+      })), 0.0022).connect(out);
+      end = Math.max(end, ct + 0.24);
+
+      /* ── and the floor taking the load ────────────────────────────────
+         Half the strike frequency (46 Hz on concrete), settling as it decays,
+         three times the body's length. No saturation on this one: it goes
+         straight to the voice so it stays a pressure change rather than
+         turning into harmonics an octave up, which is where "weight" gets
+         thrown away. The mixer's 170 Hz send highpass keeps it out of the
+         convolvers, so it adds no reverb to anybody's step. */
+      const sub = osc(actx, 'sine', s.bodyF * jit * 0.5);
+      const sgn = gain(actx, 0);
+      sub.connect(sgn); sgn.connect(out);
+      sweep(sub.frequency, ct, s.bodyF * jit * 0.62, s.bodyF * jit * 0.42,
+        s.bodyDecay * 3.2);
+      ad(sgn.gain, ct, 0.34 * lvl * s.couple, 0.006,
+        s.bodyDecay * 2.6 * rng.range(0.9, 1.2));
+      const subEnd = ct + s.bodyDecay * 5.5 + 0.05;
+      sub.start(ct); sub.stop(subEnd);
+      end = Math.max(end, subEnd);
+    }
 
     const src = bank.source(s.texKind, rng, rng.range(0.8, 1.25));
     const bp = biquad(actx, 'bandpass', s.texF * jit, s.texQ);
