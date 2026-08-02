@@ -1385,7 +1385,16 @@ export const WEAPON_DEFS = {
      */
     fuse: 2.2,
     smokeDuration: 14,
-    smokeRadius: 6.5,
+    /**
+     * EIGHT METRES — 「スモークの煙の範囲を広げて ８メートルくらい」, up from 6.5.
+     *
+     * This number is not a drawing radius: it is published on `weapon:smoke`
+     * and `AiSystem`'s listener blocks bot sightlines through its core, so it
+     * is how much cover the can actually buys against the AI as well as against
+     * the eye. @see `SMOKE_R` in `weapons/grenades.js`, which mirrors it as the
+     * fallback and explains what had to move with it.
+     */
+    smokeRadius: 8,
     /** No blast at all, and no flash. The `explosion` event is not fired for
      *  this kind — see `_detonate` — because there is nothing to explode. */
     blastRadius: 0,

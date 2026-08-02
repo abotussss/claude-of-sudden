@@ -20,6 +20,37 @@ import * as THREE from 'three';
 
 const MAX_LIVE = 6;
 
+/**
+ * ══════════════════════════════════════════════════════════════════════════
+ * THE SCREEN IS ABOUT EIGHT METRES — 「スモークの煙の範囲を広げて ８メートルくらい」
+ * ══════════════════════════════════════════════════════════════════════════
+ * The FALLBACK only: `weapons/defs.js:smoke.smokeRadius` is the authority and
+ * carries the same 8. Both are here because a def that ever loses the field
+ * must not quietly hand back the old 6.5 m can.
+ *
+ * IT IS NOT A DRAWING NUMBER, and that is the whole of why widening it is a
+ * change to the game rather than to the picture: the figure rides out on
+ * `weapon:smoke`, and `AiSystem`'s listener takes its volume straight off the
+ * event (`e.radius`, then `× SMOKE_CORE`) and refuses every sightline through
+ * the core of it. Eight metres published is therefore eight metres of cover
+ * from a bot's eye as well as from yours — symmetrically, since `_smokeBlocks`
+ * runs inside `_sightTo` for both directions. Nothing in `src/ai` had to be
+ * edited to make that true, and nothing there carries a competing radius: the
+ * `?? 6.5` on that listener is a fallback for an event with no radius on it,
+ * which this one always has.
+ *
+ * THE ONE THING STILL AT 6.5 IS A BOT'S OWN CAN — `AiSystem._detonateThrown`
+ * writes `ev.radius = 6.5` from a literal rather than from `defs.js`. That is
+ * that file's number to move and it is left alone here; until it does, a bot's
+ * screen is a fifth narrower than the player's.
+ */
+const SMOKE_R = 8;
+/**
+ * `Ambience._puff` sizes a puff at `radius * growth`, so this is a RATIO and
+ * not a distance. @see the note in `_smoke`, which is where it is spent.
+ */
+const SMOKE_GROWTH = 5.85;
+
 class Thrown {
   constructor() {
     this.live = false;
@@ -261,7 +292,7 @@ export class ThrownGrenades {
   _smoke(position, def) {
     const fx = this.ctx.peek('fx');
     const dur = def.smokeDuration ?? 14;
-    const rad = def.smokeRadius ?? 6.5;
+    const rad = def.smokeRadius ?? SMOKE_R;
     this._v.copy(position);
     this._v.y += 0.1;
     fx?.addSmokeSource?.(this._v, {
@@ -274,7 +305,22 @@ export class ThrownGrenades {
       rise: 0.85,
       dark: 0.04,
       life: 7.5,
-      growth: rad * 0.9,
+      /**
+       * A MULTIPLIER, NOT A SIZE — `Ambience._puff` grows a puff to
+       * `radius * growth`, and `radius` above is already `rad * 0.22`. So the
+       * old `rad * 0.9` made the DRAWN puff scale with rad², and widening the
+       * can from 6.5 to 8 m would have grown each sprite by half again: 12.7 m
+       * of sprite for 8 m of cover, which is the fog bank rather than the
+       * screen. `SMOKE_GROWTH` is the constant that reproduces the 6.5 m can's
+       * own drawn puff (`rad * 1.29`) and makes it LINEAR in `rad`, so the
+       * cloud grows exactly as fast as the radius it is supposed to describe.
+       *
+       * The particle cost does not move: `rate` and `life` are unchanged, so it
+       * is the same ~195 live sprites it always was. Coverage does not thin out
+       * either — a puff's area and the cloud's area both scale with rad², so
+       * the overlap that makes it opaque is the same at 8 m as at 6.5.
+       */
+      growth: SMOKE_GROWTH,
       ember: 0,
       haze: 0.85,
     });
