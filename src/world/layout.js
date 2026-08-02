@@ -575,16 +575,52 @@ export const SITEWORKS = [
    * The plinth toward the wall is at 3.2 (the band's inner edge) so it clears
    * the deck strip: A-deck/B-deck now run along the bays' back walls at
    * widened ∓56..∓54 and a plinth under a catwalk is a mantle nobody asked for.
+   *
+   * ────────────────────────────────────────────────────────────────────────────
+   * AND EVERY HEIGHT HERE WAS UNDER 1.32, WHICH IS WHY C FAILED `sitecheck`
+   * ────────────────────────────────────────────────────────────────────────────
+   * The first version of this block authored the two plinths at 1.20 and the
+   * wall and the baffle at 1.35, copied off the courtyard recipe above. The
+   * courtyard recipe is measured against `sitecheck`'s AREA test — mass between
+   * 0.9 and 2.8 m — and both bays passed it identically, 16.5 m² each, exactly
+   * as two ρ images should.
+   *
+   * `sitecheck`'s OTHER test is the engine's own cover map, and that one is not
+   * an area at all: `CoverMap.build` (src/ai/nav.js) fires its blocker ray at
+   * **1.32 m** and calls anything under it CROUCH cover. Every piece in this
+   * block stood below that line, so the two bays were generating no standing
+   * cover of their own — measured on seed 11, C came back 6 standing / 18
+   * crouch against a bar of 6, and E 7 / 22. Both were riding the bar, and the
+   * standing points that carried them were the dressing scatter's, which is a
+   * different roll of the dice on every boot: on the coordinator's seed C came
+   * back 4 of 6 and FAILED while E passed at 6. TWO ρ IMAGES THAT DISAGREE
+   * BECAUSE OF THE DICE ARE NOT SYMMETRIC, and E exists precisely because C had
+   * no mirror.
+   *
+   * So the four walls go to 1.55 and the four plinths to 1.45, which is the
+   * smallest change that puts every authored piece OVER the ray:
+   *
+   *   1.45 / 1.55  are still under a man's eye at 1.62, so the rule the header
+   *                states — mass in this band cannot block a man's line to
+   *                another man's EYES, only his line to the floor of the point
+   *                — is unchanged, and so is every `seenGround` figure.
+   *   the FOOTPRINTS do not move, so the 16.5 m² area figure, the 3.2-5.0 band,
+   *                `standRing`'s 4 m forward-spawn ring and every A* lane
+   *                through the bays are all byte-identical to what `navcheck`
+   *                and `boundcheck` already passed.
+   *
+   * A `wall` at 1.55 is well inside this table's own precedent (`A north
+   * baffle` is 1.6, the two `CATH` gate walls are 1.9).
    */
-  { id: 'C bay plinth west', kind: 'plinth', x: -44.2, z: -1.0, w: 1.6, d: 1.4, h: 1.2, key: 'concrete' },
-  { id: 'C bay plinth south', kind: 'plinth', x: -41.0, z: -4.9, w: 2.0, d: 1.2, h: 1.2, key: 'concrete' },
-  { id: 'C bay wall', kind: 'wall', x: -44.6, z: -3.6, w: 0.55, d: 3.0, h: 1.35, key: 'plaster_cream' },
-  { id: 'C mouth baffle', kind: 'wall', x: -37.4, z: -1.0, w: 0.55, d: 2.8, h: 1.35, key: 'brick' },
+  { id: 'C bay plinth west', kind: 'plinth', x: -44.2, z: -1.0, w: 1.6, d: 1.4, h: 1.45, key: 'concrete' },
+  { id: 'C bay plinth south', kind: 'plinth', x: -41.0, z: -4.9, w: 2.0, d: 1.2, h: 1.45, key: 'concrete' },
+  { id: 'C bay wall', kind: 'wall', x: -44.6, z: -3.6, w: 0.55, d: 3.0, h: 1.55, key: 'plaster_cream' },
+  { id: 'C mouth baffle', kind: 'wall', x: -37.4, z: -1.0, w: 0.55, d: 2.8, h: 1.55, key: 'brick' },
 
-  { id: 'E bay plinth east', kind: 'plinth', x: 44.2, z: -1.0, w: 1.6, d: 1.4, h: 1.2, key: 'concrete' },
-  { id: 'E bay plinth south', kind: 'plinth', x: 41.0, z: -4.9, w: 2.0, d: 1.2, h: 1.2, key: 'concrete' },
-  { id: 'E bay wall', kind: 'wall', x: 44.6, z: -3.6, w: 0.55, d: 3.0, h: 1.35, key: 'plaster_pink' },
-  { id: 'E mouth baffle', kind: 'wall', x: 37.4, z: -1.0, w: 0.55, d: 2.8, h: 1.35, key: 'brick' },
+  { id: 'E bay plinth east', kind: 'plinth', x: 44.2, z: -1.0, w: 1.6, d: 1.4, h: 1.45, key: 'concrete' },
+  { id: 'E bay plinth south', kind: 'plinth', x: 41.0, z: -4.9, w: 2.0, d: 1.2, h: 1.45, key: 'concrete' },
+  { id: 'E bay wall', kind: 'wall', x: 44.6, z: -3.6, w: 0.55, d: 3.0, h: 1.55, key: 'plaster_pink' },
+  { id: 'E mouth baffle', kind: 'wall', x: 37.4, z: -1.0, w: 0.55, d: 2.8, h: 1.55, key: 'brick' },
 ];
 
 /**
