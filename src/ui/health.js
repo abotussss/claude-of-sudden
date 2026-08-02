@@ -44,6 +44,26 @@ export class HealthFx {
     this.hpFill = el('i', null, track);
     el('u', null, track); // segment dividers, drawn over the fill
 
+    /**
+     * WHERE THE FIFTY POINTS ARE. 「医療ポイントはありますか？どういうUIになってる？」
+     *
+     * The med posts existed, were modelled, painted and prompted, and the one
+     * surface a player looks at when he is hurt said nothing about them — so
+     * from the seat they did not exist. This line sits directly under the health
+     * bar, appears only when he is BELOW FULL and a post is within the range
+     * `match` publishes, and says the two things that decide whether he walks:
+     * how far, and whether it is up.
+     *
+     * It goes away at full health on purpose. A permanent "there is a med post
+     * somewhere" is chrome; a line that appears the moment it becomes relevant
+     * is information.
+     */
+    this.med = el('div', 'ow-vt-med', this.vitals);
+    this.medMark = el('i', null, this.med);
+    this.medTxt = el('span', null, this.med, '');
+    this.medShown = 0;
+    setStyle(this.med, 'display', 'none');
+
     this.armour = el('div', 'ow-armour', this.vitals);
     el('div', 'ow-vt-lbl', this.armour, 'Armour');
     const plates = el('div', 'ow-arm-plates', this.armour);
@@ -79,8 +99,13 @@ export class HealthFx {
     this.regenT = 0;
   }
 
-  /** @param {object} s { health, maxHealth, armour, maxArmour, regen:bool } */
-  update(dt, s) {
+  /**
+   * @param {object} s   { health, maxHealth, armour, maxArmour, regen:bool }
+   * @param {object} [med] { has, dist, inReach, ready, cooldown } — the nearest
+   *                       dressing station `match` is publishing. @see the
+   *                       `ow-vt-med` note in the constructor.
+   */
+  update(dt, s, med = null) {
     const h = clamp01((s.health ?? 100) / (s.maxHealth || 100));
     const targetHurt = clamp01((0.78 - h) / 0.78) ** 1.3;
     this.hurt = damp(this.hurt, targetHurt, 7, dt);
@@ -152,6 +177,25 @@ export class HealthFx {
     // the numeral pulses on the same heartbeat as the vignette
     setStyle(this.hpNum, 'transform', `scale(${(1 + this.beatEnergy * 0.05).toFixed(3)})`);
 
+    // --- the med post, when it is worth knowing about ---------------------
+    const wantMed = !!med?.has && h < 0.995 ? 1 : 0;
+    this.medShown = damp(this.medShown, wantMed, 14, dt);
+    setStyle(this.med, 'display', this.medShown < 0.01 ? 'none' : '');
+    if (this.medShown >= 0.01) {
+      setStyle(this.med, 'opacity', this.medShown.toFixed(3));
+      const d = med.dist;
+      setText(
+        this.medTxt,
+        !med.ready
+          ? `MED KIT ${Math.ceil(med.cooldown)}S`
+          : med.inReach
+            ? 'MED KIT — HOLD F'
+            : `MED KIT ${d < 10 ? d.toFixed(1) : d | 0}M`
+      );
+      setClass(this.med, 'reach', !!med.inReach && !!med.ready);
+      setClass(this.med, 'cold', !med.ready);
+    }
+
     // --- armour plates ----------------------------------------------------
     const maxA = s.maxArmour || 150;
     const armour = Math.max(0, s.armour ?? 0);
@@ -173,6 +217,7 @@ export class HealthFx {
     this.beat.remove();
     this.desat.remove();
     this.flash.remove();
+    // `med` and the rest of the readout are children of `vitals`.
     this.vitals.remove();
   }
 }

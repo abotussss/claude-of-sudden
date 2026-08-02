@@ -214,6 +214,33 @@ const CSS = `
 .ow-vitals.low .ow-vt-num { color: var(--amber); }
 .ow-vitals.crit .ow-vt-track > i { background: linear-gradient(to bottom, #ff8b7a, #e02414); }
 .ow-vitals.crit .ow-vt-num { color: var(--red); }
+/* MED KIT, under the health bar and only while he is below full. A red cross
+   and one line: how far, or HOLD F, or how many seconds until the post is back.
+   Same symbol as the world marker and the standard on the ground, so the three
+   are recognisably one feature. */
+.ow-vt-med {
+  display:flex; align-items:center; gap: calc(var(--u) * 1.2);
+  margin-top: calc(var(--u) * 1.2);
+  font-size: calc(9.5px * var(--k)); letter-spacing:.2em; font-weight:700;
+  color: rgba(255,214,206,.92); text-shadow: var(--sh-o1);
+  will-change: opacity;
+}
+.ow-vt-med > i {
+  position:relative; display:block; flex:none;
+  width: calc(11px * var(--k)); height: calc(11px * var(--k));
+  background: #e02b1c; box-shadow: 0 0 0 1px rgba(0,0,0,.6);
+}
+/* the cross itself: two bars, so it survives at 11 px with no glyph rendering */
+.ow-vt-med > i::before, .ow-vt-med > i::after {
+  content:''; position:absolute; background:#fff;
+}
+.ow-vt-med > i::before { left:calc(4px * var(--k)); top:calc(2px * var(--k));
+  width:calc(3px * var(--k)); height:calc(7px * var(--k)); }
+.ow-vt-med > i::after  { top:calc(4px * var(--k)); left:calc(2px * var(--k));
+  height:calc(3px * var(--k)); width:calc(7px * var(--k)); }
+.ow-vt-med.reach { color:#ffffff; }
+.ow-vt-med.cold { color: var(--ink-3); }
+.ow-vt-med.cold > i { background: #6a3630; }
 
 /* armour: thinner, cyan, plate-segmented, its own label */
 .ow-armour {

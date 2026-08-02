@@ -210,6 +210,11 @@ export class UiSystem {
     this._caches = null;
     /** `match`'s live-hull view, or null when nothing is publishing one. */
     this._vehicles = null;
+    /**
+     * THE NEAREST DRESSING STATION, for the vitals widget. Written in place
+     * every frame from the cache view; never allocated. @see `_medCue()`.
+     */
+    this._med = { has: false, dist: 0, inReach: false, ready: true, cooldown: 0 };
     this._compassObjs = [];
     this._blips = new Array(MAX_BLIPS);
     for (let i = 0; i < MAX_BLIPS; i++) this._blips[i] = { x: 0, z: 0, kind: 'enemy', heading: 0 };
@@ -690,7 +695,7 @@ export class UiSystem {
     setStyle(this.crosshair.root, 'display', scoped ? 'none' : '');
     this.hit.update(dt);
     this.arcs.update(dt, rx, rz, fx, fz);
-    this.health.update(dt, s);
+    this.health.update(dt, s, this._medCue(pos));
     // The frag resupply clock rides on the ammo panel, beside the frag count it
     // governs. `match` owns the number; this is the one line that carries it.
     s.fragCooldown = this.round?.cache?.grenadeCooldown ?? 0;
@@ -789,6 +794,42 @@ export class UiSystem {
       b.heading = a.heading ?? (a.yaw !== undefined ? (a.yaw * 180) / Math.PI : 0);
     }
     this._blipCount = n;
+  }
+
+  /**
+   * IS THERE A MED POST, AND HOW FAR.
+   *
+   * 「医療ポイントはありますか？」 is a question the HUD was not answering from the
+   * one place a player asks it: the health readout. The world marker tells you
+   * where a post is once you can see it; the vitals widget is where you look
+   * when you are hurt, and it said nothing about the fact that fifty of the
+   * points you just lost are eleven metres away.
+   *
+   * Read off the same `match` cache view the world markers use, so the two can
+   * never disagree, and written into one preallocated record.
+   */
+  _medCue(pos) {
+    const m = this._med;
+    m.has = false;
+    const list = this._caches;
+    if (!list) return m;
+    let best = Infinity;
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      if (!c || c.kind !== 'medic' || !c.position) continue;
+      const dx = c.position.x - pos.x;
+      const dy = c.position.y - pos.y;
+      const dz = c.position.z - pos.z;
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (d >= best) continue;
+      best = d;
+      m.has = true;
+      m.dist = d;
+      m.inReach = !!c.inReach;
+      m.ready = !!c.ready;
+      m.cooldown = c.cooldown ?? 0;
+    }
+    return m;
   }
 
   _buildCompassObjectives(pos) {
