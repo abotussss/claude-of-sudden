@@ -1538,6 +1538,109 @@ export const RULES = {
   /** Metres per second under an open canopy. ~7 s from 46 m. */
   reinforceDescent: 6.4,
 
+  /* ══════════════════════════════════════════════════════════════════════ */
+  /* THE SUICIDE DRONES                                                     */
+  /* ══════════════════════════════════════════════════════════════════════ */
+  /**
+   * 「ドローンを周淮減させてほしい ドローンは自爆系のドローンで捕捉されたら捕捉された
+   *  UIを出してほしいし、ドローンの音も明確に出して 自爆ドローンはグレネードと同じ
+   *  ダメージ判定で ドローンは１試合に敵味方合わせて３０機投入すること」
+   *
+   * A loitering munition, both sides, thirty of them across a whole match. See
+   * `src/match/drone.js` for the flight and the lock; every number below is
+   * sized against a fact about the map or about the player, not chosen.
+   */
+  /** Thirty, BOTH SIDES COMBINED — the player's own figure. Split 15/15. */
+  droneBudget: 30,
+  /**
+   * PACED ON `_matchProgress`, NOT ON THE CLOCK, and that is what makes the
+   * thirty real. Every scheduled event in `MatchSystem` that must land at the
+   * same POINT of a match whichever way it ends is on progress (the districts,
+   * the cathedral, the final collapse) — `_timeline.mjs` measured matches ending
+   * at t = 276..288 s against a `matchTime` of 600, so anything paced on the
+   * wall clock delivers half of what it promises. Drone n launches at progress
+   * `(n + 0.5) / droneBudget`, so all thirty are spent whether the match runs
+   * its ten minutes or is decided on points in four.
+   */
+  droneLaunchPad: 0.5,
+  /**
+   * Seconds two launches must be apart. Progress is not monotone in TIME — a
+   * side that takes three zones covers 0.033 of it in twenty seconds, which is
+   * one drone's worth — so without a floor a scoring run launches a flight
+   * instead of a drone. At 8 s the worst case is still a stream and never a
+   * swarm. @see `droneMaxAloft`, which is the other half of the same guard.
+   */
+  droneGap: 8,
+  /**
+   * HOW MANY MAY BE IN THE AIR AT ONCE, both sides combined. Thirty over
+   * ~600 s at a `droneLife` of 45 s is 2.25 aloft on average; four is that with
+   * headroom, and it is the number that keeps this a RECURRING THREAT rather
+   * than a swarm. A launch that would break it is deferred, never dropped, so
+   * the budget still empties.
+   */
+  droneMaxAloft: 4,
+  /** Metres above the ground it cruises at. Above every roofline but the church. */
+  droneAltitude: 22,
+  /**
+   * Cruise and terminal speed, m/s. THE PLAYER CANNOT OUTRUN EITHER — sprint is
+   * 7.01 and tactical sprint 8.38 (`src/player/tuning.js`) — and that is the
+   * design answer to "how do I break a lock": you break it with COVER, never
+   * with your legs. @see `droneLockBreak`.
+   */
+  droneSpeed: 10,
+  droneDiveSpeed: 17,
+  /**
+   * Radians per second the dive may turn. A committed drone at 17 m/s turns
+   * inside 7.1 m, so a hard sidestep at two metres makes it miss and it has to
+   * climb and come round again — which is the skill in the fight. It is not
+   * a homing missile.
+   */
+  droneTurnRate: 2.4,
+  /** Metres it can see a target at. Two thirds of the map's short axis. */
+  droneAcquireRange: 55,
+  /**
+   * Seconds of unbroken sight before the dive commits, and the length of the
+   * warning. 2.2 s is a sprint to the nearest doorway on this map and it is
+   * deliberately longer than the dive itself.
+   */
+  droneLockTime: 2.2,
+  /**
+   * Seconds out of sight that breaks a lock. One second, so ducking behind a
+   * car does not shake it but going INSIDE does — the drone keeps closing while
+   * it is blind, and re-acquires the instant it sees you again.
+   */
+  droneLockBreak: 1.0,
+  /** Metres at which it gives up on a target it can still see. */
+  droneBreakRange: 70,
+  /** Metres from the target the warhead functions at. */
+  droneTriggerRange: 1.9,
+  /**
+   * SHOOTING IT DOWN. 60 HP on a 0.62 m box at `LAYER.SHOOT_ONLY` — three
+   * rounds of the 21-damage rifle, four of a 17, one round of the 125-damage
+   * bolt gun, two shotgun pellets. Hard enough that panic fire does not save
+   * you and fair enough that a man who hears it and turns round does.
+   */
+  droneHealth: 60,
+  /** Seconds aloft before it gives up and scuttles itself. */
+  droneLife: 45,
+  /**
+   * THE BLAST IS A GRENADE'S, AND IT IS THE GRENADE'S OWN PATH RATHER THAN A
+   * COPY OF ITS NUMBERS. @see `Drones._detonate`: the drone emits the canonical
+   * `explosion` with `kind: 'grenade'`, which is byte-for-byte what
+   * `AiSystem._updateGrenades` emits for a bot's frag — the same quadratic
+   * falloff in `ai`'s listener, the same `pow(1 - d/r, 1.6)` in
+   * `PlayerSystem._onExplosion`, the same `MASK.EXPLOSION` occlusion, and the
+   * same `fragMul` against a tank hull. These two figures are `frag`'s
+   * `blastRadius` / `blastDamage` from `src/weapons/defs.js`, read off the live
+   * weapon system when there is one and only falling back to these.
+   *
+   * AND IT HURTS EVERYONE — 「空爆は敵味方関係なく」. `ai`'s `explosion` listener
+   * has no team test, which is the standing rule for every explosive in this
+   * game and is why a drone is dangerous to the side that launched it.
+   */
+  droneBlastRadius: 7.5,
+  droneBlastDamage: 165,
+
   /* ---- bots ---- */
   /**
    * MEAN bot skill, 0..1. Each actor draws its own around this (gaussian, sd
