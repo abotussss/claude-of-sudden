@@ -308,6 +308,84 @@ export class Caches {
     }
 
     /**
+     * ════════════════════════════════════════════════════════════════════════
+     * THE CATHEDRAL CENTRE — "破壊される前は大聖堂の中央にビーコン医療キットを
+     * 配置して大聖堂内に来るメリットを与えて"
+     * ════════════════════════════════════════════════════════════════════════
+     * Two posts at the crossing while the church STANDS: a supply cache (which,
+     * like every cache in this file, takes a beacon on TAP F — that is the
+     * "ビーコン" half) and a med kit. They are the reason to be inside the
+     * biggest room on the map before the event that opens it.
+     *
+     * WHY THEY ARE NOT `world.features`: the cathedral is deliberately not a
+     * `BUILDINGS` entry (@see src/world/cathedral.js) so `buildFeatures` never
+     * walks it, and `src/world` is being worked on by somebody else. `match`
+     * already owns "what a published place is worth"; these two extend that to
+     * "and one place the level did not publish", with the position taken from
+     * the one record `world` does publish — `world.cathedral`'s own level frame.
+     *
+     * WHERE, EXACTLY: ±1.8 m off the crossing centre along the transept axis.
+     * Inside the capture circle (the merit IS the objective), outside nothing —
+     * the shell keeps 4.5 m of the centre clear of rubble and the ruin's
+     * `KEEP_STAND` keeps its masses past 4.75 m, so the spot has standing room
+     * in BOTH states (`_cathpost.mjs` proves it with floorcheck's own ring
+     * test, intact and after a real razed match).
+     *
+     * ────────────────────────────────────────────────────────────────────────
+     * WHAT HAPPENS TO THEM WHEN THE BUILDING IS RAZED — DESTROYED, DELIBERATELY
+     * ────────────────────────────────────────────────────────────────────────
+     * Three options were on the table: destroyed, relocated, or left running.
+     * They die with the building (`setCathedralRazed`), because:
+     *
+     *   1. the centre BECOMES capture point D. A beacon-plantable cache on the
+     *      live objective would let the side that reaches it first switch a
+     *      60 s forward spawn on ON the point — stronger than holding a zone,
+     *      which is the mode's own currency;
+     *   2. a med post on the one point the whole map funnels into after the
+     *      event would fuel the fight it is supposed to decide;
+     *   3. and a bombardment that levels the building levelling the supplies
+     *      in it is the honest fiction. The dressing is hidden with the shell,
+     *      the records refuse (`disabled`), and a beacon PLANTED at one dies
+     *      with it — its `until` is pulled to now, so it expires down the same
+     *      path a timed-out beacon takes.
+     *
+     * The round reset that stands the church back up re-enables both
+     * (`MatchSystem._setCathedralRazed(false)` is already the one place all
+     * three transitions pass through).
+     */
+    this.cathGroup = null;
+    {
+      const w = ctx.peek?.('world') ?? null;
+      const k = w?.cathedral ?? null;
+      if (k?.level && typeof w.levelToWorld === 'function') {
+        const yaw = w.levelYaw ?? 0;
+        const post = (id, kind, du, label) => {
+          const p = w.levelToWorld(k.level.x + du, k.floorY ?? 0, k.level.z, new THREE.Vector3());
+          this.list.push({
+            id,
+            kind,
+            building: 'CATH',
+            floor: 0,
+            indoor: true,
+            botReachable: true,
+            position: p,
+            yaw,
+            readyAt: 0,
+            weaponId: null,
+            label,
+            stand: null,
+            /** The lifecycle flag `setCathedralRazed` keys on. */
+            cathedral: true,
+            disabled: false,
+          });
+        };
+        post('CATH-CENTRE-supply', 'ammo', -1.8, 'SUPPLY CACHE');
+        post('CATH-CENTRE-med', 'medic', 1.8, 'MED KIT');
+        this.medicCount++;
+      }
+    }
+
+    /**
      * THE BEACON. One per side, and the side is `team`. Preallocated whole: this
      * record is read inside `_safeSpawn`, which runs on a respawn and must not
      * allocate.
@@ -453,6 +531,32 @@ export class Caches {
   }
 
   /**
+   * THE CATHEDRAL POSTS FOLLOW THE BUILDING. Called from the one place all
+   * three cathedral transitions already pass through —
+   * `MatchSystem._setCathedralRazed` — with the state `world.cathedral.razed`
+   * actually holds (which under `?cath=down` is not the argument the caller was
+   * given). Down: the records refuse, the dressing goes with the shell, and a
+   * beacon planted at one has its clock pulled to now so it dies down the same
+   * path a timed-out beacon takes — announcement and all. Up (the round
+   * reset): both come back. @see the lifecycle note in the constructor.
+   */
+  setCathedralRazed(down) {
+    const want = !!down;
+    for (const c of this.list) {
+      if (c.cathedral) c.disabled = want;
+    }
+    if (this.cathGroup) this.cathGroup.visible = !want;
+    if (want && this.beacon.active) {
+      for (const c of this.list) {
+        if (c.cathedral && c.id === this.beacon.at) {
+          this.beacon.until = Math.min(this.beacon.until, this.ctx.time?.elapsed ?? 0);
+          break;
+        }
+      }
+    }
+  }
+
+  /**
    * The nearest cache to `p` within `RULES.cacheUseRadius`, or null.
    *
    * The height test is `< 2.4` rather than a plane test because these sit on
@@ -466,6 +570,7 @@ export class Caches {
     let bestD = r2;
     for (let i = 0; i < this.list.length; i++) {
       const c = this.list[i];
+      if (c.disabled) continue;
       if (Math.abs(c.position.y - p.y) > 2.4) continue;
       const d = c.position.distanceToSquared(p);
       if (d < bestD) {
@@ -476,9 +581,9 @@ export class Caches {
     return best;
   }
 
-  /** Is this cache usable right now? */
+  /** Is this cache usable right now? A razed cathedral post never is. */
   ready(c, now) {
-    return !!c && now >= c.readyAt;
+    return !!c && !c.disabled && now >= c.readyAt;
   }
 
   /**
@@ -606,6 +711,7 @@ export class Caches {
     let n = 0;
     for (let i = 0; i < this.list.length; i++) {
       const c = this.list[i];
+      if (c.disabled) continue;
       const dx = c.position.x - p.x;
       const dz = c.position.z - p.z;
       const dy = c.position.y - p.y;
@@ -763,6 +869,7 @@ export class Caches {
     let bestD = maxDist * maxDist;
     for (let i = 0; i < this.botList.length; i++) {
       const c = this.botList[i];
+      if (c.disabled) continue;
       if (claimed.has(c)) continue;
       if (kinds && !kinds.has(c.kind)) continue;
       const d = c.stand.distanceToSquared(point);
@@ -806,7 +913,10 @@ export class Caches {
    *          no feature was promoted.
    */
   buildMedicMarkers() {
-    const posts = this.list.filter((c) => c.kind === 'medic');
+    // The cathedral med post is dressed by `buildCathedralPost` instead,
+    // because its dressing has a lifecycle this group does not: it goes down
+    // with the building. @see `setCathedralRazed`.
+    const posts = this.list.filter((c) => c.kind === 'medic' && !c.cathedral);
     if (!posts.length) return null;
     const group = new THREE.Group();
     group.name = 'match-medzone';
@@ -897,14 +1007,140 @@ export class Caches {
     return group;
   }
 
-  /** Free the medical zone dressing. Everything else here is data. */
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE CATHEDRAL CENTRE'S DRESSING — built by `match` for the same reason the
+   * medical zone's is, with one extra fact: IT GOES DOWN WITH THE BUILDING
+   * ══════════════════════════════════════════════════════════════════════════
+   * `world`'s twenty-four features each stand on real authored geometry; these
+   * two records stand on the cathedral's own floor, which `world` published
+   * without a crate on it. So the crate is `match`'s, in the same visual
+   * language as the med posts: a painted disc each, a low pallet of supply
+   * boxes and a beacon mast on the supply side, the red-cross kit and standard
+   * on the med side.
+   *
+   * DRAWN ONLY, DELIBERATELY. The crossing is capture point D's circle once
+   * the church is razed, the boot bake holds BOTH cathedral forms solid, and
+   * `_reprobeZoneNav` may only ever close a cell — so one solid box here would
+   * subtract walkable cells from the exact point item "Dサイトが瓦礫に埋まりすぎ"
+   * is about, permanently, in both states. Everything tall enough to matter is
+   * a 0.11 m mast or a panel; everything with bulk is at or under the 0.42 m
+   * the controller steps over. The med standards in `buildMedicMarkers` carry
+   * no proxy either, so this is the established bargain, not a new one.
+   *
+   * Hidden (not disposed) by `setCathedralRazed`, because the round reset
+   * stands the church — and the posts — back up.
+   */
+  buildCathedralPost() {
+    const posts = this.list.filter((c) => c.cathedral);
+    if (!posts.length) return null;
+    const group = new THREE.Group();
+    group.name = 'match-cathpost';
+
+    const lib = this.ctx.peek?.('materials') ?? null;
+    const surface = (tint, name, emissive = 0x000000, eInt = 0) => {
+      const m = new THREE.MeshStandardMaterial({
+        color: tint,
+        roughness: 0.72,
+        metalness: 0.04,
+        emissive,
+        emissiveIntensity: eInt,
+        dithering: true,
+      });
+      m.name = `cathpost_${name}`;
+      const set = lib?.getTextureSet?.(name) ?? null;
+      if (set) {
+        m.map = set.albedo;
+        m.normalMap = set.normal;
+        m.normalScale.set(0.7, 0.7);
+        m.roughnessMap = set.orm;
+      }
+      return m;
+    };
+    const pale = surface(0xd9d6cc, 'plaster');
+    const red = surface(0xb4231d, 'plaster', 0x5a0e0a, 0.85);
+    const olive = surface(0x6b6a4f, 'plaster');
+
+    const paleGeo = [];
+    const redGeo = [];
+    const oliveGeo = [];
+    const box = (into, w, h, d, x, y, z, ry = 0) => {
+      const g = new THREE.BoxGeometry(w, h, d);
+      if (ry) g.rotateY(ry);
+      g.translate(x, y, z);
+      into.push(g);
+    };
+
+    for (const c of posts) {
+      const { x, y, z } = c.position;
+      const yaw = c.yaw ?? 0;
+      const disc = new THREE.CircleGeometry(2.0, 24);
+      disc.rotateX(-Math.PI / 2);
+      disc.translate(x, y + 0.025, z);
+      paleGeo.push(disc);
+      if (c.kind === 'medic') {
+        // The med post: the medical zone's own iconography, on the crossing.
+        box(redGeo, 1.9, 0.02, 0.55, x, y + 0.05, z, yaw);
+        box(redGeo, 0.55, 0.02, 1.9, x, y + 0.05, z, yaw);
+        const px = x + Math.sin(yaw) * 1.55;
+        const pz = z + Math.cos(yaw) * 1.55;
+        box(paleGeo, 0.11, 2.35, 0.11, px, y + 1.17, pz);
+        box(paleGeo, 0.94, 0.94, 0.07, px, y + 2.05, pz, yaw);
+        box(redGeo, 0.74, 0.2, 0.1, px, y + 2.05, pz, yaw);
+        box(redGeo, 0.2, 0.74, 0.1, px, y + 2.05, pz, yaw);
+        // the kit itself: a white chest with the cross on its lid, step-height
+        box(paleGeo, 0.72, 0.34, 0.5, x, y + 0.17, z, yaw);
+        box(redGeo, 0.4, 0.03, 0.14, x, y + 0.355, z, yaw);
+        box(redGeo, 0.14, 0.03, 0.4, x, y + 0.355, z, yaw);
+      } else {
+        // The supply post: a pallet of olive crates and the beacon mast.
+        box(paleGeo, 1.5, 0.12, 1.1, x, y + 0.06, z, yaw);
+        box(oliveGeo, 0.78, 0.3, 0.5, x - 0.28, y + 0.27, z + 0.18, yaw + 0.12);
+        box(oliveGeo, 0.6, 0.26, 0.44, x + 0.34, y + 0.25, z - 0.14, yaw - 0.2);
+        box(oliveGeo, 0.5, 0.22, 0.36, x - 0.05, y + 0.53, z + 0.05, yaw + 0.5);
+        const px = x - Math.sin(yaw) * 1.5;
+        const pz = z - Math.cos(yaw) * 1.5;
+        box(paleGeo, 0.11, 2.2, 0.11, px, y + 1.1, pz);
+        // the beacon head, emissive red so it reads down the nave at dusk
+        box(redGeo, 0.3, 0.3, 0.3, px, y + 2.28, pz, yaw + 0.4);
+      }
+    }
+
+    const add = (geos, mat, name) => {
+      const g = geos.length ? mergeGeometries(geos) : null;
+      if (!g) return null;
+      const mesh = new THREE.Mesh(g, mat);
+      mesh.name = name;
+      mesh.matrixAutoUpdate = false;
+      mesh.updateMatrix();
+      mesh.userData.owNoShadow = true;
+      group.add(mesh);
+      return mesh;
+    };
+    add(paleGeo, pale, 'match_cathpost_pale');
+    add(redGeo, red, 'match_cathpost_red');
+    add(oliveGeo, olive, 'match_cathpost_olive');
+
+    this.cathGroup = group;
+    this.cathMaterials = [pale, red, olive];
+    return group;
+  }
+
+  /** Free the medical zone and cathedral dressing. Everything else is data. */
   dispose() {
     if (this.medGroup) {
       this.medGroup.removeFromParent();
       this.medGroup.traverse((o) => o.geometry?.dispose?.());
       this.medGroup = null;
     }
+    if (this.cathGroup) {
+      this.cathGroup.removeFromParent();
+      this.cathGroup.traverse((o) => o.geometry?.dispose?.());
+      this.cathGroup = null;
+    }
     for (const m of this.medMaterials ?? []) m.dispose();
     this.medMaterials = null;
+    for (const m of this.cathMaterials ?? []) m.dispose();
+    this.cathMaterials = null;
   }
 }

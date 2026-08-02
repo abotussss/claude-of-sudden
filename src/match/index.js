@@ -424,6 +424,14 @@ export class MatchSystem {
     const med = this.caches.buildMedicMarkers();
     if (med) ctx.scene.add(med);
     /**
+     * THE CATHEDRAL CENTRE'S TWO POSTS — the beacon-plantable supply cache and
+     * the med kit at the crossing, "大聖堂内に来るメリット" while the building
+     * stands. Their dressing and their records go down with it:
+     * `_setCathedralRazed` drives `Caches.setCathedralRazed` below.
+     */
+    const cathPost = this.caches.buildCathedralPost();
+    if (cathPost) ctx.scene.add(cathPost);
+    /**
      * …and then PROVED against the real nav grid, because `world.features`'s
      * `botReachable` is `floor === 0` and four of the eight ground floors on
      * this map are not in the height field at all. @see `Caches.prove`.
@@ -464,6 +472,7 @@ export class MatchSystem {
       // Three paints, not one: neutral plus a tint per side. @see SiteMarks.
       for (const m of this.marks.materials) patcher.patch(m);
       for (const m of this.caches.medMaterials ?? []) patcher.patch(m);
+      for (const m of this.caches.cathMaterials ?? []) patcher.patch(m);
     }
     this.spectator = new Spectator(ctx);
 
@@ -3844,11 +3853,31 @@ export class MatchSystem {
    * floor at 0.16 m and a sky ray at 26.20 m over the same cell).
    *
    * So this probes DOWNWARD FROM JUST ABOVE THE FLOOR THE GRID ALREADY HAS, and
-   * refuses any answer more than `MAX_STEP` away from it. That makes the pass
-   * strictly conservative: it can raise a cell on to new rubble, and it can shut
-   * a cell that is now blocked, and it CANNOT move a cell to another storey. A
-   * mistake here is a ruin bots will not enter, which is the one outcome the
-   * whole feature is about.
+   * refuses any answer more than `MAX_STEP` away from it. It can raise a cell
+   * on to new rubble, it can shut a cell that is now blocked, and it CANNOT
+   * move a cell to another storey. A mistake here is a ruin bots will not
+   * enter, which is the one outcome the whole feature is about.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * …AND IT NOW OPENS CELLS TOO, INSIDE THE CIRCLE, UNDER THE FULL BOOT TEST
+   * ────────────────────────────────────────────────────────────────────────
+   * "may only ever close a cell, never open one" was this method's rule and it
+   * put a hard ceiling on 「Dサイトが瓦礫に埋まりすぎ」: the boot bake holds BOTH
+   * cathedral forms solid, so every cell the SHELL alone blocked — the two
+   * tomb chests the ruin does not keep, and the margins where the shell's
+   * furniture stood fatter than the ruin's — stayed dead on a razed map whose
+   * physics says a man stands there fine. Measured (`_dwhy.mjs`, seed 1):
+   * 19 cells inside D's 8 m circle were flagged 0 with the standing capsule
+   * fitting at the ruin's own floor.
+   *
+   * The conservatism was about a cheap probe: one ray cannot be trusted to
+   * OPEN ground. So the opening branch does not use one ray — it re-runs the
+   * boot carve's own full test at the state the town is actually in: floor
+   * within the carve's 0.9 m ceiling of the ZONE's own floor (so a chest top
+   * never opens), the slope gate, and the real standing capsule — crouch
+   * capsule for a `2`, exactly `_carveInteriors`' ladder. And it is bounded to
+   * the ZONE CIRCLE, where the fight is and where `_dbury.mjs` measures: the
+   * street outside keeps the boot answer, conservative as ever.
    *
    * Returns how many cells actually changed, so "the ruin is walkable" is a
    * number in the log rather than a claim in a comment.
@@ -3870,9 +3899,36 @@ export class MatchSystem {
     for (let iz = iz0; iz <= iz1; iz++) {
       for (let ix = ix0; ix <= ix1; ix++) {
         const i = g.index(ix, iz);
-        if (g.flags[i] === 0) continue; // it was not walkable; rubble cannot open it
         const x = g.worldX(ix);
         const zz = g.worldZ(iz);
+        if (g.flags[i] === 0) {
+          /**
+           * THE OPENING BRANCH. Only inside the circle, and only under the
+           * boot carve's own full ladder — floor ceiling, slope, standing
+           * capsule, crouch capsule. @see the header.
+           */
+          if (Math.hypot(x - z.position.x, zz - z.position.z) > z.radius) continue;
+          const down = ph.raycast(x, z.position.y + START_UP, zz, 0, -1, 0, START_UP + 1.2, MASK);
+          if (!down.hit) continue;
+          const ny = down.point.y;
+          // `_carveInteriors`' own ceiling: rubble higher than 0.9 m over the
+          // zone floor stays a wall, so a chest top never becomes ground.
+          if (ny > z.position.y + 0.9 || ny < z.position.y - 1.2) continue;
+          if (down.normal.y < g.maxSlope) continue;
+          // `checkCapsule` TRUE means the capsule FITS (@see `_dbury.mjs`).
+          this._v.set(x, ny + g.radius + 0.06, zz);
+          this._v2.set(x, ny + g.height - g.radius, zz);
+          if (ph.checkCapsule(this._v, this._v2, g.radius, MASK)) {
+            g.flags[i] = 1;
+          } else {
+            this._v2.set(x, ny + g.crouchHeight - g.radius, zz);
+            if (!ph.checkCapsule(this._v, this._v2, g.radius, MASK)) continue;
+            g.flags[i] = 2;
+          }
+          g.floor[i] = ny;
+          changed++;
+          continue;
+        }
         const y0 = g.floor[i];
         const down = ph.raycast(x, y0 + START_UP, zz, 0, -1, 0, START_UP + 0.6, MASK);
         if (!down.hit) continue; // nothing under it any more: leave the old answer
