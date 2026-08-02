@@ -894,6 +894,29 @@ export class Bomber {
         // a building skips it without firing a ray, which is 27 of the 28
         // (run, host) pairs on this map.
         if (!this._runNear(run, host)) continue;
+        /**
+         * ONE HOST PER RUN, AND IT IS CHECKED RATHER THAN ASSUMED.
+         *
+         * `_solveState` re-solves THE WHOLE RUN, so a second binding's two
+         * states would both carry whatever the first host happened to be doing
+         * while they were probed, and applying either would clobber the other.
+         * Measured on this map — `_runhost.mjs`, all six `world.demolitions`
+         * and the cathedral swapped one at a time — the cathedral is the only
+         * building that moves anything under any of these four lines, so this
+         * has never fired. If `world` ever gains a destructible that overlaps
+         * one of them, this says so at boot instead of drawing the wrong
+         * answer, and the fix is a sparse per-entry variant like
+         * `Airstrike._makeVariant`'s.
+         */
+        if (run.hostVariants.length) {
+          console.error(
+            `[bomber] ${run.id} already binds ${run.hostVariants[0].host.id} and ${host.id} is a ` +
+              'SECOND perishable building under the same run. A whole-run pose pair cannot ' +
+              'express four states — the second binding is DROPPED and its ground will not be ' +
+              'followed. @see _bakeHostVariants.'
+          );
+          continue;
+        }
         const was = host.isDown();
         host.probeSwap(false);
         const up = this._solveState(run, physics);

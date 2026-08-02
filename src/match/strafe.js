@@ -664,6 +664,17 @@ export class Strafe {
     for (const run of this.runs) {
       for (const host of hosts) {
         if (!this._runNear(run, host)) continue;
+        // One host per line, checked rather than assumed. @see the same guard
+        // in `Bomber._bakeHostVariants` for why a whole-run pose pair cannot
+        // express two independent buildings, and what to do if one ever appears.
+        if (run.hostVariants.length) {
+          console.error(
+            `[strafe] ${run.id} already binds ${run.hostVariants[0].host.id} and ${host.id} is a ` +
+              'SECOND perishable building under the same line — the second binding is DROPPED ' +
+              'and its ground will not be followed. @see Bomber._bakeHostVariants.'
+          );
+          continue;
+        }
         const was = host.isDown();
         host.probeSwap(false);
         const up = this._solveState(run, physics);
