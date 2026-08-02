@@ -1319,6 +1319,28 @@ if (args.battle) {
     console.log(`[audiotest] battle layers ${did ? 'DISABLED (control run)' : 'not present in this build'}`);
   }
 
+  /**
+   * `--clamp=N` PINS THE RENDER GOVERNOR at N slots and stops it moving.
+   *
+   * The governor walks the pool 72 -> 24 when the audio thread falls behind, and
+   * `BattleLayer._room` used to refuse a slot outright below 66 % of full — so
+   * "the thread is a little behind" and "there is no distant war at all" were the
+   * same state. Headless always sits at the floor, where the behaviour is
+   * identical before and after, so the middle of the range can only be measured
+   * by holding the pool there on purpose.
+   *
+   *   node tools/audiotest.mjs --battle --clamp=48 --seconds=40
+   */
+  if (args.clamp) {
+    await page.evaluate((n) => {
+      const f = window.__ENGINE__.ctx.peek('audio').field;
+      f._trackRender = () => { f.cap = n; f.stats.cap = n; };
+      f.cap = n;
+      f.stats.cap = n;
+    }, Number(args.clamp));
+    console.log(`[audiotest] render governor pinned at ${args.clamp} slots of 72`);
+  }
+
   await page.evaluate((scale) => {
     const e = window.__ENGINE__;
     const a = e.ctx.peek('audio');

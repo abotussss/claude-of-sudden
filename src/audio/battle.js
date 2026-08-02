@@ -199,18 +199,51 @@ export class BattleLayer {
    * May a BACKGROUND voice take a slot on `bus` right now?
    *
    * Two questions, and both have to be yes:
-   *   1. is the render governor at full strength? Below it, the audio thread is
-   *      already losing real time and the correct amount of extra content is
-   *      none. @see SpatialField._trackRender
+   *   1. how much of the field is the render governor still willing to fill?
+   *      When the audio thread is losing real time the correct amount of extra
+   *      content is less, and at the floor it is none. @see _trackRender
    *   2. is this bus under `share` of its own quota? Not of the pool — of its
    *      quota, so a busy foley bus stops the footsteps without touching the
    *      gunfire and vice versa.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * (1) WAS A CLIFF AND THE CLIFF WAS THE BUG.
+   * ──────────────────────────────────────────────────────────────────────────
+   * It read `if (f.capacity < f.emitters.length * 0.66) return false`, so 47 of
+   * 72 slots and 24 of 72 were the same state: nothing. MEASURED by pinning the
+   * governor (`tools/audiotest.mjs --battle --clamp=N`) through a live 20v20:
+   *
+   *   pool 60/72   26 far voices, 35 remote footfalls   (390 remote shots offered)
+   *   pool 48/72   26 far voices, 42 remote footfalls   (592 offered)
+   *   pool 40/72    0 far voices,  0 remote footfalls   (1003 offered)
+   *
+   * A thousand shots were fired at the player over eighty-nine seconds of game
+   * and he was played none of them, because the pool was seven slots under an
+   * arbitrary line. That is 「敵味方の銃声があんまり聞こえない」 arriving as a switch
+   * rather than as a mix, and it is invisible from inside a match: the counters
+   * stay healthy, nothing is dropped, nothing is stolen, there is simply no war.
+   *
+   * The ORDERING is deliberate and is kept — this content is still the first
+   * thing to go when the thread is in trouble and the last to come back. What
+   * changes is that the last stretch of that is a FADE instead of a switch, and
+   * the fade is placed so that this is never LESS permissive than the code it
+   * replaces: `head` is 1 everywhere above the old 66 % line, so a healthy match
+   * behaves bit for bit as it did, and it falls to 0 at the pool's floor, where
+   * the layer stood down before and still does. Everything it changes lies
+   * strictly inside the band that used to be silent.
+   *
+   * The layer still cannot grow the pool — that is the bus quota's job, and the
+   * quota is a share of the CURRENT cap, so it has already shrunk too.
    */
   _room(bus, share) {
     const f = this.audio.field;
     if (!f) return false;
-    if (f.capacity < f.emitters.length * 0.66) return false;
-    return f.busLoad(bus) < f.busCap(bus) * share;
+    const full = f.emitters.length;
+    if (!full) return false;
+    // 0 at the governor's floor (0.34 of full), 1 at the old cliff (0.66).
+    const head = clamp((f.capacity - full * 0.34) / (full * 0.32), 0, 1);
+    if (head <= 0.02) return false;
+    return f.busLoad(bus) < f.busCap(bus) * share * head;
   }
 
   /* ================================================================ */
