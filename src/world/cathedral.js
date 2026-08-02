@@ -1105,8 +1105,26 @@ export function buildCathedral(A) {
      * from the crossing out to the arcade is now authored inside it. Beyond
      * that the ruin is as tall as it ever was: the silhouette is not the
      * complaint and 「しょぼい」 is still the other wall.
+     *
+     * ────────────────────────────────────────────────────────────────────────
+     * AND IT IS MEASURED FROM THE RUBBLE, NOT FROM THE TILE FLOOR
+     * ────────────────────────────────────────────────────────────────────────
+     * The first cut of this capped everything off `SEC.floor`, and `_dbury.mjs`
+     * caught it: D's standing cover points went 10 -> 0 while its cover AREA
+     * stayed at 20 m². Both tests that matter stand a man on the GROUND, and
+     * the ground on the crossing is the rubble field, 0.15-0.37 m over the
+     * tile. `_bakeCover` probes at `cell floor + 1.32` and the eye is at `cell
+     * floor + 1.62`, so a 1.46 m chest measured off the tile is only 1.1-1.3 m
+     * of cover to the man beside it — under the standing test, and the six
+     * standing points `_dmass.mjs` asserts vanish.
+     *
+     * So every mass on the crossing is datumed on `groundAt` and the window is
+     * 30 cm wide: `+EYE_LOW` clears the standing test from a neighbouring cell,
+     * `+EYE_CAP` stays under the eye of a man on one. Nothing on D is authored
+     * outside it.
      */
-    const EYE_CAP = 1.56;
+    const EYE_CAP = 1.52;
+    const EYE_LOW = 1.36;
     /** Grey rubble, ash and broken render — the palette the shell was built in. */
     const RUBBLE = ['concrete_dark', 'concrete', 'plaster_white', 'plaster_cream', 'plaster_sand', 'roof_screed'];
     const RUB_W = [0.2, 0.2, 0.16, 0.16, 0.16, 0.12];
@@ -2001,7 +2019,7 @@ export function buildCathedral(A) {
          * taller half of this range is over `_bakeCover`'s 1.32 m standing test
          * — and none of them is a lid on the point.
          */
-        const h = rng.range(0.95, EYE_CAP - 0.11);
+        const h = rng.range(0.95, EYE_CAP - 0.08);
         const seg = rng.range(2.2, 3.4);
         // an arc of drum: blocks following the ring, not one box across it
         for (let k = -1; k <= 1; k++) {
@@ -2010,17 +2028,25 @@ export function buildCathedral(A) {
           const v = Math.sin(aa) * rr;
           const hh = h * (k === 0 ? 1 : rng.range(0.62, 0.92));
           const ry = -aa + rng.range(-0.12, 0.12);
+          /**
+           * ON the rubble, like the chests. The ring sits at 10.2-13.2 m, which
+           * is where the field starts climbing out of the plaza, so a block
+           * datumed on the tile is buried at the far end of that range and
+           * standing proud at the near one — an arc that is half-buried is a
+           * metre of cover that vanished and a metre that never appears.
+           */
+          const gy = groundAt(u, v);
           A.add(k === 0 ? 'plaster_sand' : 'concrete_dark', box,
-            LL(IDENT, X(u), SEC.floor + hh / 2, Z(v), ry, seg / 3.0, hh, rng.range(0.6, 0.95),
+            LL(IDENT, X(u), gy + hh / 2, Z(v), ry, seg / 3.0, hh, rng.range(0.6, 0.95),
               0, rng.range(-0.12, 0.12)),
             { masks: [rng.range(0.5, 0.95), rng.range(0.5, 1.0), 0.4] });
-          A.box('concrete', X(u), SEC.floor + hh / 2, Z(v), seg / 3.0, hh, rng.range(0.6, 0.9), ry);
+          A.box('concrete', X(u), gy + hh / 2, Z(v), seg / 3.0, hh, rng.range(0.6, 0.9), ry);
           for (let q = 0; q < 2; q++) {
             // small, because a lump ON the ring is drawn and not collidable —
             // a 0.55 m boulder on a 1.45 m arc is 30 cm of skyline that stops
             // no bullet, which is the worst of both. @see `EYE_CAP`.
             const s = rng.range(0.16, 0.36);
-            lump(rubbleKey(), u + rng.range(-0.9, 0.9), SEC.floor + hh + s * 0.2, v + rng.range(-0.9, 0.9), s, 0.6);
+            lump(rubbleKey(), u + rng.range(-0.9, 0.9), gy + hh + s * 0.2, v + rng.range(-0.9, 0.9), s, 0.6);
           }
         }
       }
@@ -2045,17 +2071,18 @@ export function buildCathedral(A) {
         // …and tipped further over than it was, so it is a raft lying down
         // rather than a raft on edge. 2.7 m of shell standing eleven metres
         // from the point was the single tallest thing on D's horizon.
-        const h = rng.range(1.15, EYE_CAP - 0.06);
+        const h = rng.range(1.15, EYE_CAP - 0.04);
         const ry = rng.range(-1.2, 1.2);
+        const gy = groundAt(u, v);
         A.add('roof_screed', box,
-          LL(IDENT, X(u), SEC.floor + h / 2, Z(v), ry, rng.range(2.6, 3.6), h, rng.range(0.6, 0.9),
+          LL(IDENT, X(u), gy + h / 2, Z(v), ry, rng.range(2.6, 3.6), h, rng.range(0.6, 0.9),
             0, rng.range(0.25, 0.55)), { masks: [0.6, rng.range(0.5, 1.0), 0.35] });
-        A.box('concrete', X(u), SEC.floor + h * 0.5, Z(v), rng.range(2.2, 3.0), h, 0.95, ry);
+        A.box('concrete', X(u), gy + h * 0.5, Z(v), rng.range(2.2, 3.0), h, 0.95, ry);
         // the ribs that ran over the shell, snapped and still on it — laid ON
         // the raft now, not standing proud of it
         for (let k = 0; k < 2; k++) {
           A.add('concrete', soft,
-            LL(IDENT, X(u + rng.range(-1.2, 1.2)), SEC.floor + h * rng.range(0.55, 0.88), Z(v + rng.range(-0.8, 0.8)),
+            LL(IDENT, X(u + rng.range(-1.2, 1.2)), gy + h * rng.range(0.55, 0.88), Z(v + rng.range(-0.8, 0.8)),
               ry + rng.range(-0.3, 0.3), rng.range(1.8, 3.0), 0.4, 0.5, 0, rng.range(-0.4, 0.4)),
             { masks: [0.9, 0.45, 0.25] });
         }
@@ -2088,19 +2115,20 @@ export function buildCathedral(A) {
         const u = Math.cos(a) * rr;
         const v = Math.sin(a) * rr;
         const ry = a + 0.4;
-        const lh = EYE_CAP - 0.06;
-        A.add('plaster_cream', box, LL(IDENT, X(u), SEC.floor + lh / 2, Z(v), ry, 3.2, lh, 2.5,
+        const lh = EYE_CAP - 0.04;
+        const gy = groundAt(u, v);
+        A.add('plaster_cream', box, LL(IDENT, X(u), gy + lh / 2, Z(v), ry, 3.2, lh, 2.5,
           0.16, 0.1), { masks: [0.5, 0.6, 0.45] });
-        A.box('concrete', X(u), SEC.floor + lh / 2, Z(v), 3.0, lh, 2.4, ry);
-        A.add('concrete_dark', soft, LL(IDENT, X(u + Math.cos(ry) * 1.7), SEC.floor + lh * 0.62, Z(v - Math.sin(ry) * 1.7),
+        A.box('concrete', X(u), gy + lh / 2, Z(v), 3.0, lh, 2.4, ry);
+        A.add('concrete_dark', soft, LL(IDENT, X(u + Math.cos(ry) * 1.7), gy + lh * 0.62, Z(v - Math.sin(ry) * 1.7),
           ry, 0.5, 2.2, 2.6, 0.2, 0), { masks: [0.95, 0.35, 0.12] });
         // the finial, snapped off and lying across it rather than sticking up
         const fin = tubeY(0.12, 2.2, { radial: 6 });
-        A.addOnce('metal_rust', fin, LL(IDENT, X(u + 1.1), SEC.floor + lh + 0.1, Z(v + 0.7), ry, 1, 1, 1, 1.52, 0.3),
+        A.addOnce('metal_rust', fin, LL(IDENT, X(u + 1.1), gy + lh + 0.1, Z(v + 0.7), ry, 1, 1, 1, 1.52, 0.3),
           { masks: [1, 0.8, 0.1] });
         for (let k = 0; k < 6; k++) {
           const s = rng.range(0.25, 0.65);
-          lump(rubbleKey(), u + rng.range(-2.4, 2.4), SEC.floor + rng.range(0.1, 0.5), v + rng.range(-2.4, 2.4), s, 0.55);
+          lump(rubbleKey(), u + rng.range(-2.4, 2.4), gy + rng.range(0.06, 0.35), v + rng.range(-2.4, 2.4), s, 0.55);
         }
       }
       /**
@@ -2130,25 +2158,31 @@ export function buildCathedral(A) {
         [-4.9, -4.9, 0.78], [4.9, -4.9, -0.78], [-4.9, 4.9, -0.78], [0, 6.1, 0],
       ]) {
         /**
-         * 1.34-1.46, UP from 1.0-1.3, and it is a visibility change even though
-         * the number went up. `_bakeCover` calls a point STANDING cover when it
-         * finds mass at 1.32 m, so a 1.2 m chest was never standing cover at
-         * all — the six standing points D needs were being carried by the dome
-         * SLABS at 1.8-2.1 m, which is head height and is what was blinding the
-         * point. Raising the chest into the 1.32-1.62 m band and dropping the
-         * slab into it as well puts every piece of D's cover where a man fires
-         * OVER it and nothing of it above his eye. @see `EYE_CAP`.
+         * THE CHEST IS NOW EXACTLY ONE THING: cover a standing man is covered
+         * BY and can shoot OVER, and it is measured off the rubble he is
+         * standing on rather than off the tile under the rubble.
+         *
+         * It went 1.0-1.3 -> 1.34-1.46 off `SEC.floor` in the first cut of this
+         * change, and `_dbury.mjs` then measured D's standing cover points at
+         * ZERO: the field laps 0.15-0.37 m over the tile round the crossing, so
+         * `_bakeCover`'s 1.32 m test — which starts at the CELL's floor — was
+         * looking for mass the chest did not have. Datumed on `groundAt` and
+         * sized between `EYE_LOW` and `EYE_CAP` it clears that test from the
+         * cell beside it and still sits under the 1.62 m eye of the man on it.
+         * @see the note on `EYE_CAP`, which has both numbers and the 30 cm
+         * window they leave.
          */
-        const h = rng.range(1.34, 1.46);
-        A.add('concrete', box, LL(IDENT, X(tu), SEC.floor + h / 2, Z(tv), ry + rng.range(-0.1, 0.1),
+        const gy = groundAt(tu, tv);
+        const h = rng.range(EYE_LOW + 0.06, EYE_CAP - 0.02);
+        A.add('concrete', box, LL(IDENT, X(tu), gy + h / 2, Z(tv), ry + rng.range(-0.1, 0.1),
           2.6, h, 1.25, rng.range(-0.06, 0.06), rng.range(-0.06, 0.06)),
           { masks: [rng.range(0.5, 0.9), rng.range(0.55, 1.0), 0.45] });
-        A.box('concrete', X(tu), SEC.floor + h / 2, Z(tv), 2.6, h, 1.25, ry);
+        A.box('concrete', X(tu), gy + h / 2, Z(tv), 2.6, h, 1.25, ry);
         // the lid, slid off one end and now leaning against the chest
         const cs = Math.cos(ry);
         const sn = Math.sin(ry);
         A.add('concrete_dark', box,
-          LL(IDENT, X(tu + cs * rng.range(0.9, 1.5)), SEC.floor + h * rng.range(0.45, 0.72), Z(tv - sn * rng.range(0.9, 1.5)),
+          LL(IDENT, X(tu + cs * rng.range(0.9, 1.5)), gy + h * rng.range(0.4, 0.66), Z(tv - sn * rng.range(0.9, 1.5)),
             // …and leaning at a shallower angle: a 2 m lid propped at 0.9 rad
             // reaches 1.74 m, which is a head-height plate that stops no round.
             ry + rng.range(-0.3, 0.3), 2.0, 0.22, 1.25, 0, rng.range(0.22, 0.5)),
@@ -2157,16 +2191,16 @@ export function buildCathedral(A) {
         // its whole footprint over the chest's own dead square — and inside
         // `EYE_CAP`, which is the whole of 「視認性を改善しろ」 on this point.
         if (slab++ < 3) {
-          const sh = rng.range(1.44, EYE_CAP);
+          const sh = rng.range(EYE_CAP - 0.06, EYE_CAP);
           A.add('roof_screed', box,
-            LL(IDENT, X(tu + cs * rng.range(-0.35, 0.35)), SEC.floor + h + (sh - h) / 2 - 0.15,
+            LL(IDENT, X(tu + cs * rng.range(-0.35, 0.35)), gy + h + (sh - h) / 2 - 0.15,
               Z(tv - sn * rng.range(-0.35, 0.35)), ry + rng.range(-0.25, 0.25),
               1.9, sh - h + 0.3, 0.55, rng.range(-0.1, 0.1), rng.range(0.15, 0.35)),
             { masks: [0.6, rng.range(0.5, 1.0), 0.35] });
-          A.box('concrete', X(tu), SEC.floor + h + (sh - h) / 2 - 0.15, Z(tv), 1.9, sh - h + 0.3, 0.55, ry);
+          A.box('concrete', X(tu), gy + h + (sh - h) / 2 - 0.15, Z(tv), 1.9, sh - h + 0.3, 0.55, ry);
           // a rib off the shell, snapped and still on the slab
           A.add('concrete', soft,
-            LL(IDENT, X(tu + cs * 0.5), SEC.floor + sh - 0.2, Z(tv - sn * 0.5),
+            LL(IDENT, X(tu + cs * 0.5), gy + sh - 0.2, Z(tv - sn * 0.5),
               ry + rng.range(-0.3, 0.3), rng.range(1.4, 2.2), 0.34, 0.4, 0, rng.range(-0.5, 0.5)),
             { masks: [0.9, 0.45, 0.25] });
         }
@@ -2174,7 +2208,7 @@ export function buildCathedral(A) {
         for (let k = 0; k < 4; k++) {
           const s = rng.range(0.22, 0.55);
           lump(rng.float() < 0.5 ? 'plaster_white' : 'concrete',
-            tu + rng.range(-1.6, 1.6), SEC.floor + (k ? rng.range(0.05, 0.3) : h + s * 0.2), tv + rng.range(-1.2, 1.2), s, 0.55);
+            tu + rng.range(-1.6, 1.6), gy + (k ? rng.range(0.02, 0.16) : h + s * 0.2), tv + rng.range(-1.2, 1.2), s, 0.55);
         }
       }
     }
