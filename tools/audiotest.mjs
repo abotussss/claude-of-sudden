@@ -1177,6 +1177,29 @@ if (args.foot) {
           occlusion: occ, tag: 'step',
         }, 'foley', 0.28);
       },
+      /**
+       * ONE COALESCED BURST OF DISTANT FIRE, on the layer's own plumbing —
+       * `playFar` is what `BattleLayer._updateFar` calls when a bearing's bin
+       * flushes, so this is the voice the player is actually given for a
+       * firefight two streets away, at its real gain and its real send.
+       */
+      far(dist, rounds = 6) {
+        const lp = a.field.listenerPos;
+        const ang = 2.4;
+        return a.playFar(lp.x + Math.cos(ang) * dist, lp.y + 2, lp.z + Math.sin(ang) * dist,
+          { rounds, spacing: 0.1 });
+      },
+      /** 「爆撃や銃撃、グレネードの爆破音は遠くても聞こえるように」, at range. */
+      blast(dist, radius) {
+        const lp = a.field.listenerPos;
+        const ang = 0.6;
+        e.ctx.events.emit('explosion', {
+          position: {
+            x: lp.x + Math.cos(ang) * dist, y: lp.y - 1.2, z: lp.z + Math.sin(ang) * dist,
+          },
+          radius, damage: 260,
+        });
+      },
       resetMix() { a.mixer.resetDynamics(); a.clearRateGates(); },
       /**
        * THE BED OFF, AND IT IS NOT OPTIONAL FOR THIS QUESTION.
@@ -1295,6 +1318,22 @@ if (args.foot) {
   }
   await runCase('remote step @12m occ=0.97 run',
     () => page.evaluate(() => window.__FOOT__.remote(12, 0.97, 'run')), 1.0);
+  /**
+   * THE WAR, ON THE SAME INSTRUMENT AND AGAINST THE SAME BED. 「銃声が方方でなって
+   * いる感じが戦争です」 and 「爆撃や銃撃、グレネードの爆破音は遠くても聞こえるように」 are
+   * both claims about audibility over the ambience, and quoting them against a
+   * bed measured by a different tool in a different window is how the last three
+   * passes produced numbers that did not reach him.
+   */
+  for (const d of [90, 150, 200]) {
+    await runCase(`far fire @${d}m (6 rounds)`,
+      () => page.evaluate((dd) => window.__FOOT__.far(dd, 6), d), 2.4, Math.max(4, TRIALS / 2));
+  }
+  for (const [d, r] of [[35, 15], [100, 15], [200, 15], [80, 6]]) {
+    await runCase(`blast r${r} @${d}m`,
+      () => page.evaluate(([dd, rr]) => window.__FOOT__.blast(dd, rr), [d, r]), 3.0,
+      Math.max(3, TRIALS / 2));
+  }
 
   const bed = rows[0];
   const dB = (v, ref) => (v > 0 && ref > 0 ? 20 * Math.log10(v / ref) : NaN);
