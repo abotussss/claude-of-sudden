@@ -162,40 +162,52 @@ export function planBreaches(buildings) {
       console.warn(`[world] breach ${spec.id}: already carries a full ruin — skipped`);
       continue;
     }
-    const side = chooseSide(spec);
-    if (side < 0) {
+    /**
+     * UP TO TWO ELEVATIONS PER HOUSE NOW, NOT ONE — 「家がもっと爆撃や砲撃で
+     * 壊れるようにして … 今は屋内が安全すぎる」. One breachable wall per house
+     * meant a room with four walls had exactly one that ordnance could ever
+     * open, and every other bearing stayed as safe as it was before the
+     * feature existed. The second wall obeys a stricter rule than the first
+     * (@see `chooseSides`), and each one is its own record, its own scope and
+     * its own `damageAt` target — a shell into the north wall does not open
+     * the west one.
+     */
+    const sides = chooseSides(spec, 2);
+    if (!sides.length) {
       console.warn(`[world] breach ${spec.id}: no elevation with open ground outside it — skipped`);
       continue;
     }
-    const L = side === 0 || side === 2 ? spec.w : spec.d;
-    const holeW = Math.min(HOLE_MAX, Math.max(HOLE_MIN, L * HOLE_FRAC));
-    const groundH = spec.groundH ?? 3.45;
-    out.push({
-      id: `${spec.id}-S${side}`,
-      building: spec.id,
-      name: `${spec.id} WALL ${['N', 'E', 'S', 'W'][side]}`,
-      spec,
-      side,
-      /** Along the elevation, from its middle. Centred: the jambs are the ends. */
-      at: 0,
-      holeW,
-      holeH: Math.min(HOLE_H, groundH - HEAD_MIN),
-      groundH,
-      info: null,
-      /** The two scopes, filled by `world` and by `buildBreaches`. */
-      wall: null,
-      ruin: null,
-      down: false,
-      strength: BREACH_STRENGTH,
-      /** Filled by `publishBreaches`, once the level transform exists. */
-      position: null,
-      normal: null,
-      reach: 0,
-      mass: null,
-      surfaces: ['plaster', 'concrete'],
-      tint: 0xbfae92,
-      navRect: null,
-    });
+    for (const side of sides) {
+      const L = side === 0 || side === 2 ? spec.w : spec.d;
+      const holeW = Math.min(HOLE_MAX, Math.max(HOLE_MIN, L * HOLE_FRAC));
+      const groundH = spec.groundH ?? 3.45;
+      out.push({
+        id: `${spec.id}-S${side}`,
+        building: spec.id,
+        name: `${spec.id} WALL ${['N', 'E', 'S', 'W'][side]}`,
+        spec,
+        side,
+        /** Along the elevation, from its middle. Centred: the jambs are the ends. */
+        at: 0,
+        holeW,
+        holeH: Math.min(HOLE_H, groundH - HEAD_MIN),
+        groundH,
+        info: null,
+        /** The two scopes, filled by `world` and by `buildBreaches`. */
+        wall: null,
+        ruin: null,
+        down: false,
+        strength: BREACH_STRENGTH,
+        /** Filled by `publishBreaches`, once the level transform exists. */
+        position: null,
+        normal: null,
+        reach: 0,
+        mass: null,
+        surfaces: ['plaster', 'concrete'],
+        tint: 0xbfae92,
+        navRect: null,
+      });
+    }
   }
   return out;
 }
@@ -212,6 +224,29 @@ export function chooseSide(spec) {
   cands.sort((a, b) => (doors.has(a) ? 1 : 0) - (doors.has(b) ? 1 : 0) || a - b);
   for (const s of cands) if (openOutside(spec, s)) return s;
   return -1;
+}
+
+/**
+ * Up to `max` elevations, measured with the same probes. The FIRST is exactly
+ * what `chooseSide` has always returned — door-less sides preferred, a door
+ * side as last resort — so every wall that was breachable before this function
+ * existed is still breachable, on the same side, with the same id. Every
+ * FURTHER side must be door-less outright: the first wall may fall back to a
+ * door's side because one breach is better than none, but a SECOND hole beside
+ * a door is a second entrance to a room that already has two.
+ */
+export function chooseSides(spec, max = 2) {
+  const doors = new Set(Object.keys(spec.doorBays ?? {}).map(Number));
+  const first = chooseSide(spec);
+  if (first < 0) return [];
+  const picked = [first];
+  const skip = new Set(spec.skipSides ?? []);
+  for (const s of [0, 1, 2, 3]) {
+    if (picked.length >= max) break;
+    if (s === first || skip.has(s) || doors.has(s)) continue;
+    if (openOutside(spec, s)) picked.push(s);
+  }
+  return picked;
 }
 
 /** Three samples along the elevation, two distances out, all of them open. */

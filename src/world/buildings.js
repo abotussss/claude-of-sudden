@@ -153,14 +153,18 @@ function terrace(A, rng, spec, y, t) {
  * @param {Assembler} A
  * @param {Rng} rng
  * @param {object} spec
- * @param {object|null} hooks  optional. `{ scopeGroundSide, scopeId }` brackets
- *   the GROUND-STOREY facade of ONE side in an `Assembler` scope, so that panel
- *   — its geometry, its window units and the `slabBox` collision `facadeWall`
- *   authors under it — can later stop existing on its own. The scope handle
- *   comes back on `info.facadeScope`. `src/world/breach.js` is the only caller;
- *   @see the note over `Assembler.beginScope`, and note that `_scope` is a
- *   SINGLE SLOT, so a building already bracketed by a demolition shell scope
- *   must never be handed this (`planBreaches` is what refuses).
+ * @param {object|null} hooks  optional. `{ scopeGroundSides: {side: scopeId} }`
+ *   brackets the GROUND-STOREY facade of each named side in its own
+ *   `Assembler` scope, so that panel — its geometry, its window units and the
+ *   `slabBox` collision `facadeWall` authors under it — can later stop
+ *   existing on its own. The handles come back on `info.facadeScopes[side]`.
+ *   It was ONE side (`scopeGroundSide`/`scopeId`, `info.facadeScope`) until a
+ *   cache house grew a second breachable wall — 「今は屋内が安全すぎる」 — and
+ *   the sides are bracketed one after another as the facade loop reaches them,
+ *   never nested, because `_scope` is a SINGLE SLOT. That is also why a
+ *   building already bracketed by a demolition shell scope must never be
+ *   handed this (`planBreaches` is what refuses). `src/world/breach.js` is the
+ *   only caller; @see the note over `Assembler.beginScope`.
  */
 export function buildBuilding(A, rng, spec, hooks = null) {
   const t = spec.t ?? 0.34;
