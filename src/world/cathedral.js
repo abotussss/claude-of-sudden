@@ -1434,7 +1434,7 @@ export function buildCathedral(A) {
      */
     tornWall('u', -WV, -HW, HW, [[-3.9, 3.9], [-8.1, -3.1], [3.1, 8.1]], {
       key: 'plaster_cream', base: 2.3, sign: -1,
-      survivors: [[9.9, 3.0, 5.4], [-11.0, 2.8, 7.8], [13.2, 1.8, 4.2]],
+      survivors: [[9.9, 3.0, 4.3], [-11.0, 2.8, 6.0], [13.2, 1.8, 3.5]],
     });
     portal('u', -WV, 0, 4.0, 6.1, 1.8, 'plaster_cream', -1, 0);
     // the two side portals kept their heads too, lower and half gone
@@ -1443,18 +1443,18 @@ export function buildCathedral(A) {
     /** THE APSE END, with its door on the axis and two facets still standing. */
     tornWall('u', WV, -HW, HW, [[-3.5, 3.5]], {
       key: 'plaster_sand', base: 2.2, sign: 1,
-      survivors: [[-7.6, 2.4, 6.2], [7.0, 2.2, 5.2], [12.4, 2.4, 4.3]],
+      survivors: [[-7.6, 2.4, 4.8], [7.0, 2.2, 4.1], [12.4, 2.4, 3.5]],
     });
     portal('u', WV, 0, 2.8, 4.6, 1.4, 'plaster_sand', 1, -1);
     /** BOTH FLANKS. The transept portal is dead centre of each and keeps its
      *  head; the tower owns the south end of the west one. */
     tornWall('v', -WU, TOW.v1 - 0.6, HD, [[-3.6, 3.6]], {
       key: 'plaster_sand', base: 2.4, sign: -1,
-      survivors: [[-9.0, 2.6, 6.4], [5.4, 2.0, 5.0], [13.4, 3.0, 7.2]],
+      survivors: [[-9.0, 2.6, 5.0], [5.4, 2.0, 3.9], [13.4, 3.0, 5.6]],
     });
     tornWall('v', WU, -HD, HD, [[-3.6, 3.6]], {
       key: 'plaster_cream', base: 2.4, sign: 1,
-      survivors: [[-16.4, 3.0, 7.6], [-7.0, 2.2, 5.4], [8.4, 2.6, 6.8], [18.4, 2.6, 4.6]],
+      survivors: [[-16.4, 3.0, 5.9], [-7.0, 2.2, 4.2], [8.4, 2.6, 5.3], [18.4, 2.6, 3.7]],
     });
     portal('v', -WU, 0, 3.4, 5.0, 1.5, 'plaster_sand', -1, 1);
     portal('v', WU, 0, 3.4, 5.0, 1.5, 'plaster_cream', 1, -1);
@@ -1468,7 +1468,7 @@ export function buildCathedral(A) {
     for (const side of [-1, 1]) {
       for (const v of [...NAVE_V, ...CHOIR_V, -HD + 0.9, HD - 0.9]) {
         const u = side * (HW + BUTT / 2 - 0.1);
-        const h = rng.range(1.6, 4.6);
+        const h = rng.range(1.5, 3.8);
         A.add('concrete', box, LL(IDENT, X(u), SEC.floor + h / 2, Z(v + 2), rng.range(-0.03, 0.03),
           BUTT, h, 1.3), { masks: [rng.range(0.5, 0.95), rng.range(0.4, 0.9), 0.4] });
         A.box('concrete', X(u), SEC.floor + h / 2, Z(v + 2), BUTT, h, 1.3);
@@ -1516,13 +1516,21 @@ export function buildCathedral(A) {
        * off the parvis, the stump read as a ziggurat, every course a tread. A
        * tower SHEARS: one diagonal plane takes a run of courses at once, the
        * rest is noise, and the shaft ends in a broken edge rather than a slope.
+       *
+       * THE NUMBERS CAME DOWN A QUARTER — 「瓦礫が残り続けるのはいいけどもう少し
+       * 高さを小さくして」. The first stump peaked at 13.4 m and put 17.8 % of
+       * the plan over 2.8 m, which the player liked as a policy (the rubble
+       * stays) and not as a skyline. The 3.45 m state he called しょぼい is the
+       * other wall; this sits between them — the stump tops out around 10 m,
+       * every survivor and shaft below scaled with it (@see the survivor lists
+       * and the arcade), and `_cathruin.mjs` carries the measured surface.
        */
       const towerH = (u, v) => {
         const f = clamp01(1 - Math.hypot((u - TOW.u0) / 9.6, (v - TOW.v0) / 10.6));
         const n = fbm3(u * 0.62 + 12.3, 7.1, v * 0.62 + 3.7, 3) - 0.5;
         const shear = (u - TOW.u0) * 0.62 + (v - TOW.v0) * 0.44;
-        return Math.max(1.7,
-          Math.min(3.0 + 11.4 * f * f + n * 4.4, 14.6 - shear * 0.95 + n * 3.0));
+        return Math.max(1.6,
+          Math.min(2.4 + 8.2 * f * f + n * 3.4, 10.4 - shear * 0.85 + n * 2.2));
       };
       // west wall, on the flank line; south wall, on the front line; and the
       // inner return that closes the corner into the aisle
@@ -1567,7 +1575,7 @@ export function buildCathedral(A) {
       for (let i = 0; i < 11; i++) {
         const u = rng.range(TOW.u0 + 1.6, TOW.u1 - 1.6);
         const v = rng.range(TOW.v0 + 1.6, TOW.v1 - 2.6);
-        const h = rng.range(1.8, 4.2);
+        const h = rng.range(1.6, 3.6);
         const w = rng.range(1.3, 2.1);
         const d = rng.range(1.3, 2.1);
         const ry = rng.range(-0.6, 0.6);
@@ -1645,7 +1653,7 @@ export function buildCathedral(A) {
       const all = [...NAVE_V, ...CHOIR_V];
       for (const v of all) {
         const tall = rng.float() < 0.34;
-        const h = tall ? rng.range(3.4, 6.9) : rng.range(1.15, 2.4);
+        const h = tall ? rng.range(2.9, 5.4) : rng.range(1.15, 2.4);
         const w = PW * (tall ? 1.0 : rng.range(1.05, 1.3));
         A.add(tall ? 'plaster_cream' : 'concrete_dark', box,
           LL(IDENT, X(u), SEC.floor + h / 2, Z(v), rng.range(-0.05, 0.05), w, h, w),
@@ -1720,7 +1728,7 @@ export function buildCathedral(A) {
       [-5.4, -18.6, 0.5], [5.8, -12.4, -0.35], [-6.0, -8.6, 0.22],
       [5.2, 9.6, 0.44], [-5.6, 14.8, -0.5], [6.2, 19.4, 0.16],
     ]) {
-      const h = rng.range(2.1, 3.3);
+      const h = rng.range(1.9, 2.8);
       const w = rng.range(3.4, 4.8);
       const d = rng.range(2.6, 4.2);
       A.add('plaster_white', box, LL(IDENT, X(u), SEC.floor + h / 2, Z(v), ry, w, h, d,
@@ -1789,7 +1797,7 @@ export function buildCathedral(A) {
      * which is the same argument that moved three arcs out in the first place,
      * applied to what was left.
      *
-     * So three things move OUT rather than away, and nothing is deleted:
+     * So three things moved OUT rather than away, and nothing was deleted:
      *
      *   - THE LANTERN, from a 6.6 m bearing to 9.6 m. It is the single biggest
      *     mass on the crossing (3.0 x 2.4 m of solid, 7.2 m² of D's cover in one
@@ -1799,37 +1807,60 @@ export function buildCathedral(A) {
      *     three that were already there.
      *   - ONE OF THE TWO INNER RAFTS, likewise.
      *
-     * The four smashed TOMB CHESTS stay exactly where they are, because they
-     * cost the point nothing: section 7 stands the shell's own six on those
-     * squares, so the boot bake has already refused those cells in BOTH states
-     * and `_reprobeZoneNav` may only ever close a cell, never open one. They are
-     * 10.6 m² of the 0.9-2.8 m band for free, and they are most of the reason D
-     * still clears `sitecheck`'s floor of 12 m² with a third of the mass gone.
+     * ──────────────────────────────────────────────────────────────────────
+     * AND THE PLAYER SAID IT A SECOND TIME, so the second pass finishes the
+     * argument: walkable went 60 % → 65.7 % and the four open zones sit at
+     * ~100 %, which is not "most of the gap closed", it is a sixth of it.
+     * `_dbury.mjs` cell by cell: 38 cells dead to `floorY + 0.9` and 52 to the
+     * standing capsule, and nearly all of both were the three arcs and the
+     * raft still standing between the rim and the middle — each box kills its
+     * own footprint AND a bot-radius ring round it. So the second pass moves
+     * ALL of the free-standing discrete masses out of the circle (arcs to
+     * 8.8-13.0 m, rafts to 9.2-12.6 m, spread in radius so the rim reads as a
+     * debris scatter and not a wall), and D's own cover moves onto the four
+     * smashed TOMB CHESTS — grown to the shell chest's own dead footprint and
+     * carrying slabs of the fallen dome to standing height. Vertical mass on a
+     * square the boot bake refused in BOTH states is the one cover that costs
+     * zero cells, because `_reprobeZoneNav` may only ever close a cell, never
+     * open one. `_dbury.mjs` and `_dmass.mjs` carry the measured after-numbers.
      */
     {
       const RING = [];
       /**
-       * SEVEN ARCS, AND ONLY THREE OF THEM ARE INSIDE THE CIRCLE.
+       * SEVEN ARCS, AND NONE OF THEM ARE INSIDE THE CIRCLE ANY MORE.
        *
        * The first version put all of them on a 5.2-7.2 m ring, which is an
        * ANNULUS round the point rather than cover on it: nineteen separate
        * masses between a man on the rim and the middle. Measured over four
        * `_postcheck.mjs` runs a side, that halved how much of the round D had
-       * somebody standing in it. Most of the drum landed OUTSIDE the circle
-       * anyway — it fell off an 18 m wall — so four of the seven go out on to
-       * the 8.8-11.5 m rim, where they are cover on the APPROACH and cost the
-       * point nothing. The fourth is 「埋まりすぎ」's: an arc is two boxes and
-       * each of them eats a bot-radius ring of nav cells round itself.
+       * somebody standing in it. Four of the seven went out on to the rim for
+       * the first 「埋まりすぎ」 fix — walkable 60 % → 65.7 % — and the player
+       * said it again, so the second fix follows the argument to its end: the
+       * drum fell off an 18 m wall and ALL of it lands outside the circle,
+       * spread over 8.8-13.0 m so the rim is a scatter of approach cover and
+       * not a wall at one radius. An arc is two or three boxes and each box
+       * eats a bot-radius ring of nav cells round itself; measured cell by
+       * cell (`_dbury.mjs`), the three arcs and the raft that stayed inside
+       * were most of the 52 capsule refusals in D's circle. What covers the
+       * POINT now is the four smashed tomb chests — mass on squares the boot
+       * bake had already refused in both states — grown a hand's breadth and
+       * carrying slabs of the dome that came through them. @see below.
        */
       for (let i = 0; i < 7; i++) {
         const a = (i / 7) * 6.283 + rng.range(-0.2, 0.2);
         RING.push(a);
-        const out = i >= 3;
-        const rr = out ? rng.range(8.8, 11.5) : rng.range(KEEP_STAND + 0.5, 7.2);
+        /**
+         * 9.4, NOT 8.8 — the ring is measured from the BLOCK'S CENTRE, and a
+         * block half 0.47 m deep plus the bot radius (0.36) plus the capsule
+         * margin reaches ~0.9 m inward: at 8.8 the ring's own dead cells lap
+         * over the r = 8 circle it was moved out of. 9.4 keeps the whole ring,
+         * ring included, outside the point.
+         */
+        const rr = rng.range(9.4, 13.0);
         const h = rng.range(1.3, 2.35);
         const seg = rng.range(2.2, 3.4);
         // an arc of drum: blocks following the ring, not one box across it
-        for (let k = out ? -1 : 0; k <= 1; k++) {
+        for (let k = -1; k <= 1; k++) {
           const aa = a + (k * seg) / (2.2 * rr);
           const u = Math.cos(aa) * rr;
           const v = Math.sin(aa) * rr;
@@ -1847,12 +1878,15 @@ export function buildCathedral(A) {
         }
       }
       /** Three rafts of the shell itself, tipped on edge where they landed —
-       *  ONE on the point, two out past it for the same reason as the arcs. A
-       *  raft is 2.2-3.0 m of solid across, which is the widest single thing
-       *  that was standing between the rim and the middle. */
+       *  ALL out past the circle now, for the same reason as the arcs. A raft
+       *  is 2.2-3.0 m of solid across, which was the widest single thing
+       *  standing between the rim and the middle, and the widest single ring
+       *  of dead nav cells with the bot radius drawn round it. */
       for (let i = 0; i < 3; i++) {
         const a = RING[i * 2] + rng.range(0.4, 0.8);
-        const rr = i >= 1 ? rng.range(9.2, 11.8) : rng.range(KEEP_STAND + 0.7, 7.4);
+        // 9.6 for the same reach arithmetic as the arcs, with a raft's own
+        // fatter half-extent in it.
+        const rr = rng.range(9.6, 12.6);
         const u = Math.cos(a) * rr;
         const v = Math.sin(a) * rr;
         const h = rng.range(1.9, 2.7);
@@ -1879,7 +1913,12 @@ export function buildCathedral(A) {
        */
       {
         const a = RING[3] + 0.55;
-        const rr = 9.6;
+        /**
+         * 10.6: the lantern is 3.0 x 2.4 m of solid, so its half-diagonal is
+         * 1.9 m and at 9.6 its corner plus the bot ring reached r = 7.3 —
+         * measured, the single deepest bite the rim took out of the circle.
+         */
+        const rr = 10.6;
         const u = Math.cos(a) * rr;
         const v = Math.sin(a) * rr;
         const ry = a + 0.4;
@@ -1904,15 +1943,29 @@ export function buildCathedral(A) {
        * up or down: a broken chest on the same square costs the point not one
        * walkable cell, and it is what a crossing full of tombs leaves when the
        * dome comes through it. Four of the six, with the lid slid off one end.
+       *
+       * WITH THE ARCS AND THE RAFT GONE FROM THE CIRCLE, THESE ARE D'S COVER,
+       * and they carry it two ways that both cost the point nothing:
+       *
+       *   - the chest itself is 2.6 x 1.25 m instead of 2.4 x 1.1 — still
+       *     inside the ring the SHELL's own 2.5 x 1.15 chest plus the bot
+       *     radius already killed at boot, so the extra 0.9 m² of 0.9-2.8 m
+       *     band per chest is free in walkable cells;
+       *   - three of the four carry a SLAB OF THE DOME SHELL, come to rest on
+       *     the chest that broke under it, standing to 1.8-2.1 m WITHIN the
+       *     chest's own plan. Vertical mass on a dead footprint is the one
+       *     kind of standing cover that eats no cells, and it is what keeps
+       *     `_dmass.mjs`'s six standing cover points after the arcs moved out.
        */
+      let slab = 0;
       for (const [tu, tv, ry] of [
         [-4.9, -4.9, 0.78], [4.9, -4.9, -0.78], [-4.9, 4.9, -0.78], [0, 6.1, 0],
       ]) {
         const h = rng.range(1.0, 1.3);
         A.add('concrete', box, LL(IDENT, X(tu), SEC.floor + h / 2, Z(tv), ry + rng.range(-0.1, 0.1),
-          2.4, h, 1.1, rng.range(-0.06, 0.06), rng.range(-0.06, 0.06)),
+          2.6, h, 1.25, rng.range(-0.06, 0.06), rng.range(-0.06, 0.06)),
           { masks: [rng.range(0.5, 0.9), rng.range(0.55, 1.0), 0.45] });
-        A.box('concrete', X(tu), SEC.floor + h / 2, Z(tv), 2.4, h, 1.1, ry);
+        A.box('concrete', X(tu), SEC.floor + h / 2, Z(tv), 2.6, h, 1.25, ry);
         // the lid, slid off one end and now leaning against the chest
         const cs = Math.cos(ry);
         const sn = Math.sin(ry);
@@ -1920,6 +1973,22 @@ export function buildCathedral(A) {
           LL(IDENT, X(tu + cs * rng.range(0.9, 1.5)), SEC.floor + h * rng.range(0.55, 0.9), Z(tv - sn * rng.range(0.9, 1.5)),
             ry + rng.range(-0.3, 0.3), 2.0, 0.22, 1.25, 0, rng.range(0.4, 0.9)),
           { masks: [0.95, rng.range(0.4, 0.9), 0.2] });
+        // the dome slab on three of them: on edge, leaning the way it landed,
+        // its whole footprint over the chest's own dead square
+        if (slab++ < 3) {
+          const sh = rng.range(1.8, 2.1);
+          A.add('roof_screed', box,
+            LL(IDENT, X(tu + cs * rng.range(-0.35, 0.35)), SEC.floor + h + (sh - h) / 2 - 0.15,
+              Z(tv - sn * rng.range(-0.35, 0.35)), ry + rng.range(-0.25, 0.25),
+              1.9, sh - h + 0.3, 0.55, rng.range(-0.1, 0.1), rng.range(0.15, 0.35)),
+            { masks: [0.6, rng.range(0.5, 1.0), 0.35] });
+          A.box('concrete', X(tu), SEC.floor + h + (sh - h) / 2 - 0.15, Z(tv), 1.9, sh - h + 0.3, 0.55, ry);
+          // a rib off the shell, snapped and still on the slab
+          A.add('concrete', soft,
+            LL(IDENT, X(tu + cs * 0.5), SEC.floor + sh - 0.2, Z(tv - sn * 0.5),
+              ry + rng.range(-0.3, 0.3), rng.range(1.4, 2.2), 0.34, 0.4, 0, rng.range(-0.5, 0.5)),
+            { masks: [0.9, 0.45, 0.25] });
+        }
         // and the effigy off the top of it, in pieces
         for (let k = 0; k < 4; k++) {
           const s = rng.range(0.22, 0.55);
@@ -2295,7 +2364,7 @@ export function buildCathedral(A) {
      * standing. `_cathruin.mjs` measures the real surface over the whole plan.
      */
     intactTopY: SEC.towerTop,
-    ruinTopY: SEC.floor + 14.0,
+    ruinTopY: SEC.floor + 10.6,
 
     /* ------------------------------------------------------------------ */
     /* WHAT THE COLLAPSE IS MADE OF. @see section 8b.                      */
