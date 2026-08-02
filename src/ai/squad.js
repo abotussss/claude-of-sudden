@@ -72,6 +72,26 @@ export class Squad {
     this.peekHolders = new Set();
     this.peekTimer = 0;
     this.grenadeCooldown = 6;
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * THE OTHER TWO THINGS IN THE POUCH, ON THEIR OWN CLOCKS
+     * ────────────────────────────────────────────────────────────────────────
+     * `grenadeCooldown` is the frag ration and it must stay the frag ration: a
+     * flash and a frag are not competing for the same window, and putting them
+     * on one clock would mean a man who bangs a doorway has taken his squad's
+     * grenade away from the man who wanted to kill somebody with it.
+     *
+     * They are separate from each other for the same reason and paced
+     * differently, because the mistakes are different. Four men flashing one
+     * door in four seconds is a wasted stock and a blinded assault; four men
+     * smoking one lane is a map nobody can see across, and it lasts fourteen
+     * seconds a can rather than one instant. So the screen's clock is roughly
+     * twice the flash's and both are well over the duration of what they put on
+     * the ground. @see `Agent._maybeFlash` / `Agent._maybeSmoke` for the
+     * question each of them is the answer to.
+     */
+    this.flashCooldown = 8;
+    this.screenCooldown = 8;
     /** Kept for anything that reads it; `flankers` is what the gate uses now. */
     this.flanker = null;
     /** ids currently out wide. Size is capped by `flankTokens`. */
@@ -244,6 +264,8 @@ export class Squad {
   update(dt) {
     this.regroup(dt);
     this.grenadeCooldown -= dt;
+    this.flashCooldown -= dt;
+    this.screenCooldown -= dt;
     this.contactAge += dt;
     if (this.flanker && (!this.flanker.alive || this.flanker.state !== 'flank')) this.flanker = null;
     // Hand a flank token back the moment the man stops using it, or the squad
@@ -354,6 +376,34 @@ export class Squad {
   requestGrenade() {
     if (this.grenadeCooldown > 0) return false;
     this.grenadeCooldown = 14 + this.rng.float() * 12;
+    return true;
+  }
+
+  /**
+   * THE BANG. @see `flashCooldown` and `Agent._maybeFlash`.
+   *
+   * Paced tighter than the frag because a flash is an ENABLER — it is thrown to
+   * make the next four seconds work, so refusing it costs the assault rather
+   * than saving a grenade — and looser than the screen because it lasts an
+   * instant instead of a quarter of a minute.
+   */
+  requestFlash() {
+    if (this.flashCooldown > 0) return false;
+    this.flashCooldown = 11 + this.rng.float() * 9;
+    return true;
+  }
+
+  /**
+   * THE CAN. @see `screenCooldown`.
+   *
+   * The longest of the three clocks, and it is the duration of the thing that
+   * makes it so: a can screens for fourteen seconds, so four men smoking one
+   * lane inside half a minute is a map nobody on either side can see across —
+   * including the side that threw them. `_smokeBlocks` is symmetric on purpose.
+   */
+  requestScreen() {
+    if (this.screenCooldown > 0) return false;
+    this.screenCooldown = 22 + this.rng.float() * 14;
     return true;
   }
 }

@@ -107,12 +107,67 @@ const POST_PHASE_T = 12;
 const POST_REACH = 55;
 
 /**
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND THE THIRD NUMBER, WHICH IS THE ONE THE PLAYER WAS LOOKING AT
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「AIが屋内にいるとき、外にも出ないしその場で突っ立ったままです」.
+ *
+ * Phase 2 of `_runPost` is a man standing at a window with `desiredSpeed = 0`,
+ * and its clock was `rng.range(35, 75) + patience * 40` — up to A HUNDRED AND
+ * FIFTEEN SECONDS. A poster with something to shoot at is doing his job for
+ * every one of them; a poster with an EMPTY street in front of him is doing
+ * nothing at all, and from the pavement the two are the same picture: a man
+ * indoors, motionless, for most of a match. Two tokens a side means four men on
+ * a forty-man roster, which is one in ten of everybody the player can see.
+ *
+ * So the hold now has TWO clocks and the short one is about the fight:
+ *
+ *   `POST_HOLD` is the ordinary tenancy, and it is cut to a third. A window is
+ *     worth taking for half a minute; past that it is a man who has stopped
+ *     playing DOMINATION.
+ *   `POST_DRY` is the one that answers the complaint. It counts seconds since
+ *     this man last had ANYTHING to shoot at — his own target or his squad's
+ *     call-out, `lastKnownAge` being the same freshness test `_combat` uses —
+ *     and when it runs out he gives the window back and walks down. A man who
+ *     is trading shots out of it resets it on every contact and keeps it, which
+ *     is the whole point of being up there.
+ *
+ * Neither is an `_unstick` rung and neither can strand anybody: `_dropPost`
+ * already walks him down through phase 3 and hands him to `STATE.ADVANCE`.
+ */
+const POST_HOLD = 22;
+const POST_DRY = 9;
+
+/**
  * INSIDE THIS, A BOLT GUN IS THE WRONG WEAPON AND HE LEAVES. 16 m is a little
  * over the map's street width, and it is deliberately well outside the 6.5 m at
  * which a man who has already closed would simply be executed while turning
  * round. @see the break in `_combat`.
  */
 const SNIPER_MIN = 16;
+
+/**
+ * THE TWO NON-LETHAL THROWS. @see `Agent._maybeFlash` / `Agent._maybeSmoke`.
+ *
+ * `FLASH_LO` is "not in my own face" — the player's own flash has a 16 m
+ * radius, so six metres is already inside it and he takes a share of his own
+ * bang, which is correct and is why the floor is not lower. `FLASH_HI` is room
+ * and doorway distance; past it the man is not going through anything.
+ *
+ * `SMOKE_MIN` is the range at which a screen beats a rush, and `SMOKE_BIAS` is
+ * where on the line between the two men it lands — past halfway, because the
+ * ground that needs covering is the ground he has not crossed yet.
+ */
+/**
+ * WHAT A LIFE COSTS AT THE REQUESTED RATE. @see the reserve block in the
+ * constructor for the arithmetic; this is the one number it turns on.
+ */
+const RESERVE_MUL = 2.0;
+
+const FLASH_LO = 6;
+const FLASH_HI = 22;
+const SMOKE_MIN = 22;
+const SMOKE_BIAS = 0.62;
 
 /**
  * PERSONALITY — and why one `skill` scalar was not enough.
@@ -839,7 +894,34 @@ export class Agent {
      * life) and a machine pistol carries seven 20s (160) — both of them roughly
      * a life and a half of THEIR OWN rate, which is the point.
      */
-    this.reserve = this.magSize * W.spares;
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * AND THE THIRD CEILING IS THE POUCH — "今の３倍は撃ってくれないと"
+     * ══════════════════════════════════════════════════════════════════════
+     * Every number in the paragraph above is honest and every one of them was
+     * measured against A MAP FIRING 24 ROUNDS PER MAN-MINUTE. The request is
+     * for roughly a hundred, and the arithmetic does not survive it: mean life
+     * on the live 20 v 20 is ~170 s (13.3 deaths/min against 37.8 alive), so a
+     * man who is actually doing what he has been asked to do spends ~283
+     * rounds a life against the carbine's 150. He runs dry, `_shoot` refuses,
+     * and the loudest men on the map become the quietest — 「マガジンからにする
+     * くらいまで撃つ」 turned into a man standing in a firefight with an empty gun.
+     *
+     * `_firegate.mjs` had already found the front edge of it before the burst
+     * was touched again: **11.7 % of contact time was a man with zero rounds in
+     * the magazine** — and that measurement was taken at 33 rounds per
+     * man-minute, a third of the target.
+     *
+     * So the whole rack scales together, in ONE place, rather than seven
+     * numbers being edited in `WEAPONS`: the table still says what each gun's
+     * load-out IS relative to the others, and this says what a life on this map
+     * now costs. 2.0 is "a life and a half at the new rate", the same rule
+     * `W.spares` was chosen under. NOTHING ELSE CHANGES: `resupply` is still
+     * capped at `startReserve`, running dry is still real and still recoverable
+     * only at a crate, and the crate legs `match` writes are still worth
+     * walking — a man simply gets to fight for his life before he needs one.
+     */
+    this.reserve = Math.round(this.magSize * W.spares * RESERVE_MUL);
     /** What he started with. `resupply` may not hand over more than this. */
     this.startReserve = this.reserve;
     /** Magazine empty AND nothing left to load. Set in `_shoot`. */
@@ -954,6 +1036,38 @@ export class Agent {
     this.peekTimer = this.rng.range(0.5, 2.5);
     this.grenadeCooldown = this.rng.range(9, 22);
     this.hasGrenade = true;
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * THE OTHER TWO THINGS IN THE POUCH — 「閃光弾」 and 「スモーク」
+     * ══════════════════════════════════════════════════════════════════════
+     * ONE OF EACH, FOR A LIFE. That is the economy the request already fixes
+     * for the player — 「グレネードの補充は1分に一回まで 補充できすぎるとゲーム性崩壊
+     * する」 — and a bot has no crate circuit of his own for these, so the stock
+     * he lands with is the stock he has. A man who has thrown both is an
+     * ordinary rifleman for the rest of his life, which is the point: a flash
+     * has to be a decision.
+     *
+     * They are SEPARATE FROM `hasGrenade` and from each other because they are
+     * separate decisions with separate questions behind them — @see
+     * `_maybeFlash` (a door I am about to go through) and `_maybeSmoke` (a
+     * street I am about to cross) — and they are rationed side-wide on
+     * `Squad.flashCooldown` / `Squad.screenCooldown`, not on the frag's clock,
+     * so banging a doorway cannot take the squad's frag away from the man who
+     * wanted to kill somebody with it.
+     */
+    this.hasFlash = true;
+    this.hasSmoke = true;
+    /** Per-man throttle so one man cannot bang two doors in three seconds. */
+    this.flashCooldown = this.rng.range(4, 12);
+    this.smokeCooldown = this.rng.range(4, 12);
+    /**
+     * SECONDS OF NOT ACQUIRING ANYTHING. @see `AiSystem`'s `weapon:flash`
+     * listener and the blind test at the top of `pickVisibleHostile`. It is a
+     * plain countdown on the man rather than a state, because being flashed
+     * does not change what he is trying to do — only what he can see while he
+     * tries.
+     */
+    this.blindT = 0;
 
     /* ---------------- navigation ---------------- */
     this.path = [];
@@ -992,6 +1106,8 @@ export class Agent {
      */
     this.post = null;
     this.postPhase = 0;
+    /** Seconds of "nothing to shoot at" left in the hold. @see `POST_DRY`. */
+    this.postDry = POST_DRY;
     this.postWp = 0;
     this.postTimer = 0;
     this._postCool = 0;
@@ -1092,6 +1208,9 @@ export class Agent {
     this.fireCooldown -= dt;
     this.burstCooldown -= dt;
     this.grenadeCooldown -= dt;
+    this.flashCooldown -= dt;
+    this.smokeCooldown -= dt;
+    if (this.blindT > 0) this.blindT -= dt;
     this.peekTimer -= dt;
     this.repathTimer -= dt;
     this._detourTimer -= dt;
@@ -1272,6 +1391,25 @@ export class Agent {
     // it is a crate that gave him nothing for the length of most lives.
     this.grenadeCooldown = Math.min(this.grenadeCooldown, this.rng.range(2, 6));
     return true;
+  }
+
+  /**
+   * BANGED. @see `AiSystem`'s `weapon:flash` listener.
+   *
+   * `blindT` stops him ACQUIRING (`pickVisibleHostile` returns null) and the
+   * suppression shove is what makes it read from outside: the cone opens, the
+   * flinch fires, and a man over the threshold ducks. `alertness` at 1 because
+   * a flashed man knows exactly one thing for certain — somebody is coming.
+   * Additive so two bangs are worse than one, and clamped so a stack of them
+   * cannot take a man out of the round.
+   */
+  blind(seconds) {
+    if (!this.alive || !(seconds > 0)) return;
+    this.blindT = Math.min(6, this.blindT + seconds);
+    this.suppression = Math.min(1.6, this.suppression + 0.5 + seconds * 0.12);
+    this.alertness = 1;
+    this.aimSettle = 0;
+    if (this.state === STATE.IDLE || this.state === STATE.PATROL) this._setState(STATE.ALERT);
   }
 
   /** Rounds cracking past raise suppression, which drives the flinch + duck. */
@@ -1492,7 +1630,10 @@ export class Agent {
       }
       if (up && this.position.y > p.top - 1.2) {
         this.postPhase = 2;
-        this.postTimer = this.rng.range(35, 75) + this.traits.patience * 40;
+        this.postTimer = POST_HOLD + this.rng.range(0, 10) + this.traits.patience * 14;
+        // @see POST_DRY. Armed generously on arrival: he has just climbed a
+        // flight and is entitled to look before the clock starts biting.
+        this.postDry = POST_DRY;
         if (this.ai.postStats) this.ai.postStats.reachedTop++;
         this._hasHoldSpot = true;
         this._postWalk = 0;
@@ -1566,7 +1707,22 @@ export class Agent {
      * being worth a man": he is out of ammunition, he is hurt, or somebody has
      * this angle ranged and he is being shot at through it.
      */
-    if (this.dry || this.health < 40 || this.suppression > 1.35) {
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * AND THE FOURTH: NOTHING TO SHOOT AT. @see `POST_DRY`.
+     * ══════════════════════════════════════════════════════════════════════
+     * 「AIが屋内にいるとき、外にも出ないしその場で突っ立ったままです」 — this is the
+     * line that ends that. A man who has had a target, or whose squad has
+     * called one in, inside the last `POST_DRY` seconds is fighting out of the
+     * window and keeps it; a man looking at an empty street is not holding an
+     * angle, he is standing still indoors, and he goes back to the capture
+     * points where the game is. `lastKnownAge` is the same freshness signal
+     * `_combat` breaks off on, so a squad call-out is enough to keep him.
+     */
+    if (this.hasTarget || this.lastKnownAge < 4) this.postDry = POST_DRY;
+    else this.postDry -= dt;
+
+    if (this.dry || this.health < 40 || this.suppression > 1.35 || this.postDry <= 0) {
       this.postPhase = 3;
       this.postWp = p.route.length - 1;
       this.postTimer = POST_PHASE_T;
@@ -2703,9 +2859,49 @@ export class Agent {
        * at 2.6-3.8 m/s instead of 4.3, and `_fireRound` opens his cone by his
        * own speed. The armour clause is the tank agent's and is not changed.
        */
-      const shootMoving = tr.exposure > 0.28 && this.targetVisible && this.hasTarget
+      /**
+       * ══════════════════════════════════════════════════════════════════════
+       * MEASURED AGAIN, AND THIS IS THE CEILING — 「今の３倍は撃ってくれないと」
+       * ══════════════════════════════════════════════════════════════════════
+       * `_firegate.mjs`, seed 7, 4552 contact samples: of ALL the actor-time in
+       * which a man HAS A TARGET, **46.8 %** ended on this branch with the
+       * trigger up — a man with a live contact, walking between two walls,
+       * weapon down. Firing was 7.1 %. The burst length is not the problem and
+       * has not been since it was fixed (median pull 8, magazines emptied); the
+       * problem is that half of every engagement on this map is spent WALKING.
+       *
+       * Two terms were doing it and both are relaxed here:
+       *
+       *   `exposure > 0.28` LOOKED like three men in four and is not. The
+       *     archetype table is 0.84 rusher / 0.60 flanker / 0.54 hunter / 0.36
+       *     support / 0.24 anchor / 0.14 marksman / 0.10 sniper, and the mix is
+       *     weighted to the bottom half — so the men it excluded are most of
+       *     the roster. It is gone for everybody except the BOLT GUN, which is
+       *     a genuine mechanical exception: a man cycling an action at 0.9
+       *     rounds a second while jogging is not shooting, he is dropping his
+       *     rifle. 「AIMは悪くてもいい」 is the explicit permission for the rest.
+       *
+       *   `targetVisible` was the other half, and `visibleShare` says why: only
+       *     42.5 % of contact time has a clear line. A man who saw somebody one
+       *     second ago and is now walking past a wall does not lower his weapon
+       *     in real life — he keeps rounds on the doorway. So advancing fire is
+       *     allowed on a FRESH last-known too, at the same trigger-discipline
+       *     roll the peeking suppression branch uses, and it is bounded by the
+       *     same thing: `_fireRound` opens his cone with his own speed AND with
+       *     every round of the pull, so this is noise and suppression rather
+       *     than a free kill. It is also, precisely, 「銃声が鳴り響きまくる」.
+       *
+       * Everything that made it fair is untouched: he still moves at 2.6-3.8
+       * m/s instead of 4.3 while he does it, and the armour clause is the tank
+       * agent's and is not changed.
+       */
+      const canFireMoving = !this.sniper
         && dist < this.weaponRange
         && (!armour || this.armourWorth === 1 || this.armourWorth === 3);
+      let shootMoving = canFireMoving && this.targetVisible && this.hasTarget;
+      if (!shootMoving && canFireMoving && !armour && this.hasTarget && this.lastKnownAge < 3) {
+        shootMoving = this.rng.float() < 0.4 + (1 - tr.trigger) * 0.55;
+      }
       this.desiredSpeed = shootMoving ? 2.6 + tr.aggression * 1.2 : 4.3;
       this.crouch = false;
       this.wantFire = shootMoving;
@@ -2843,6 +3039,108 @@ export class Agent {
     ) {
       this._throwGrenade(target);
     }
+
+    // …and the other two things in the pouch, each with its own question.
+    this._maybeFlash(target, dist, armour, sq);
+    this._maybeSmoke(target, dist, armour, sq);
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE FLASH — 「閃光弾」. THE QUESTION IS "AM I ABOUT TO GO IN THERE?"
+   * ══════════════════════════════════════════════════════════════════════════
+   * A bot that throws flashbangs at random is worse than a bot with none: he
+   * spends a finite stock on nothing, he blinds his own squad (the listener has
+   * no team test, and it must not have one — 「空爆は敵味方関係なく」 is the same
+   * argument), and the player learns to ignore the bang. So this asks for a
+   * REASON, and the reason is the one a real assault has: I am going through a
+   * door or onto a held point, the man on the other side is expecting me, and I
+   * would like him not to be looking at it when I arrive.
+   *
+   * All four conditions are about that and none of them is a coin flip:
+   *
+   *   HE MEANS TO CLOSE. `aggression` over 0.5 and a `push`/`defuse`/`retake`
+   *     verb, or a man already inside his own objective's circle who is being
+   *     contested for it. A marksman holding a lane 40 m back has nothing to
+   *     assault and never throws one.
+   *   IT IS ROOM DISTANCE. `FLASH_LO`..`FLASH_HI` — under six metres it goes
+   *     off in his own face, over twenty-two it is a light he is watching from
+   *     across a square.
+   *   THE CONTACT IS REAL AND FRESH. Same 1.5 s the frag uses.
+   *   THE SQUAD CAN AFFORD IT. `Squad.flashCooldown`, which is NOT the frag's
+   *     ration — @see the note over it in `squad.js`.
+   *
+   * He throws it AT the contact and then pushes: `_setState(FLANK)` would be a
+   * lie (he is not going wide), so what he does is drop his cover and let the
+   * ordinary `toward` bias walk him in, with the difference that the man he is
+   * walking at cannot see him for the next few seconds.
+   */
+  _maybeFlash(target, dist, armour, sq) {
+    if (!this.hasFlash || armour || this.flashCooldown > 0) return;
+    if (dist < FLASH_LO || dist > FLASH_HI) return;
+    if (this.lastKnownAge > 1.5) return;
+    const tr = this.traits;
+    if (tr.aggression < 0.5) return;
+    const mode = this.objective?.mode;
+    const assaulting = mode === 'push' || mode === 'defuse' || mode === 'retake'
+      || mode === 'plant';
+    // A man being contested for ground he is standing on is assaulting too — he
+    // is just assaulting in the other direction.
+    const contested = this.objective?.site != null
+      && this.position.distanceTo(this.objective.position) < SITE_HOLD_R;
+    if (!assaulting && !contested) return;
+    if (sq && !sq.requestFlash()) return;
+    this.hasFlash = false;
+    this.flashCooldown = this.rng.range(18, 34);
+    this.ai.throwGrenade(this, this._v.copy(this.animator.muzzleWorld), target, 'flash');
+    // Going in behind it. Dropping cover is what makes the throw mean something:
+    // the `toward` bias in the block above then walks him at the contact.
+    this.cover = null;
+    this.ai.cover?.release(this.id);
+    this.repathTimer = 0;
+    this.ai.radio?.say(this, 'fragout', 'fragout', null, false);
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE SCREEN — 「スモーク」. THE QUESTION IS "AM I BEING SHOT AT ACROSS OPEN
+   * GROUND BY SOMETHING I CANNOT REACH?"
+   * ══════════════════════════════════════════════════════════════════════════
+   * The flash is for a door; this is for a street. Two situations produce it and
+   * they are the two the player named — crossing open ground, and breaking a
+   * sniper's line — and both reduce to the same measurement: the thing shooting
+   * at me is FAR, and I am either pinned by it or I have somewhere to be past
+   * it.
+   *
+   *   `SMOKE_MIN` is the range below which a can is the wrong answer: inside
+   *     twenty-two metres the answer is a flash and a rush, and smoke would only
+   *     hide the man who is winning.
+   *   SUPPRESSED OR EXPOSED. Either he is actually being hit (`suppression`
+   *     over the ducking threshold) or he has ground to cross — his objective is
+   *     further away than the fight is, so the fight is between him and it.
+   *
+   * WHERE IT GOES is the difference between a screen and a decoration. Not on
+   * the enemy — a cloud on a sniper who has already picked his spot moves with
+   * nothing — but ON THE LINE, `SMOKE_BIAS` of the way from this man to the
+   * threat, so the wall stands in the ground he has to walk over. `_smokeBlocks`
+   * then refuses every sightline through it in BOTH directions, which is the
+   * honest cost: he cannot see out of his own smoke either.
+   */
+  _maybeSmoke(target, dist, armour, sq) {
+    if (!this.hasSmoke || this.smokeCooldown > 0) return;
+    if (dist < SMOKE_MIN) return;
+    if (this.lastKnownAge > 2.5) return;
+    const pinned = this.suppression > 0.75;
+    const obj = this.objective?.position;
+    const crossing = obj != null && this.position.distanceTo(obj) > dist * 0.8;
+    if (!pinned && !crossing) return;
+    if (sq && !sq.requestScreen()) return;
+    this.hasSmoke = false;
+    this.smokeCooldown = this.rng.range(24, 44);
+    // On the line, not on the man. @see the note above.
+    this._v2.copy(this.position).lerp(target, SMOKE_BIAS);
+    this.ai.throwGrenade(this, this._v.copy(this.animator.muzzleWorld), this._v2, 'smoke');
+    this.ai.radio?.say(this, 'suppress', 'suppressing', null, false);
   }
 
   /* ================================================================== */
@@ -3601,7 +3899,26 @@ export class Agent {
     // including theirs. `match` flips this.
     if (this.ai.combatEnabled === false) this.wantFire = false;
 
-    if (!this.wantFire || this.animator.reloading || this.animator.vaulting) return;
+    if (this.animator.reloading || this.animator.vaulting) return;
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * A MAN RELOADS IN THE LULL, NOT AT THE NEXT TARGET
+     * ══════════════════════════════════════════════════════════════════════
+     * `!this.wantFire` used to return BEFORE the empty-magazine branch, so a
+     * man who ran his magazine dry and then lost his angle — ducked, walked,
+     * lost sight — stood there with an empty gun until the next time he wanted
+     * to shoot, and only THEN started a 2.0-5.6 s magazine change. Measured
+     * (`_firegate.mjs`, seed 7): **11.7 % of all contact time was a man with a
+     * live target and zero rounds in the gun**, on top of the 5.0 % actually
+     * playing the reload. It is the second largest gate after the walk, it is
+     * pure dead time, and it is the reason the volume of fire has a ceiling
+     * that turning the burst length up cannot lift.
+     *
+     * So the empty magazine is handled FIRST and unconditionally. Everything
+     * about the reload itself is unchanged — same animation, same duration,
+     * same draw on `reserve`, same radio call, same dry branch when there is
+     * nothing left to load. What changes is only WHEN it is allowed to start.
+     */
     if (this.ammo <= 0) {
       /**
        * THE MAGAZINE COMES OFF THE RESERVE. @see the constructor for the size
@@ -3632,6 +3949,9 @@ export class Agent {
       }
       return;
     }
+    // …and the trigger itself is still a decision. @see the block above for why
+    // this test moved down two branches rather than away.
+    if (!this.wantFire) return;
     if (this.burstLeft <= 0) {
       if (this.burstCooldown > 0) return;
       /**

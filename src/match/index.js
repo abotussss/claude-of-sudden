@@ -625,6 +625,13 @@ export class MatchSystem {
     this.drones.launchPoint = (team, out) => this._droneLaunchPoint(team, out);
     this.drones.onLock = (l) => this._droneLock(l);
     this.drones.onLaunch = (d) => this._droneLaunched(d);
+    /**
+     * WHICH SIDE THE CAMERA IS ON, so the airframe halo can be painted FROM THE
+     * PLAYER'S POINT OF VIEW rather than by team index — the same line
+     * `this.marks.playerTeam` gets above and for the same hard-won reason.
+     * @see the note on `HALO_FRIEND` in `src/match/drone.js`.
+     */
+    this.drones.playerTeam = this.playerTeam;
     if (patcher) for (const m of this.drones.materials) patcher.patch(m);
     if (typeof window !== 'undefined') window.__DRONES__ = this.drones;
 
@@ -652,6 +659,16 @@ export class MatchSystem {
      * only the fact that these two objects are on the map.
      */
     this.ai.vehicles = this.tank.tanks;
+    /**
+     * AND THE DRONES, FOR EXACTLY THE SAME REASON AND ON THE SAME TERMS.
+     * 「ドローンは捕捉されたらちゃんと撃つようにして」 — a suicide drone was scenery in
+     * precisely the way a tank was: not an `Agent`, therefore never in
+     * `hostilesOf`, therefore never anybody's target. The live pool is handed
+     * over once and each drone's own `alive` flag is the gate. `ai` owns who
+     * engages one and how badly (`AiSystem._droneBias`); `match` owns only the
+     * fact that these things are on the map.
+     */
+    this.ai.drones = this.drones.list;
     /**
      * THE ANNOUNCEMENT, and the reason it is wired here rather than inside the
      * three weapons.

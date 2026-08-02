@@ -170,6 +170,49 @@ const ARMOUR_SUPPRESS_BIAS = 1.35;
 const SITE_TARGET_BIAS = 0.55;
 const SITE_TARGET_R2 = 9 * 9;
 
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE DRONE, SCORED — 「捕捉されたらちゃんと撃つように 間に合わなくてもいい」
+ * ════════════════════════════════════════════════════════════════════════════
+ * The request has two halves and they are two different numbers.
+ *
+ *   THE MAN WHO HAS BEEN LOCKED must shoot at it, and "間に合わなくてもいい" is
+ *     the explicit permission to make that a losing fight: a drone dives at
+ *     17 m/s and the warhead functions whatever the man does. `0.14` is a bias
+ *     strong enough that the thing coming to kill him beats a rifleman standing
+ *     seven times closer, which is the intent — it is not a filter, so a man
+ *     with a muzzle in his face still fights the muzzle.
+ *   EVERYBODY NEAR AN UNLOCKED ONE ("捕捉される前に近くにいても撃つように") gets a
+ *     mild preference inside `DRONE_NEAR`, so a machine crossing a street draws
+ *     fire from the men under it without emptying the capture point.
+ *
+ * `DRONE_NEAR` is deliberately shorter than any weapon's range: a 0.31 m sphere
+ * at sixty metres is not a target, it is a distraction, and the men who should
+ * be shooting at it are the ones it is about to be on top of.
+ */
+const DRONE_LOCKED_BIAS = 0.14;
+const DRONE_NEAR_BIAS = 0.7;
+const DRONE_NEAR = 34;
+/**
+ * A drone is a small fast thing overhead and a man is entitled to notice it
+ * outside his cone: this is the `blind` radius `_sightTo` grants it, the same
+ * mechanism `ARMOUR_NOTICE` is. Much shorter than the tank's 40 m, because a
+ * quadcopter is not a 29-tonne hull.
+ */
+const DRONE_NOTICE = 18;
+
+/**
+ * SMOKE. @see `AiSystem._smokeBlocks`.
+ *
+ * `SMOKE_CORE` is the fraction of the can's drawn radius that actually refuses
+ * a sightline, and it is under 1 on purpose: `fx`'s cloud grows to the full
+ * radius over several seconds and is ragged at its edge for the whole of its
+ * life, so a hard sphere at the drawn radius would refuse shots through air the
+ * player can plainly see through. 0.78 is the part that is reliably opaque.
+ */
+const SMOKE_MAX = 6;
+const SMOKE_CORE = 0.78;
+
 export class AiSystem {
   static id = 'ai';
   static deps = ['physics', 'world'];
@@ -312,6 +355,53 @@ export class AiSystem {
      * Nothing here is allocated per frame and nothing here reaches into `match`.
      */
     this.vehicles = null;
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * …AND THE DRONES, WHICH WERE SCENERY FOR EXACTLY THE SAME REASON
+     * ──────────────────────────────────────────────────────────────────────
+     * 「ドローンは捕捉されたらちゃんと撃つようにして 間に合わなくてもいい 捕捉される前に
+     *  近くにいても撃つようにして」
+     *
+     * `src/match/drone.js` puts a 0.31 m sphere on `LAYER.SHOOT_ONLY` and a
+     * round already arrives as a canonical `damage:dealt` with the shooter
+     * attached, so the ONLY missing piece was the same one the tank had: a
+     * drone is not an `Agent`, `Agent.target` only ever comes out of
+     * `hostilesOf`, so nobody could ever choose to shoot one.
+     *
+     * `match` hands the LIVE POOL over once (`ai.drones = match.drones.list`)
+     * and `alive` does the rest, exactly as it does for a parked hull. The
+     * contract is even smaller than the vehicle one, because a drone is not
+     * armour and needs none of the worth policy:
+     *
+     *     { position:Vector3, alive:boolean, team:0|1, target:actor|null }
+     *
+     * `target` is the man it has LOCKED, and it is the only field this file
+     * interprets: @see `DRONE_LOCKED_BIAS`. Everything else about a drone —
+     * where to aim at a body with no head, how a man engages it — falls out of
+     * code that already exists (`actorChest`'s no-`eyeHeight` branch, and the
+     * ordinary man-versus-man combat loop, because `isVehicle` is not set).
+     *
+     * The identity test is a `Set` built ONCE when the array is handed over
+     * rather than a flag written onto `match`'s objects: `ai` may read another
+     * subsystem's published record and may not scribble on it.
+     */
+    this._drones = null;
+    this._droneSet = null;
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * LIVE SMOKE, AS FIVE NUMBERS EACH: x, y, z, radius, expiry.
+     * ──────────────────────────────────────────────────────────────────────
+     * A flat `Float64Array` rather than objects because `_smokeBlocks` runs
+     * inside `_sightTo`, which is the hottest thing in this file — two rays per
+     * actor per selection across forty men — and because a fixed array is the
+     * only shape that cannot allocate. `SMOKE_MAX` is a ration, not a budget:
+     * `Squad.screenCooldown` is eight seconds a side and a can lasts fourteen,
+     * so four live clouds is already more than both sides can pay for, and the
+     * oldest slot is recycled rather than the newest refused.
+     */
+    this._smoke = new Float64Array(SMOKE_MAX * 5);
+    this._smokeN = 0;
+    this._smokeNext = 0;
     /** Suppression against armour — @see clause 3 of `armourWorth`. Flipped
      *  only by `_tankfight.mjs`, to report the engagement rate both ways. */
     this.armourSuppress = true;
@@ -355,6 +445,14 @@ export class AiSystem {
     this._grenades = [];
     this._grenadeGeo = null;
     this._grenadeMat = null;
+    /**
+     * The two non-lethal payloads, preallocated and REUSED — the same contract
+     * `match`'s air events publish under. @see `_detonateThrown`.
+     */
+    this._throwEvent = { position: new THREE.Vector3(), radius: 0, duration: 0 };
+    this._blastEvent = {
+      position: new THREE.Vector3(), radius: 0, damage: 0, impulse: 0,
+    };
 
     /* ---- frame budgets and LOD state (see _updateRelevance / requestPath) ---- */
     this._pathBudget = 0;
@@ -675,6 +773,49 @@ export class AiSystem {
       }
     });
 
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * THE FLASH BLINDS BOTS TOO — 「閃光弾」
+     * ══════════════════════════════════════════════════════════════════════
+     * A flashbang only the human suffers is the opposite of a flashbang. This
+     * is listened for rather than plumbed, and that is what makes it work for
+     * BOTH implementations at once: `src/weapons/grenades.js` publishes
+     * `weapon:flash` for the player's, and `AiSystem._detonateThrown` publishes
+     * the identical payload for a bot's, so one listener covers every bang on
+     * the map and neither subsystem has to know the other exists.
+     *
+     * WHAT BEING BANGED DOES TO A SOLDIER, in the fields this engine already
+     * has: `blindT` seconds of not acquiring anything (`pickVisibleHostile`
+     * returns null), a shove on `suppression` so he ducks and his cone opens,
+     * and `alertness` at 1 because a man who has just been flashed knows
+     * perfectly well that somebody is coming. The strength falls off with
+     * distance and is gated on the same `MASK.EXPLOSION` line of sight the
+     * player's own is, so a wall is a wall for everybody.
+     */
+    on('weapon:flash', (e) => {
+      if (!e || !e.position) return;
+      const radius = e.radius ?? 16;
+      const dur = e.duration ?? 4.2;
+      for (const a of this.agents) {
+        if (!a.alive) continue;
+        const d = a.position.distanceTo(e.position);
+        if (d > radius) continue;
+        if (this.phys && !this.phys.lineOfSight(e.position, a.eye, this.phys.MASK.EXPLOSION)) continue;
+        const see = 1 - d / radius;
+        a.blind(dur * (0.35 + see * 0.65));
+      }
+    });
+
+    /**
+     * AND THE SCREEN IS A WALL TO BOTS TOO. @see `_smokeBlocks` for the test
+     * and `this._smoke` for the ring. Same argument as the flash: one listener,
+     * both grenade implementations, no import either way.
+     */
+    on('weapon:smoke', (e) => {
+      if (!e || !e.position) return;
+      this._addSmoke(e.position, e.radius ?? 6.5, e.duration ?? 14);
+    });
+
     on('player:footstep', (e) => {
       if (!e || !e.position) return;
       const loud = e.running ? 24 : 11;
@@ -856,7 +997,40 @@ export class AiSystem {
       return out.set(p.x, p.y + 1.35, p.z);
     }
     const p = actor.position;
+    /**
+     * AND A DRONE HAS NEITHER. It is a 0.31 m sphere whose `position` IS its
+     * centre of mass, so the aim point is the position — and the test is
+     * "does this actor have a body at all" rather than a type check, because
+     * `eyeHeight` is what every branch above is really asking for. Without
+     * this the expression evaluates to NaN, `_sightTo` compares NaN and
+     * returns -1, and a drone is invisible in a way that looks like a policy.
+     */
+    if (actor.eyeHeight === undefined) return out.set(p.x, p.y, p.z);
     return out.set(p.x, p.y + actor.eyeHeight - 0.22, p.z);
+  }
+
+  /**
+   * THE DRONE POOL, handed over once by `match`. @see `this._drones`.
+   *
+   * The `Set` is built HERE and only when the array identity changes, so the
+   * per-frame cost of "is this actor a drone" is one hash lookup and the
+   * per-match cost is one pass over a fixed pool. `match.drones.list` is
+   * allocated at boot and never reallocated, so in practice this runs once.
+   */
+  set drones(list) {
+    if (this._drones === list) return;
+    this._drones = list ?? null;
+    if (!list) { this._droneSet = null; return; }
+    this._droneSet = new Set(list);
+  }
+
+  get drones() {
+    return this._drones;
+  }
+
+  /** Is this actor one of `match`'s suicide drones? */
+  isDrone(actor) {
+    return this._droneSet !== null && this._droneSet.has(actor);
   }
 
   /** Live actors hostile to `team`. The list is rebuilt at most once a frame. */
@@ -892,6 +1066,21 @@ export class AiSystem {
           if (!v || v.alive !== true || !this.targetable(v)) continue;
           const t = v.team === 1 ? 1 : 0;
           this._hostiles[1 - t].push(v);
+        }
+      }
+      /**
+       * …AND THE DRONES, on exactly the same terms again. `alive` is the whole
+       * gate: `Drones._launch` sets it as the machine leaves its base and
+       * `_retire`/`_detonate` clear it, so a pool slot that is not flying is in
+       * nobody's list. @see `this._drones`.
+       */
+      const dr = this._drones;
+      if (dr) {
+        for (let i = 0; i < dr.length; i++) {
+          const d = dr[i];
+          if (!d || d.alive !== true || !this.targetable(d)) continue;
+          const t = d.team === 1 ? 1 : 0;
+          this._hostiles[1 - t].push(d);
         }
       }
     }
@@ -1004,6 +1193,17 @@ export class AiSystem {
    * tenth of a second and costs ~40 rays a frame instead of ~200.
    */
   pickVisibleHostile(agent) {
+    /**
+     * A BANGED MAN SEES NOTHING. @see the `weapon:flash` listener. This is the
+     * whole mechanical effect of a flashbang on a bot and it is deliberately
+     * the same one it has on the player: he does not stop existing, he does not
+     * stop shooting at what he already believed, he simply stops ACQUIRING —
+     * and `Agent` keeps walking to `lastKnown` with `armourWorth` cleared.
+     */
+    if (agent.blindT > 0) {
+      agent.armourWorth = 0;
+      return null;
+    }
     const list = this.hostilesOf(agent.team);
     const n = list.length;
     if (!n) return null;
@@ -1061,7 +1261,7 @@ export class AiSystem {
         best = cur;
         bestScore = cur.isVehicle === true
           ? d * (curWorth === 3 ? ARMOUR_SUPPRESS_BIAS : ARMOUR_BIAS)
-          : d * this._siteBias(cur, site);
+          : d * this._siteBias(cur, site) * this._droneBias(agent, cur, d);
       }
     }
     let checks = 0;
@@ -1077,7 +1277,7 @@ export class AiSystem {
       if (d < 0) continue;
       const score = t.isVehicle === true
         ? d * (worth === 3 ? ARMOUR_SUPPRESS_BIAS : ARMOUR_BIAS)
-        : d * this._siteBias(t, site);
+        : d * this._siteBias(t, site) * this._droneBias(agent, t, d);
       if (score < bestScore) {
         best = t;
         bestScore = score;
@@ -1108,6 +1308,22 @@ export class AiSystem {
     return dx * dx + dz * dz <= SITE_TARGET_R2 ? SITE_TARGET_BIAS : 1;
   }
 
+  /**
+   * HOW BADLY THIS MAN WANTS TO SHOOT THIS DRONE. 1 for everything that is not
+   * one, so no other target's score moves. @see `DRONE_LOCKED_BIAS`.
+   *
+   * The elite squad is the one exception in the table and it is the player's
+   * own sentence: 「AI最強部隊は戦車は避ける、ドローンは撃ち落とすこと」. They take a
+   * drone at the locked man's bias whether it is hunting them or not, which is
+   * what "shoot it down" means as a standing order rather than as self defence.
+   */
+  _droneBias(agent, actor, d) {
+    if (this._droneSet === null || !this._droneSet.has(actor)) return 1;
+    if (actor.target === agent) return DRONE_LOCKED_BIAS;
+    if (agent.elite === true) return DRONE_LOCKED_BIAS;
+    return d < DRONE_NEAR ? DRONE_NEAR_BIAS : 1;
+  }
+
   /** Distance to `target` if `agent` can see it, else -1. */
   _sightTo(agent, target, eye, fx, fz, cone) {
     const p = this.actorChest(target, this._v3);
@@ -1119,10 +1335,89 @@ export class AiSystem {
     if (dist > agent.viewRange || dist < 1e-4) return -1;
     const inv = 1 / dist;
     // @see ARMOUR_NOTICE — a tank is not something you fail to notice at 4.6 m.
-    const blind = target.isVehicle === true ? ARMOUR_NOTICE : 4.5;
+    // @see DRONE_NOTICE — nor is a rotor coming down the street at you.
+    const blind = target.isVehicle === true ? ARMOUR_NOTICE
+      : this.isDrone(target) ? DRONE_NOTICE : 4.5;
     if ((dx * inv) * fx + (dz * inv) * fz <= cone && dist > blind) return -1;
     if (this.phys && !this.phys.lineOfSight(eye, p, this.phys.MASK.SIGHT)) return -1;
+    /**
+     * AND THE SMOKE. @see `_smokeBlocks` — a screen only the player can hide
+     * behind is a decoration, and this is the line that makes it a wall.
+     */
+    if (this._smokeN > 0 && this._smokeBlocks(eye, p)) return -1;
     return dist;
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * SMOKE ACTUALLY BLOCKS AI SIGHT
+   * ══════════════════════════════════════════════════════════════════════════
+   * `fx` draws the cloud and `physics` knows nothing about it, so before this a
+   * smoke can — the player's or a bot's — changed exactly one thing on the map:
+   * what the player could see. A screen that only works one way is worse than
+   * no screen, because it is a handicap dressed as an option.
+   *
+   * The volume is a SPHERE and the test is the classic segment/sphere one, with
+   * a deliberate softening: sight is refused when the ray passes within
+   * `SMOKE_CORE` of the centre AND the nearest approach lies between the two
+   * ends, so grazing the edge of a cloud is still a shot and standing in the
+   * middle of one is not. A man INSIDE the cloud is blind out of it and
+   * everybody outside is blind into it, which is the honest reading — and it is
+   * symmetric, so a bot cannot use one as a firing position either.
+   *
+   * At most `SMOKE_MAX` are ever live; the loop is over a fixed preallocated
+   * array of plain numbers, runs only when one is burning, and allocates
+   * nothing. @see `_onSmoke` for where they come from — BOTH grenade
+   * implementations, because both publish `weapon:smoke`.
+   */
+  /**
+   * A can has gone off. Takes the FIRST expired slot, then the oldest, so a
+   * seventh cloud never refuses to exist and never grows the array.
+   */
+  _addSmoke(position, radius, duration) {
+    const S = this._smoke;
+    const now = this.ctx.time.elapsed;
+    let slot = -1;
+    for (let i = 0; i < this._smokeN; i++) {
+      if (S[i * 5 + 4] <= now) { slot = i; break; }
+    }
+    if (slot < 0) {
+      if (this._smokeN < SMOKE_MAX) slot = this._smokeN++;
+      else { slot = this._smokeNext; this._smokeNext = (this._smokeNext + 1) % SMOKE_MAX; }
+    }
+    const o = slot * 5;
+    S[o] = position.x;
+    // Chest height of the column rather than the base: the cloud rises, and a
+    // sphere centred on the ground screens a man's knees.
+    S[o + 1] = position.y + radius * 0.45;
+    S[o + 2] = position.z;
+    S[o + 3] = radius * SMOKE_CORE;
+    S[o + 4] = now + duration;
+  }
+
+  /** Every cloud gone — a round reset, and every path that clears the board. */
+  clearSmoke() {
+    this._smokeN = 0;
+    this._smokeNext = 0;
+  }
+
+  _smokeBlocks(a, b) {
+    const S = this._smoke;
+    const now = this.ctx.time.elapsed;
+    const abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z;
+    const len2 = abx * abx + aby * aby + abz * abz;
+    if (len2 < 1e-6) return false;
+    for (let i = 0; i < this._smokeN; i++) {
+      const o = i * 5;
+      if (S[o + 4] <= now) continue;
+      const cx = S[o] - a.x, cy = S[o + 1] - a.y, cz = S[o + 2] - a.z;
+      let t = (cx * abx + cy * aby + cz * abz) / len2;
+      if (t < 0) t = 0; else if (t > 1) t = 1;
+      const px = cx - abx * t, py = cy - aby * t, pz = cz - abz * t;
+      const r = S[o + 3];
+      if (px * px + py * py + pz * pz < r * r) return true;
+    }
+    return false;
   }
 
   /** Wipe the board — every actor, every squad, every ragdoll. */
@@ -1141,6 +1436,8 @@ export class AiSystem {
     this._hostileFrame = -1e9;
     this._hostiles[0].length = 0;
     this._hostiles[1].length = 0;
+    // A cloud from the last round is a wall in the next one.
+    this.clearSmoke();
   }
 
   /**
@@ -1823,6 +2120,79 @@ export class AiSystem {
     this.ctx.events.emit('weapon:reload', { weapon: 'ai_rifle', phase: 'start', actor: agent });
   }
 
+  /**
+   * A BOT'S FLASH OR SMOKE HAS GONE OFF. @see `throwGrenade`.
+   *
+   * The payloads are BYTE-FOR-BYTE the ones `src/weapons/grenades.js` publishes
+   * for the player's own — same event names, same three fields, same numbers
+   * off `weapons/defs.js`'s defaults — which is what makes one bot's bang and
+   * one player's bang the same thing to `fx`, to `ai`'s own listeners and to
+   * anything added later. The flash also emits the canonical zero-damage
+   * `explosion` so the burst is drawn and the blast voice plays, exactly as the
+   * player's does; a smoke deliberately emits none, because a can that fires
+   * the blast voice sounds like a frag that did nothing.
+   *
+   * The one thing this does NOT do is reach into `fx.viewFlash` for the player:
+   * `weapons` owns the player's eye and does that from its own listener path.
+   * A bot's flash still reaches the player through `_flashPlayer` below, which
+   * is the same distance-and-line-of-sight test, because a flashbang the human
+   * is standing next to has to blind the human.
+   */
+  _detonateThrown(kind, p) {
+    const ev = this._throwEvent;
+    ev.position.set(p.x, p.y + 0.14, p.z);
+    if (kind === 'smoke') {
+      ev.radius = 6.5;
+      ev.duration = 14;
+      const fx = this.ctx.peek('fx');
+      fx?.addSmokeSource?.(ev.position, {
+        duration: ev.duration,
+        rate: 26,
+        radius: ev.radius * 0.22,
+        rise: 0.85,
+        dark: 0.04,
+        life: 7.5,
+        growth: ev.radius * 0.9,
+        ember: 0,
+        haze: 0.85,
+      });
+      this.ctx.peek('audio')?.play?.('impact', ev.position, { surface: 'metal', energy: 1, level: 0.9 });
+      this.ctx.events.emit('weapon:smoke', ev);
+      return;
+    }
+    const b = this._blastEvent;
+    b.position.copy(ev.position);
+    b.radius = 4.5;
+    b.damage = 0;
+    b.impulse = 60;
+    this.ctx.events.emit('explosion', b);
+    ev.radius = 16;
+    ev.duration = 4.2;
+    this.ctx.events.emit('weapon:flash', ev);
+    this._flashPlayer(ev.position, ev.radius, ev.duration);
+  }
+
+  /**
+   * A BOT'S FLASH, IN THE HUMAN'S FACE. The same three effects `weapons`
+   * applies for his own — the light, the trauma and the suppression — scaled by
+   * how much of the bang he could actually SEE, and gated on the same
+   * `MASK.EXPLOSION` line of sight that gates blast damage, so a wall is a wall.
+   */
+  _flashPlayer(position, radius, dur) {
+    const player = this.ctx.peek('player');
+    if (!player || player.dead === true) return;
+    const eye = this.ctx.camera?.position;
+    if (!eye) return;
+    const d = position.distanceTo(eye);
+    let see = d < radius ? 1 - d / radius : 0;
+    if (see > 0 && this.phys?.lineOfSight
+      && !this.phys.lineOfSight(position, eye, this.phys.MASK.EXPLOSION)) see = 0;
+    if (see <= 0) return;
+    this.ctx.peek('fx')?.viewFlash?.(eye.x, eye.y, eye.z - 0.35, 1, 0.98, 0.92, 0.4 + see * 1.8);
+    player.addTrauma?.(Math.min(0.85, 0.25 + see * 0.7));
+    player.addSuppression?.(Math.min(1, 0.4 + see * 0.9));
+  }
+
   /** Grenade geometry + material. Built at prewarm, not on the first throw. */
   _ensureGrenade() {
     if (this._grenadeGeo) return;
@@ -1834,7 +2204,27 @@ export class AiSystem {
     });
   }
 
-  throwGrenade(agent, from, target) {
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * A BOT'S THROW — and it is now three things rather than one
+   * ══════════════════════════════════════════════════════════════════════════
+   * 「AIにも閃光弾やスモークを使わせて」
+   *
+   * This is deliberately still self-contained — its own mesh, its own body, its
+   * own fuse — and does NOT reach into `src/weapons/grenades.js`, because that
+   * file's pool is the PLAYER's viewmodel state machine (a cook, a release
+   * beat, a proxy per throw) and forty bots do not have viewmodels. What is
+   * SHARED is the only thing that has to be: the two events the player's
+   * grenades publish, `weapon:flash` and `weapon:smoke`. `fx` draws the cloud
+   * off the same call the player's can makes, `ai`'s own listeners blind bots
+   * and screen sightlines off the same payload, and neither implementation
+   * knows the other exists. One map, one set of rules, two throwers.
+   *
+   * `kind` is `'frag'` (the default and everything that came before),
+   * `'flash'` or `'smoke'`. The ballistics, the animation and the radio are
+   * identical for all three — physically it is the same act.
+   */
+  throwGrenade(agent, from, target, kind = 'frag') {
     const phys = this.phys;
     if (!phys) return;
     this._ensureGrenade();
@@ -1859,7 +2249,11 @@ export class AiSystem {
       object3D: mesh,
       surfaceType: 'metal',
     });
-    this._grenades.push({ body, mesh, fuse: 2.35, agent });
+    // A smoke can is lit rather than fuzed and takes a beat longer to bloom;
+    // a flash is thrown to go off as it lands, which is what makes it useful
+    // for a door. The frag's 2.35 s is untouched.
+    const fuse = kind === 'smoke' ? 2.8 : kind === 'flash' ? 1.9 : 2.35;
+    this._grenades.push({ body, mesh, fuse, agent, kind });
     agent.animator.fire(0.35);
 
     /**
@@ -1873,6 +2267,10 @@ export class AiSystem {
      * grenade he cannot see is a man with x-ray hearing, and the whole point of
      * the perception model in this file is that it is imperfect.
      */
+    // Only a frag is worth two transmissions. "GRENADE" is the highest priority
+    // message in the system because it is the only one with a fuse on it, and a
+    // smoke can does not have one; a flash announces itself.
+    if (kind !== 'frag') return;
     this.radio.say(agent, 'fragout', 'fragout', null, false);
     let warner = null;
     let bestD = 14 * 14;
@@ -1894,6 +2292,13 @@ export class AiSystem {
       g.fuse -= dt;
       if (g.fuse > 0) continue;
       const p = g.body?.position ?? g.mesh.position;
+      if (g.kind === 'flash' || g.kind === 'smoke') {
+        this._detonateThrown(g.kind, p);
+        this.phys?.removeRigidBody(g.body);
+        this.root.remove(g.mesh);
+        this._grenades.splice(i, 1);
+        continue;
+      }
       this.ctx.events.emit('explosion', {
         position: new THREE.Vector3(p.x, p.y, p.z),
         radius: 6.5,
