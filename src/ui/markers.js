@@ -122,6 +122,31 @@ function nestGlyph(parent) {
   svg('circle', { cx: 8, cy: 9.2, r: 1.8, fill: 'currentColor' }, s);
   return s;
 }
+/**
+ * THE FIFTH KIND. 「医療ポイントはありますか？どういうUIになってる？」 — they exist,
+ * and the answer to "what does the UI look like" was: an ammunition crate.
+ * `match._publishCaches` publishes `kind: 'medic'` with the label MED KIT, and
+ * `_cacheGlyph` was a four-entry table whose miss case is `?? 1` — the supply
+ * crate. So a dressing station drew the same glyph as the ammo dump twelve
+ * metres behind it and the only thing separating them was four characters of
+ * 9 px text. A player scanning for health does not read labels, he reads
+ * shapes, and there was no shape to read.
+ *
+ * A CROSS, and deliberately the ONE glyph in this file that is not
+ * `currentColor` throughout: white arms on a red field is the single most
+ * over-determined symbol in the visual language of any game, and it has to
+ * survive being 17 px wide with a rifle in front of it. The field carries the
+ * red so the mark still reads when the marker itself is dimmed on cooldown —
+ * `.ow-cache.cold` greys `currentColor`, and a grey cross is a cross, whereas a
+ * grey ammo crate is nothing.
+ */
+function medicGlyph(parent) {
+  const s = svg('svg', { viewBox: '0 0 16 16' }, parent);
+  svg('rect', { x: 1.4, y: 1.4, width: 13.2, height: 13.2, rx: 1.6,
+    fill: '#e02b1c', stroke: 'rgba(6,20,28,.75)', 'stroke-width': 1 }, s);
+  svg('path', { d: 'M6.5 3.4h3v3.1h3.1v3h-3.1v3.1h-3V9.5H3.4v-3h3.1z', fill: '#ffffff' }, s);
+  return s;
+}
 
 /**
  * The impact reticle: a bracketed cross on the point that is about to stop
@@ -299,7 +324,7 @@ export class WorldMarkers {
       () => {
         const node = el('div', 'ow-cache');
         const gl = el('div', 'ow-cache-glyph', node);
-        const glyphs = [rackGlyph(gl), crateGlyph(gl), fragGlyph(gl), nestGlyph(gl)];
+        const glyphs = [rackGlyph(gl), crateGlyph(gl), fragGlyph(gl), nestGlyph(gl), medicGlyph(gl)];
         for (const g of glyphs) g.style.display = 'none';
         const chev = chevron(el('div', 'ow-cache-chev', node));
         const label = el('div', 'ow-cache-label', node, '');
@@ -312,8 +337,58 @@ export class WorldMarkers {
       },
       this.objRoot
     );
-    /** Kind -> index into `_glyphs`. */
-    this._cacheGlyph = { weapon: 0, ammo: 1, grenade: 2, vantage: 3 };
+    /**
+     * Kind -> index into `_glyphs`. `medic` is the fifth and it is the reason
+     * this table stopped being allowed to have a miss case that draws a crate:
+     * anything `match` invents from here on gets a glyph or gets a bug report.
+     */
+    this._cacheGlyph = { weapon: 0, ammo: 1, grenade: 2, vantage: 3, medic: 4 };
+
+    /* -------------------------------------------------------- armour ---
+     * THE HULL. 「戦車は相手チームの場合はハイライトしてわかりやすいように」
+     *
+     * SAME LANGUAGE AS THE INFANTRY BRACKET, ONE SIZE UP. The rule this file
+     * already committed to is that a hostile is marked by GEOMETRY — four
+     * corners the size of the thing, nothing inside them — and a tank is a
+     * hostile, so it gets corners. Heavier arms and a hard rule across the top
+     * of the box separate it from a man at a glance without inventing a second
+     * visual grammar: the player does not have to learn anything to read it.
+     *
+     * ONLY THE OTHER SIDE'S. He asked for the ENEMY tank to be picked out, and
+     * that is also the honest design: his own armour is a thing he walks behind,
+     * not a thing he has to solve, and bracketing both would make the mark mean
+     * "a tank" instead of "a threat".
+     *
+     * THE BAR IS THE POINT OF THE WHOLE MARK. A tank carries `RULES.tankHealth`
+     * = 2600 and a rifle does single figures to it: without a state of health on
+     * screen the player cannot tell "this is nearly dead, keep shooting" from
+     * "you are wasting a magazine, leave", which is the only decision he
+     * actually has in front of a hull.
+     *
+     * FOUR, because the map runs two sorties and a marker must survive a round
+     * reset with both still on the field.
+     */
+    this.vehPool = new Pool(
+      4,
+      () => {
+        const node = el('div', 'ow-veh');
+        for (const c of ['tl', 'tr', 'bl', 'br']) el('i', `ow-veh-c ${c}`, node);
+        const tag = el('div', 'ow-veh-tag', node);
+        const label = el('div', 'ow-veh-l', tag, 'TANK');
+        const track = el('div', 'ow-veh-track', tag);
+        const fill = el('i', null, track);
+        const dist = el('div', 'ow-veh-d', tag, '');
+        const chev = chevron(el('div', 'ow-veh-chev', node));
+        node._label = label;
+        node._track = track;
+        node._fill = fill;
+        node._dist = dist;
+        node._chev = chev.parentNode;
+        node._tag = tag;
+        return node;
+      },
+      this.objRoot
+    );
 
     this.dnPool = new Pool(
       16,
@@ -560,11 +635,21 @@ export class WorldMarkers {
         );
         setClass(node, 'reach', !!o.inReach && !!o.ready);
         setClass(node, 'cold', !o.ready);
+        /**
+         * A MED POST IS NOT A SUPPLY DUMP. The glyph carries the symbol; this
+         * carries the two other things that make a marker findable in a street
+         * full of them — the label goes white instead of supply-green, and it is
+         * exempted from the distance dim below, because the whole complaint is
+         * that these could not be found from where the player was standing.
+         */
+        const med = o.kind === 'medic';
+        setClass(node, 'med', med);
         // The glyph breathes only when it is a key away: motion is the last thing
         // left that pulls an eye that is looking somewhere else, and spending it
         // on the six crates you cannot reach is spending it on nothing.
         const s = o.inReach && o.ready ? 1 + 0.16 * beat : 1;
-        setStyle(node, 'opacity', (clamp01(1.25 - p.dist / 40) * (o.ready ? 1 : 0.62)).toFixed(3));
+        const far = med ? 1 : clamp01(1.25 - p.dist / 40);
+        setStyle(node, 'opacity', (far * (o.ready ? 1 : 0.62)).toFixed(3));
         setStyle(node._label, 'transform', `scale(${s.toFixed(3)})`);
       }
     }
@@ -574,6 +659,85 @@ export class WorldMarkers {
         setStyle(items[i].node, 'display', 'none');
       }
     }
+  }
+
+  /**
+   * A HOSTILE HULL, BRACKETED.
+   *
+   * `list` is `match`'s own preallocated view records — read, never retained:
+   * `{ position, hostile, name, health, maxHealth }`. Nothing is allocated here;
+   * the pool is built once in the constructor.
+   *
+   * @param dt      seconds, for the bracket's close-in
+   * @param list    match.setVehicles()' array, or null
+   * @param camera  the world camera
+   * @param fade    0..1 master opacity
+   */
+  updateVehicles(dt, list, camera, w, h, k, fade = 1) {
+    const items = this.vehPool.items;
+    const focal = (h * 0.5) / Math.tan(camera.fov * 0.5 * (Math.PI / 180));
+    /**
+     * 78 px, and it is the tag's height plus the top arm: the tag hangs ABOVE
+     * the box, so a hull clamped to the top edge of the screen put its label off
+     * the screen at anything under this. The bottom clamp is the same number for
+     * symmetry — a tank below you down a hill is the same problem upside down.
+     */
+    const margin = 78 * k;
+    let n = 0;
+    if (list && fade > 0.01) {
+      for (let i = 0; i < list.length && n < items.length; i++) {
+        const v = list[i];
+        // His own armour is cover, not a problem to solve. @see the pool's note.
+        if (!v?.position || !v.hostile) continue;
+        const p = project(v.position, camera, w, h, margin);
+        const it = items[n++];
+        if (!it.alive) { it.alive = true; it.t = 0; setStyle(it.node, 'display', ''); }
+        it.t = Math.min(1, it.t + dt / 0.18);
+        const node = it.node;
+
+        /**
+         * THE BOX IS THE HULL, not a fixed pixel size. 3.4 m of half-extent is
+         * the measured envelope of the model — 7 m long, 3.5 m tall, and it
+         * turns, so a single radius is the only honest answer to "how wide is
+         * it from here" without asking `match` for a yaw the mark does not
+         * otherwise need. The box is drawn WIDER THAN TALL because that is what
+         * a tank is, and because a square would read as a very close man.
+         */
+        const px = Math.max(1, (focal * 3.4) / Math.max(p.dist, 0.6));
+        // Bigger floor than the infantry bracket (26 px): at 180 m down a lane
+        // the hull is 14 px and the thing that has to be legible is that it is
+        // ARMOUR, which a 26 px square cannot say.
+        const bw = clamp(px * 1.06, 40 * k, 420 * k);
+        const bh = clamp(px * 0.62, 24 * k, 250 * k);
+        const grow = 1 + (1 - ease.outCubic(it.t)) * 0.4;
+        const gw = bw * grow;
+        const gh = bh * grow;
+        const edge = p.offscreen;
+        setStyle(node, 'width', `${gw.toFixed(1)}px`);
+        setStyle(node, 'height', `${gh.toFixed(1)}px`);
+        setStyle(node, 'transform',
+          `translate(${(p.x - gw * 0.5).toFixed(1)}px,${(p.y - gh * 0.5).toFixed(1)}px)`);
+        setClass(node, 'edge', edge);
+        setStyle(node._chev, 'display', edge ? '' : 'none');
+        if (edge) setStyle(node._chev, 'transform', `rotate(${p.angle.toFixed(1)}deg)`);
+        setText(node._label, v.name || 'TANK');
+        setText(node._dist, metres(p.dist));
+        const frac = clamp01((v.health ?? 1) / (v.maxHealth || 1));
+        setStyle(node._fill, 'transform', `scaleX(${frac.toFixed(4)})`);
+        // Under a third left is the only number on this mark that changes what
+        // the player does, so it is the only one that changes colour.
+        setClass(node, 'weak', frac < 0.34);
+        setStyle(node, 'opacity', (fade * (0.55 + 0.45 * it.t) * (edge ? 0.8 : 1)).toFixed(3));
+      }
+    }
+    for (let i = n; i < items.length; i++) {
+      if (items[i].alive) {
+        items[i].alive = false;
+        items[i].t = 0;
+        setStyle(items[i].node, 'display', 'none');
+      }
+    }
+    return n;
   }
 
   /** @param {number} fuse seconds until detonation */
@@ -725,6 +889,7 @@ export class WorldMarkers {
     this.dnPool.releaseAll();
     this.tgtPool.releaseAll();
     this.friendPool.releaseAll();
+    this.vehPool.releaseAll();
     for (const it of this.tgtPool.items) { it.node._key = ''; it.node._lock = 0; }
   }
 

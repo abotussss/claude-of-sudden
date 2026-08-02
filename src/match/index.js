@@ -4416,6 +4416,74 @@ export class MatchSystem {
     this.ui.setCaches(n ? view : null);
   }
 
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE HULLS ON THE FIELD, FOR THE HUD
+   * ══════════════════════════════════════════════════════════════════════════
+   * 「戦車は相手チームの場合はハイライトしてわかりやすいように」
+   *
+   * `ui` had no way to know a tank existed. `ai.getHudActors()` reports AGENTS,
+   * and a tank is deliberately not one (`isVehicle`, @see the note on the tank
+   * record) — so the world markers bracketed every rifleman on the street and
+   * nothing at all around the forty tonnes of steel behind them. That is the
+   * one contact on the map that cannot be handled by not noticing it.
+   *
+   * WHAT `ui` IS TOLD, and nothing more: where it is, whose it is FROM THE
+   * LOCAL PLAYER'S POINT OF VIEW (`hostile`, the same relative rule every other
+   * field on the HUD snapshot follows), whether it is out of its pocket, and how
+   * much of it is left. How the mark is drawn — its size, its shape, its colour
+   * — is `src/ui`'s decision and is made in `src/ui/markers.js`.
+   *
+   * NOT LINE-OF-SIGHT GATED, and that is the difference between this and the
+   * infantry brackets. A bracket on a man is a spotting report and decays three
+   * seconds after somebody loses him; a tank announces itself for two hundred
+   * metres with an engine and a gun, so pretending the player does not know
+   * where it is would be the fiction, not the other way round.
+   *
+   * Preallocated: the records and the array are built once and rewritten in
+   * place, and `ui` reads them every frame and never retains them.
+   */
+  _publishVehicles() {
+    if (!this.ui?.setVehicles) return;
+    const tanks = this.tank?.tanks;
+    if (!tanks || !tanks.length) {
+      if (this._vehicleView?.length) this._vehicleView.length = 0;
+      this.ui.setVehicles(null);
+      return;
+    }
+    let recs = this._vehicleRecords;
+    if (!recs) {
+      recs = this._vehicleRecords = [];
+      this._vehicleView = [];
+      for (let i = 0; i < tanks.length; i++) {
+        recs.push({
+          id: '',
+          name: '',
+          position: new THREE.Vector3(),
+          hostile: false,
+          health: 1,
+          maxHealth: RULES.tankHealth,
+        });
+      }
+    }
+    const view = this._vehicleView;
+    let n = 0;
+    for (let i = 0; i < tanks.length && n < recs.length; i++) {
+      const t = tanks[i];
+      if (!t.alive) continue;
+      const v = recs[n++];
+      v.id = t.id;
+      v.name = t.name || 'TANK';
+      v.position.copy(t.position);
+      v.hostile = t.team !== this.playerTeam;
+      v.health = t.health;
+      v.maxHealth = RULES.tankHealth;
+      view[n - 1] = v;
+    }
+    view.length = n;
+    this.ui.setVehicles(n ? view : null);
+  }
+
   /** One transient off a cache. Audio is optional; never let it break the take. */
   _cacheFeedback() {
     try {
@@ -4600,6 +4668,8 @@ export class MatchSystem {
       // player finds out the caches exist at all.
       this._publishCaches();
     }
+    // Every mode: a hull on the field is the biggest thing on it. @see below.
+    this._publishVehicles();
     /**
      * THE BEACON'S CLOCK, written in place. `ui/round.js` draws it under the zone
      * strip. `mine` is from the LOCAL player's point of view for the same reason

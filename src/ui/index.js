@@ -48,6 +48,11 @@ const MAX_BLIPS = 48;
  *                                       kind, with the cooldown on them. See
  *                                       src/ui/pickups.js for why the whole
  *                                       feature needed announcing.
+ *   ui.setVehicles([{position,hostile,name,health,maxHealth}])
+ *                                       THE HULLS. A hostile tank gets armour
+ *                                       brackets, a name, what is left of it and
+ *                                       the range; a friendly one gets nothing.
+ *                                       See src/ui/markers.js `updateVehicles`.
  *   ui.pickup(title, sub, kind)         'supply'|'weapon'|'beacon'|'deny' —
  *                                       the receipt for a take, or the reason
  *                                       there was not one
@@ -203,6 +208,8 @@ export class UiSystem {
     this._objectives = [];
     /** `match`'s nearby-cache view, or null when nothing is publishing one. */
     this._caches = null;
+    /** `match`'s live-hull view, or null when nothing is publishing one. */
+    this._vehicles = null;
     this._compassObjs = [];
     this._blips = new Array(MAX_BLIPS);
     for (let i = 0; i < MAX_BLIPS; i++) this._blips[i] = { x: 0, z: 0, kind: 'enemy', heading: 0 };
@@ -424,6 +431,17 @@ export class UiSystem {
    */
   setCaches(list) {
     this._caches = list ?? null;
+  }
+
+  /**
+   * THE HULLS ON THE FIELD. `match` hands over its own preallocated view
+   * records — read every frame, never retained. Only the hostile ones are
+   * drawn; see `WorldMarkers.updateVehicles` for why.
+   *
+   * @param {Array|null} list [{ position, hostile, name, health, maxHealth }]
+   */
+  setVehicles(list) {
+    this._vehicles = list ?? null;
   }
 
   /**
@@ -713,6 +731,12 @@ export class UiSystem {
     // to finish in 130 ms of the player's time even when the world clock is
     // slowed (or, in the capture harness, nearly stopped).
     this.markers.updateTargets(rawDt, this._actorList, ctx.camera, this.vw, this.vh, this.k);
+    /**
+     * ARMOUR after the infantry brackets and before the objectives: a tank is a
+     * hostile, so it belongs in the same pass, but its box is up to 420 px wide
+     * and would otherwise be painted over the man standing in front of it.
+     */
+    this.markers.updateVehicles(rawDt, this._vehicles, ctx.camera, this.vw, this.vh, this.k);
     this.markers.updateObjectives(this._objectives, ctx.camera, this.vw, this.vh, this.k);
     this.markers.updateCaches(dt, this._caches, ctx.camera, this.vw, this.vh, this.k);
     this.markers.updateGrenades(dt, ctx.camera, this.vw, this.vh, this.k);

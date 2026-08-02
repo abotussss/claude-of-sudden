@@ -649,6 +649,71 @@ const CSS = `
 .ow-cache.cold .ow-cache-sub { color: var(--ink-3); }
 .ow-cache.reach { color: #ffffff; }
 .ow-cache.reach .ow-cache-sub { color: var(--amber); font-weight:700; }
+/* MED KIT. Not supply green — a dressing station is not a resupply dump, and
+   the whole reported failure is that the two were indistinguishable at any
+   range where the 9 px label is unreadable. White ink over the red-cross glyph,
+   a hair larger than the other four, and a bigger tap area for the eye. */
+.ow-cache.med { color: #ffffff; }
+.ow-cache.med .ow-cache-glyph { width:calc(21px * var(--k)); height:calc(21px * var(--k)); }
+.ow-cache.med .ow-cache-label { color: #ffffff; }
+.ow-cache.med .ow-cache-sub { color: rgba(255,190,180,.9); }
+.ow-cache.med.cold .ow-cache-label { color: var(--ink-3); }
+
+/* ---------------------------------------------------------- armour (world)
+   THE ENEMY TANK. Same corner-bracket grammar as .ow-tgt — a hostile is marked
+   by geometry, not by hue — one size up and with a top rule, so "armour" and
+   "a man" are never the same read. The tag hangs above the box with the name,
+   what is left of it, and the range. */
+.ow-veh {
+  position:absolute; left:0; top:0; color: var(--enemy);
+  will-change: transform, width, height, opacity;
+  filter: drop-shadow(0 0 calc(2px * var(--k)) rgba(0,0,0,.9));
+}
+.ow-veh-c {
+  position:absolute; width:calc(11px * var(--k)); height:calc(9px * var(--k));
+  border:0 solid currentColor; box-sizing:border-box;
+}
+.ow-veh-c.tl { left:0;  top:0;    border-left-width:calc(3px * var(--k)); border-top-width:calc(3px * var(--k)); }
+.ow-veh-c.tr { right:0; top:0;    border-right-width:calc(3px * var(--k)); border-top-width:calc(3px * var(--k)); }
+.ow-veh-c.bl { left:0;  bottom:0; border-left-width:calc(3px * var(--k)); border-bottom-width:calc(3px * var(--k)); }
+.ow-veh-c.br { right:0; bottom:0; border-right-width:calc(3px * var(--k)); border-bottom-width:calc(3px * var(--k)); }
+.ow-veh-tag {
+  position:absolute; left:50%; bottom:100%; transform:translateX(-50%);
+  display:flex; flex-direction:column; align-items:center;
+  padding-bottom: calc(var(--u) * .8);
+}
+.ow-veh-l {
+  font-size: calc(10.5px * var(--k)); letter-spacing:.24em; font-weight:700;
+  color: currentColor; white-space:nowrap; text-shadow: var(--sh-o1);
+}
+.ow-veh-track {
+  width: calc(46px * var(--k)); height: calc(3px * var(--k));
+  margin-top: calc(var(--u) * .4);
+  background: rgba(6,12,16,.72); border:calc(1px * var(--k)) solid rgba(0,0,0,.55);
+}
+.ow-veh-track i {
+  display:block; height:100%; width:100%; background: currentColor;
+  transform-origin: left; transform: scaleX(1);
+}
+.ow-veh-d {
+  margin-top: calc(var(--u) * .3);
+  font-size: calc(9px * var(--k)); letter-spacing:.2em;
+  color: var(--ink-2); white-space:nowrap; text-shadow: var(--sh-o1);
+}
+/* Under a third left: the mark goes amber, which on this HUD has meant
+   "the state of this thing is about to change" everywhere else. */
+.ow-veh.weak .ow-veh-track i { background: var(--amber); }
+.ow-veh.weak .ow-veh-l { color: var(--amber); }
+.ow-veh-chev {
+  position:absolute; left:50%; top:50%;
+  width:calc(20px * var(--k)); height:calc(20px * var(--k));
+  margin:calc(-10px * var(--k)) 0 0 calc(-10px * var(--k));
+}
+.ow-veh-chev svg { width:100%; height:100%; display:block; overflow:visible;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.9)); }
+/* Clamped to the edge: the corners would be a box around nothing. */
+.ow-veh.edge .ow-veh-c { display:none; }
+.ow-veh.edge .ow-veh-track { display:none; }
 
 /* ======================================================== damage numbers */
 .ow-dn {
