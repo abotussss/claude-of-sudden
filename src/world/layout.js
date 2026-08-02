@@ -91,10 +91,18 @@ export const ALLEYS = [
   // ------------------------------------------------------------- A lane (west)
   { rect: [-31, 3, -20.5, 32], surface: 'dirt', density: 0.5 }, // north run
   { rect: [-36, -11, -20.5, 3], surface: 'gravel', density: 0.5 }, // SITE A courtyard
+  /**
+   * The WEST BAY — the courtyard's outer pocket through where BW2's slab used
+   * to stand, walled by BW1 (z 1), BW3 (z -8) and BW2's new back wall (widened
+   * x -56). ZONE C stands in it. Its east twin is the EAST BAY below. @see the
+   * long note over BW2 in `BUILDINGS`.
+   */
+  { rect: [-47, -8, -36, 1], surface: 'gravel', density: 0.5 }, // WEST BAY — ZONE C
   { rect: [-31, -26, -20.5, -11], surface: 'dirt', density: 0.3 }, // south run
   // ------------------------------------------------------------- B lane (east)
   { rect: [20.5, 3, 31, 32], surface: 'dirt', density: 0.5 }, // north run
   { rect: [20.5, -11, 36, 3], surface: 'gravel', density: 0.5 }, // SITE B courtyard
+  { rect: [36, -8, 47, 1], surface: 'gravel', density: 0.5 }, // EAST BAY — ZONE E
   { rect: [20.5, -26, 31, -11], surface: 'dirt', density: 0.3 }, // south run
   // ------------------------------------------------------- north cross street
   { rect: [-31, 24, -6.5, 32], surface: 'dirt', density: 0.35 },
@@ -118,7 +126,10 @@ export const ALLEYS = [
  */
 export const FLAT = [
   [-33, -80, 33, 70], // the whole three-lane box, both base districts included
-  [-38, -13, 38, 5], // both site courtyards
+  // Both site courtyards AND the two new outer bays: the bays run to widened
+  // x ∓56 (authored ∓47) and a capture point on ±0.55 m of fbm is a capture
+  // point where your crosshair sits on a hill.
+  [-47, -13, 47, 5],
 ];
 
 /**
@@ -214,15 +225,33 @@ export const RELIEF = {
    * rally point is not standing under 3 m of steel.
    */
   decks: [
-    { id: 'A-deck', rect: [-36, -9.5, -34, -2.2], y: 2.9, railSide: 1 },
-    { id: 'B-deck', rect: [34, -8.6, 36, 0.6], y: 2.9, railSide: 3 },
+    /**
+     * A-DECK AND B-DECK MOVED OUT WITH THE WALL THEY RUN ALONG. The courtyards
+     * grew an outer bay each through BW2/BE2 (@see the note over BW2 in
+     * `BUILDINGS`) and the perimeter wall these two decks were authored against
+     * went from widened ∓45 to ∓56 — leaving them floating over the middle of
+     * the new bay, on the exact ground ZONE C / ZONE E now stand on. So they
+     * follow the wall: still the 2 m strip against the courtyard's outer face,
+     * still "the one strip no bot route wants", and now they look down on the
+     * new capture points instead of on the mouth into them.
+     */
+    { id: 'A-deck', rect: [-47, -9.5, -45, -2.2], y: 2.9, railSide: 1 },
+    { id: 'B-deck', rect: [45, -8.6, 47, 0.6], y: 2.9, railSide: 3 },
     { id: 'A-south deck', rect: [-22.5, -15.6, -20.5, -12.8], y: 3.0, railSide: 3 },
     { id: 'B-south deck', rect: [20.5, -15.6, 22.5, -12.8], y: 3.0, railSide: 1 },
   ],
   /** Containers and crates to mantle off. `base` stacks one on another. */
   blocks: [
-    { id: 'A-deck step', rect: [-34, -4.5, -32, -2.5], h: 1.5, key: 'metal_green' },
-    { id: 'B-deck step', rect: [32, -5.5, 34, -3.5], h: 1.5, key: 'metal_blue' },
+    /**
+     * The two deck steps moved with their decks (@see `decks` above) — and to
+     * the decks' SOUTH ends rather than their middles, because the middle of
+     * each deck now overlooks a capture point: a 1.5 m container at the old
+     * offset would stand inside the zone's circle, on the standing ring the
+     * forward spawns are cut from. At z -8..-6.4 they are outside both circles,
+     * against the bay's south wall, and still adjacent-in-x to their deck.
+     */
+    { id: 'A-deck step', rect: [-45, -8.0, -43, -6.4], h: 1.5, key: 'metal_green' },
+    { id: 'B-deck step', rect: [43, -8.0, 45, -6.4], h: 1.5, key: 'metal_blue' },
     /**
      * The mantle chain onto the two south catwalks, and the reason they are the
      * DEFENCE'S. Both sit in the defence's own lane at the catwalk's south end,
@@ -523,6 +552,39 @@ export const SITEWORKS = [
   { id: 'B plinth east', kind: 'plinth', x: 32.1, z: -1.4, w: 1.6, d: 1.4, h: 1.2, key: 'concrete' },
   { id: 'B plinth south', kind: 'plinth', x: 28.6, z: -3.9, w: 2.0, d: 1.2, h: 1.2, key: 'concrete' },
   { id: 'B retake wall', kind: 'wall', x: 30.4, z: -5.6, w: 3.0, d: 0.55, h: 1.3, key: 'plaster_pink', revet: true },
+
+  // ═══════════════════════════════ ZONES C AND E — the two outer bays ═══════
+  /**
+   * The mass ON the two capture points after they moved into the bays the
+   * courtyards grew through BW2/BE2 (@see `BUILDINGS`). Zone centres are
+   * authored `LW(∓41, -1)` = widened (∓50, -1); everything here is in the same
+   * 3.2-5.0 authored band the rest of this table uses — outside `standRing`'s
+   * 4 m forward-spawn ring, inside the 8 m capture circle. The pieces the zones
+   * left behind at (∓37, -1) STAY — same call as the plazas and the avenues:
+   * they are the approach through the courtyard now.
+   *
+   *   two PLINTHS   waist-high mass ON the point, south and toward the mouth.
+   *   one WALL      along Z against the bay's own back half — what a side
+   *                 walks up behind to retake the point.
+   *   one BAFFLE    standing IN the 13.5 m mouth, 1.4 units outside the old
+   *                 wall line, so the way in is two slots rather than a
+   *                 courtyard-wide read of the whole bay. A* keeps an 8.4 m
+   *                 lane south of it and a slot north — re-measured, not hoped:
+   *                 `navcheck` and `sitecheck` gate every piece here.
+   *
+   * The plinth toward the wall is at 3.2 (the band's inner edge) so it clears
+   * the deck strip: A-deck/B-deck now run along the bays' back walls at
+   * widened ∓56..∓54 and a plinth under a catwalk is a mantle nobody asked for.
+   */
+  { id: 'C bay plinth west', kind: 'plinth', x: -44.2, z: -1.0, w: 1.6, d: 1.4, h: 1.2, key: 'concrete' },
+  { id: 'C bay plinth south', kind: 'plinth', x: -41.0, z: -4.9, w: 2.0, d: 1.2, h: 1.2, key: 'concrete' },
+  { id: 'C bay wall', kind: 'wall', x: -44.6, z: -3.6, w: 0.55, d: 3.0, h: 1.35, key: 'plaster_cream' },
+  { id: 'C mouth baffle', kind: 'wall', x: -37.4, z: -1.0, w: 0.55, d: 2.8, h: 1.35, key: 'brick' },
+
+  { id: 'E bay plinth east', kind: 'plinth', x: 44.2, z: -1.0, w: 1.6, d: 1.4, h: 1.2, key: 'concrete' },
+  { id: 'E bay plinth south', kind: 'plinth', x: 41.0, z: -4.9, w: 2.0, d: 1.2, h: 1.2, key: 'concrete' },
+  { id: 'E bay wall', kind: 'wall', x: 44.6, z: -3.6, w: 0.55, d: 3.0, h: 1.35, key: 'plaster_pink' },
+  { id: 'E mouth baffle', kind: 'wall', x: 37.4, z: -1.0, w: 0.55, d: 2.8, h: 1.35, key: 'brick' },
 ];
 
 /**
@@ -643,7 +705,15 @@ export const SITEWORKS = [
  * @see `THE MAP GROWS — PART 4` and `ZONES` in src/match/sites.js.
  */
 export const KEEPOUT = [
-  [-28.0, -1.0, 3.0], // ZONE C — the west courtyard, on the equidistant line
+  /**
+   * ZONES C AND E MOVED INTO THE TWO OUTER BAYS — widened (∓50, -1), still on
+   * the equidistant line z -1 and still exact ρ images of each other. These two
+   * circles moved with them IN THE SAME COMMIT, which is the sentence this file
+   * has now written five times: a zone centre without its circle is a zone the
+   * dressing scatter can put a crate on, and a zone that then moves between
+   * boots. @see the C and E entries in `ZONES`, src/match/sites.js.
+   */
+  [-41.0, -1.0, 3.0], // ZONE C — the west bay, on the equidistant line
   /**
    * ZONE E — the east courtyard, and it is ρ(C) rather than a mirror of this
    * line. `widenX` is odd, so the widened pair is (-37, -1) and (37, -1), and
@@ -655,7 +725,7 @@ export const KEEPOUT = [
    * forward-spawn ring. The demolition circle at (28, -7) below is a different
    * point in a different mode and both stay.
    */
-  [28.0, -1.0, 3.0], // ZONE E — the east courtyard, ρ(C)
+  [41.0, -1.0, 3.0], // ZONE E — the east bay, ρ(C)
   [-28.0, -7.0, 2.2], // site A plant area
   [28.0, -7.0, 2.2], // site B plant area
   /**
@@ -1228,11 +1298,42 @@ export const BUILDINGS = [
    * the point. Nothing in `src/world/cordon.js` changed to make that happen.
    */
   { id: 'BW1', x: -41, z: 11, w: 20, d: 20, floors: 3, wallKey: 'plaster_sand', streetSide: 1, damage: 0.15, skipSides: [3], roofProps: 3 },
-  { id: 'BW2', x: -45, z: -4, w: 18, d: 18, floors: 2, wallKey: 'plaster_cream', streetSide: 1, damage: 0.25, skipSides: [3], roofProps: 2 },
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * BW2 AND BE2 ARE THE COURTYARDS' OUTER WALLS NOW, NOT THEIR INFILL
+   * ══════════════════════════════════════════════════════════════════════════
+   * "CサイトとEサイト付近はもう少し大聖堂から遠くできる？今近いから、もう少しマップを
+   *  広くして遠ざけて" — push C and E away from the cathedral and make the map
+   * wider to do it.
+   *
+   * C and E sit on level z -1 because that is the line equidistant from the two
+   * bases, and a zone off it is a permanent lead in a mode that never swaps ends
+   * (@see the C entry in `ZONES`, src/match/sites.js, which measured a 103 m
+   * gift and reverted). So the ONLY way to move them out is along z -1 — and at
+   * z -1 the ground stopped at the courtyards' west/east walls, which were
+   * BW2's and BE2's inner faces (widened ∓45).
+   *
+   * So each courtyard grows an OUTER BAY through the block that walled it: BW2
+   * goes from an 18-wide slab (widened -63..-45) to a 6-wide back wall
+   * (widened -62..-56), and the 11 units it vacates become courtyard ground.
+   * The bay is walled on its own: BW1's south face (z 1) caps it north, BW3's
+   * north face (z -8) caps it south, BW2's east face (x ∓56) is its back wall,
+   * and its whole east side opens into the courtyard it belongs to. The zones
+   * move into the bays — widened (∓50, -1), 19.5 m further out, still an exact
+   * ρ pair because ρ(x, -1) = (-x, -1).
+   *
+   * BE3's north face moves from z -3 to z -8 in the same breath, because the
+   * east bay does not exist without it: BW3's north face is z -8 and BE3's was
+   * -3, so the mirrored bay would have been 4 units tall against the west's 9.
+   * The two bays are MIRROR pairs exactly as the two courtyards are; the two
+   * zone centres on z -1 are ρ images of each other regardless.
+   */
+  { id: 'BW2', x: -50, z: -4, w: 6, d: 18, floors: 2, wallKey: 'plaster_cream', streetSide: 1, damage: 0.25, skipSides: [3], roofProps: 2 },
   { id: 'BW3', x: -41, z: -26, w: 20, d: 36, floors: 2, wallKey: 'plaster_blue', streetSide: 1, damage: 0.2, skipSides: [3], roofProps: 2 },
   { id: 'BE1', x: 41, z: 22, w: 20, d: 42, floors: 3, wallKey: 'plaster_pink', streetSide: 3, damage: 0.15, skipSides: [1], roofProps: 3 },
-  { id: 'BE2', x: 45, z: -4, w: 18, d: 18, floors: 2, wallKey: 'plaster_sand', streetSide: 3, damage: 0.25, skipSides: [1], roofProps: 2 },
-  { id: 'BE3', x: 41, z: -13, w: 20, d: 20, floors: 2, wallKey: 'plaster_cream', streetSide: 3, damage: 0.2, skipSides: [1], roofProps: 2 },
+  { id: 'BE2', x: 50, z: -4, w: 6, d: 18, floors: 2, wallKey: 'plaster_sand', streetSide: 3, damage: 0.25, skipSides: [1], roofProps: 2 },
+  /** North face pulled from z -3 to z -8, the mirror of BW3's. @see BW2 above. */
+  { id: 'BE3', x: 41, z: -15.5, w: 20, d: 15, floors: 2, wallKey: 'plaster_cream', streetSide: 3, damage: 0.2, skipSides: [1], roofProps: 2 },
   /**
    * The mass BEHIND the gate. Only its top four metres and its roofline are
    * visible — through the sliver of sky over the arch spandrel — but that is the

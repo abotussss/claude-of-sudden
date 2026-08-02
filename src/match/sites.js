@@ -487,10 +487,43 @@ export const ZONES = [
      * pair of districts is built on the other diagonal. That is world work and
      * it is the honest next step, not another number in this file.
      */
-    level: LW(-28.0, -1.0),
-    /** Two units into the courtyard's middle, off the spine wall. */
-    fallback: LW(-27.0, -3.0),
-    holdLevel: LW(-28.0, -1.0),
+    /**
+     * ════════════════════════════════════════════════════════════════════════
+     * AND THE WORLD WORK GOT DONE — THE COURTYARD GREW AN OUTER BAY AND C WENT
+     * INTO IT
+     * ════════════════════════════════════════════════════════════════════════
+     * "CサイトとEサイト付近はもう少し大聖堂から遠くできる？今近いから、もう少しマップを
+     *  広くして遠ざけて"
+     *
+     * The entry above is still right about the CONSTRAINT: C must stay on level
+     * z -1 (the line equidistant from the two bases) or one side gets a
+     * permanent lead, and moving it to the flank district at LW(-70, -1)
+     * measured a 103 m gift and was reverted. What changed is the GROUND. The
+     * note said the answer was world work, and the world work is in
+     * src/world/layout.js: BW2 — the 18-unit slab that walled the courtyard's
+     * west side — is a 6-unit back wall now, and the 11 widened units it
+     * vacated are authored courtyard ground (the WEST BAY, widened x -56..-45,
+     * z -8..1, walled by BW1 north, BW3 south, BW2 west, open east into the
+     * courtyard it grew from).
+     *
+     * C stands in the middle of that bay: `LW(-41, -1)` = widened (-50, -1),
+     * 13 widened units — 19.5 m of ground — further from the cathedral than
+     * the courtyard centre it left. E is its exact ρ image in the EAST BAY,
+     * which is authored as the west one's mirror in the same commit (BE2
+     * shrunk the same way, BE3's north face pulled from z -3 to z -8 to match
+     * BW3's). Both zones stay on z -1, so ρ(x, -1) = (-x, -1) and the pair
+     * costs neither side anything.
+     *
+     * `KEEPOUT`, the A/B-deck catwalks, their mantle steps and the new bay
+     * SITEWORKS all moved in the same pass — IF ONE MOVES, MOVE THE OTHER.
+     * The courtyard mass the zones left at (∓37, -1) stays where it is: it is
+     * the approach through the courtyard now, the same call the avenues and
+     * the plazas already made.
+     */
+    level: LW(-41.0, -1.0),
+    /** Two units back toward the bay's mouth, off the back wall and the deck. */
+    fallback: LW(-39.0, -1.0),
+    holdLevel: LW(-41.0, -1.0),
     flankLevel: null,
   },
   /**
@@ -550,10 +583,19 @@ export const ZONES = [
   {
     id: 'E',
     name: 'EAST COURTYARD',
-    level: LW(28.0, -1.0),
-    /** ρ(C's fallback): two units into the courtyard's middle, off the spine. */
-    fallback: LW(27.0, 1.0),
-    holdLevel: LW(28.0, -1.0),
+    /**
+     * ρ(C) exactly, in the EAST BAY. C is widened (-50, -1); ρ(-50, -1) =
+     * (50, -1), which is `LW(41, -1)` because `widenX(41)` is 50. The fallback
+     * is ρ'd the same way: C's `LW(-39, -1)` is widened (-48, -1), ρ of that
+     * is (48, -1) = `LW(39, -1)`. Written out because the B entry below once
+     * spent six commits two authored units off the ρ it claimed.
+     * @see the long note in the C entry — both bays are authored in
+     * src/world/layout.js in the same commit as this pair of centres.
+     */
+    level: LW(41.0, -1.0),
+    /** ρ(C's fallback): two units back toward the bay's mouth. */
+    fallback: LW(39.0, -1.0),
+    holdLevel: LW(41.0, -1.0),
     flankLevel: null,
   },
   {
