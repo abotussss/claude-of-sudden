@@ -1685,9 +1685,15 @@ export const RULES = {
    * `AiSystem._updateGrenades` emits for a bot's frag — the same quadratic
    * falloff in `ai`'s listener, the same `pow(1 - d/r, 1.6)` in
    * `PlayerSystem._onExplosion`, the same `MASK.EXPLOSION` occlusion, and the
-   * same `fragMul` against a tank hull. These two figures are `frag`'s
-   * `blastRadius` / `blastDamage` from `src/weapons/defs.js`, read off the live
-   * weapon system when there is one and only falling back to these.
+   * same `fragMul` against a tank hull. The two figures are `frag`'s
+   * `blastRadius` / `blastDamage`, READ OFF THE LIVE WEAPON SYSTEM
+   * (`Drones._fragDef`) and only falling back to these when there is none.
+   *
+   * THAT IS NOT DECORATION AND IT HAS ALREADY PAID. The frag was widened from
+   * 7.5 m to 11.5 m in a parallel commit while this file was being written, and
+   * the drone came up at 11.5 with nothing here touched — measured at boot,
+   * `_dboot.mjs`. These two numbers are therefore a FLOOR for a build with no
+   * weapons subsystem, not the drone's blast.
    *
    * AND IT HURTS EVERYONE — 「空爆は敵味方関係なく」. `ai`'s `explosion` listener
    * has no team test, which is the standing rule for every explosive in this
