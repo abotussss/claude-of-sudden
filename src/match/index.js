@@ -3783,6 +3783,19 @@ export class MatchSystem {
     if (typeof cath?.setRazed !== 'function') return false;
     const changed = cath.setRazed(down, this.ctx.peek?.('physics')) === true;
     this.ai?.setCoverRazed?.(down);
+    /**
+     * …AND THE TWO POSTS AT THE CROSSING GO WITH THE BUILDING. They are the
+     * reason to be inside it BEFORE the event ("大聖堂内に来るメリット"), and the
+     * crossing becomes capture point D the moment it falls — a beacon-plantable
+     * cache and a med kit ON the live objective would be a stronger reward than
+     * holding a zone. @see the lifecycle note in `src/match/caches.js`.
+     *
+     * `cath.razed` RATHER THAN `down`, for the same reason `setVisual` reads
+     * its own latch: under `?cath=down` the church is razed whatever this
+     * caller was given, and the posts must not be usable inside a ruin.
+     * Guarded, because `_beginRound`'s prime lands before `this.caches` exists.
+     */
+    this.caches?.setCathedralRazed?.(cath.razed);
     return changed;
   }
 
