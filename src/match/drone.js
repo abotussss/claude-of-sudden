@@ -257,9 +257,9 @@ const CHEST = 1.15;
 const HALO_FRIEND = 0x8fc8ff;
 const HALO_ENEMY = 0xff7a63;
 /** Halo world radius per metre of camera distance, before the clamp. */
-const HALO_PER_M = 0.017;
-const HALO_MIN = 0.55;
-const HALO_MAX = 2.4;
+const HALO_PER_M = 0.019;
+const HALO_MIN = 0.7;
+const HALO_MAX = 2.6;
 
 let _nextId = 1;
 
@@ -454,8 +454,8 @@ export class Drones {
      * WIDER annulus that overlaps it on both edges, so the colour always has a
      * dark border on the inside and the outside. @see the note on `HALO_FRIEND`.
      */
-    const haloRing = mk(new THREE.RingGeometry(0.74, 1.0, 30));
-    const haloBack = mk(new THREE.RingGeometry(0.6, 1.15, 30));
+    const haloRing = mk(new THREE.RingGeometry(0.66, 1.0, 30));
+    const haloBack = mk(new THREE.RingGeometry(0.54, 1.13, 30));
 
     /**
      * Two paints, FRIEND THEN HOSTILE — relative to the local player and never
@@ -502,7 +502,7 @@ export class Drones {
       const hl = new THREE.MeshBasicMaterial({
         color: new THREE.Color(hex),
         transparent: true,
-        opacity: s === 0 ? 0.5 : 0.95,
+        opacity: s === 0 ? 0.6 : 1,
         side: THREE.DoubleSide,
         depthWrite: false,
         toneMapped: false,
@@ -514,7 +514,7 @@ export class Drones {
     const haloEdge = new THREE.MeshBasicMaterial({
       color: 0x05080b,
       transparent: true,
-      opacity: 0.5,
+      opacity: 0.68,
       side: THREE.DoubleSide,
       depthWrite: false,
       toneMapped: false,

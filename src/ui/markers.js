@@ -390,6 +390,64 @@ export class WorldMarkers {
       this.objRoot
     );
 
+    /* --------------------------------------------------------- drones ---
+     * 「ドローンは向かってくるときにできればUIでわかりやすくして、ハイライトしてほしい
+     *   ドローン自体をハイライトして 敵味方のドローンで色分けして」
+     *
+     * THE LOCK STRIP IS A CAPTION AND THIS IS THE THING. `dronelock.js` says a
+     * drone has you, from which bearing and how long you have; it cannot say
+     * WHICH SPECK, and the counter-play (shoot it, or get a roof between you)
+     * needs the player to find a 0.62 m airframe against a bright sky. The
+     * airframe carries a world-space halo of its own now — @see the note on
+     * `HALO_FRIEND` in `src/match/drone.js` — and this is the other half: the
+     * HUD mark, which does the two things the world ring cannot.
+     *
+     *   IT WORKS OFF SCREEN. A drone in a dive comes from behind more often
+     *   than not. Clamped to the edge with a chevron, this is the only mark
+     *   that points at one you are not looking at.
+     *   IT CARRIES THE STATE OF ITS HEALTH. `Drones.HEALTH` is 60 — two rounds
+     *   of an AK, three of a carbine — so "keep shooting, it is nearly down"
+     *   is a real decision and needs a bar, exactly as the tank's does.
+     *
+     * SAME GRAMMAR AS THE TANK AND THE MAN, THIRD SIZE. A HOSTILE gets corner
+     * brackets, because in this file corners have meant "this is a target" since
+     * the infantry mark and a drone must not invent a fourth visual language.
+     * A FRIENDLY gets a pip and nothing else: it is colour-coded because the
+     * player asked to tell them apart, but it is not a thing he shoots, and
+     * putting brackets on his own side's drone would be the same mistake as
+     * bracketing his own armour.
+     *
+     * THE COLOURS ARE RELATIVE TO HIM. `hostile` is decided in `match` from
+     * `playerTeam`, never from a team index — the `--friend` / `--enemy` split
+     * `sitemark.js` and `_publishObjectives` fought for. This file only reads
+     * the flag.
+     *
+     * SIX: `RULES.droneMaxAloft` is 4, the pool behind it is 5, and a mark has
+     * to survive a round reset with a full sky.
+     */
+    this.dronePool = new Pool(
+      6,
+      () => {
+        const node = el('div', 'ow-drn');
+        for (const c of ['tl', 'tr', 'bl', 'br']) el('i', `ow-drn-c ${c}`, node);
+        el('b', 'ow-drn-pip', node);
+        const tag = el('div', 'ow-drn-tag', node);
+        const label = el('div', 'ow-drn-l', tag, 'DRONE');
+        const track = el('div', 'ow-drn-track', tag);
+        const fill = el('i', null, track);
+        const dist = el('div', 'ow-drn-d', tag, '');
+        const chev = chevron(el('div', 'ow-drn-chev', node));
+        node._label = label;
+        node._fill = fill;
+        node._dist = dist;
+        node._chev = chev.parentNode;
+        return node;
+      },
+      this.objRoot
+    );
+    /** Beat phase for the inbound mark, integrated so a pause freezes it. */
+    this._drnT = 0;
+
     this.dnPool = new Pool(
       16,
       () => {
@@ -740,6 +798,96 @@ export class WorldMarkers {
     return n;
   }
 
+  /**
+   * THE DRONES IN THE AIR, MARKED. @see the pool's note for what this is for
+   * and why a friendly does not get brackets.
+   *
+   * `list` is `match`'s own preallocated view records — read, never retained:
+   * `{ position, hostile, name, health, maxHealth, locked, diving }`. Nothing
+   * is allocated here.
+   *
+   * @param dt      seconds, for the mark's close-in and the inbound beat
+   * @param list    match.setDrones()' array, or null
+   * @param camera  the world camera
+   * @param fade    0..1 master opacity
+   */
+  updateDrones(dt, list, camera, w, h, k, fade = 1) {
+    const items = this.dronePool.items;
+    const focal = (h * 0.5) / Math.tan(camera.fov * 0.5 * (Math.PI / 180));
+    this._drnT += dt;
+    // Two beats: a slow one for a drone that has you, a fast one for a drone
+    // that has already committed. Same information the lock strip's pulse and
+    // the dive scream carry, for an eye that is on the sky.
+    const slow = 0.72 + 0.28 * Math.abs(Math.sin(this._drnT * 5.5));
+    const fast = 0.62 + 0.38 * Math.abs(Math.sin(this._drnT * 13));
+    /** The tag hangs above the box; 70 px is its height plus the top arm. */
+    const margin = 70 * k;
+    let n = 0;
+    if (list && fade > 0.01) {
+      for (let i = 0; i < list.length && n < items.length; i++) {
+        const v = list[i];
+        if (!v?.position) continue;
+        const p = project(v.position, camera, w, h, margin);
+        const it = items[n++];
+        if (!it.alive) { it.alive = true; it.t = 0; setStyle(it.node, 'display', ''); }
+        it.t = Math.min(1, it.t + dt / 0.18);
+        const node = it.node;
+
+        /**
+         * THE BOX IS THE AIRFRAME, with a FLOOR that is most of the point. 0.62 m
+         * across is 7 px at 60 m and 3 px at 140 m — a true-size bracket on a
+         * drone is a bracket you cannot see, which is the complaint. 34 px is
+         * the smallest square that still reads as four corners rather than as a
+         * dot, and it is what makes a drone at the top of the sky findable.
+         */
+        const px = Math.max(1, (focal * 0.62) / Math.max(p.dist, 0.6));
+        const box = clamp(px * 1.6, 34 * k, 190 * k);
+        const grow = 1 + (1 - ease.outCubic(it.t)) * 0.45;
+        const s = box * grow;
+        const edge = p.offscreen;
+        setStyle(node, 'width', `${s.toFixed(1)}px`);
+        setStyle(node, 'height', `${s.toFixed(1)}px`);
+        setStyle(node, 'transform',
+          `translate(${(p.x - s * 0.5).toFixed(1)}px,${(p.y - s * 0.5).toFixed(1)}px)`);
+        setClass(node, 'edge', edge);
+        setClass(node, 'friendly', !v.hostile);
+        const inbound = !!v.locked && !!v.hostile;
+        setClass(node, 'lock', inbound);
+        setClass(node, 'dive', inbound && !!v.diving);
+        setStyle(node._chev, 'display', edge ? '' : 'none');
+        if (edge) setStyle(node._chev, 'transform', `rotate(${p.angle.toFixed(1)}deg)`);
+        // INBOUND is the only word here that changes what the player does, so
+        // it is the only one that replaces the name.
+        setText(node._label, inbound ? (v.diving ? 'INBOUND' : 'DRONE LOCK') : v.name || 'DRONE');
+        setText(node._dist, metres(p.dist));
+        const frac = clamp01((v.health ?? 1) / (v.maxHealth || 1));
+        setStyle(node._fill, 'transform', `scaleX(${frac.toFixed(4)})`);
+        setClass(node, 'weak', frac < 0.5);
+        const beat = inbound ? (v.diving ? fast : slow) : 1;
+        // A friendly is present, not urgent: half the weight, so ten of them a
+        // match never compete with the one that is hunting him.
+        const own = v.hostile ? 1 : 0.5;
+        setStyle(node, 'opacity',
+          (fade * own * beat * (0.5 + 0.5 * it.t) * (edge ? 0.85 : 1)).toFixed(3));
+      }
+    }
+    for (let i = n; i < items.length; i++) {
+      if (items[i].alive) {
+        items[i].alive = false;
+        items[i].t = 0;
+        setStyle(items[i].node, 'display', 'none');
+      }
+    }
+    return n;
+  }
+
+  /** How many drone marks are live. For the harnesses. */
+  get droneCount() {
+    let n = 0;
+    for (const it of this.dronePool.items) if (it.alive) n++;
+    return n;
+  }
+
   /** @param {number} fuse seconds until detonation */
   spawnGrenade(position, fuse = 2.4) {
     const it = this.nadePool.acquire();
@@ -890,6 +1038,7 @@ export class WorldMarkers {
     this.tgtPool.releaseAll();
     this.friendPool.releaseAll();
     this.vehPool.releaseAll();
+    this.dronePool.releaseAll();
     for (const it of this.tgtPool.items) { it.node._key = ''; it.node._lock = 0; }
   }
 

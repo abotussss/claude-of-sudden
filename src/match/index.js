@@ -5037,6 +5037,78 @@ export class MatchSystem {
     this.ui.setVehicles(n ? view : null);
   }
 
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE DRONES, TO THE HUD — 「ドローン自体をハイライトして 敵味方のドローンで色分けして」
+   * ══════════════════════════════════════════════════════════════════════════
+   * The same contract `_publishVehicles` established and for the same reason: a
+   * drone is not an `Agent`, so `ai.getHudActors()` has never reported one and
+   * `ui` had no way to know it was in the air. The lock strip is told when one
+   * has the player; it is not told where any of them ARE.
+   *
+   * BOTH SIDES, which is the one place this differs from the hulls. A hostile
+   * hull is a problem and a friendly one is cover, so only the hostile is
+   * published. The player asked to tell FRIENDLY DRONES FROM HOSTILE ONES, so
+   * both go over and `ui` shapes them differently — brackets and a health bar
+   * for theirs, a pip for his.
+   *
+   * `hostile` IS RELATIVE TO THE PLAYER and never a team index. That is the rule
+   * `sitemark.js` and `_publishObjectives` both carry, and it is the exact bug
+   * that shipped once on the zone markers: `RULES.playerTeam` is 0 and
+   * `TEAM_COLOR[0]` is the hex the HUD reserves for hostiles, so anything
+   * coloured by team paints the player's own things as threats.
+   *
+   * `locked` is the drone that owns the player's lock warning — the same
+   * `d.warning` flag `Drones._reportLock` sets, so the mark and the strip can
+   * never disagree about which speck is the one counting down on him.
+   *
+   * Preallocated: one record per pool slot, built once and rewritten in place.
+   */
+  _publishDrones() {
+    if (!this.ui?.setDrones) return;
+    const all = this.drones?.list;
+    if (!all || !all.length) {
+      if (this._droneView?.length) this._droneView.length = 0;
+      this.ui.setDrones(null);
+      return;
+    }
+    let recs = this._droneRecords;
+    if (!recs) {
+      recs = this._droneRecords = [];
+      this._droneView = [];
+      for (let i = 0; i < all.length; i++) {
+        recs.push({
+          id: 0,
+          name: '',
+          position: new THREE.Vector3(),
+          hostile: true,
+          health: 1,
+          maxHealth: 1,
+          locked: false,
+          diving: false,
+        });
+      }
+    }
+    const view = this._droneView;
+    let n = 0;
+    for (let i = 0; i < all.length && n < recs.length; i++) {
+      const d = all[i];
+      if (!d.alive) continue;
+      const v = recs[n++];
+      v.id = d.id;
+      v.name = d.name || 'DRONE';
+      v.position.copy(d.position);
+      v.hostile = d.team !== this.playerTeam;
+      v.health = d.health;
+      v.maxHealth = d.maxHealth || 1;
+      v.locked = d.warning === true;
+      v.diving = d.state === 'dive';
+      view[n - 1] = v;
+    }
+    view.length = n;
+    this.ui.setDrones(n ? view : null);
+  }
+
   /** One transient off a cache. Audio is optional; never let it break the take. */
   _cacheFeedback() {
     try {
@@ -5242,6 +5314,8 @@ export class MatchSystem {
     }
     // Every mode: a hull on the field is the biggest thing on it. @see below.
     this._publishVehicles();
+    // …and the smallest, which is the one that needs the mark most. @see below.
+    this._publishDrones();
     /**
      * THE BEACON'S CLOCK, written in place. `ui/round.js` draws it under the zone
      * strip. `mine` is from the LOCAL player's point of view for the same reason

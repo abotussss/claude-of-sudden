@@ -55,6 +55,13 @@ const MAX_BLIPS = 48;
  *                                       brackets, a name, what is left of it and
  *                                       the range; a friendly one gets nothing.
  *                                       See src/ui/markers.js `updateVehicles`.
+ *   ui.setDrones([{position,hostile,name,health,maxHealth,locked,diving}])
+ *                                       THE AIR. Both sides, colour-coded from
+ *                                       the player's own side: a hostile gets
+ *                                       brackets, a bar and INBOUND when it has
+ *                                       him, a friendly gets a pip. The lock
+ *                                       strip says one HAS you; this says WHICH
+ *                                       SPECK. See markers.js `updateDrones`.
  *   ui.pickup(title, sub, kind)         'supply'|'weapon'|'beacon'|'deny' —
  *                                       the receipt for a take, or the reason
  *                                       there was not one
@@ -235,6 +242,7 @@ export class UiSystem {
     this._caches = null;
     /** `match`'s live-hull view, or null when nothing is publishing one. */
     this._vehicles = null;
+    this._drones = null;
     /**
      * THE NEAREST DRESSING STATION, for the vitals widget. Written in place
      * every frame from the cache view; never allocated. @see `_medCue()`.
@@ -472,6 +480,19 @@ export class UiSystem {
    */
   setVehicles(list) {
     this._vehicles = list ?? null;
+  }
+
+  /**
+   * THE DRONES IN THE AIR. `match` hands over its own preallocated view records
+   * — read every frame, never retained. BOTH SIDES are drawn, unlike the hulls:
+   * the player asked to tell his own from theirs, and `hostile` (which `match`
+   * decides from `playerTeam`) is what the mark is coloured and shaped by.
+   * @see `WorldMarkers.updateDrones`
+   *
+   * @param {Array|null} list [{ position, hostile, name, health, maxHealth, locked, diving }]
+   */
+  setDrones(list) {
+    this._drones = list ?? null;
   }
 
   /**
@@ -811,6 +832,14 @@ export class UiSystem {
      * and would otherwise be painted over the man standing in front of it.
      */
     this.markers.updateVehicles(rawDt, this._vehicles, ctx.camera, this.vw, this.vh, this.k);
+    /**
+     * THE DRONES after the armour and still before the objectives: it is the
+     * same pass — things in the world that are or are not shooting at you — and
+     * a drone mark is the smallest of the three, so it goes on top of them.
+     * RAW dt for the same reason the brackets take it: the inbound beat is a
+     * HUD animation and must not slow with the world clock.
+     */
+    this.markers.updateDrones(rawDt, this._drones, ctx.camera, this.vw, this.vh, this.k);
     this.markers.updateObjectives(this._objectives, ctx.camera, this.vw, this.vh, this.k);
     this.markers.updateCaches(dt, this._caches, ctx.camera, this.vw, this.vh, this.k);
     this.markers.updateGrenades(dt, ctx.camera, this.vw, this.vh, this.k);

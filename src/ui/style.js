@@ -742,6 +742,86 @@ const CSS = `
 .ow-veh.edge .ow-veh-c { display:none; }
 .ow-veh.edge .ow-veh-track { display:none; }
 
+/* ---------------------------------------------------------- drones (world)
+   THE AIRFRAME, MARKED. Corner brackets again — in this HUD corners have meant
+   "this is a target" since the infantry mark — at a third the tank's weight and
+   with a hard 34 px floor, because the thing being bracketed is 0.62 m across
+   and 3 px at the range where finding it matters.
+
+   FRIEND OR FOE IS THE COLOUR AND ALSO THE SHAPE. --enemy with brackets for a
+   hostile; --friend with a pip and NO brackets for your own, because a friendly
+   drone is not a thing you shoot and a bracket says it is. The hostile/friendly
+   split is decided in match from playerTeam and never from a team index. */
+.ow-drn {
+  position:absolute; left:0; top:0; color: var(--enemy);
+  will-change: transform, width, height, opacity;
+  filter: drop-shadow(0 0 calc(2px * var(--k)) rgba(0,0,0,.95));
+}
+.ow-drn-c {
+  position:absolute; width:calc(7px * var(--k)); height:calc(7px * var(--k));
+  border:0 solid currentColor; box-sizing:border-box;
+}
+.ow-drn-c.tl { left:0;  top:0;    border-left-width:calc(2px * var(--k)); border-top-width:calc(2px * var(--k)); }
+.ow-drn-c.tr { right:0; top:0;    border-right-width:calc(2px * var(--k)); border-top-width:calc(2px * var(--k)); }
+.ow-drn-c.bl { left:0;  bottom:0; border-left-width:calc(2px * var(--k)); border-bottom-width:calc(2px * var(--k)); }
+.ow-drn-c.br { right:0; bottom:0; border-right-width:calc(2px * var(--k)); border-bottom-width:calc(2px * var(--k)); }
+/* The pip is the whole of a friendly's mark and is hidden on a hostile: two
+   marks on one drone would make the brackets ambiguous. */
+.ow-drn-pip {
+  position:absolute; left:50%; top:50%;
+  width:calc(5px * var(--k)); height:calc(5px * var(--k));
+  margin:calc(-2.5px * var(--k)) 0 0 calc(-2.5px * var(--k));
+  background: currentColor; transform: rotate(45deg); display:none;
+}
+.ow-drn-tag {
+  position:absolute; left:50%; bottom:100%; transform:translateX(-50%);
+  display:flex; flex-direction:column; align-items:center;
+  padding-bottom: calc(var(--u) * .6);
+}
+.ow-drn-l {
+  font-size: calc(9.5px * var(--k)); letter-spacing:.22em; font-weight:700;
+  color: currentColor; white-space:nowrap; text-shadow: var(--sh-o1);
+}
+.ow-drn-track {
+  width: calc(30px * var(--k)); height: calc(2.5px * var(--k));
+  margin-top: calc(var(--u) * .3);
+  background: rgba(6,12,16,.72); border:calc(1px * var(--k)) solid rgba(0,0,0,.55);
+}
+.ow-drn-track i {
+  display:block; height:100%; width:100%; background: currentColor;
+  transform-origin: left; transform: scaleX(1);
+}
+.ow-drn-d {
+  margin-top: calc(var(--u) * .2);
+  font-size: calc(8.5px * var(--k)); letter-spacing:.2em;
+  color: var(--ink-2); white-space:nowrap; text-shadow: var(--sh-o1);
+}
+/* Half a bar left is one more round of anything: amber, the colour this HUD
+   uses everywhere for "the state of this thing is about to change". */
+.ow-drn.weak .ow-drn-track i { background: var(--amber); }
+/* IT HAS YOU. The brackets thicken and the whole mark goes white-hot on the
+   dive — the same escalation the lock strip and the scream carry. */
+.ow-drn.lock .ow-drn-c { border-width:calc(2.6px * var(--k)); }
+.ow-drn.lock .ow-drn-l { letter-spacing:.3em; }
+.ow-drn.dive { color: #ffffff; }
+.ow-drn.dive .ow-drn-l { color: #ffffff; }
+/* YOUR OWN: a pip, no brackets, no bar. Present, not a problem to solve. */
+.ow-drn.friendly { color: var(--friend); }
+.ow-drn.friendly .ow-drn-c { display:none; }
+.ow-drn.friendly .ow-drn-pip { display:block; }
+.ow-drn.friendly .ow-drn-track { display:none; }
+.ow-drn-chev {
+  position:absolute; left:50%; top:50%;
+  width:calc(16px * var(--k)); height:calc(16px * var(--k));
+  margin:calc(-8px * var(--k)) 0 0 calc(-8px * var(--k));
+}
+.ow-drn-chev svg { width:100%; height:100%; display:block; overflow:visible;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.9)); }
+/* Clamped to the edge: the corners would be a box around nothing. */
+.ow-drn.edge .ow-drn-c { display:none; }
+.ow-drn.edge .ow-drn-pip { display:none; }
+.ow-drn.edge .ow-drn-track { display:none; }
+
 /* ======================================================== damage numbers */
 .ow-dn {
   position:absolute; left:0; top:0; font-family: var(--fd);
