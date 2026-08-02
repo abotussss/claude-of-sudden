@@ -2969,8 +2969,11 @@ export class MatchSystem {
    *
    *   • `RULES.reinforceDeficit` behind — being ground down, at any point in the
    *     match.
-   *   • the enemy within `RULES.reinforceEndgame` of `scoreTarget` — a match
-   *     about to end, where the trailing side may be only forty behind.
+   *   • the enemy within `RULES.reinforceEndgame` of `scoreTarget` AND AHEAD OF
+   *     US — a match about to end, where the trailing side may be only forty
+   *     behind. Both halves are load-bearing: without the second, a close finish
+   *     qualifies the LEADER too, and half the drops measured on the build
+   *     before it were exactly that. @see the block on `endgame` below.
    *
    * ────────────────────────────────────────────────────────────────────────
    * "たまに" IS A ROLL PER POLL AND NOT A TIMER. @see `RULES.reinforceChance`
@@ -3010,7 +3013,35 @@ export class MatchSystem {
       const mine = this.score[team];
       const theirs = this.score[1 - team];
       const behind = theirs - mine >= RULES.reinforceDeficit;
-      const endgame = RULES.scoreTarget - theirs <= RULES.reinforceEndgame;
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * THE ENDGAME TRIGGER IS "THE ENEMY IS ABOUT TO WIN", AND `theirs > mine`
+       * IS WHAT MAKES THAT A DIFFERENT SENTENCE FROM "THE MATCH IS ALMOST OVER"
+       * ────────────────────────────────────────────────────────────────────
+       * Without it the condition is symmetric in a close finish — at 466-424
+       * BOTH sides are within a hundred of `scoreTarget`, so the side that is
+       * WINNING qualifies for a comeback. MEASURED on the build before this
+       * line: six matches, eight drops, and FOUR of the eight were called for
+       * the leader (RED +42 on seed 11, +18 on seed 7, +34 on seed 19, +24 on
+       * seed 23) — ten free men for the side already ahead, which is the exact
+       * inverse of "形勢逆転要素". `_updateReinforcements` is polled `[0, 1]` in
+       * order and returns on the first call, so the leader also got FIRST
+       * refusal of the dice.
+       *
+       * The requirement names the losing side and nothing else — "大幅に負けて
+       * いる（…残り１００ポイントに相手チームがなったら）チーム" — and the
+       * bracket is a description of WHICH KIND of losing counts, not a second,
+       * side-agnostic trigger. So the endgame window is the enemy inside
+       * `reinforceEndgame` of the target AND us behind him, by any margin: the
+       * trailing side in a decided match is often only forty back, which is
+       * what this branch exists to catch and what `behind` cannot.
+       *
+       * It is a STRICT inequality, so a dead-level 450-450 gives nobody ten
+       * men. Two sides that are tied are not a side that is losing, and firing
+       * for both would be the "reinforce everybody" reading the player was
+       * asked about and rejected.
+       */
+      const endgame = RULES.scoreTarget - theirs <= RULES.reinforceEndgame && theirs > mine;
       if (!behind && !endgame) continue;
       this.reinforceStats.windows[team]++;
       /**

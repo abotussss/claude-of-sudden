@@ -1392,10 +1392,18 @@ export const RULES = {
   /** Points behind before a side is "大幅に負けている". */
   reinforceDeficit: 100,
   /**
-   * …or the enemy is within this many of winning. At `scoreTarget` 500 this is
-   * the enemy on 400+, which measures at roughly the last minute and a half of a
-   * decided match — late enough to be a last stand, early enough that ten men
-   * walking off a drop zone can still reach a capture point and hold it.
+   * …or the enemy is within this many of winning AND IS AHEAD OF US. At
+   * `scoreTarget` 500 this is the enemy on 400+, which measures at roughly the
+   * last minute and a half of a decided match — late enough to be a last stand,
+   * early enough that ten men walking off a drop zone can still reach a capture
+   * point and hold it.
+   *
+   * "AND IS AHEAD OF US" IS NOT IMPLIED BY THE NUMBER AND HAD TO BE WRITTEN
+   * DOWN. In a close finish both sides are inside a hundred of the target, so
+   * the distance on its own qualifies the LEADER — measured, four of eight
+   * drops over six matches went to the side that was winning. The subject of
+   * the requirement is 「大幅に負けているチーム」 and the test lives in
+   * `MatchSystem._updateReinforcements`, where the reasoning is written out.
    */
   reinforceEndgame: 100,
   /** Men in a drop. "１０人追加". */
