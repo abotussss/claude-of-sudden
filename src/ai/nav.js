@@ -2150,3 +2150,330 @@ export class CoverMap {
     return 0;
   }
 }
+
+/* ================================================================== */
+/* THE UPPER POST                                                     */
+/* ================================================================== */
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * STAIRS, FOR TWO OR THREE MEN — "屋内にAI入るけど2階とか屋上には来ないね ちゃんと
+ * 行動させて、そこにも 上から打つのは強いから 全員がそういう行動取るんじゃなくて２人や
+ * ３人くらい"
+ * ────────────────────────────────────────────────────────────────────────────
+ *
+ * WHAT IS ACTUALLY WRONG, MEASURED FIRST. `NavGrid` is a 2.5D height field: one
+ * floor per cell. Inside a building `_carveInteriors` keeps the GROUND storey
+ * and throws away everything above `floorY + 0.9`, so an upper floor is not in
+ * the graph at all and a staircase is truncated at knee height. Swept on this
+ * map (`_sixaudit.mjs`, seed 7): 36 820 walkable cells sit above 2.5 m, in
+ * 2113 separate components, and 865 of the baked cover points are up there —
+ * NONE of them joined to the ground. `_measureClimbs` finds 24 climb edges in
+ * the whole level. Men above 2.5 m over a 192 s round: ZERO, for zero seconds.
+ *
+ * MAKING THE UPPER STOREYS PROPERLY NAVIGABLE IS A MULTI-LEVEL NAVMESH and it
+ * is out of scope by a wide margin: every cell index in this file, every
+ * component label, every cover point, `escape`, `drop`, `_carveInteriors` and
+ * A* itself are single-valued in (x, z). The honest smallest thing is this
+ * class, and it rests on ONE FACT THE FILE ALREADY WRITES DOWN TWICE: the
+ * capsule can walk a staircase. `STANCE.stand.stepHeight` is 0.42 and the
+ * treads are 0.19. Only A* cannot see them.
+ *
+ * So this does not extend the grid. It measures, at boot, ONE ROUTE UP AND
+ * BACK per enterable building, as a list of world points, and `Agent._runPost`
+ * walks it with the same `_commitDetour` machinery `_descend` already uses to
+ * get a man OFF a roof. Two men a side may hold one at a time
+ * (`Squad.postTokens`), which is the "２人や３人くらい" the request asks for.
+ *
+ * THE METHOD IS `tools/floorcheck.mjs`'S, IN THE BOT'S OWN CAPSULE. Cast down
+ * each column of the footprint repeatedly, keep every horizontal surface with
+ * standing room, link surfaces 4-ways when they are within one `maxStep` of
+ * each other, and flood from the ground floor. A stair links ITSELF into that
+ * graph without being special-cased — which is the whole reason it is done this
+ * way rather than by pattern-matching a flight. What comes back is a BFS tree,
+ * and the route is a walk up its parents.
+ *
+ * MEASURED before it was written (`_sixstairs.mjs` / `_sixfoot.mjs`, seed 7):
+ * all ten interior volumes have a real flight (49-101 tread cells with standing
+ * room, rising 1.9-2.4 m), every first floor has 542-1040 standing cells on it,
+ * and A* can already deliver a man to the foot of every one of them from
+ * 42 of 42 spawn points. Nothing about the level had to change.
+ */
+
+/** Metres between column samples. The nav grid's own cell, so the step test
+ *  between two neighbours is the step test the controller will actually make. */
+const POST_CELL = 0.8;
+/** How far above a volume's floor a storey has to be to count as UPSTAIRS. */
+const POST_UP_MIN = 2.4;
+/** …and the ceiling on the scan, so this never walks a man onto a roof it has
+ *  not proved a way down from. One storey. */
+const POST_UP_MAX = 4.4;
+/** Surfaces per column. Ground, mid-flight, first floor — three is enough for
+ *  one storey and it bounds the working set at nx*nz*3 nodes per volume. */
+const POST_SURF = 5;
+/** Route waypoints are thinned to this spacing; the detour's own arrival
+ *  radius is 0.6 m, so anything tighter is a waypoint he is already standing on. */
+const POST_WP_GAP = 1.6;
+/** How many firing positions to keep per building, and how far apart. */
+const POST_STANDS = 3;
+const POST_STAND_GAP = 3.0;
+
+export class StairMap {
+  constructor(physics, grid) {
+    this.physics = physics;
+    this.grid = grid;
+    /**
+     * One per enterable building that has a walkable way up:
+     *   { building, route: Vector3[], stand: Vector3[], top, foot: Vector3 }
+     * `route` starts on the nav grid (so `_goTo` can deliver a man to
+     * `route[0]`) and ends on the first floor. Walked forwards to go up and
+     * backwards to come down — a step graph is symmetric, so the way up IS the
+     * way down and no second measurement is needed.
+     */
+    this.posts = [];
+    this.ms = 0;
+    this.columns = 0;
+    /** Per volume: why it did or did not yield a post. Report-time only. */
+    this.diag = [];
+  }
+
+  build(volumes) {
+    const t0 = performance.now();
+    this.posts.length = 0;
+    this.columns = 0;
+    this.diag.length = 0;
+    if (!volumes || !volumes.length) return this;
+    for (const v of volumes) this._one(v);
+    this.ms = performance.now() - t0;
+    return this;
+  }
+
+  /** Nearest post to a world point that this man's component can reach, or null. */
+  nearest(x, z, maxDist = Infinity) {
+    let best = null, bestD = maxDist * maxDist;
+    for (const p of this.posts) {
+      const dx = p.route[0].x - x, dz = p.route[0].z - z;
+      const d = dx * dx + dz * dz;
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    return best;
+  }
+
+  /**
+   * `NavGrid._treadLadder` in world coordinates: does the surface between two
+   * samples climb in treads a 0.42 m step offset can take, with room over each
+   * one? Same five sample points, same two constants, same three refusals —
+   * kept as its own copy only because that one takes cell indices and this is a
+   * lattice of its own. @see the call site in `_one`'s flood.
+   */
+  _treads(x0, z0, y0, x1, z1, y1) {
+    const phys = this.physics;
+    const MASK = phys.MASK.WORLD;
+    const lo = Math.min(y0, y1), hi = Math.max(y0, y1);
+    const top = hi + 0.75;
+    const len = (hi - lo) + 1.3;
+    let prev = y0;
+    for (let s = 1; s <= 3; s++) {
+      const t = s * 0.25;
+      const x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
+      const down = phys.raycast(x, top, z, 0, -1, 0, len, MASK);
+      if (!down.hit) return false;
+      const y = down.point.y;
+      if (y < lo - 0.08 || y > hi + 0.08) return false;
+      if (Math.abs(y - prev) > CLIMB_TREAD) return false;
+      if (phys.raycastAny(x, y + 0.22, z, 0, 1, 0, this.grid.crouchHeight, MASK)) return false;
+      prev = y;
+    }
+    return Math.abs(y1 - prev) <= CLIMB_TREAD;
+  }
+
+  _one(v) {
+    const d = { b: v.building, surfaces: 0, seeds: 0, reached: 0, maxRel: 0, why: 'ok' };
+    this.diag.push(d);
+    const phys = this.physics;
+    const MASK = phys.MASK.WORLD;
+    const g = this.grid;
+    const R = g.radius, H = g.height, STEP = g.maxStep;
+    const nx = Math.ceil((v.hw * 2) / POST_CELL) + 1;
+    const nz = Math.ceil((v.hd * 2) / POST_CELL) + 1;
+    const N = nx * nz;
+    // Node k = cell * POST_SURF + s. `-Infinity` marks an empty slot.
+    const sy = new Float32Array(N * POST_SURF).fill(-Infinity);
+    const wx = new Float32Array(N);
+    const wz = new Float32Array(N);
+    const p0 = this._p0 ?? (this._p0 = new THREE.Vector3());
+    const p1 = this._p1 ?? (this._p1 = new THREE.Vector3());
+
+    for (let iz = 0; iz < nz; iz++) {
+      for (let ix = 0; ix < nx; ix++) {
+        const lx = -v.hw + ix * POST_CELL;
+        const lz = -v.hd + iz * POST_CELL;
+        const cell = iz * nx + ix;
+        if (Math.abs(lx) > v.hw || Math.abs(lz) > v.hd) continue;
+        // Back onto world axes. `c`/`s` are the volume's own rotation, exactly
+        // as `_carveInteriors` uses them — but INVERTED, because that pass goes
+        // world -> local and this one goes local -> world.
+        const x = v.cx + lx * v.c + lz * v.s;
+        const z = v.cz - lx * v.s + lz * v.c;
+        wx[cell] = x; wz[cell] = z;
+        let y = v.floorY + POST_UP_MAX + 1.2;
+        let found = 0;
+        this.columns++;
+        for (let k = 0; k < 8 && found < POST_SURF; k++) {
+          const hit = phys.raycast(x, y, z, 0, -1, 0, POST_UP_MAX + 2.4, MASK);
+          if (!hit.hit) break;
+          const h = hit.point.y;
+          if (h < v.floorY - 0.5) break;
+          if (hit.normal.y >= g.maxSlope) {
+            p0.set(x, h + R + 0.06, z);
+            p1.set(x, h + H - R, z);
+            if (!phys.checkCapsule(p0, p1, R, MASK)) {
+              sy[cell * POST_SURF + found] = h;
+              found++; d.surfaces++;
+            }
+          }
+          y = h - 0.08;
+        }
+        // Lowest first, so slot 0 is the ground storey wherever there is one.
+        for (let a = 0; a < found - 1; a++) {
+          for (let b = a + 1; b < found; b++) {
+            const ka = cell * POST_SURF + a, kb = cell * POST_SURF + b;
+            if (sy[kb] < sy[ka]) { const t = sy[ka]; sy[ka] = sy[kb]; sy[kb] = t; }
+          }
+        }
+      }
+    }
+
+    /* ---- flood from the ground floor, one step at a time ---- */
+    const M = N * POST_SURF;
+    const parent = new Int32Array(M).fill(-2);   // -2 unvisited, -1 a seed
+    const queue = new Int32Array(M);
+    let head = 0, tail = 0;
+    for (let cell = 0; cell < N; cell++) {
+      const k = cell * POST_SURF;
+      if (sy[k] === -Infinity) continue;
+      if (sy[k] - v.floorY > 0.6) continue;      // not the ground storey
+      parent[k] = -1;
+      queue[tail++] = k;
+    }
+    d.seeds = tail;
+    if (tail === 0) { d.why = 'no ground-floor seed'; return; }
+    const DXS = [1, -1, 0, 0];
+    const DZS = [0, 0, 1, -1];
+    while (head < tail) {
+      const k = queue[head++];
+      const cell = (k / POST_SURF) | 0;
+      const ix = cell % nx, iz = (cell / nx) | 0;
+      const y = sy[k];
+      for (let d = 0; d < 4; d++) {
+        const jx = ix + DXS[d], jz = iz + DZS[d];
+        if (jx < 0 || jz < 0 || jx >= nx || jz >= nz) continue;
+        const jc = jz * nx + jx;
+        for (let s = 0; s < POST_SURF; s++) {
+          const j = jc * POST_SURF + s;
+          if (sy[j] === -Infinity) continue;
+          if (parent[j] !== -2) continue;
+          if (sy[j] - v.floorY > POST_UP_MAX) continue;
+          /**
+           * A FLIGHT IS STEEPER THAN THE LATTICE, and this is the line that
+           * decides whether this class finds anything at all. A 32° stair rises
+           * 0.19 m per 0.275 m tread, i.e. 0.55 m across one 0.8 m sample —
+           * over `maxStep` 0.42, so a plain step test refuses every flight on
+           * the map. Measured on the first run: three of ten buildings yielded
+           * a post and the other seven flooded to 0.28-0.91 m and stopped, one
+           * tread up, exactly as `NavGrid._measureClimbs`' own header says they
+           * would.
+           *
+           * `_treads` is that method's `_treadLadder` in world coordinates: it
+           * re-asks the question the capsule actually asks — does the surface
+           * between these two samples climb in steps of 0.4 m or less, with
+           * head clearance over each one. A stair passes, a 0.6 m ledge does
+           * not, and a roof over a void does not.
+           */
+          const dy = Math.abs(sy[j] - y);
+          if (dy > STEP && (dy > CLIMB_MAX * 2
+            || !this._treads(wx[cell], wz[cell], y, wx[jc], wz[jc], sy[j]))) continue;
+          parent[j] = k;
+          queue[tail++] = j;
+        }
+      }
+    }
+
+    /* ---- the firing positions: upstairs, and against an outside wall ---- */
+    let bestUp = -1, bestScore = -Infinity;
+    const cand = [];
+    for (let k = 0; k < M; k++) {
+      if (parent[k] === -2 || sy[k] === -Infinity) continue;
+      const rel = sy[k] - v.floorY;
+      d.reached++;
+      if (rel > d.maxRel) d.maxRel = +rel.toFixed(2);
+      if (rel < POST_UP_MIN) continue;
+      const cell = (k / POST_SURF) | 0;
+      const ix = cell % nx, iz = (cell / nx) | 0;
+      // How close to the edge of the footprint: a man who is going to shoot out
+      // of a window has to be standing at one.
+      const edge = Math.min(ix, nx - 1 - ix, iz, nz - 1 - iz);
+      const score = rel * 2 - edge;
+      cand.push(k);
+      if (score > bestScore) { bestScore = score; bestUp = k; }
+    }
+    if (bestUp < 0) { d.why = 'flood never reached an upper storey'; return; }
+
+    /* ---- walk the parents back down to the ground seed ---- */
+    const raw = [];
+    for (let k = bestUp; k !== -1; k = parent[k]) {
+      const cell = (k / POST_SURF) | 0;
+      raw.push(new THREE.Vector3(wx[cell], sy[k], wz[cell]));
+      if (raw.length > 4096) return;             // cannot happen; not trusted to
+    }
+    raw.reverse();
+    // Thin it. The first and last are always kept: the first is the handover
+    // from A*, the last is the position itself.
+    const route = [raw[0]];
+    for (let i = 1; i < raw.length - 1; i++) {
+      const p = route[route.length - 1];
+      if (raw[i].distanceToSquared(p) >= POST_WP_GAP * POST_WP_GAP) route.push(raw[i]);
+    }
+    route.push(raw[raw.length - 1]);
+
+    /**
+     * THE HANDOVER HAS TO BE ON THE HEIGHT FIELD or `_goTo` cannot deliver
+     * anybody to it. The seed is a ground-floor cell inside a carved interior,
+     * so it normally IS on the grid; snapping makes that a fact rather than an
+     * assumption, and a building whose foot does not snap is dropped instead of
+     * becoming an order nobody can fill.
+     */
+    const foot = route[0];
+    const ci = g.nearest(foot.x, foot.z, foot.y, 4, 1.6);
+    if (ci < 0) { d.why = 'foot of the flight is not on the height field'; return; }
+    foot.set(g.worldX(ci % g.nx), g.floor[ci], g.worldZ((ci / g.nx) | 0));
+
+    /* ---- two or three places to stand once he is up ---- */
+    cand.sort((a, b) => {
+      const ca = (a / POST_SURF) | 0, cb = (b / POST_SURF) | 0;
+      const ea = Math.min(ca % nx, nx - 1 - (ca % nx), ((ca / nx) | 0), nz - 1 - ((ca / nx) | 0));
+      const eb = Math.min(cb % nx, nx - 1 - (cb % nx), ((cb / nx) | 0), nz - 1 - ((cb / nx) | 0));
+      return ea - eb;
+    });
+    const stand = [];
+    for (const k of cand) {
+      if (stand.length >= POST_STANDS) break;
+      const cell = (k / POST_SURF) | 0;
+      const p = new THREE.Vector3(wx[cell], sy[k], wz[cell]);
+      let ok = true;
+      for (const q of stand) if (q.distanceToSquared(p) < POST_STAND_GAP * POST_STAND_GAP) { ok = false; break; }
+      if (ok) stand.push(p);
+    }
+    if (!stand.length) stand.push(route[route.length - 1].clone());
+
+    this.posts.push({
+      building: v.building,
+      route,
+      stand,
+      foot,
+      top: route[route.length - 1].y,
+      /** Who is on it, or -1. One man per building — @see `Squad.claimPost`. */
+      held: -1,
+    });
+  }
+}

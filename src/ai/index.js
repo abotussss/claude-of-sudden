@@ -53,7 +53,7 @@ import * as THREE from 'three';
 import { SoldierMaterials, TEAM_RIM, TEAM_DRESS } from './textures.js';
 import { buildSoldier, resolveMaterials, MATERIAL_SLOTS, VARIANTS } from './soldier.js';
 import { RIG } from './rig.js';
-import { NavGrid, CoverMap } from './nav.js';
+import { NavGrid, CoverMap, StairMap } from './nav.js';
 import { Agent, STATE, drawPersona, ARMOUR_FRAG_MIN, ARMOUR_FRAG_MAX } from './agent.js';
 import { Squad } from './squad.js';
 import { Radio } from './radio.js';
@@ -1250,6 +1250,13 @@ export class AiSystem {
      * ever be inside one. @see `NavGrid._carveInteriors`.
      */
     this.grid.build(world?.interiorVolumes ?? null);
+    /**
+     * ONE WAY UPSTAIRS PER BUILDING, MEASURED. @see `StairMap` — a height field
+     * with one floor per cell cannot hold an upper storey, so this is a short
+     * list of world points beside the grid rather than anything in it, and
+     * `Agent._runPost` walks it. Same volumes, same capsule, one boot pass.
+     */
+    this.stairs = new StairMap(phys, this.grid).build(world?.interiorVolumes ?? null);
     this._bakeCover(phys, world);
     this.stats.navMs = performance.now() - t0;
     this.stats.walkable = this.grid.walkableCount;
@@ -1268,6 +1275,8 @@ export class AiSystem {
             `(+${this.stats.coverRubblePts} the rubble makes, ` +
             `${this.coverIntact.depMs.toFixed(0)}ms)`
           : '') +
+        ` · ${this.stairs.posts.length} upper posts ` +
+        `(${this.stairs.columns} columns, ${this.stairs.ms.toFixed(0)}ms)` +
         ` · ${this.stats.navMs.toFixed(0)}ms`
     );
   }
