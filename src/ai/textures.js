@@ -267,6 +267,48 @@ export const CAMO = {
     macro: 2,
     warp: 0.14,
   },
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * NOT CAMOUFLAGE — 「民間軍は私服にして軍服にはしないように」
+   * ──────────────────────────────────────────────────────────────────────────
+   * PLAIN CLOTH, run through the same machinery, and that is the whole trick.
+   * `camoTexel` blends five tonal families through four blotch fields; set the
+   * five families a few percent apart instead of 2.7:1 apart and the blend
+   * collapses to ONE colour with a faint dye-lot mottle in it — which is what a
+   * cotton shirt or a work jacket actually is. Everything the pattern carries
+   * that is NOT the blotch field — the felled seams, the stitch beads, the
+   * pocket creases, the 1-2 cm crease field, the fold relief — is unchanged and
+   * is doing all the work. That is why this is a CAMO entry and not a fourth
+   * bake path: the relief is the expensive half and it is shared.
+   *
+   * ONE BAKE SERVES BOTH KINDS OF CIVILIAN. The armed man and the unarmed one
+   * are separated by the material's own `tint`, which multiplies this map:
+   * `CIVIL_CLOTH` in soldier.js is 0.42x for the militiaman's dark work jacket
+   * and 3.05x for the unarmed civilian's pale shirt. That is a 7:1 VALUE ratio
+   * between the two of them out of one 512 tile, and value is the cue that
+   * survives shade, distance and a 27-pixel figure — @see the TEAM_DRESS note
+   * on why hue alone was not enough for the two ARMIES.
+   *
+   * `window` widens the budget clamp for this pattern only. `CLOTH_BUDGET`
+   * pins every uniform into 0.040-0.152 linear because a soldier brighter than
+   * sunlit plaster reads as a mannequin; a white shirt IS brighter than sunlit
+   * plaster, deliberately, and 0.152 x 3.05 = 0.46 has to be allowed to land.
+   * `contrast` is dropped to 0.55 because a plain garment has no macro contrast
+   * to stretch — leaving it at 1.5 turns the dye mottle into blotches and puts
+   * the camouflage back.
+   */
+  civil: {
+    budget: 0.104,
+    window: { min: 0.062, max: 0.150, contrast: 0.55, sat: 1.05 },
+    // a five-family spread of 1.25:1 rather than 2.7:1 — a dye lot, not a print
+    pale: [0.121, 0.117, 0.110],
+    base: [0.108, 0.104, 0.097],
+    mid: [0.100, 0.097, 0.092],
+    dark: [0.092, 0.089, 0.086],
+    olive: [0.104, 0.102, 0.095],
+    macro: 2,
+    warp: 0.12,
+  },
 };
 
 /**
@@ -385,8 +427,15 @@ export const KIT_CAL = 0.51;
 
 export function budgetFor(cfg) {
   const mean = cfg?.budget ?? CLOTH_BUDGET.mean;
-  if (mean === CLOTH_BUDGET.mean) return CLOTH_BUDGET;
-  return { ...CLOTH_BUDGET, mean };
+  /**
+   * A pattern may also move the WINDOW it is clamped into and the contrast
+   * stretch applied inside it. Only `CAMO.civil` does — @see its note: plain
+   * cloth has no macro contrast to stretch, and the pale shirt's whole job is
+   * to sit above the band every uniform on the map is pinned into.
+   */
+  const win = cfg?.window ?? null;
+  if (mean === CLOTH_BUDGET.mean && !win) return CLOTH_BUDGET;
+  return { ...CLOTH_BUDGET, mean, ...win };
 }
 
 const lum3 = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
