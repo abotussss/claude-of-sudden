@@ -60,6 +60,35 @@
  * regress `tools/navcheck.mjs`, which is what lets it be scheduled three times a
  * round on the attackers' route.
  *
+ * ────────────────────────────────────────────────────────────────────────────
+ * …AND THE GROUND UNDER A LINE IS NOT A CONSTANT OF THE MAP
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「宙にうく物体はまだ大聖堂の上に残ってますよ」, photographed after three
+ * "fixes" that every gate passed. `_floatcheck` reconstructs the PHYSICS world
+ * and this grit carries no collision at all, so the gate was structurally
+ * unable to see it while the player was looking at it.
+ *
+ * The cause is the boot probe above. MAIN and CROSS both cross the cathedral,
+ * and measured at ?seed=7, 15 of CROSS's 31 impacts and 3 of MAIN's 11 are on
+ * that building — nine of them on the nave roof at 15.2 m — and
+ * `world.cathedral.setRazed` takes it away in the middle of a match. The
+ * impacts, the tracers that end on them and the grit thrown out of them stayed
+ * where the boot bake put them, up to 14.8 m above the ruin.
+ *
+ * The answer is `Airstrike._bakeHostVariants`'s and `Bomber`'s: BAKE AT BOOT,
+ * SWAP AT FIRE TIME. Each line standing over a building that can stop existing
+ * carries a SECOND COMPLETE POSE — impact heights, buried rest poses, settled
+ * poses and the throw between them — solved at boot with that building's
+ * COLLISION swapped out and back, and the frame it falls is a scatter of
+ * pre-solved floats.
+ *
+ * THE TIMELINE IS NOT PART OF IT, AND THAT IS A PROPERTY OF THE WEAPON RATHER
+ * THAN AN OMISSION. `ahead` and `travel` come from `ALT` and `DEPRESSION`, and
+ * `tFire` is a distance along the aircraft's own track: not one of them reads
+ * the ground under an impact. So unlike the bomber, where a longer fall moves a
+ * release point, a strafing run's clock is identical in both states and only
+ * `p.at.y` moves. @see `_bakeHostVariants`.
+ *
  * DAMAGE IS SAMPLED, and that is the one honest compromise in the file. Thirty
  * `explosion` events in a second and a half would each spawn a full fx fireball
  * and a full audio voice — the voice pool is 48 with a ~2 s hold, so the run
@@ -88,6 +117,7 @@
 import * as THREE from 'three';
 import { RULES } from './rules.js';
 import { chunkGeometry, clamp, makeChunkMaterial, mergeGeometries } from './airstrike.js';
+import { perishableHosts } from './bomber.js';
 
 /** Same 1.5x as sites.js, airstrike.js and bomber.js. IF ONE MOVES, MOVE THE OTHERS. */
 const SCALE = 1.5;
@@ -147,6 +177,12 @@ const DAMAGE_EVERY = 4;
 const CHUNKS_PER_IMPACT = 8;
 /** Seconds after the last impact before the grit is baked down. */
 const GRIT_SETTLE = 3.2;
+/** Metres a probe must move before a host is judged to have moved the ground. */
+const HOST_EPS = 0.05;
+/** An impact above this is on a roof rather than in the lane it was authored for. */
+const ROOF_Y = 3;
+/** Metres above an impact a settle/burial ray starts from. @see `_crown`. */
+const SETTLE_PROBE = 5;
 
 /**
  * Flight profile. A fighter is faster than the bomber (38 m/s) and that is the
@@ -242,6 +278,14 @@ export class Strafe {
     };
     this._cand = [];
     this._wt = [];
+
+    /**
+     * Every (run, host) binding on the map, flat, so the per-frame compare is
+     * one loop over a list that is normally two entries long.
+     * @see `_bakeHostVariants`
+     */
+    this._variants = [];
+    this._hostBakeMs = 0;
   }
 
   /* ====================================================================== */
@@ -266,6 +310,10 @@ export class Strafe {
       const run = this._buildRun(LINES[i], i, world, physics);
       if (run) this.runs.push(run);
     }
+    // The second pose per line, and only then the report — "over a rooftop"
+    // is a different sentence once we know whether the roof survives the match.
+    this._bakeHostVariants(world, physics);
+    this._reportGround();
 
     ctx.scene.add(this.group);
     this.ready = this.runs.length > 0;
@@ -375,31 +423,6 @@ export class Strafe {
       topY = Math.max(topY, p.y);
       impacts.push({ at: p, from: new THREE.Vector3(), tFire: 0, tImpact: 0, damage: i % DAMAGE_EVERY === 0 });
     }
-    /**
-     * A shell that lands on a ROOF did nothing, and a badly authored line hides
-     * exactly this way — so say so at boot, as the bomber does. But at 2.2 m
-     * spacing this probe is fine enough to also find things a bomber's 9 m
-     * spacing steps straight over, and those are not all errors: CROSS passes
-     * under the canopy at the mid-street junction (measured 3.2-3.9 m across
-     * level x -2.7..+2.7 at every z from 10.5 to 13.5), and rounds striking that
-     * canopy while the man underneath is untouched is the correct behaviour and a
-     * real piece of overhead cover. So the threshold is a SHARE of the line:
-     * a handful of sheltered impacts is a lane feature, a third of them is an
-     * authoring mistake.
-     */
-    const high = impacts.filter((p) => p.at.y > 3);
-    if (high.length / n > 0.3) {
-      console.warn(
-        `[strafe] ${spec.id}: ${high.length}/${n} impacts land above 3 m ` +
-          `(${high.map((p) => p.at.y.toFixed(1)).join(', ')} m) — the line is over rooftops, ` +
-          'not over a street. Re-author it.'
-      );
-    } else if (high.length) {
-      console.info(
-        `[strafe] ${spec.id}: ${high.length}/${n} impacts are sheltered by structure at ` +
-          `${high.map((p) => p.at.y.toFixed(1)).join('/')} m — overhead cover, not a roof.`
-      );
-    }
 
     /* ---- the timeline, closed form ----------------------------------- */
     const alt = topY + ALT;
@@ -449,6 +472,8 @@ export class Strafe {
       tracer: 0,
       t: -1,
       chunkCount: n * CHUNKS_PER_IMPACT,
+      /** Alternative poses, one per perishable building under this line. */
+      hostVariants: [],
       uniforms: {
         uT: { value: -1 },
         uAnim: { value: 1 },
@@ -498,17 +523,28 @@ export class Strafe {
     /** Broken tarmac and the pale sub-base under it, as in bomber.js. */
     const palette = [0x6f6a62, 0x847d73, 0x9c9488, 0xb2a897];
 
+    /**
+     * The dice the SECOND pose needs back — which impact owns each chunk, how
+     * deep it is buried and how far its own half-extent lifts it off the plane
+     * it settles on. Everything else is identical in both states and is never
+     * re-drawn. @see `Bomber._buildDebris` for the same four arrays.
+     */
+    const owner = new Uint16Array(n);
+    const dig = new Float32Array(n);
+    const lift = new Float32Array(n);
+
     let k = 0;
-    for (const p of run.impacts) {
+    for (let pi = 0; pi < run.impacts.length; pi++) {
+      const p = run.impacts[pi];
       for (let i = 0; i < CHUNKS_PER_IMPACT; i++, k++) {
+        owner[k] = pi;
         /* ---- rest pose: under the road ------------------------------- */
         const ra = rng.float() * Math.PI * 2;
         const rr = Math.sqrt(rng.float()) * 0.5;
-        pos.set(
-          p.at.x + Math.cos(ra) * rr,
-          p.at.y - rng.range(0.5, 1.2),
-          p.at.z + Math.sin(ra) * rr
-        );
+        const rx = p.at.x + Math.cos(ra) * rr;
+        const rz = p.at.z + Math.sin(ra) * rr;
+        dig[k] = rng.range(0.5, 1.2);
+        pos.set(rx, this._crown(p.at.y, rx, rz, physics) - dig[k], rz);
         // Smaller than a bomb's spoil: a 30 mm shell breaks the surface course,
         // it does not excavate.
         const size = rng.range(0.1, 0.3);
@@ -530,8 +566,9 @@ export class Strafe {
           0,
           p.at.z + Math.sin(sa) * sr + run.dir.z * rng.range(0.2, 1.6)
         );
-        const floor = physics.groundHeight(settlePos.x, settlePos.z, p.at.y + 5);
-        settlePos.y = (Number.isFinite(floor) ? floor : p.at.y) + size * 0.36;
+        const floor = physics.groundHeight(settlePos.x, settlePos.z, p.at.y + SETTLE_PROBE);
+        lift[k] = size * 0.36;
+        settlePos.y = (Number.isFinite(floor) ? floor : p.at.y) + lift[k];
 
         /* ---- the curve, solved here and never again ------------------- */
         mot[k * 4] = p.tImpact + rng.range(0, 0.03);
@@ -568,6 +605,9 @@ export class Strafe {
     mesh.instanceMatrix.needsUpdate = true;
     mesh.userData.rest = new Float32Array(mesh.instanceMatrix.array);
     mesh.userData.settled = settled;
+    run.owner = owner;
+    run.dig = dig;
+    run.lift = lift;
     mesh.instanceColor = new THREE.InstancedBufferAttribute(colour, 3);
     mesh.instanceColor.needsUpdate = true;
     geo.setAttribute('aMot', new THREE.InstancedBufferAttribute(mot, 4));
@@ -577,6 +617,257 @@ export class Strafe {
     mesh.updateMatrix();
     this.group.add(mesh);
     return mesh;
+  }
+
+  /**
+   * The plane a chunk is buried UNDER, which is not always its own impact's.
+   *
+   * A shell's spoil is drawn inside a 0.5 m disc, and an impact on a canopy or
+   * a cathedral aisle has part of that disc hanging over the lane beside it.
+   * Burying those chunks under THE IMPACT'S plane leaves them in open air off
+   * the edge — measured at ?seed=7 on the untouched map, 6 of CROSS's 248 sat
+   * 1.5 m or more above the pavement with nothing over them and nothing under
+   * them, with no event fired. So the burial plane is the LOWER of the two: one
+   * extra ray per chunk at boot, and nothing that is ever drawn changes, because
+   * the rest pose exists to be invisible. @see `Bomber._crown`.
+   */
+  _crown(impactY, x, z, physics) {
+    const g = physics.groundHeight(x, z, impactY + SETTLE_PROBE);
+    return Number.isFinite(g) && g < impactY ? g : impactY;
+  }
+
+  /* ====================================================================== */
+  /* THE BUILDING UNDER THE LINE, WHICH MAY NOT BE THERE LATER              */
+  /* ====================================================================== */
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * ONE ALTERNATIVE POSE PER (RUN, HOST), SOLVED AT BOOT
+   * ────────────────────────────────────────────────────────────────────────
+   * The bomber's method with the timeline taken out, because a strafing run
+   * has no timeline to move: `tFire` is a distance along the aircraft's track
+   * and `travel` is a constant of the gun's profile, so the only things the
+   * ground under an impact decides are `p.at.y` and the grit round it.
+   *
+   * Everything absolute, never a delta applied and unapplied — these are
+   * `Float32Array`s and the swap has to survive a round reset standing the
+   * church back up and putting it down again. `probeSwap`, never `setRazed`:
+   * collision only, and the level is left byte-identical to what it was.
+   */
+  _bakeHostVariants(world, physics) {
+    const hosts = perishableHosts(world, physics);
+    if (!hosts.length || !this.runs.length) return;
+    const t0 = performance.now();
+    let bound = 0;
+    let rays = 0;
+
+    for (const run of this.runs) {
+      for (const host of hosts) {
+        if (!this._runNear(run, host)) continue;
+        const was = host.isDown();
+        host.probeSwap(false);
+        const up = this._solveState(run, physics);
+        host.probeSwap(true);
+        const down = this._solveState(run, physics);
+        host.probeSwap(was);
+        rays += 2 * (run.impacts.length + run.chunkCount * 2);
+        if (!this._statesDiffer(up, down)) continue;
+
+        const v = { run, host, up, down, applied: null };
+        run.hostVariants.push(v);
+        this._variants.push(v);
+        bound++;
+        let moved = 0;
+        let worst = 0;
+        for (let i = 0; i < run.impacts.length; i++) {
+          const d = up.impactY[i] - down.impactY[i];
+          if (Math.abs(d) > HOST_EPS) moved++;
+          if (d > worst) worst = d;
+        }
+        let chunks = 0;
+        for (let k = 0; k < run.chunkCount; k++) {
+          if (Math.abs(up.settledY[k] - down.settledY[k]) > HOST_EPS
+            || Math.abs(up.restY[k] - down.restY[k]) > HOST_EPS) chunks++;
+        }
+        console.info(
+          `[strafe] ${run.id}: ${moved}/${run.impacts.length} impacts and ${chunks}/` +
+            `${run.chunkCount} chunks stand on ${host.id} — second pose baked ` +
+            `(worst ${worst.toFixed(2)} m)`
+        );
+      }
+    }
+    // Put every line into the state the level is ACTUALLY in right now: a no-op
+    // when that is the state the base bake ran in, the correction under
+    // `?cath=down`.
+    this._syncHosts(true);
+
+    this._hostBakeMs = performance.now() - t0;
+    if (bound) {
+      console.info(
+        `[strafe] perishable hosts: ${bound} run/host binding(s) carry a second pose ` +
+          `(${rays} rays, ${this._hostBakeMs.toFixed(0)}ms)`
+      );
+    }
+  }
+
+  /** Is any part of this line — an impact or a chunk — inside `host`'s circle? */
+  _runNear(run, host) {
+    const rr = host.reach * host.reach;
+    for (const p of run.impacts) {
+      const dx = p.at.x - host.centre.x;
+      const dz = p.at.z - host.centre.z;
+      if (dx * dx + dz * dz <= rr) return true;
+    }
+    const s = run.grit.userData.settled;
+    for (let k = 0; k < run.chunkCount; k++) {
+      const dx = s[k * 16 + 12] - host.centre.x;
+      const dz = s[k * 16 + 14] - host.centre.z;
+      if (dx * dx + dz * dz <= rr) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The whole line, re-solved against the collision the level has RIGHT NOW,
+   * by the same three rules the boot bake used and no fourth one. The dice are
+   * never re-drawn: `run.dig` and `run.lift` are the draws it made.
+   */
+  _solveState(run, physics) {
+    const n = run.impacts.length;
+    const nc = run.chunkCount;
+    const s = {
+      impactY: new Float64Array(n),
+      restY: new Float32Array(nc),
+      settledY: new Float32Array(nc),
+      offY: new Float32Array(nc),
+    };
+    for (let i = 0; i < n; i++) {
+      const p = run.impacts[i];
+      const h = physics.groundHeight(p.at.x, p.at.z, 60);
+      s.impactY[i] = Number.isFinite(h) ? h : p.at.y;
+    }
+    const rest = run.grit.userData.rest;
+    const settled = run.grit.userData.settled;
+    for (let k = 0; k < nc; k++) {
+      const iy = s.impactY[run.owner[k]];
+      s.restY[k] = this._crown(iy, rest[k * 16 + 12], rest[k * 16 + 14], physics) - run.dig[k];
+      const f = physics.groundHeight(settled[k * 16 + 12], settled[k * 16 + 14], iy + SETTLE_PROBE);
+      s.settledY[k] = (Number.isFinite(f) ? f : iy) + run.lift[k];
+      s.offY[k] = s.settledY[k] - s.restY[k];
+    }
+    return s;
+  }
+
+  /** True when the two states put anything anywhere different. */
+  _statesDiffer(a, b) {
+    for (let i = 0; i < a.impactY.length; i++) {
+      if (Math.abs(a.impactY[i] - b.impactY[i]) > HOST_EPS) return true;
+    }
+    for (let k = 0; k < a.restY.length; k++) {
+      if (Math.abs(a.restY[k] - b.restY[k]) > HOST_EPS) return true;
+      if (Math.abs(a.settledY[k] - b.settledY[k]) > HOST_EPS) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The compare, once a frame. One boolean read per binding when nothing has
+   * changed; a scatter of pre-solved floats on the frame a host falls.
+   * @see `Bomber._syncHosts` for why this is READ rather than hooked.
+   */
+  _syncHosts(force = false) {
+    const list = this._variants;
+    for (let i = 0; i < list.length; i++) {
+      const v = list[i];
+      const down = v.host.isDown();
+      if (!force && down === v.applied) continue;
+      v.applied = down;
+      this._applyState(v.run, down ? v.down : v.up);
+    }
+  }
+
+  /** Scatter one pre-solved state over a line. No arithmetic at all. */
+  _applyState(run, s) {
+    if (!run) return;
+    for (let i = 0; i < run.impacts.length; i++) run.impacts[i].at.y = s.impactY[i];
+
+    const mesh = run.grit;
+    const rest = mesh.userData.rest;
+    const settled = mesh.userData.settled;
+    const inst = mesh.instanceMatrix.array;
+    const off = mesh.geometry.getAttribute('aOff');
+    // What is DRAWN is the settled pose once the dust is down and the buried
+    // rest pose at every other moment.
+    const live = run.baked;
+    for (let k = 0; k < run.chunkCount; k++) {
+      rest[k * 16 + 13] = s.restY[k];
+      settled[k * 16 + 13] = s.settledY[k];
+      off.array[k * 3 + 1] = s.offY[k];
+      inst[k * 16 + 13] = live ? s.settledY[k] : s.restY[k];
+    }
+    off.needsUpdate = true;
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * WHAT GROUND DOES EACH LINE ACTUALLY HAVE, IN EVERY STATE THE MAP HAS?
+   * ────────────────────────────────────────────────────────────────────────
+   * The old check counted impacts above 3 m and called a third of them an
+   * authoring mistake. That is two different facts wearing one number: CROSS
+   * had fifteen and TWELVE OF THEM WERE THE CATHEDRAL, which is legitimately
+   * what is on the cross street and which the match takes away — while ALANE's
+   * nine are a permanent roof and are the mistake the check exists to find.
+   *
+   * A NOTE ON THE THIRD CASE, WHICH IS REAL AND IS KEPT: at 2.2 m spacing this
+   * probe is fine enough to find genuine overhead cover a bomber's 9 m spacing
+   * steps over — CROSS passes under the canopy at the mid-street junction — and
+   * rounds striking that canopy while the man underneath is untouched is
+   * correct behaviour. So the SHARE threshold still decides whether a permanent
+   * roof is a lane feature or an authoring mistake; what changed is that a
+   * perishable roof is no longer counted against it at all.
+   */
+  _reportGround() {
+    for (const run of this.runs) {
+      const n = run.impacts.length;
+      const perishable = [];
+      const permanent = [];
+      for (let i = 0; i < n; i++) {
+        let lo = run.impacts[i].at.y;
+        let hi = lo;
+        for (const v of run.hostVariants) {
+          lo = Math.min(lo, v.up.impactY[i], v.down.impactY[i]);
+          hi = Math.max(hi, v.up.impactY[i], v.down.impactY[i]);
+        }
+        if (hi - lo > HOST_EPS) perishable.push(`${hi.toFixed(1)}→${lo.toFixed(1)}`);
+        else if (hi > ROOF_Y) permanent.push(hi);
+      }
+      const host = run.hostVariants.map((v) => v.host.id).join('+');
+      if (permanent.length / n > 0.3) {
+        console.warn(
+          `[strafe] ${run.id}: ${permanent.length}/${n} impacts land above ${ROOF_Y} m ` +
+            `(${permanent.map((y) => y.toFixed(1)).join(', ')} m) on ground that is there in ` +
+            'EVERY state of this map — the line is over a permanent rooftop, not over a lane. ' +
+            'Re-author it.'
+        );
+      } else if (permanent.length) {
+        console.info(
+          `[strafe] ${run.id}: ${permanent.length}/${n} impacts are sheltered by permanent ` +
+            `structure at ${permanent.map((y) => y.toFixed(1)).join('/')} m — overhead cover, ` +
+            'not a roof.'
+        );
+      }
+      if (perishable.length) {
+        console.info(
+          `[strafe] ${run.id}: ${perishable.length}/${n} impacts land on ${host}, which the ` +
+            `match can take away (${perishable.join(', ')} m) — both poses baked, and the ` +
+            'grit follows the building down.'
+        );
+      }
+      if (!permanent.length && !perishable.length) {
+        console.info(`[strafe] ${run.id}: all ${n} impacts land on the lane in every state.`);
+      }
+    }
   }
 
   /* ====================================================================== */
@@ -665,6 +956,9 @@ export class Strafe {
    */
   update(dt, live) {
     if (!this.ready) return;
+    // One boolean read per binding when nothing has changed, and a scatter of
+    // pre-solved floats on the one frame a building under a line stops existing.
+    if (this._variants.length) this._syncHosts();
 
     let flying = null;
     for (let i = this._live.length - 1; i >= 0; i--) {

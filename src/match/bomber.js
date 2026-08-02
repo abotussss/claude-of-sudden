@@ -56,6 +56,45 @@
  * a round on the attackers' route without `tools/navcheck.mjs` ever being able
  * to regress.
  *
+ * ────────────────────────────────────────────────────────────────────────────
+ * …AND THE PLANE UNDER A RUN IS NOT A CONSTANT OF THE MAP
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「宙にうく物体はまだ大聖堂の上に残ってますよ」, reported three times, fixed
+ * three times, and photographed the fourth. Every gate said zero because the
+ * debris CARRIES NO COLLISION — `_floatcheck` reconstructs the physics world and
+ * is structurally blind to it — while the player was looking at a swarm of dark
+ * cubes in clear sky over the razed cathedral.
+ *
+ * The cause is the boot probe above. MAIN and CROSS both cross the cathedral,
+ * and measured at ?seed=7 the mid street has its nave roof at 15.2 m on it and
+ * the cross street has the aisle roof at 9.0 m as well: 5 of the 23 impacts on
+ * this map are on a 29 m building, and `world.cathedral.setRazed` takes that
+ * building away in the middle of a match. The bomb, its crater, its scorch and
+ * its forty chunks of spoil stay where the boot bake put them, 5.4 to 14.5 m
+ * above the ruin.
+ *
+ * TWO ANSWERS WERE CONSIDERED AND ARE WRONG, and they are written down so they
+ * are not re-derived:
+ *   - probe the razed plane once, `host: 'cathedral'`-style. `Airstrike` may do
+ *     that because `MatchSystem._razeCathedral` GUARANTEES the shell is gone
+ *     `cathedralRazeDelay` after those sites fire. Nothing guarantees anything
+ *     about when a bomber run is scheduled, so a single razed-state bake makes
+ *     every bomb before the collapse detonate at nave-FLOOR level and drop its
+ *     spoil through a roof that is still standing.
+ *   - re-author the lines off the church. The cathedral is legitimately what is
+ *     on the mid street and the cross street; moving the lines is moving the
+ *     weapon off the two corridors it exists to price.
+ *
+ * So it is `Airstrike._bakeHostVariants`'s answer, which is this project's
+ * answer to destruction everywhere: BAKE AT BOOT, SWAP AT FIRE TIME. Each run
+ * that stands over a building that can stop existing carries A SECOND COMPLETE
+ * POSE — impact heights, fall times, release points, the buried rest pose, the
+ * settled pose and the throw between them — solved at boot with that building's
+ * COLLISION swapped out and back, and the frame the host actually falls is a
+ * scatter of pre-solved floats over the entries that host owns. Nothing is
+ * solved on that frame and nothing at all is solved on a fire frame.
+ * @see `_bakeHostVariants`, `_syncHosts`.
+ *
  * The frame a bomb lands does: one `explosion` event, one uniform write that
  * was going to happen anyway, and three `fx` calls that write into preallocated
  * rings.
@@ -156,6 +195,18 @@ const EXIT = 120;
 const CHUNKS_PER_BOMB = 40;
 /** Seconds after the last impact before the debris is baked down. */
 const DEBRIS_SETTLE = 4.5;
+/**
+ * Slack round a perishable building's own radius when deciding whether a run is
+ * even ASKED about it. Same value and same job as `Airstrike`'s: it only picks
+ * who is measured, and everything it picks is then measured with real rays.
+ */
+const HOST_REACH = 6.0;
+/** Metres a probe must move before a host is judged to have moved the ground. */
+const HOST_EPS = 0.05;
+/** A bomb above this is on a roof rather than in the street it was authored for. */
+const ROOF_Y = 3;
+/** Metres above a crater a settle/burial ray starts from. @see `_crown`. */
+const SETTLE_PROBE = 6;
 
 const UP = new THREE.Vector3(0, 1, 0);
 /**
@@ -172,6 +223,64 @@ const UP = new THREE.Vector3(0, 1, 0);
  * boot and simply not visible.
  */
 const PARKED_Y = -600;
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * EVERY BUILDING ON THIS MAP THAT CAN STOP EXISTING, AS ONE LIST
+ * ────────────────────────────────────────────────────────────────────────────
+ * The two destroyed-state publishers `world` already has, behind one shape: a
+ * circle on the plan, a COLLISION-ONLY swap, and a live `down` flag. It is the
+ * same list `Airstrike._perishables` builds for the same reason, rebuilt here
+ * rather than imported because it is four lines of `world`'s PUBLIC contract
+ * and reaching into another site's private cache to save them would be worse.
+ *
+ * COLLISION ONLY, NEVER THE PICTURE. The whole point of `world`'s
+ * `setVisual`/`setCollision` split is that a probe may re-ask what the ground
+ * is with the building still visibly standing, at boot, with no frame drawn
+ * between — and `setCollision` neither touches `cathedral.razed` nor fires
+ * `onRaze`, so a bake cannot start somebody else's collapse.
+ *
+ * `world.breaches` is deliberately NOT here, for the reason `airstrike.js`
+ * gives: a breach takes one ground-storey elevation off and leaves the storeys
+ * above standing on their jambs, so nothing's settle plane moves. Measured for
+ * these runs too — `_runhost.mjs` swaps all six `world.demolitions` and the
+ * cathedral one at a time and reports which impacts move.
+ *
+ * `strafe.js` imports this. It is the one thing the two air files share beyond
+ * `airstrike.js`'s chunk machinery, and duplicating it would be two places to
+ * fix when `world` gains a third destructible.
+ *
+ * @param {object} world
+ * @param {object} physics
+ * @returns {Array<{id:string, centre:THREE.Vector3, reach:number,
+ *                  probeSwap:(down:boolean)=>void, isDown:()=>boolean}>}
+ */
+export function perishableHosts(world, physics) {
+  const out = [];
+  for (const rec of world?.demolitions ?? []) {
+    if (typeof rec.setCollision !== 'function' || !rec.position) continue;
+    out.push({
+      id: rec.id,
+      centre: rec.position.clone(),
+      reach: (rec.radius ?? Math.hypot(rec.halfW ?? 8, rec.halfD ?? 8)) + HOST_REACH,
+      probeSwap: (down) => rec.setCollision(down),
+      isDown: () => !!rec.down,
+    });
+  }
+  const k = world?.cathedral;
+  if (k && typeof k.setCollision === 'function' && k.level) {
+    out.push({
+      id: 'CATHEDRAL',
+      centre: world.levelToWorld(k.level.x, 0, k.level.z, new THREE.Vector3()),
+      reach: Math.hypot(k.halfW ?? 15, k.halfD ?? 22.5) + HOST_REACH,
+      probeSwap: (down) => k.setCollision(down, physics),
+      isDown: () => !!k.razed,
+    });
+  }
+  return out;
+}
 
 /* -------------------------------------------------------------------------- */
 
@@ -240,6 +349,23 @@ export class Bomber {
     };
     this._cand = [];
     this._wt = [];
+
+    /**
+     * Every (run, host) binding on the map, flat, so the per-frame compare is
+     * one loop over a list that is normally two entries long.
+     * @see `_bakeHostVariants`
+     */
+    this._variants = [];
+    this._hostBakeMs = 0;
+    /** Scratch bomb for the boot-time re-solve. Never touched after `build`. */
+    this._probeBomb = {
+      impact: new THREE.Vector3(),
+      release: new THREE.Vector3(),
+      fall: 0,
+      tRelease: 0,
+      tImpact: 0,
+      tPlane: 0,
+    };
   }
 
   /** True while any co-system (airstrike, strafe) has something in the air. */
@@ -287,6 +413,11 @@ export class Bomber {
       const run = this._buildRun(RUNS[i], i, world, physics);
       if (run) this.runs.push(run);
     }
+    // The second pose per run, and only then the report — what "over a rooftop"
+    // means is a different sentence once we know whether the roof survives the
+    // match. @see `_bakeHostVariants`.
+    this._bakeHostVariants(world, physics);
+    this._reportGround();
 
     ctx.scene.add(this.group);
     this.ready = this.runs.length > 0;
@@ -427,44 +558,33 @@ export class Bomber {
       const h = physics.groundHeight(p.x, p.z, 60);
       p.y = Number.isFinite(h) ? h : world.groundHeight(p.x, p.z);
       topY = Math.max(topY, p.y);
-      bombs.push({ impact: p, tRelease: 0, tImpact: 0, fall: 0, release: new THREE.Vector3() });
-    }
-    /**
-     * A bomb that lands on a roof is a bomb that did nothing.
-     *
-     * The impact point is wherever the first surface under the flight path is,
-     * which is physically right and is exactly how a badly authored line hides:
-     * the stick still fires, the craters still appear, and every one of them is
-     * twelve metres above the lane the run was supposed to price. So say so.
-     */
-    const high = bombs.filter((b) => b.impact.y > 3);
-    if (high.length) {
-      console.warn(
-        `[bomber] ${spec.id}: ${high.length}/${n} bombs land above 3 m ` +
-          `(${high.map((b) => b.impact.y.toFixed(1)).join(', ')} m) — the run is over rooftops, ` +
-          'not over a street. Re-author the line.'
-      );
+      bombs.push({
+        impact: p,
+        tRelease: 0,
+        tImpact: 0,
+        /** The aircraft's own life, implied by THIS bomb's release. @see `_retime`. */
+        tPlane: 0,
+        fall: 0,
+        release: new THREE.Vector3(),
+      });
     }
 
     /* ---- the timeline, closed form ----------------------------------- */
-    // Release altitude is above the HIGHEST ground on the run, so the aircraft
-    // clears the tallest roof under it by the same margin everywhere.
+    /**
+     * Release altitude is above the HIGHEST ground on the run, so the aircraft
+     * clears the tallest roof under it by the same margin everywhere.
+     *
+     * IT IS BAKED IN THE STATE THE LEVEL BOOTS IN AND NEVER MOVES AGAIN, and
+     * that is deliberate. `alt` and `start` are the AEROPLANE, and the
+     * aeroplane's track is the whole telegraph of this weapon — a run whose
+     * flight path jumped 12 m the moment somebody else's building fell would be
+     * a different aircraft on a different line. Razing the host only makes the
+     * aircraft's clearance over that ground larger, never smaller.
+     */
     const alt = topY + ALT;
-    let lastImpact = 0;
-    for (const bomb of bombs) {
-      // v0 down, constant g: t = (-v0 + sqrt(v0² + 2g·h)) / g.
-      const drop = alt - bomb.impact.y;
-      bomb.fall = (-DROP_V + Math.sqrt(DROP_V * DROP_V + 2 * G * drop)) / G;
-      bomb.release.copy(bomb.impact).addScaledVector(dir, -SPEED * bomb.fall);
-      bomb.release.y = alt;
-    }
+    for (const bomb of bombs) this._solveDrop(bomb, alt, dir);
     const start = new THREE.Vector3().copy(bombs[0].release).addScaledVector(dir, -APPROACH);
-    for (const bomb of bombs) {
-      bomb.tRelease = start.distanceTo(bomb.release) / SPEED;
-      bomb.tImpact = bomb.tRelease + bomb.fall;
-      lastImpact = Math.max(lastImpact, bomb.tImpact);
-    }
-    const planeTime = (start.distanceTo(bombs[n - 1].release) + EXIT) / SPEED;
+    for (const bomb of bombs) this._solveTimes(bomb, start);
 
     const run = {
       id: spec.id,
@@ -477,10 +597,10 @@ export class Bomber {
       alt,
       /** For the HUD / the event payload: the middle of the stick. */
       position: new THREE.Vector3().copy(a).addScaledVector(dir, span * 0.5),
-      planeTime,
-      lastImpact,
-      settleAt: lastImpact + DEBRIS_SETTLE,
-      duration: Math.max(planeTime, lastImpact + DEBRIS_SETTLE) + 0.2,
+      planeTime: 0,
+      lastImpact: 0,
+      settleAt: 0,
+      duration: 0,
       yaw: Math.atan2(dir.x, dir.z),
       flown: false,
       active: false,
@@ -488,6 +608,8 @@ export class Bomber {
       next: 0,
       t: -1,
       chunkCount: n * CHUNKS_PER_BOMB,
+      /** Alternative poses, one per perishable building under this run. */
+      hostVariants: [],
       uniforms: {
         /** Seconds since this run started; negative before it. */
         uT: { value: -1 },
@@ -495,9 +617,59 @@ export class Bomber {
         uAnim: { value: 1 },
       },
     };
+    this._retime(run);
     run.material = makeChunkMaterial(this.ctx, this._lib, 'asphalt', run.uniforms);
     run.debris = this._buildDebris(run, rng, physics);
     return run;
+  }
+
+  /* --------------------------------------------- one bomb, closed form --- */
+
+  /**
+   * How long this bomb falls, and where it has to leave the bay to land where
+   * it is authored to. `v0` down, constant g: `t = (-v0 + sqrt(v0² + 2gh)) / g`.
+   *
+   * A LONGER FALL MOVES THE RELEASE BACK, NOT THE CRATER FORWARD. The impact
+   * point is the authored quantity; the release is derived from it. That is
+   * also what makes the alternative pose cheap — with `start` fixed, dropping
+   * the ground under a bomb moves its release BACKWARDS by exactly `SPEED·Δfall`
+   * and its release TIME earlier by `Δfall`, so `tImpact` barely moves and the
+   * stick still walks in the order and at the rate it was authored at.
+   */
+  _solveDrop(bomb, alt, dir) {
+    const drop = Math.max(0.5, alt - bomb.impact.y);
+    bomb.fall = (-DROP_V + Math.sqrt(DROP_V * DROP_V + 2 * G * drop)) / G;
+    bomb.release.copy(bomb.impact).addScaledVector(dir, -SPEED * bomb.fall);
+    bomb.release.y = alt;
+  }
+
+  /** …and when, given where the aircraft enters. `start` never moves. */
+  _solveTimes(bomb, start) {
+    const s = start.distanceTo(bomb.release);
+    bomb.tRelease = Math.max(0, s / SPEED);
+    bomb.tImpact = bomb.tRelease + bomb.fall;
+    bomb.tPlane = (s + EXIT) / SPEED;
+  }
+
+  /**
+   * The four run-level clocks, re-reduced from whatever the bombs currently say.
+   *
+   * This is the ONLY arithmetic `_syncHosts` does, and it is a max over at most
+   * eight floats plus three adds. It is a reduction rather than a fifth pair of
+   * baked scalars on purpose: a run standing over TWO perishable buildings has
+   * four states and no pair can express them, whereas a reduction over the live
+   * per-bomb values is exact in all four. Measured on this map exactly one
+   * building ever binds, so it is a reduction over eight numbers that never
+   * disagree — and it stays right if a second one ever appears.
+   */
+  _retime(run) {
+    const b = run.bombs;
+    let last = 0;
+    for (let i = 0; i < b.length; i++) if (b[i].tImpact > last) last = b[i].tImpact;
+    run.lastImpact = last;
+    run.planeTime = b[b.length - 1].tPlane;
+    run.settleAt = last + DEBRIS_SETTLE;
+    run.duration = Math.max(run.planeTime, run.settleAt) + 0.2;
   }
 
   /**
@@ -552,19 +724,35 @@ export class Bomber {
      */
     const palette = [0x6f6a62, 0x847d73, 0x9c9488, 0xb2a897];
 
+    /**
+     * WHAT THE SECOND POSE NEEDS AND CANNOT RE-DRAW.
+     *
+     * The alternative pose is solved from the same three rules as this one, so
+     * the only things it needs back are the DICE: which bomb owns each chunk,
+     * how deep it was buried, how far its own half-extent lifts it off the
+     * plane it settles on, and the sub-frame jitter on its delay. Everything
+     * else — the scatter angles, the spin, the arc, the tint — is identical in
+     * both states and is never re-drawn. @see `_solveState`.
+     */
+    const owner = new Uint16Array(n);
+    const dig = new Float32Array(n);
+    const lift = new Float32Array(n);
+    const jitter = new Float32Array(n);
+
     let k = 0;
-    for (const bomb of run.bombs) {
+    for (let bi = 0; bi < run.bombs.length; bi++) {
+      const bomb = run.bombs[bi];
       for (let i = 0; i < CHUNKS_PER_BOMB; i++, k++) {
+        owner[k] = bi;
         /* ---- rest pose: UNDER the road ------------------------------- */
         // Buried, so nothing is visible until the bomb that owns this chunk
         // lands and the baked arc lifts it out of its own crater.
         const ra = rng.float() * Math.PI * 2;
         const rr = Math.sqrt(rng.float()) * 1.1;
-        pos.set(
-          bomb.impact.x + Math.cos(ra) * rr,
-          bomb.impact.y - rng.range(0.8, 2.0),
-          bomb.impact.z + Math.sin(ra) * rr
-        );
+        const rx = bomb.impact.x + Math.cos(ra) * rr;
+        const rz = bomb.impact.z + Math.sin(ra) * rr;
+        dig[k] = rng.range(0.8, 2.0);
+        pos.set(rx, this._crown(bomb, rx, rz, physics) - dig[k], rz);
         const size = rng.range(0.16, 0.52);
         scale.set(size, size * rng.range(0.4, 0.95), size * rng.range(0.6, 1.25));
         q.setFromAxisAngle(
@@ -584,13 +772,15 @@ export class Bomber {
           0,
           bomb.impact.z + Math.sin(sa) * sr
         );
-        const floor = physics.groundHeight(settlePos.x, settlePos.z, bomb.impact.y + 6);
-        settlePos.y = (Number.isFinite(floor) ? floor : bomb.impact.y) + size * 0.36;
+        const floor = physics.groundHeight(settlePos.x, settlePos.z, bomb.impact.y + SETTLE_PROBE);
+        lift[k] = size * 0.36;
+        settlePos.y = (Number.isFinite(floor) ? floor : bomb.impact.y) + lift[k];
 
         /* ---- the curve, solved here and never again ------------------- */
         // The delay is this bomb's impact time. Six hundredths of a second of
         // jitter on top, so a crater does not empty itself on one frame.
-        mot[k * 4] = bomb.tImpact + rng.range(0, 0.06);
+        jitter[k] = rng.range(0, 0.06);
+        mot[k * 4] = bomb.tImpact + jitter[k];
         mot[k * 4 + 1] = clamp(Math.sqrt((2 * (sr * 0.55 + 1.2)) / G) * rng.range(1.1, 2.0), 0.5, 2.2);
         mot[k * 4 + 2] = rng.range(0.7, 1.0) * (1.1 + sr * 0.24);
         mot[k * 4 + 3] = rng.range(2.2, 9.5) * (rng.float() < 0.5 ? -1 : 1);
@@ -624,6 +814,10 @@ export class Bomber {
     mesh.instanceMatrix.needsUpdate = true;
     mesh.userData.rest = new Float32Array(mesh.instanceMatrix.array);
     mesh.userData.settled = settled;
+    run.owner = owner;
+    run.dig = dig;
+    run.lift = lift;
+    run.jitter = jitter;
     mesh.instanceColor = new THREE.InstancedBufferAttribute(colour, 3);
     mesh.instanceColor.needsUpdate = true;
     geo.setAttribute('aMot', new THREE.InstancedBufferAttribute(mot, 4));
@@ -633,6 +827,332 @@ export class Bomber {
     mesh.updateMatrix();
     this.group.add(mesh);
     return mesh;
+  }
+
+  /**
+   * The plane a chunk is buried UNDER, which is not always its own bomb's.
+   *
+   * A crater's spoil is drawn inside a 1.1 m disc round the impact, and a bomb
+   * on a 4 m canopy or on a cathedral aisle has some of that disc hanging over
+   * the street beside it. Burying those chunks `dig` metres under THE BOMB'S
+   * plane leaves them in open air off the edge of the roof — measured at
+   * ?seed=7 on the untouched map, 27 of BLANE's 200 and 6 of CROSS's 320 sat
+   * 1.5 m or more above the pavement with nothing over them and nothing under
+   * them, on the INTACT level, with no event fired. They are the same defect as
+   * the settled chunks over the cathedral and they were there first.
+   *
+   * So the burial plane is the LOWER of the bomb's own and the chunk's own —
+   * one extra ray per chunk at boot, and the rest pose is under a surface
+   * everywhere instead of under the surface the middle of the crater is on. It
+   * changes nothing that is ever drawn: the rest pose exists to be invisible.
+   */
+  _crown(bomb, x, z, physics) {
+    const g = physics.groundHeight(x, z, bomb.impact.y + SETTLE_PROBE);
+    return Number.isFinite(g) && g < bomb.impact.y ? g : bomb.impact.y;
+  }
+
+  /* ====================================================================== */
+  /* THE BUILDING UNDER THE RUN, WHICH MAY NOT BE THERE LATER               */
+  /* ====================================================================== */
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * ONE ALTERNATIVE POSE PER (RUN, HOST), SOLVED AT BOOT
+   * ────────────────────────────────────────────────────────────────────────
+   * `Airstrike._bakeHostVariants` bakes a second rest pose for the handful of
+   * its chunks that are thrown clear onto somebody else's doomed roof. This is
+   * the same move with a bigger subject: for these four lines the host is not
+   * under a few stray chunks, it is under the IMPACT POINTS — so what carries a
+   * second pose is the whole run, bomb heights and all.
+   *
+   * WHAT IS BAKED: for each state of the host, every bomb's impact height, fall
+   * time, release point, release time, impact time and implied plane time, and
+   * every chunk's buried rest height, settled height, throw offset and delay.
+   * All of it absolute, never as a delta applied and unapplied — every buffer
+   * here is a `Float32Array` and `x + d - d` is not always `x`, so absolute
+   * values make the swap idempotent over a round reset that stands the church
+   * back up and puts it down again.
+   *
+   * WHAT IS SOLVED WHEN THE HOST FALLS: nothing. `_syncHosts` is a scatter of
+   * pre-solved floats plus `_retime`, which is a max over eight numbers.
+   *
+   * `probeSwap`, never `setRazed`: this pass must not touch
+   * `world.cathedral.razed` and must not fire `onRaze`. Collision only, and the
+   * level is left in exactly the state it was called in — `_runhost.mjs`
+   * re-probes every impact afterwards and asserts a drift of zero.
+   */
+  _bakeHostVariants(world, physics) {
+    const hosts = perishableHosts(world, physics);
+    if (!hosts.length || !this.runs.length) return;
+    const t0 = performance.now();
+    let bound = 0;
+    let rays = 0;
+
+    for (const run of this.runs) {
+      for (const host of hosts) {
+        // The plan test only decides WHO IS ASKED. A run that goes nowhere near
+        // a building skips it without firing a ray, which is 27 of the 28
+        // (run, host) pairs on this map.
+        if (!this._runNear(run, host)) continue;
+        const was = host.isDown();
+        host.probeSwap(false);
+        const up = this._solveState(run, physics);
+        host.probeSwap(true);
+        const down = this._solveState(run, physics);
+        host.probeSwap(was);
+        rays += 2 * (run.bombs.length + run.chunkCount * 2);
+        if (!this._statesDiffer(up, down)) continue;
+
+        const v = { run, host, up, down, applied: null };
+        run.hostVariants.push(v);
+        this._variants.push(v);
+        bound++;
+        const moved = [];
+        for (let i = 0; i < run.bombs.length; i++) {
+          if (Math.abs(up.impactY[i] - down.impactY[i]) > HOST_EPS) {
+            moved.push(`${up.impactY[i].toFixed(1)}→${down.impactY[i].toFixed(1)}`);
+          }
+        }
+        let chunks = 0;
+        for (let k = 0; k < run.chunkCount; k++) {
+          if (Math.abs(up.settledY[k] - down.settledY[k]) > HOST_EPS
+            || Math.abs(up.restY[k] - down.restY[k]) > HOST_EPS) chunks++;
+        }
+        console.info(
+          `[bomber] ${run.id}: ${moved.length}/${run.bombs.length} bombs and ${chunks}/` +
+            `${run.chunkCount} chunks stand on ${host.id} — second pose baked ` +
+            `(${moved.join(', ')} m)`
+        );
+      }
+    }
+    // …and put every run into the state the level is ACTUALLY in right now,
+    // which is a no-op when that is the state the base bake ran in and is the
+    // correction under `?cath=down`.
+    this._syncHosts(true);
+
+    this._hostBakeMs = performance.now() - t0;
+    if (bound) {
+      console.info(
+        `[bomber] perishable hosts: ${bound} run/host binding(s) carry a second pose ` +
+          `(${rays} rays, ${this._hostBakeMs.toFixed(0)}ms)`
+      );
+    }
+  }
+
+  /** Is any part of this run — a crater or a chunk — inside `host`'s circle? */
+  _runNear(run, host) {
+    const rr = host.reach * host.reach;
+    for (const b of run.bombs) {
+      const dx = b.impact.x - host.centre.x;
+      const dz = b.impact.z - host.centre.z;
+      if (dx * dx + dz * dz <= rr) return true;
+    }
+    const s = run.debris.userData.settled;
+    for (let k = 0; k < run.chunkCount; k++) {
+      const dx = s[k * 16 + 12] - host.centre.x;
+      const dz = s[k * 16 + 14] - host.centre.z;
+      if (dx * dx + dz * dz <= rr) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The whole run, re-solved against the collision the level has RIGHT NOW.
+   *
+   * Same three rules as the boot bake and no fourth one, which is what makes
+   * the two states comparable: the impact point is the first surface under the
+   * line, the rest pose is `dig` under the lower of its bomb's plane and its
+   * own, and the settled pose is `lift` over the plane it lands on. The dice
+   * are never re-drawn — `run.dig`, `run.lift` and `run.jitter` are the draws
+   * the first bake made.
+   */
+  _solveState(run, physics) {
+    const n = run.bombs.length;
+    const nc = run.chunkCount;
+    const s = {
+      impactY: new Float64Array(n),
+      fall: new Float64Array(n),
+      tRelease: new Float64Array(n),
+      tImpact: new Float64Array(n),
+      tPlane: new Float64Array(n),
+      relX: new Float64Array(n),
+      relZ: new Float64Array(n),
+      restY: new Float32Array(nc),
+      settledY: new Float32Array(nc),
+      offY: new Float32Array(nc),
+      delay: new Float32Array(nc),
+    };
+    const bomb = this._probeBomb;
+    for (let i = 0; i < n; i++) {
+      const src = run.bombs[i];
+      const h = physics.groundHeight(src.impact.x, src.impact.z, 60);
+      bomb.impact.set(src.impact.x, Number.isFinite(h) ? h : src.impact.y, src.impact.z);
+      this._solveDrop(bomb, run.alt, run.dir);
+      this._solveTimes(bomb, run.start);
+      s.impactY[i] = bomb.impact.y;
+      s.fall[i] = bomb.fall;
+      s.tRelease[i] = bomb.tRelease;
+      s.tImpact[i] = bomb.tImpact;
+      s.tPlane[i] = bomb.tPlane;
+      s.relX[i] = bomb.release.x;
+      s.relZ[i] = bomb.release.z;
+    }
+    const rest = run.debris.userData.rest;
+    const settled = run.debris.userData.settled;
+    for (let k = 0; k < nc; k++) {
+      const bi = run.owner[k];
+      bomb.impact.set(run.bombs[bi].impact.x, s.impactY[bi], run.bombs[bi].impact.z);
+      const rx = rest[k * 16 + 12];
+      const rz = rest[k * 16 + 14];
+      s.restY[k] = this._crown(bomb, rx, rz, physics) - run.dig[k];
+      const sx = settled[k * 16 + 12];
+      const sz = settled[k * 16 + 14];
+      const f = physics.groundHeight(sx, sz, s.impactY[bi] + SETTLE_PROBE);
+      s.settledY[k] = (Number.isFinite(f) ? f : s.impactY[bi]) + run.lift[k];
+      s.offY[k] = s.settledY[k] - s.restY[k];
+      s.delay[k] = s.tImpact[bi] + run.jitter[k];
+    }
+    return s;
+  }
+
+  /** True when the two states put anything anywhere different. */
+  _statesDiffer(a, b) {
+    for (let i = 0; i < a.impactY.length; i++) {
+      if (Math.abs(a.impactY[i] - b.impactY[i]) > HOST_EPS) return true;
+    }
+    for (let k = 0; k < a.restY.length; k++) {
+      if (Math.abs(a.restY[k] - b.restY[k]) > HOST_EPS) return true;
+      if (Math.abs(a.settledY[k] - b.settledY[k]) > HOST_EPS) return true;
+    }
+    return false;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE COMPARE, ONCE A FRAME — the same move `Airstrike._syncHosts` makes
+   * ────────────────────────────────────────────────────────────────────────
+   * `world.demolitions[].down` and `world.cathedral.razed` are written by the
+   * salvo, the round reset, `forceDemoNav`, `?demo=down`, `?cath=down`, the
+   * cathedral beat sheet and half a dozen probes. ARCHITECTURE.md already says
+   * why that is READ rather than hooked: "six flags and a compare cannot be
+   * wired up wrong". When nothing changed it is one boolean read per binding.
+   *
+   * `isDown` IS THE COLLISION, NOT THE PICTURE, and the two are written
+   * together everywhere it reads from — `setRazed` does the shell and the ruin
+   * in one call — so there is no frame on which a crater has been moved onto
+   * ground that is not there yet.
+   *
+   * THE ONE ROUGH EDGE, STATED: a host that falls while this run's own bombs
+   * are in the air moves them mid-stick, and a chunk already on its arc takes a
+   * step of `Δ · u` on that frame. It needs the cathedral to come down inside
+   * the ten seconds one bomber run lasts, and the alternative is cratering a
+   * roof that has gone.
+   *
+   * @param {boolean} force  ignore the cached state (the boot bake's own apply)
+   */
+  _syncHosts(force = false) {
+    const list = this._variants;
+    for (let i = 0; i < list.length; i++) {
+      const v = list[i];
+      const down = v.host.isDown();
+      if (!force && down === v.applied) continue;
+      v.applied = down;
+      this._applyState(v.run, down ? v.down : v.up);
+    }
+  }
+
+  /** Scatter one pre-solved state over a run. No arithmetic but `_retime`. */
+  _applyState(run, s) {
+    if (!run) return;
+    const n = run.bombs.length;
+    for (let i = 0; i < n; i++) {
+      const b = run.bombs[i];
+      b.impact.y = s.impactY[i];
+      b.fall = s.fall[i];
+      b.tRelease = s.tRelease[i];
+      b.tImpact = s.tImpact[i];
+      b.tPlane = s.tPlane[i];
+      b.release.set(s.relX[i], run.alt, s.relZ[i]);
+    }
+    this._retime(run);
+
+    const mesh = run.debris;
+    const rest = mesh.userData.rest;
+    const settled = mesh.userData.settled;
+    const inst = mesh.instanceMatrix.array;
+    const off = mesh.geometry.getAttribute('aOff');
+    const mot = mesh.geometry.getAttribute('aMot');
+    // What is DRAWN is the settled pose once the dust is down and the buried
+    // rest pose at every other moment, so the live matrix follows whichever the
+    // run is currently showing.
+    const live = run.baked;
+    for (let k = 0; k < run.chunkCount; k++) {
+      rest[k * 16 + 13] = s.restY[k];
+      settled[k * 16 + 13] = s.settledY[k];
+      off.array[k * 3 + 1] = s.offY[k];
+      mot.array[k * 4] = s.delay[k];
+      inst[k * 16 + 13] = live ? s.settledY[k] : s.restY[k];
+    }
+    off.needsUpdate = true;
+    mot.needsUpdate = true;
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * WHAT GROUND DOES EACH RUN ACTUALLY HAVE, IN EVERY STATE THE MAP HAS?
+   * ────────────────────────────────────────────────────────────────────────
+   * The old line said "N bombs land above 3 m — the run is over rooftops. Re-
+   * author the line" and printed it for MAIN and CROSS, whose roof is the
+   * cathedral. It was true and it was the wrong instruction: the cathedral is
+   * legitimately what is on the mid street, and 15.2 m IS the ground that run
+   * has until the church comes down. Meanwhile the same line printed for ALANE
+   * and BLANE, whose roofs are PERMANENT and where it is the right instruction,
+   * and the two were indistinguishable.
+   *
+   * So the report separates them. A bomb on a building that can stop existing
+   * is reported with both of its heights and is not a warning; a bomb that is
+   * on a roof in EVERY state the map can be in is the authoring mistake the
+   * check was written to find, and only that is a warning.
+   */
+  _reportGround() {
+    for (const run of this.runs) {
+      const n = run.bombs.length;
+      const perishable = [];
+      const permanent = [];
+      for (let i = 0; i < n; i++) {
+        let lo = run.bombs[i].impact.y;
+        let hi = lo;
+        for (const v of run.hostVariants) {
+          lo = Math.min(lo, v.up.impactY[i], v.down.impactY[i]);
+          hi = Math.max(hi, v.up.impactY[i], v.down.impactY[i]);
+        }
+        // A bomb a host MOVES is that host's, whatever the two heights are —
+        // the ruin's own crest is still ground the run has. Only a bomb NO
+        // state of the map ever lowers is an authored line over a rooftop.
+        if (hi - lo > HOST_EPS) perishable.push(`${hi.toFixed(1)}→${lo.toFixed(1)}`);
+        else if (hi > ROOF_Y) permanent.push(hi);
+      }
+      const host = run.hostVariants.map((v) => v.host.id).join('+');
+      if (permanent.length) {
+        console.warn(
+          `[bomber] ${run.id}: ${permanent.length}/${n} bombs land above ${ROOF_Y} m ` +
+            `(${permanent.map((y) => y.toFixed(1)).join(', ')} m) on ground that is there in ` +
+            'EVERY state of this map — the run is over a permanent rooftop, not over a ' +
+            'street. Re-author the line.'
+        );
+      }
+      if (perishable.length) {
+        console.info(
+          `[bomber] ${run.id}: ${perishable.length}/${n} bombs land on ${host}, which the ` +
+            `match can take away (${perishable.join(', ')} m) — both poses baked, and the ` +
+            'crater follows the building down.'
+        );
+      }
+      if (!permanent.length && !perishable.length) {
+        console.info(`[bomber] ${run.id}: all ${n} bombs land on the street in every state.`);
+      }
+    }
   }
 
   /* ====================================================================== */
@@ -724,6 +1244,9 @@ export class Bomber {
    */
   update(dt, live) {
     if (!this.ready) return;
+    // One boolean read per binding when nothing has changed, and a scatter of
+    // pre-solved floats on the one frame a building under a run stops existing.
+    if (this._variants.length) this._syncHosts();
 
     let flying = null;
     for (let i = this._live.length - 1; i >= 0; i--) {

@@ -92,6 +92,12 @@
  *                  mass and must not be swept as candidates for floating.
  *   --region=all   all four.
  *
+ * …and every region is only HALF the sweep. The regions above are what the
+ * COLLISION half looks at; the DRAWN half at the foot of this file is not
+ * region-scoped at all, because picture-only mass is not confined to a
+ * footprint — the bomber and the fighter walk theirs down 68 m of street. It
+ * runs on every invocation. @see "THE SECOND HALF OF THE QUESTION".
+ *
  * ────────────────────────────────────────────────────────────────────────────
  * --fire, AND WHY THE BOOT FLAGS ARE NOT ENOUGH ON THEIR OWN
  * ────────────────────────────────────────────────────────────────────────────
@@ -113,9 +119,14 @@
  *                 how this gate passed four boot states while the player was
  *                 looking at the bug. @see `_cathwatch.mjs`.
  *   --fire=all    the above plus `callEverything` — every site and every
- *                 district block, which is the state `--region=all` wants.
+ *                 district block — plus every bomber and every strafing run,
+ *                 fired one at a time and waited out, so the DRAWN sweep below
+ *                 judges the settled pose of all eight lines over the ruin
+ *                 instead of whichever ones the scheduler's dice happened to
+ *                 pick. @see the note where they are fired.
  *
- * Exit code 1 if anything floats. `?seed=N` pins the level dice, so a find is
+ * Exit code 1 if anything floats — a solid mass standing on nothing, OR a drawn
+ * instance hanging in clear sky. `?seed=N` pins the level dice, so a find is
  * reproducible: the seed of the boot is printed either way.
  */
 import { chromium } from 'playwright';
@@ -257,6 +268,48 @@ if (FIRE) {
       m.airstrike.callEverything(0.4);
     });
     await sleep(9000);
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * …AND EVERY DRAWN-ONLY RUN, ONE AT A TIME, OVER THE RUIN
+     * ──────────────────────────────────────────────────────────────────────
+     * `callEverything` is the AIRSTRIKE's own list. The bomber and the fighter
+     * are on their own weighted schedulers with a per-round cap, so which of
+     * their eight lines have flown by the time the cathedral comes down is a
+     * DIE ROLL — and the two that matter most are the two that cross the
+     * church. A gate whose coverage depends on the dice is a gate that will
+     * one day be green for the wrong reason.
+     *
+     * The sweep below reads what is DRAWN, so an unflown run is still swept
+     * (its buried rest pose is on screen from boot and 34 of the instances in
+     * the photograph were exactly that). Firing them anyway is what puts the
+     * SETTLED pose of all eight lines over the razed map, which is the state
+     * the complaint is about. Fired serially, with the schedulers stood down so
+     * nothing else joins in, and each one waited out to `settled`.
+     */
+    await page.evaluate(() => {
+      const m = window.__ENGINE__.ctx.peek('match');
+      m.airstrike.enabled = false;
+      if (m.bomber) m.bomber.enabled = false;
+      if (m.strafe) m.strafe.enabled = false;
+    });
+    for (const sys of ['bomber', 'strafe']) {
+      const ids = await page.evaluate(
+        (s) => (window.__ENGINE__.ctx.peek('match')[s]?.runs ?? []).map((r) => r.id),
+        sys
+      );
+      for (const id of ids) {
+        const lit = await page.evaluate(([s, i]) => {
+          const sy = window.__ENGINE__.ctx.peek('match')[s];
+          return !!(sy && !sy.flown(i) && sy.fire(i));
+        }, [sys, id]);
+        if (!lit) continue;
+        await page.waitForFunction(
+          (s) => !window.__ENGINE__.ctx.peek('match')[s].busy,
+          sys,
+          { timeout: 120000 }
+        );
+      }
+    }
   }
   await page.evaluate(() => (window.__ENGINE__.time.scale = 1));
   await sleep(1200);
@@ -945,30 +998,82 @@ const result = await page.evaluate(
  * masonry, and passed — correctly, for what it was measuring. The drawn mass
  * was never asked about at all.
  *
- * So the gate now asks both. Every struck site's SETTLED POSE — the same
- * `mesh.userData.settled` matrices `_bakeSettled` hands back to
- * `instanceMatrix` — is walked, and one ray is dropped from above each chunk to
- * whatever it is resting on. The ray starts ABOVE the chunk and not under it:
- * fired from a chunk's own underside it starts below the terrain for anything
- * lying on the ground, which is a probe measuring its own start point (the
- * first version of this pass did exactly that and reported 297 chunks with
+ * So the gate now asks both. Every drawn instance of the picture-only mass is
+ * walked in the pose it is CURRENTLY DRAWN IN, and one ray is dropped from above
+ * each one to whatever it is resting on. The ray starts ABOVE the chunk and not
+ * under it: fired from a chunk's own underside it starts below the terrain for
+ * anything lying on the ground, which is a probe measuring its own start point
+ * (the first version of this pass did exactly that and reported 297 chunks with
  * "60 m of air" at y = 0.4).
  *
- * `--chunks=0` turns it off; `--cair` is the metres of open air that make a
- * chunk a bug rather than a chunk sat on the piece below it.
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND IT WAS STILL ONLY ASKING ABOUT THE AIRSTRIKE — THE THIRD WAY THIS GATE
+ * WAS FOOLED
+ * ────────────────────────────────────────────────────────────────────────────
+ * Two systems fooled it before (razing on the same frame as the salvo; a
+ * raycast walk that saw only one of two coincident faces). The third was
+ * simpler than either: the pass above swept `airstrike.sites` and NOTHING ELSE,
+ * and `src/match/bomber.js` and `src/match/strafe.js` draw 1440 more chunks of
+ * exactly the same picture-only kind on four fixed lines — two of which cross
+ * the cathedral. Photographed from the player's eye in a real scheduled match,
+ * the swarm in the sky censused as 114 drawn instances at 14.1-15.4 m, EVERY
+ * ONE of them `bomber_*_debris` or `strafe_*_grit`, with nothing solid in the
+ * twelve metres below. This file reported zero, correctly, about a question
+ * nobody had asked it.
+ *
+ * So the sweep is now over DRAWN MASS rather than over one system's list:
+ *
+ *   1. every struck airstrike site (as before, and with the same "a struck site
+ *      that has not baked has not been measured" refusal);
+ *   2. every bomber run and every strafe run, FLOWN OR NOT — their rest pose is
+ *      buried and on screen from the first boot frame, so a run that has never
+ *      fired still has 320 drawn instances on the map and 34 of them were in
+ *      the photograph;
+ *   3. ANY OTHER INSTANCED MESH IN THE SCENE THAT IS DEBRIS, found by walking
+ *      `ctx.scene` and testing the material rather than the owner. A list of
+ *      systems is a list somebody has to remember to add to, which is how this
+ *      gate came to be blind in the first place; `makeChunkMaterial` stamps
+ *      `material.userData.owUniforms` on everything that moves on the settle
+ *      program, so a fourth system that throws rubble is swept the day it is
+ *      written and nobody has to edit this file.
+ *
+ * WHY THE WALK DOES NOT JUDGE EVERYTHING IT FINDS, WHICH IS A LIMIT AND IS
+ * WRITTEN DOWN RATHER THAN QUIETLY APPLIED. The header of the collision half
+ * says why a per-piece downward ray is the wrong probe: it false-positives on
+ * every balcony, gallery and roof, none of which has anything beneath it and
+ * all of which are held perfectly well from the side. That objection applies
+ * unchanged to `world`'s instanced dressing — measured on this map, a plain
+ * ray test calls 258 palm fronds, 121 conduit boxes on facades, 27 lamp
+ * glasses and 27 pockmarks "floating", and every one of them is fixed to a wall
+ * or a trunk. It is the right probe for DEBRIS because debris is the one class
+ * whose whole contract is "it comes to rest on a plane" — so debris is what
+ * FAILS the gate, and every other instanced mesh with something in clear air is
+ * printed in full underneath, named and counted, so nothing is hidden.
+ *
+ * TWO TESTS, AND THE SECOND ONE IS WHY A BURIED CHUNK IS NOT A FAILURE. The
+ * rest pose of every crater's spoil is UNDER the road on purpose: it is drawn
+ * from boot, it is invisible, and the ray under it correctly reports the whole
+ * depth of the map. So a candidate is also asked what is ABOVE it — one ray
+ * down from over the map — and an instance whose top is under a solid surface
+ * is buried or indoors and is counted as SHELTERED rather than as a failure.
+ * Sheltered instances are printed, never silently dropped: a gate that hides a
+ * category is the bug this file exists to stop.
+ *
+ * `--chunks=0` turns the whole pass off; `--cair` is the metres of open air that
+ * make an instance a bug rather than one sat on the piece below it; `--cmin` is
+ * how many one group needs before it is a failure rather than a note.
  */
 const CHUNKS = args.chunks !== '0' && args.chunks !== false;
-/** Metres of open air under a drawn chunk before it is a floating object. */
+/** Metres of open air under a drawn instance before it is a floating object. */
 const CAIR = Number(args.cair ?? 1.5);
-/** Chunks in one site over CAIR before the site is reported rather than noted. */
+/** Instances in one group over CAIR before the group fails rather than notes. */
 const CMIN = Number(args.cmin ?? 3);
 
 const drawn = CHUNKS
   ? await page.evaluate(({ CAIR }) => {
       const e = window.__ENGINE__;
       const ph = e.ctx.peek('physics');
-      const sites = e.ctx.peek('match')?.airstrike?.sites ?? [];
-      if (!sites.length) return null;
+      const m = e.ctx.peek('match');
       const MASK = ph.MASK.WORLD;
       const M4 = e.camera.matrixWorld.constructor;
       const V3 = e.camera.position.constructor;
@@ -976,37 +1081,154 @@ const drawn = CHUNKS
       const pos = new V3();
       const sc = new V3();
       const q = e.camera.quaternion.clone();
+      /** Well over the tallest thing on this map, for the "what is above" ray. */
+      const SKY = 60;
+
+      /**
+       * WHAT IS DRAWN, NOT WHAT IS INTENDED. `instanceMatrix` is the buffer the
+       * renderer reads, so this is the only array that answers "what can the
+       * player see" for a settled mass, a never-fired run's buried rest pose and
+       * anything else instanced on the map alike.
+       *
+       * `userData.settled` is deliberately NOT used any more: it is where a
+       * chunk is GOING. The systems that animate declare themselves unsettled
+       * below instead, which is the same refusal made in the right place.
+       */
+      const groups = [];
+      const claimed = new Set();
+      const claim = (mesh) => { if (mesh) claimed.add(mesh); };
+      /**
+       * AND IT HAS TO BE ON SCREEN TO BE IN THE SKY. `src/match/tank.js` parks
+       * a 179-instance wreck and its plough spoil on `visible = false` groups
+       * rather than under the map, and a sweep that ignored that reported 155
+       * "floating" instances belonging to two tanks that are not destroyed and
+       * are not drawn. Visibility is inherited, so the whole chain is asked.
+       *
+       * `airstrike`, `bomber` and `strafe` are unaffected either way: all three
+       * keep their meshes visible from the first boot frame ON PURPOSE, because
+       * hiding them moves the shader compile onto the frame the weapon fires.
+       */
+      const shown = (o) => {
+        for (let q = o; q; q = q.parent) if (!q.visible) return false;
+        return true;
+      };
+
+      /* ---- 1. the airstrike, exactly as before -------------------------- */
+      const unsettled = [];
+      const sites = m?.airstrike?.sites ?? [];
+      for (const s of sites) {
+        for (const mesh of s.meshes ?? []) claim(mesh);
+        if (!s.struck) continue;
+        /**
+         * A STRUCK SITE THAT HAS NOT BAKED IS NOT A SWEPT SITE, and saying so is
+         * the difference between a gate and a rubber stamp: until `_bakeSettled`
+         * copies the settled pose into `instanceMatrix` the screen shows the
+         * vertex shader's curve, so what is in the buffer is neither where the
+         * chunks are nor where they are going.
+         */
+        if (!s.baked) unsettled.push(s.id);
+        groups.push({ id: s.id, kind: s.kind, family: 'airstrike', judge: true, meshes: s.meshes ?? [] });
+      }
+
+      /* ---- 2. the bomber and the fighter, flown or not ------------------ */
+      for (const [sys, family, key, kind] of [
+        [m?.bomber, 'bomber', 'debris', 'crater'],
+        [m?.strafe, 'strafe', 'grit', 'cannon'],
+      ]) {
+        for (const run of sys?.runs ?? []) {
+          const mesh = run[key];
+          if (!mesh) continue;
+          claim(mesh);
+          // Mid-run the buffer holds the buried rest pose while the shader draws
+          // the arc, so the same refusal the airstrike gets applies here.
+          if (run.active && !run.baked) unsettled.push(`${family}:${run.id}`);
+          groups.push({ id: `${family}:${run.id}`, kind, family, judge: true, meshes: [mesh] });
+        }
+      }
+
+      /* ---- 3. and every other instanced mesh in the scene --------------- */
+      /**
+       * DEBRIS IDENTIFIES ITSELF BY THE ATTRIBUTES THAT THROW IT, and the test
+       * is the geometry rather than the material: `src/materials/shader.js`
+       * stamps `userData.owUniforms` on EVERY patched material on the map, so
+       * that field says "this went through the patcher" and not "this is
+       * rubble" (tried first, and it claimed 816 meshes of `world` dressing).
+       *
+       * `aMot` + `aOff` are `makeChunkMaterial`'s own instanced attributes —
+       * delay/flight/arc/spin and the rest→settled throw — and nothing that is
+       * not on the settle program carries them. A fourth system that throws
+       * rubble is therefore swept the day it is written.
+       */
+      const isDebris = (mesh) => {
+        const g = mesh.geometry;
+        return !!(g?.getAttribute?.('aMot') && g.getAttribute('aOff'));
+      };
+      const rest = [];
+      let hidden = 0;
+      e.ctx.scene.traverse((o) => {
+        if (!o.isInstancedMesh || claimed.has(o)) return;
+        if (!(o.count > 0)) return;
+        if (!shown(o)) { hidden++; return; }
+        rest.push(o);
+      });
+      let strays = 0;
+      for (const mesh of rest) {
+        const debris = isDebris(mesh);
+        if (debris) strays++;
+        groups.push({
+          id: mesh.name || '(unnamed)',
+          kind: debris ? 'DEBRIS' : 'dressing',
+          family: 'scene',
+          judge: debris,
+          meshes: [mesh],
+        });
+      }
+
+      /* ---- the sweep ---------------------------------------------------- */
       const rows = [];
       let checked = 0;
-      /**
-       * A STRUCK SITE THAT HAS NOT BAKED IS NOT A SWEPT SITE, and saying so is
-       * the difference between a gate and a rubber stamp. `userData.settled` is
-       * where a chunk is GOING; until `_bakeSettled` copies it into
-       * `instanceMatrix` the screen shows the vertex shader's curve instead, so
-       * a run that ends while masonry is in the air has measured a future.
-       */
-      const unsettled = [];
-      for (const s of sites) {
-        if (!s.struck) continue;
-        if (!s.baked) unsettled.push(s.id);
+      let sheltered = 0;
+      for (const g of groups) {
         let n = 0;
+        let shelter = 0;
         let worst = 0;
         let hiY = -Infinity;
         let at = null;
-        for (const mesh of s.meshes) {
-          const arr = mesh.userData.settled;
-          if (!arr) continue;
-          for (let i = 0; i < arr.length; i += 16) {
+        let instances = 0;
+        for (const mesh of g.meshes) {
+          const arr = mesh.instanceMatrix?.array;
+          if (!arr || !shown(mesh)) continue;
+          const count = Math.min(mesh.count ?? arr.length / 16, arr.length / 16);
+          instances += count;
+          /**
+           * `instanceMatrix` IS MESH-LOCAL. The airstrike, the bomber and the
+           * fighter all park their meshes on an identity group at the scene
+           * root, so for years local and world were the same numbers and the
+           * distinction never came up — until the walk in step 3 found
+           * `match_tank_*_wreck`, whose instances are the hull's own boxes in
+           * the HULL's frame and which read as 42 objects hanging over the map
+           * origin. Compose with `matrixWorld` and they are a tank.
+           */
+          mesh.updateWorldMatrix(true, false);
+          const world = mesh.matrixWorld;
+          for (let i = 0; i < count * 16; i += 16) {
             mat.fromArray(arr, i);
+            mat.premultiply(world);
             mat.decompose(pos, q, sc);
             // The largest half-extent, so a rotated chunk's underside is never
             // over-estimated: this can under-report air, never invent it.
-            const under = pos.y - Math.max(sc.x, sc.y, sc.z) * 0.5;
+            const half = Math.max(sc.x, sc.y, sc.z) * 0.5;
+            const under = pos.y - half;
             checked++;
-            if (under < 0.6) continue; // lying on the map
+            if (under < 0.6) continue; // lying on the map, or parked below it
             const h = ph.raycast(pos.x, pos.y + 0.15, pos.z, 0, -1, 0, 80, MASK);
             const gap = h.hit ? under - h.point.y : under;
             if (gap <= CAIR) continue;
+            // Nothing under it — but is there anything OVER it? A rest pose is
+            // buried on purpose and an instance inside a building is not in the
+            // sky. Counted and printed, never a failure.
+            const up = ph.raycast(pos.x, SKY, pos.z, 0, -1, 0, SKY + 20, MASK);
+            if (up.hit && up.point.y > pos.y + half) { shelter++; sheltered++; continue; }
             n++;
             if (gap > worst) worst = +gap.toFixed(2);
             if (pos.y > hiY) {
@@ -1015,16 +1237,41 @@ const drawn = CHUNKS
             }
           }
         }
-        if (n) rows.push({ id: s.id, kind: s.kind, chunks: s.chunkCount, n, worst, at });
+        if (n || shelter) {
+          rows.push({
+            id: g.id, kind: String(g.kind), family: g.family, judge: !!g.judge,
+            chunks: instances, n, shelter, worst, at,
+          });
+        }
       }
-      return { rows, checked, unsettled, struck: sites.filter((s) => s.struck).length };
+      rows.sort((a, b) => b.n - a.n || b.shelter - a.shelter);
+      return {
+        rows,
+        checked,
+        sheltered,
+        unsettled,
+        groups: groups.length,
+        judged: groups.filter((g) => g.judge).length,
+        strays,
+        hidden,
+        struck: sites.filter((s) => s.struck).length,
+        scene: rest.length,
+      };
     }, { CAIR })
   : null;
 
 await browser.close();
 
-/** Sites whose drawn mass is genuinely hanging, rather than one stray chunk. */
-const drawnBad = (drawn?.rows ?? []).filter((r) => r.n >= CMIN);
+/** Groups whose drawn mass is genuinely hanging, rather than one stray chunk. */
+const drawnBad = (drawn?.rows ?? []).filter((r) => r.judge && r.n >= CMIN);
+/**
+ * …AND A GROUP STILL IN THE AIR IS A FAILED RUN, NOT A PASSED ONE. It used to
+ * print a note and exit 0, which is a gate saying OK about a question it could
+ * not answer — the exact failure mode this file has now had three times. The
+ * `--fire` driver waits every event out before it censuses, so reaching here
+ * with something unsettled means the wait was wrong and the sweep is void.
+ */
+const drawnVoid = drawn?.unsettled?.length ?? 0;
 
 /* -------------------------------------------------------------------------- */
 
@@ -1078,36 +1325,76 @@ if (args.json) {
   }
   /* ---- and the drawn mass, which carries no collision at all ------------- */
   if (drawn === null) {
-    console.log('  drawn mass: not swept (--chunks=0, or no strike has fired)');
-  } else if (drawn.unsettled.length) {
-    console.log(
-      `  drawn mass: ${drawn.unsettled.length} STRUCK SITE(S) HAVE NOT SETTLED — ${drawn.unsettled.join(', ')}.\n` +
-        '    Their chunks are still on the vertex shader\'s curve, so what was swept is where they\n' +
-        '    are GOING and not what is drawn. Wait past SETTLE_AT and run it again.\n'
-    );
-  } else if (!drawn.rows.length) {
-    console.log(
-      `  drawn mass: ${drawn.checked} settled chunks over ${drawn.struck} struck sites — ` +
-        `none with more than ${CAIR} m of air under it.\n`
-    );
+    console.log('  drawn mass: not swept (--chunks=0)');
   } else {
+    const inSky = drawn.rows.filter((r) => r.n && r.judge);
+    const dressing = drawn.rows.filter((r) => r.n && !r.judge);
     console.log(
-      `\n  DRAWN MASS IN THE SKY — ${drawn.checked} settled chunks swept over ${drawn.struck} ` +
-        `struck sites (air > ${CAIR} m; a site is a FAILURE at ${CMIN}):\n`
+      `\n  DRAWN MASS — ${drawn.checked} instances swept over ${drawn.groups} groups, ` +
+        `${drawn.judged} of them DEBRIS and judged (${drawn.struck} struck strike sites, every ` +
+        `bomber and strafe run flown or not, and ${drawn.strays} unregistered mesh(es) on the ` +
+        `settle program); ${drawn.scene} other instanced mesh(es) walked and reported only, ` +
+        `${drawn.hidden} skipped as not drawn (visible=false). ` +
+        `${drawn.sheltered} instances are under a solid surface — buried or indoors, not in the sky.`
     );
-    console.log('    site        kind     chunks   in the sky   worst air   highest (x,y,z)');
-    for (const r of drawn.rows) {
+    if (drawn.unsettled.length) {
       console.log(
-        `    ${r.id.padEnd(10)} ${String(r.kind).padEnd(7)} ${String(r.chunks).padStart(7)}   ` +
-          `${String(r.n).padStart(10)}   ${String(r.worst).padStart(9)}   ${r.at.join(', ')}` +
-          (r.n < CMIN ? '   (noted, under the threshold)' : '')
+        `\n  ${drawn.unsettled.length} GROUP(S) HAVE NOT SETTLED — ${drawn.unsettled.join(', ')}.\n` +
+          "    Their mass is still on the vertex shader's curve, so `instanceMatrix` is neither\n" +
+          '    where it is nor where it is going. Wait past the settle time and run it again.'
       );
     }
-    console.log('');
+    const line = (r) =>
+      `    ${r.id.padEnd(22)} ${r.kind.padEnd(9)} ${String(r.chunks).padStart(5)}   ` +
+      `${String(r.n).padStart(10)}   ${String(r.shelter).padStart(9)}   ` +
+      `${String(r.worst).padStart(9)}   ${r.at.join(', ')}`;
+    const head =
+      '    group                  kind      drawn   in the sky   sheltered   worst air   highest (x,y,z)';
+    if (!inSky.length) {
+      console.log(
+        `  no DEBRIS with more than ${CAIR} m of air under it and open sky over it.\n`
+      );
+    } else {
+      console.log(
+        `\n  DEBRIS IN CLEAR SKY (air > ${CAIR} m with nothing above; a group FAILS at ${CMIN}):\n`
+      );
+      console.log(head);
+      for (const r of inSky) {
+        console.log(line(r) + (r.n < CMIN ? '   (noted, under the threshold)' : ''));
+      }
+      console.log('');
+    }
+    /**
+     * Reported and NOT judged. A downward ray is not a support test for a sign
+     * bracketed to a wall or a frond on a trunk — @see the header — so these are
+     * printed so that a real regression in the dressing is still visible to a
+     * human, and are never the reason this file exits 1.
+     */
+    if (dressing.length) {
+      console.log(
+        `  ${dressing.length} non-debris instanced mesh(es) also have instances with air under ` +
+          'them. A ray is not a support test for wall-mounted geometry, so these are REPORTED, ' +
+          'NOT JUDGED:\n'
+      );
+      console.log(head);
+      for (const r of dressing.slice(0, 12)) console.log(line(r));
+      if (dressing.length > 12) console.log(`    … and ${dressing.length - 12} more`);
+      console.log('');
+    }
+    const shelteredOnly = drawn.rows.filter((r) => !r.n && r.shelter && r.judge);
+    if (shelteredOnly.length) {
+      console.log(
+        '  sheltered only (buried rest poses and mass inside buildings — reported, not failed):'
+      );
+      for (const r of shelteredOnly) {
+        console.log(`    ${r.id.padEnd(15)} ${String(r.shelter).padStart(5)} of ${r.chunks}`);
+      }
+      console.log('');
+    }
   }
 }
 if (errs.length) {
   console.log(`  ${errs.length} PAGE ERROR(S):`);
   for (const s of errs.slice(0, 5)) console.log(`    ${s}`);
 }
-process.exit(result?.floating?.length || drawnBad.length ? 1 : 0);
+process.exit(result?.floating?.length || drawnBad.length || drawnVoid ? 1 : 0);
