@@ -2049,10 +2049,28 @@ export class Armour {
       r.mesh.instanceMatrix.addUpdateRange(o, 16);
       r.mesh.instanceMatrix.needsUpdate = true;
     }
-    // 2. it stops being solid
+    /**
+     * 2. it stops being solid — AND WHAT IT WAS IS REMEMBERED, ABSOLUTELY.
+     *
+     * `_restorePlough` used to put `LAYER.STATIC` back on every triangle it had
+     * zeroed, on the assumption that every triangle a pile owns was STATIC to
+     * begin with. MEASURED with `_maskproof.mjs`, that is false for 1428 of the
+     * 5743 entries the two hulls touch: 17376 of this map's 213358 static
+     * triangles are NOT solid at boot (`LAYER.CLIP` decks, masked-off faces),
+     * and a pile's box test claims them like any other. So a round reset was
+     * ADDING collision that had never been there — the exact shape of failure
+     * `stuckcheck` exists to catch, arriving one round late.
+     *
+     * The fix is the one this repo already learnt on the cathedral host state:
+     * store both states ABSOLUTE, never a delta applied and unapplied.
+     */
     const sw = this.physics?.staticWorld;
     if (sw?.mask && pile.tris) {
-      for (let i = 0; i < pile.tris.length; i++) sw.mask[pile.tris[i]] = 0;
+      if (!pile.trisWas) pile.trisWas = new sw.mask.constructor(pile.tris.length);
+      for (let i = 0; i < pile.tris.length; i++) {
+        pile.trisWas[i] = sw.mask[pile.tris[i]];
+        sw.mask[pile.tris[i]] = 0;
+      }
     }
     // 3. it comes apart
     if (pile.uniforms) {
@@ -2088,11 +2106,10 @@ export class Armour {
           r.mesh.instanceMatrix.addUpdateRange(o, 16);
           r.mesh.instanceMatrix.needsUpdate = true;
         }
-        if (sw?.mask && pile.tris) {
-          // LAYER.STATIC is what these triangles were registered with; the
-          // Assembler puts every world box in on that bit.
-          const L = this.physics.LAYER.STATIC;
-          for (let i = 0; i < pile.tris.length; i++) sw.mask[pile.tris[i]] = L;
+        // What each triangle ACTUALLY was, not what a pile is assumed to be
+        // made of. @see the note in `_firePlough`.
+        if (sw?.mask && pile.tris && pile.trisWas) {
+          for (let i = 0; i < pile.tris.length; i++) sw.mask[pile.tris[i]] = pile.trisWas[i];
         }
       }
       pile.fired = false;
@@ -2238,8 +2255,13 @@ export class Armour {
     arr.fill(0, o, o + 16);
     rec.mesh.instanceMatrix.addUpdateRange(o, 16);
     rec.mesh.instanceMatrix.needsUpdate = true;
+    // Absolute, not a delta — @see the note in `_firePlough`.
     if (sw?.mask && rec.tris) {
-      for (let i = 0; i < rec.tris.length; i++) sw.mask[rec.tris[i]] = 0;
+      if (!rec.trisWas) rec.trisWas = new sw.mask.constructor(rec.tris.length);
+      for (let i = 0; i < rec.tris.length; i++) {
+        rec.trisWas[i] = sw.mask[rec.tris[i]];
+        sw.mask[rec.tris[i]] = 0;
+      }
     }
   }
 
@@ -2248,7 +2270,6 @@ export class Armour {
     const a = this._atlas;
     if (!a?.fired.length) return;
     const sw = this.physics?.staticWorld;
-    const L = this.physics?.LAYER?.STATIC ?? 1;
     for (const rec of a.fired) {
       if (rec.m) {
         const arr = rec.mesh.instanceMatrix.array;
@@ -2257,8 +2278,9 @@ export class Armour {
         rec.mesh.instanceMatrix.addUpdateRange(o, 16);
         rec.mesh.instanceMatrix.needsUpdate = true;
       }
-      if (sw?.mask && rec.tris) {
-        for (let i = 0; i < rec.tris.length; i++) sw.mask[rec.tris[i]] = L;
+      // Absolute, not `LAYER.STATIC` — @see the note in `_firePlough`.
+      if (sw?.mask && rec.tris && rec.trisWas) {
+        for (let i = 0; i < rec.tris.length; i++) sw.mask[rec.tris[i]] = rec.trisWas[i];
       }
       rec.fired = false;
     }
