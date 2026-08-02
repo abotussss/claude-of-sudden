@@ -1364,10 +1364,26 @@ export const BUILDINGS = [
    * The two bays are MIRROR pairs exactly as the two courtyards are; the two
    * zone centres on z -1 are ρ images of each other regardless.
    */
-  { id: 'BW2', x: -50, z: -4, w: 6, d: 18, floors: 2, wallKey: 'plaster_cream', streetSide: 1, damage: 0.25, skipSides: [3], roofProps: 2 },
+  /**
+   * `w` IS 7 AND `x` IS ∓50.5 SO THE **OUTER** FACE DOES NOT MOVE, and that is
+   * not tidiness — it is a measured leak. Authored at x -50 w 6 the block spans
+   * -53..-47, i.e. widened -62..-56, and the face it used to present to the
+   * west was widened -63. That 1-unit sliver is open ground, and with the six
+   * district blocks levelled (`?demo=down`) it joins the terrain outside the
+   * authored rects: `boundcheck` went from PASS to FAIL with 7547 m² of empty
+   * reachable ground and 20 of 64 bearings ending in void, while the same gate
+   * on the build before this pass PASSED. At w 7 the span is -54..-47 =
+   * widened -63..-56, so the outer face is exactly where it always was and only
+   * the INNER face moves in to open the bay.
+   */
+  { id: 'BW2', x: -50.5, z: -4, w: 7, d: 18, floors: 2, wallKey: 'plaster_cream', streetSide: 1, damage: 0.25, skipSides: [3], roofProps: 2 },
   { id: 'BW3', x: -41, z: -26, w: 20, d: 36, floors: 2, wallKey: 'plaster_blue', streetSide: 1, damage: 0.2, skipSides: [3], roofProps: 2 },
   { id: 'BE1', x: 41, z: 22, w: 20, d: 42, floors: 3, wallKey: 'plaster_pink', streetSide: 3, damage: 0.15, skipSides: [1], roofProps: 3 },
-  { id: 'BE2', x: 50, z: -4, w: 6, d: 18, floors: 2, wallKey: 'plaster_sand', streetSide: 3, damage: 0.25, skipSides: [1], roofProps: 2 },
+  /** The mirror, and it seals the pocket at widened x 60..63 that the note over
+   *  `WC4`/`EC4` says is "sealed on all four sides (SE1 south, BE2 north, BE3
+   *  west, EC4 east)". At w 6 this block's face was widened 62 and that seal was
+   *  1 unit short. @see BW2 above for the boundcheck measurement. */
+  { id: 'BE2', x: 50.5, z: -4, w: 7, d: 18, floors: 2, wallKey: 'plaster_sand', streetSide: 3, damage: 0.25, skipSides: [1], roofProps: 2 },
   /** North face pulled from z -3 to z -8, the mirror of BW3's. @see BW2 above. */
   { id: 'BE3', x: 41, z: -15.5, w: 20, d: 15, floors: 2, wallKey: 'plaster_cream', streetSide: 3, damage: 0.2, skipSides: [1], roofProps: 2 },
   /**
