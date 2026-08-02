@@ -1768,25 +1768,63 @@ export function buildCathedral(A) {
      * — 2.6 m square and the last thing standing 26 m up — lying broken on one
      * bearing with its finial still in it. Eight bearings of the ring are still
      * open, so the point is coverable without being a fort.
+     *
+     * ──────────────────────────────────────────────────────────────────────
+     * AND THEN IT OVERSHOT — 「大聖堂のDサイトが瓦礫に埋まりすぎ」
+     * ──────────────────────────────────────────────────────────────────────
+     * The rebuild that answered 「しょぼい」 took the mean surface over the plan
+     * from 0.33 m to 1.29 m and the highest solid from 3.45 m to 13.44 m, which
+     * is the silhouette and is right. What it also did was fill the CAPTURE
+     * POINT, and the number that says so is not a height — it is the nav grid.
+     * Measured on the razed map (`_dbury.mjs`), D was 189 of 315 cells walkable
+     * against 312-314 of ~314 at A, B, C and E: 40 % of the one point the whole
+     * event exists to open was ground nobody could stand on. 107 of those 126
+     * dead cells were this section's own — 44 refused by `_carveInteriors`'
+     * `floorY + 0.9` and 63 by the standing capsule against a mass beside them.
+     *
+     * The floor was never the problem: only 18.6 % of D's circle stands over
+     * the controller's 0.42 m step, against 26-31 % at the four open zones. It
+     * is the COUNT OF DISCRETE MASSES between the rim and the middle — every
+     * one of which eats a `radius`-wide ring of cells round its own footprint,
+     * which is the same argument that moved three arcs out in the first place,
+     * applied to what was left.
+     *
+     * So three things move OUT rather than away, and nothing is deleted:
+     *
+     *   - THE LANTERN, from a 6.6 m bearing to 9.6 m. It is the single biggest
+     *     mass on the crossing (3.0 x 2.4 m of solid, 7.2 m² of D's cover in one
+     *     box) and it fell 26 m; landing it on the rim rather than on the point
+     *     is if anything the likelier physics.
+     *   - ONE OF THE FOUR INNER ARCS, out on to the same 8.8-11.5 m rim as the
+     *     three that were already there.
+     *   - ONE OF THE TWO INNER RAFTS, likewise.
+     *
+     * The four smashed TOMB CHESTS stay exactly where they are, because they
+     * cost the point nothing: section 7 stands the shell's own six on those
+     * squares, so the boot bake has already refused those cells in BOTH states
+     * and `_reprobeZoneNav` may only ever close a cell, never open one. They are
+     * 10.6 m² of the 0.9-2.8 m band for free, and they are most of the reason D
+     * still clears `sitecheck`'s floor of 12 m² with a third of the mass gone.
      */
     {
       const RING = [];
       /**
-       * SEVEN ARCS, AND ONLY FOUR OF THEM ARE INSIDE THE CIRCLE.
+       * SEVEN ARCS, AND ONLY THREE OF THEM ARE INSIDE THE CIRCLE.
        *
        * The first version put all of them on a 5.2-7.2 m ring, which is an
        * ANNULUS round the point rather than cover on it: nineteen separate
        * masses between a man on the rim and the middle. Measured over four
        * `_postcheck.mjs` runs a side, that halved how much of the round D had
        * somebody standing in it. Most of the drum landed OUTSIDE the circle
-       * anyway — it fell off an 18 m wall — so three of the seven go out on to
+       * anyway — it fell off an 18 m wall — so four of the seven go out on to
        * the 8.8-11.5 m rim, where they are cover on the APPROACH and cost the
-       * point nothing.
+       * point nothing. The fourth is 「埋まりすぎ」's: an arc is two boxes and
+       * each of them eats a bot-radius ring of nav cells round itself.
        */
       for (let i = 0; i < 7; i++) {
         const a = (i / 7) * 6.283 + rng.range(-0.2, 0.2);
         RING.push(a);
-        const out = i >= 4;
+        const out = i >= 3;
         const rr = out ? rng.range(8.8, 11.5) : rng.range(KEEP_STAND + 0.5, 7.2);
         const h = rng.range(1.3, 2.35);
         const seg = rng.range(2.2, 3.4);
@@ -1809,10 +1847,12 @@ export function buildCathedral(A) {
         }
       }
       /** Three rafts of the shell itself, tipped on edge where they landed —
-       *  two on the point, one out past it for the same reason as the arcs. */
+       *  ONE on the point, two out past it for the same reason as the arcs. A
+       *  raft is 2.2-3.0 m of solid across, which is the widest single thing
+       *  that was standing between the rim and the middle. */
       for (let i = 0; i < 3; i++) {
         const a = RING[i * 2] + rng.range(0.4, 0.8);
-        const rr = i === 2 ? rng.range(9.2, 11.8) : rng.range(KEEP_STAND + 0.7, 7.4);
+        const rr = i >= 1 ? rng.range(9.2, 11.8) : rng.range(KEEP_STAND + 0.7, 7.4);
         const u = Math.cos(a) * rr;
         const v = Math.sin(a) * rr;
         const h = rng.range(1.9, 2.7);
@@ -1829,10 +1869,17 @@ export function buildCathedral(A) {
             { masks: [0.9, 0.45, 0.25] });
         }
       }
-      /** THE LANTERN, down. 26 m up when the shell was standing. */
+      /**
+       * THE LANTERN, down. 26 m up when the shell was standing, and 9.6 m out
+       * from the crossing rather than 6.6 — the single change that does most of
+       * 「埋まりすぎ」's work. 3.0 x 2.4 m of solid is 7.2 m² of D's 0.9-2.8 m
+       * band in ONE box and roughly eighteen nav cells with the bot radius round
+       * it; on the rim it is the same object, the same size, doing the same job
+       * for a man walking in. @see the note over this section.
+       */
       {
         const a = RING[3] + 0.55;
-        const rr = 6.6;
+        const rr = 9.6;
         const u = Math.cos(a) * rr;
         const v = Math.sin(a) * rr;
         const ry = a + 0.4;

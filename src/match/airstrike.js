@@ -1101,6 +1101,44 @@ export class Airstrike {
       blocking: false,
       grand: true,
       /**
+       * ────────────────────────────────────────────────────────────────────
+       * NOBODY BUT `onRaze` MAY FIRE THIS SITE — 「大聖堂破壊イベントの時に破壊
+       * 演出して欲しいのに、その前に破壊されてしまう場合がある」
+       * ────────────────────────────────────────────────────────────────────
+       * `scheduled` was already put on the three `CATH-*` BAYS and on the
+       * `CATHEDRAL` salvo group for exactly this reason, and the site built
+       * here — the BUILDING, 2151 chunks of it — was left out of that fix
+       * because it is not authored in `STRIKE_SITES` and joins no group. So
+       * `_scheduleNext`'s weighted draw could still take it, and `_focusWeight`
+       * favours it all match because the middle capture point is inside it.
+       *
+       * Measured, one match, unforced (`_cathwatch.mjs`):
+       *
+       *   [airstrike] IMPACT CATHEDRAL (demo) at t=211.4s — 2151 chunks
+       *   [match]     CATHEDRAL EVENT called at t=216s p=0.40
+       *
+       * — the church came apart 4.6 s BEFORE its own event began, which is the
+       * player's first sentence. AND THE SECOND ONE FALLS OUT OF THE SAME
+       * FRAME: this site is `blocking: false`, so `fire` takes the shell out of
+       * the PICTURE (`setVisual(true)`) and leaves `world`'s two collision
+       * states exactly as they were — shell solid, ruin intangible and not
+       * drawn. The 2151 chunks then settle into poses probed against the RUIN,
+       * which is not there, and hang in clear air over a bare floor until the
+       * raze beat finally swaps the two forms in. That is
+       * 「大聖堂破壊後の宙に浮いている瓦礫」, and it is not a settle bug: the
+       * poses are right and the map underneath them is the wrong one.
+       *
+       * `scheduled` keeps it out of `_scheduleNext`; `razeOnly` keeps it out of
+       * `callEverything` as well, which is the other enumerator and would fire
+       * it at `finalCollapseProgress` with the same two consequences. The
+       * cathedral does not need either of them: `match` brings it down at
+       * `cathedralOpenProgress` in every match, and if it somehow has not by
+       * the final collapse, a church left standing is a far smaller defect
+       * than an invisible one that still stops bullets.
+       */
+      scheduled: true,
+      razeOnly: true,
+      /**
        * THE SAME BLAST A DISTRICT BLOCK MAKES, DELIBERATELY. `grand` is about
        * how big the event LOOKS and SOUNDS, and widening the lethal radius to
        * match would be a balance change hiding inside a VFX one: the crossing
@@ -2565,7 +2603,9 @@ export class Airstrike {
   callEverything(stagger = 0.55) {
     if (!this.ready || this._final) return 0;
     const left = [];
-    for (const s of this.sites) if (!s.struck && !s.dropped) left.push(s);
+    // `razeOnly` is the cathedral, and it is `world.cathedral.onRaze`'s alone.
+    // @see `_buildCathedralSite`.
+    for (const s of this.sites) if (!s.struck && !s.dropped && !s.razeOnly) left.push(s);
     if (!left.length) return 0;
     this._final = { list: left, k: 0, t: 0, stagger };
     // One jet for the whole thing, placed over the middle of the town. The
