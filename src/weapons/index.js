@@ -14,6 +14,7 @@ import { buildRevolver } from './models/revolver.js';
 import { buildMpistol } from './models/mpistol.js';
 import { buildKnife } from './models/knife.js';
 import { buildGrenade } from './models/grenade.js';
+import { buildFlashbang, buildSmokeGrenade, buildMine } from './models/throwables.js';
 import { ThrownGrenades } from './grenades.js';
 import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
 
@@ -93,7 +94,12 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  * in, and the order the pause menu lists. Primaries first, then the sidearm,
  * then the blade.
  */
-const WEAPON_IDS = ['rifle', 'ak', 'sniper', 'lmg', 'smg', 'pistol', 'revolver', 'mpistol', 'knife', 'grenade'];
+const WEAPON_IDS = [
+  'rifle', 'ak', 'sniper', 'lmg', 'smg',
+  'pistol', 'revolver', 'mpistol',
+  'knife',
+  'grenade', 'flashbang', 'smoke', 'mine',
+];
 
 export class WeaponSystem {
   static id = 'weapons';
@@ -108,6 +114,8 @@ export class WeaponSystem {
     this.primaryId = 'rifle';
     /** Which sidearm slot 2 draws first — the last one the player held. */
     this.sidearmId = 'pistol';
+    /** Which throwable slot 4 draws first — the last one the player held. */
+    this.throwableId = 'grenade';
     this.debugMode = null;
     /**
      * Trigger disabled from outside. `match` holds this true through freeze
@@ -261,6 +269,9 @@ export class WeaponSystem {
       mpistol: buildMpistol,
       knife: buildKnife,
       grenade: buildGrenade,
+      flashbang: buildFlashbang,
+      smoke: buildSmokeGrenade,
+      mine: buildMine,
     };
     let tris = 0;
     for (const id of WEAPON_IDS) {
@@ -347,6 +358,16 @@ export class WeaponSystem {
        */
       return c !== 'pistol' && c !== 'melee' && c !== 'throwable' && c !== 'grenade';
     });
+  }
+
+  /**
+   * THE THROWABLE SLOT'S CANDIDATES — every `class: 'grenade'` weapon, in
+   * registration order (frag, flash, smoke, mine). Derived like `primaryIds`
+   * and `sidearmIds`, so a fifth thing to throw appears in the slot-4 cycle
+   * with nothing else to change.
+   */
+  get throwableIds() {
+    return WEAPON_IDS.filter((id) => WEAPON_DEFS[id]?.class === 'grenade');
   }
 
   /** THE SIDEARM SLOT'S CANDIDATES — every `class: 'pistol'` weapon, in
@@ -597,7 +618,9 @@ export class WeaponSystem {
     this.activeId = id;
     // Slot 2's memory: whichever sidearm ends up in the hands — by number key,
     // wheel or anything else — is the one the slot draws next time.
-    if (this.states.get(id).def.class === 'pistol') this.sidearmId = id;
+    const cls = this.states.get(id).def.class;
+    if (cls === 'pistol') this.sidearmId = id;
+    if (cls === 'grenade') this.throwableId = id;
     this.viewmodel.setActive(id);
     this.viewmodel.play('draw');
     this._shotIndex = 0;
@@ -837,10 +860,15 @@ export class WeaponSystem {
     this._cooking = false;
     this._throwing = false;
     this.thrown?.clear();
-    const gren = this.viewmodel?.weapons?.get('grenade');
-    if (gren) {
-      gren.group.visible = this.activeId === 'grenade';
-      if (gren.parts.pin) gren.parts.pin.visible = true;
+    // Every throwable, not just the frag: the model is hidden between the
+    // release beat and the end of the throw clip, so a round that turned over
+    // inside that window would leave the player holding nothing. There are
+    // four of them now and the bug is per-weapon.
+    for (const id of this.throwableIds) {
+      const t = this.viewmodel?.weapons?.get(id);
+      if (!t) continue;
+      t.group.visible = this.activeId === id;
+      if (t.parts.pin) t.parts.pin.visible = true;
     }
     this._burstLeft = 0;
     this._burstCooldown = 0;
@@ -1516,8 +1544,24 @@ export class WeaponSystem {
         }
       }
       if (input.pressed('Digit3')) this.setWeapon('knife');
-      /** Slot 4: the frag. Empty pouch = an empty hand, so the swap is refused. */
-      if (input.pressed('Digit4') && this.grenadeCount > 0) this.setWeapon('grenade');
+      /**
+       * SLOT 4 CYCLES THE THROWABLES — 「グレネードに加えて閃光弾、スモークを
+       * 導入して もしくは感知式爆弾」 put four things in the pouch and the slot
+       * key drew exactly one of them. Press 4 for your throwable; press 4 again
+       * while holding one to walk frag -> flash -> smoke -> mine.
+       *
+       * AN EMPTY POUCH IS AN EMPTY HAND, so the cycle SKIPS anything you have
+       * none of rather than refusing: pressing 4 with no frags left should
+       * still put the smoke in your hand. `throwableId` remembers the last one
+       * you held. Nothing left at all = nothing happens, as before.
+       */
+      if (input.pressed('Digit4')) {
+        const list = this.throwableIds.filter((id) => (this.states.get(id)?.mag ?? 0) > 0);
+        if (list.length) {
+          const i = list.indexOf(this.activeId);
+          this.setWeapon(i >= 0 ? list[(i + 1) % list.length] : (list.includes(this.throwableId) ? this.throwableId : list[0]));
+        }
+      }
       if (input.wheel) this.nextWeapon();
       if (!this.locked) {
         if (melee) {

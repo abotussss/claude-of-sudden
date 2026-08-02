@@ -1282,6 +1282,217 @@ export const WEAPON_DEFS = {
     lowReadyRot: [-2.11, -1.05, -1.72],
     swayScale: 1.2,
     bobScale: 1.15,
+    /** @see `throwKind` on the flashbang below. */
+    throwKind: 'frag',
+  },
+
+  /* ────────────────────────────────────────────────────────────────────────
+   * 「グレネードに加えて閃光弾、スモークを導入して もしくは感知式爆弾
+   *  （レーザーが出ていて人が触れると1秒後に爆発するもの）
+   *  これは感知したときに音を知らせるようにして」
+   *
+   * Three more throwables, all `class: 'grenade'` so every branch that already
+   * exists keeps working with nothing to change: `primaryIds` keeps them off
+   * the rack, `reload()` and `scavenge()` skip them, `resetAmmo` refills them
+   * by `count`, `buildClips` gives them the cook/throw timeline, and the HUD
+   * reads them through the countless-but-counted path (ui/ammo.js).
+   *
+   * What separates them is `throwKind`, and it is a STRING ON THE DEF rather
+   * than a subclass because exactly one place branches on it — the detonation
+   * in `ThrownGrenades._detonate`. Everything upstream of that (the fuze, the
+   * cook, the release beat, the rigid body, the bounce) is identical for all
+   * four, because physically it is: they are all a can you let go of.
+   * ──────────────────────────────────────────────────────────────────────── */
+
+  flashbang: {
+    id: 'flashbang',
+    label: 'M84',
+    class: 'grenade',
+    modes: ['throw'],
+    throwKind: 'flash',
+    /** Two, like the frag, and refilled only by `resetAmmo` at the spawn. */
+    count: 2,
+    reserve: 0,
+    /**
+     * 1.6 s, not the frag's 3.0. A flashbang is thrown INTO a room you are
+     * about to enter and it has to go off before you get there; a 3 s fuze on
+     * a stun grenade is a stun grenade that flashes an empty doorway behind
+     * you. Cooking still works and still kills you, on the same clock.
+     */
+    fuse: 1.6,
+    /**
+     * NOT A BLAST. `blastDamage: 0` is load-bearing rather than decorative:
+     * `_detonate` still fires the canonical `explosion` event so fx, audio and
+     * the physics impulse all happen, and the damage path is simply not
+     * entered. A flashbang that does 20 damage is a bad frag.
+     *
+     * `blastRadius` is the BANG's radius — what fx sizes the burst to and what
+     * the suppression falls off over — while `flashRadius` is how far the
+     * light reaches and `flashDuration` how long a man caught looking at it is
+     * blind for. The light travels further than the noise, which is right.
+     */
+    blastRadius: 4.5,
+    blastDamage: 0,
+    flashRadius: 16,
+    flashDuration: 4.2,
+    throwSpeed: 18,
+    tossSpeed: 8.5,
+    throwLoft: 0.16,
+    /** Lighter and hollower than a frag: it skips off walls instead of dying. */
+    bounce: 0.46,
+    ads: false,
+    adsTime: 0.16,
+    adsFov: 1,
+    viewFov: 1,
+    inspectTime: 2.2,
+    drawTime: 0.5,
+    holsterTime: 0.32,
+    cycleTime: 0.3,
+    cookTime: 0.42,
+    throwTime: 0.66,
+    releaseAt: 0.26,
+    spreadHip: 0,
+    spreadAds: 0,
+    spreadPerShot: 0,
+    spreadMax: 0,
+    spreadDecay: 1,
+    /** The frag's searched rest pose — the same hand holding the same section. */
+    hipPos: [0.15, -0.12, -0.4],
+    hipRot: [0.05, -0.95, 0.55],
+    adsCant: [0, 0, 0],
+    moveScale: 1.15,
+    sprintPos: [0.1375, -0.1766, -0.2516],
+    sprintRot: [-2.27, -0.93, -1.45],
+    lowReadyPos: [0.1575, -0.1616, -0.2666],
+    lowReadyRot: [-2.11, -1.05, -1.72],
+    swayScale: 1.2,
+    bobScale: 1.15,
+  },
+
+  smoke: {
+    id: 'smoke',
+    label: 'M8-HC',
+    class: 'grenade',
+    modes: ['throw'],
+    throwKind: 'smoke',
+    count: 2,
+    reserve: 0,
+    /**
+     * 2.2 s to the POP, and then 14 s of smoke. A smoke can does not detonate,
+     * it lights, so `fuse` here is the delay before it starts making smoke and
+     * `smokeDuration` is how long the screen lasts — long enough to cross a
+     * street on, which is the only reason to carry one.
+     */
+    fuse: 2.2,
+    smokeDuration: 14,
+    smokeRadius: 6.5,
+    /** No blast at all, and no flash. The `explosion` event is not fired for
+     *  this kind — see `_detonate` — because there is nothing to explode. */
+    blastRadius: 0,
+    blastDamage: 0,
+    throwSpeed: 15,
+    tossSpeed: 7.5,
+    throwLoft: 0.18,
+    /** A heavy can full of powder: it lands and stays where it lands. */
+    bounce: 0.2,
+    ads: false,
+    adsTime: 0.16,
+    adsFov: 1,
+    viewFov: 1,
+    inspectTime: 2.2,
+    drawTime: 0.54,
+    holsterTime: 0.34,
+    cycleTime: 0.3,
+    cookTime: 0.42,
+    throwTime: 0.7,
+    releaseAt: 0.26,
+    spreadHip: 0,
+    spreadAds: 0,
+    spreadPerShot: 0,
+    spreadMax: 0,
+    spreadDecay: 1,
+    hipPos: [0.15, -0.12, -0.4],
+    hipRot: [0.05, -0.95, 0.55],
+    adsCant: [0, 0, 0],
+    /** The heaviest thing you throw — 540 g of filled can. */
+    moveScale: 1.1,
+    sprintPos: [0.1375, -0.1766, -0.2516],
+    sprintRot: [-2.27, -0.93, -1.45],
+    lowReadyPos: [0.1575, -0.1616, -0.2666],
+    lowReadyRot: [-2.11, -1.05, -1.72],
+    swayScale: 1.2,
+    bobScale: 1.15,
+  },
+
+  mine: {
+    id: 'mine',
+    label: 'PM-1',
+    class: 'grenade',
+    modes: ['throw'],
+    throwKind: 'mine',
+    /** ONE. It is the strongest thing in the pouch — it kills a man who walks
+     *  into it without you being there — so the budget is one per spawn. */
+    count: 1,
+    reserve: 0,
+    /**
+     * THE FUZE IS THE ARMING DELAY, not a countdown to a bang. `_detonate` is
+     * never reached by time on this kind: at `fuse` the body stops being a
+     * grenade and becomes a MINE — the beam lights, the sensor starts looking,
+     * and from then on the only thing that sets it off is somebody crossing
+     * the beam. 0.9 s is long enough that you cannot arm one in a man's face
+     * and shoot him with it.
+     */
+    fuse: 0.9,
+    /** How far the laser reaches, and how thick a body has to be to break it. */
+    beamRange: 9,
+    beamRadius: 0.22,
+    /**
+     * ONE SECOND FROM THE TRIP TO THE BANG — 「人が触れると1秒後に爆発する」 —
+     * and the whole second is the point: it is what makes a mine a warning
+     * rather than an instant death, and it is why the noise below matters.
+     * A man who hears it has one second to get out of the radius.
+     */
+    trigDelay: 1.0,
+    /**
+     * AND IT SAYS SO OUT LOUD — 「これは感知したときに音を知らせるようにして」.
+     * The voice is played at the MINE, in the world, so it is positional: the
+     * man who tripped it hears it at his feet and the man across the street
+     * hears where it is. @see `ThrownGrenades._trip`.
+     */
+    blastRadius: 8.5,
+    blastDamage: 145,
+    /** Thrown underhand-ish by default: you place these, you do not lob them. */
+    throwSpeed: 11,
+    tossSpeed: 5.5,
+    throwLoft: 0.1,
+    /** It must STOP where it lands, or it is not a mine, it is a bowling ball. */
+    bounce: 0.06,
+    ads: false,
+    adsTime: 0.16,
+    adsFov: 1,
+    viewFov: 1,
+    inspectTime: 2.2,
+    drawTime: 0.56,
+    holsterTime: 0.34,
+    cycleTime: 0.3,
+    cookTime: 0.42,
+    throwTime: 0.66,
+    releaseAt: 0.26,
+    spreadHip: 0,
+    spreadAds: 0,
+    spreadPerShot: 0,
+    spreadMax: 0,
+    spreadDecay: 1,
+    hipPos: [0.15, -0.12, -0.4],
+    hipRot: [0.05, -0.95, 0.55],
+    adsCant: [0, 0, 0],
+    moveScale: 1.12,
+    sprintPos: [0.1375, -0.1766, -0.2516],
+    sprintRot: [-2.27, -0.93, -1.45],
+    lowReadyPos: [0.1575, -0.1616, -0.2666],
+    lowReadyRot: [-2.11, -1.05, -1.72],
+    swayScale: 1.2,
+    bobScale: 1.15,
   },
 };
 
