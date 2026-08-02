@@ -121,6 +121,22 @@ const out = await page.evaluate(([JOBS, CLIMB]) => {
     const s = idx(job.from[0], job.from[1]), g = idx(job.to[0], job.to[1]);
     if (s < 0 || g < 0) { res.push({ id: job.id, err: 'endpoint off lattice' }); continue; }
     if (!pass[s] || !pass[g]) { res.push({ id: job.id, err: `endpoint blocked (from ${pass[s]} to ${pass[g]})` }); continue; }
+    /**
+     * PER-JOB NO-GO CIRCLES, in the same authored units — the other capture
+     * points' stand-off rings, so a scouted spoke cannot be the "trimmed at
+     * the 16 m stand-off on E" drop `_bakeLegs` printed for RED->B.
+     * `avoid: [[x, z, r], …]`.
+     */
+    const AV = job.avoid ?? [];
+    const avoidOk = (k) => {
+      if (!AV.length) return true;
+      const ax = X0 + (k % NX) * GS, az = Z0 + ((k / NX) | 0) * GS;
+      for (const [vx, vz, vr] of AV) {
+        if (Math.hypot(ax - vx, az - vz) < vr) return false;
+      }
+      return true;
+    };
+    if (!avoidOk(s) || !avoidOk(g)) { res.push({ id: job.id, err: 'endpoint inside an avoid circle' }); continue; }
     const gsc = new Float32Array(NX * NZ).fill(Infinity);
     const prev = new Int32Array(NX * NZ).fill(-1);
     const open = [s]; gsc[s] = 0;
@@ -141,7 +157,7 @@ const out = await page.evaluate(([JOBS, CLIMB]) => {
         const nx = cx + dx, nz = cz + dz;
         if (nx < 0 || nx >= NX || nz < 0 || nz >= NZ) continue;
         const nk = nz * NX + nx;
-        if (!pass[nk] || !edgeOk(cur, nk, ax, di)) continue;
+        if (!pass[nk] || !avoidOk(nk) || !edgeOk(cur, nk, ax, di)) continue;
         const step = Math.hypot(dx, dz) + Math.abs(wy[nk] - wy[cur]) * 0.5;
         if (gsc[cur] + step < gsc[nk]) { gsc[nk] = gsc[cur] + step; prev[nk] = cur; open.push(nk); }
       }
