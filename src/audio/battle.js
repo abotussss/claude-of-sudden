@@ -70,8 +70,18 @@ import { tankEngine } from './vehicle.js';
 const BINS = 8;
 /** How long a bin may collect before it has to be heard. Longer = laggy. */
 const BIN_WINDOW = 0.34;
-/** Rounds one voice will carry. Past this the bin flushes early. */
-const BIN_ROUNDS = 8;
+/**
+ * Rounds one voice will carry. Past this the bin flushes early.
+ *
+ * BACK TO 6 — I raised it to 8 in the same pass as the rate and MEASURED the
+ * cost at 1x: 95.3 far voices a minute became 75.8, while the ROUNDS inside
+ * them went 377 to 490. Fewer, fatter bursts is the wrong trade for this
+ * complaint. A voice is one BEARING, and 「銃声が方方でなっている感じが戦争です」 is a
+ * request for fire from many directions — the number of distinct directions per
+ * second is the voice count, not the round count. 6 keeps the bins flushing
+ * early under heavy fire and hands the density back.
+ */
+const BIN_ROUNDS = 6;
 /**
  * Voices a second, all bins together. 9, up from 5 — the THIRD round of
  * 「銃声が全然聞こえない、銃声が方方でなっている感じが戦争です」, and this round the

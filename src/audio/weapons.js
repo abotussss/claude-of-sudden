@@ -633,10 +633,25 @@ export function distantFire(actx, bank, rng, o = {}) {
   const p = o.profile ?? WEAPON_PROFILES.rifle;
   const lvl = (o.level ?? 1) * (p.level ?? 1);
 
-  // VOICE TRIM. Staged against `weaponShot`, which trims to 0.46 and is the
-  // reference the whole mix is built on; the difference between a near and a far
-  // report is then the distance curve's job, not this number's.
-  const out = gain(actx, 0.62);
+  /**
+   * VOICE TRIM 0.62 -> 0.95, and this one is deliberately TOO MUCH.
+   *
+   * It was staged against `weaponShot`'s 0.46 with the difference left to the
+   * distance curve — correct in principle, and it has now failed to reach the
+   * player three times. 「銃声が方方でなっている感じが戦争です」 is the third telling,
+   * and the last measurement before this pass stopped measuring had a coalesced
+   * six-round burst arriving 1.6 dB over the ambience bed at 200 m. Two passes
+   * of "measured correct" have already been wrong about what reaches him, so
+   * this is aimed at being audibly excessive rather than defensibly right: it is
+   * the layer that has to sound like a war happening somewhere else, and it is
+   * the cheapest thing in the graph to turn back down if it is now too loud
+   * (one number, here).
+   *
+   * It touches THIS LAYER ONLY — the coalesced far burst past 60 m. The full
+   * `weaponShot` a man fires at you inside 60 m goes through none of it, so the
+   * near mix, which nobody has complained about, does not move.
+   */
+  const out = gain(actx, 0.95);
   // Everything past the last round's own decay is the town answering.
   const sum = gain(actx, 1);
   out.connect(sum);
