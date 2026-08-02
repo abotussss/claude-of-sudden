@@ -1037,6 +1037,14 @@ const result = await page.evaluate(
  *      program, so a fourth system that throws rubble is swept the day it is
  *      written and nobody has to edit this file.
  *
+ * AND IT IS NOT ONE SYSTEM'S MISTAKE. While this was being written the tank
+ * agent found its own plough spoil settling UP TO 6.86 m IN THE AIR, invisible
+ * to `_ploughfloat.mjs` for exactly the reason the bomber's debris was
+ * invisible here: a visual-only mass measured by a collision-only probe. Two
+ * independent systems, the same blind spot, the same week — which is why the
+ * test below is on the ATTRIBUTES THAT THROW A CHUNK rather than on a list of
+ * owners. `match_tank_*_plough` is swept by this file with no line naming it.
+ *
  * WHY THE WALK DOES NOT JUDGE EVERYTHING IT FINDS, WHICH IS A LIMIT AND IS
  * WRITTEN DOWN RATHER THAN QUIETLY APPLIED. The header of the collision half
  * says why a per-piece downward ray is the wrong probe: it false-positives on
