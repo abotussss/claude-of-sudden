@@ -1992,8 +1992,37 @@ export class Armour {
       dir.normalize();
       const r = rng.range(0.5, 2.6);
       const sy = Math.max(c.hy, 0.08) + rng.range(0, 0.14);
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * A CHUNK LANDS ON THE GROUND IT LANDS ON — 「空中に瓦礫が浮いてます」
+       * ────────────────────────────────────────────────────────────────────
+       * The settled height was `pile.y + sy`: the road under the PILE, for
+       * every chunk, however far the shove threw it. That is right in a street
+       * and wrong the moment a pile stands on anything with an edge — a kerb,
+       * a plinth, a loading dock — because the outward throw is up to 2.6 m
+       * and carries pieces past that edge, where they stop at the height of
+       * the thing they came off.
+       *
+       * MEASURED with `_ploughsettle.mjs` (seed 7, all 70 piles, 3500 baked
+       * chunk poses): two piles put 25 and 32 chunks between 1.5 m and 6.86 m
+       * in the air. `_ploughfloat.mjs` passes and cannot see it — that gate
+       * measures COLLISION and this debris is visual-only by design, so a
+       * chunk hanging in the sky is invisible to the gate and perfectly
+       * visible to the player, who has now raised floating rubble twice.
+       *
+       * One downward ray per chunk, at BOOT, at the point it will come to
+       * rest. 3500 rays over the whole map next to the raze atlas's 213 358
+       * triangle walk is not a cost worth trading a floating rock for.
+       */
+      const lx = posv.x + dir.x * r;
+      const lz = posv.z + dir.z * r;
+      let rest = pile.y;
+      const g = this.physics?.groundHeight?.(lx, lz, 40);
+      // Only ever DOWN to real ground: a ray that finds a roof over the
+      // landing point must not lift the chunk onto it.
+      if (Number.isFinite(g) && g < pile.y + 0.05) rest = g;
       off[i * 3] = dir.x * r;
-      off[i * 3 + 1] = pile.y + sy - posv.y;
+      off[i * 3 + 1] = rest + sy - posv.y;
       off[i * 3 + 2] = dir.z * r;
       mot[i * 4] = rng.range(0, 0.08);
       mot[i * 4 + 1] = clamp(rng.range(0.5, 1.1), 0.4, 1.6);
