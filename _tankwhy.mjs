@@ -173,21 +173,43 @@ const res = await page.evaluate(async ({ SPEED, SECONDS }) => {
   }
 
   /* ---- the plough verdict ---------------------------------------------- */
+  // Who owns which instance, and did that pile ever fire?
+  const owner = new Map();
+  for (const t of armour.tanks) {
+    for (const pile of t.plough) {
+      for (const r of pile.inst) owner.set(`${r.mesh.id}:${r.slot}`, { tank: t.id, fired: pile.fired, leg: pile.leg });
+    }
+  }
+  const gone = (q) => { const mm = new (e.camera.matrixWorld.constructor)(); q.mesh.getMatrixAt(q.slot, mm); return mm.elements[0] === 0 && mm.elements[5] === 0 && mm.elements[10] === 0; };
+
   for (const t of armour.tanks) {
     const p = per[t.id];
     // props within the swept corridor of what the hull ACTUALLY drove
     let inCorridor = 0;
+    const why = { erased: 0, ownPileUnfired: 0, otherTank: 0, noPile: 0 };
+    const heights = [];
     const seen = new Set();
     for (const q of props) {
       for (let i = 0; i < p.visited.length; i++) {
         if (Math.hypot(q.x - p.visited[i][0], q.z - p.visited[i][1]) <= PLOUGH_HALF) {
           const k = `${q.mesh.id}:${q.slot}`;
-          if (!seen.has(k)) { seen.add(k); inCorridor++; }
+          if (!seen.has(k)) {
+            seen.add(k); inCorridor++;
+            if (gone(q)) why.erased++;
+            else {
+              const o = owner.get(k);
+              if (!o) { why.noPile++; if (heights.length < 24) heights.push([q.mesh.name, +q.x.toFixed(1), +q.z.toFixed(1)]); }
+              else if (o.tank !== t.id) why.otherTank++;
+              else why.ownPileUnfired++;
+            }
+          }
           break;
         }
       }
     }
     p.propsInCorridor = inCorridor;
+    p.why = why;
+    p.noPileSample = heights;
     p.pilesFired = t.plough.filter((q) => q.fired).length;
     p.instErased = t.plough.filter((q) => q.fired).reduce((a, q) => a + q.inst.length, 0);
     p.razed = t.stats.razed;
@@ -218,6 +240,8 @@ for (const id of Object.keys(res.per)) {
   console.log('mass standing in front of each leg END (top m, bound = prop instances behind it):');
   console.table(p.legEndMass.map((x, i) => ({ leg: i, zone: p.legs[i].zone, ...(x ?? { none: true }) })));
   console.log(`PLOUGH  baked piles=${p.ploughBaked} (instances ${p.ploughInst}) | fired=${p.pilesFired} erasing ${p.instErased} | props inside the corridor it actually drove: ${p.propsInCorridor} | shelled off by the gun: ${p.razed}`);
+  console.log(`        of those ${p.propsInCorridor} in the corridor: ERASED ${p.why.erased} | left standing: ${p.why.noPile} bound to no pile at all, ${p.why.otherTank} held by the OTHER hull's pile, ${p.why.ownPileUnfired} in an own pile that never fired`);
+  if (p.noPileSample.length) console.log('        unbound sample:', JSON.stringify(p.noPileSample));
   const pc = (v) => `${((v / Math.max(1e-6, p.liveT)) * 100).toFixed(1)}%`;
   console.log(`MOTION  advance ${p.advT.toFixed(1)}s (${pc(p.advT)})  hold ${p.holdT.toFixed(1)}s (${pc(p.holdT)})`);
   console.log(`        under walking pace WHILE ADVANCING: ${p.slowAdvT.toFixed(1)}s = ${((p.slowAdvT / Math.max(1e-6, p.advT)) * 100).toFixed(1)}% of the advance`);

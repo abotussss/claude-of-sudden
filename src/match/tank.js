@@ -377,10 +377,60 @@ const ZONE_STANDOFF = 16;
 const ZONE_ARRIVE = 34;
 /** Seconds between "which point should we be at" decisions. */
 const RETARGET_EVERY = 2.0;
-/** Radians/second the hull swings its nose. Over `PIVOT_HOLD` off the heading
- *  it wants, it pivots on the spot instead of driving. */
-const PIVOT_RATE = 0.5;
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「戦車が占領地域へ向かっているが進んでいない時がある」 — IT WAS THE STEERING
+ * ────────────────────────────────────────────────────────────────────────────
+ * MEASURED BEFORE IT WAS CHANGED, with `_tankwhy.mjs` (seed 7, both hulls, the
+ * fraction of the seconds a hull spends in `advance` — i.e. holding an order to
+ * MOVE — at under walking pace, attributed to the drive's own three reasons):
+ *
+ *     RED    27.6 % of its advance under 1.4 m/s — 7.7 s pivot, 0.7 s fight
+ *            speed, 0.0 s plough drag
+ *     BLUE   45.5 % of its advance under 1.4 m/s — 41.6 s pivot, 0.1 s fight
+ *            speed, 0.1 s plough drag
+ *
+ * So it is not the gun and it is not the plough: a hull ordered to a capture
+ * point spent up to forty-five per cent of the drive AT A DEAD STOP, turning.
+ * Two causes, both structural:
+ *
+ *   1. THE HEADING IT CHASED WAS THE BAKED YAW UNDER ITS OWN TRACKS. `YAW[i]`
+ *      is the path's direction AT the sample the hull is standing on, so at an
+ *      authored corner it steps by the whole corner in one sample: the error
+ *      goes from nothing to ninety degrees between two frames, `pivoting` goes
+ *      true, and the throttle is cut to ZERO until the nose has come round. The
+ *      hull therefore stopped dead at every corner of every spoke — and the
+ *      wheel is authored with a dozen of them.
+ *
+ *      It now chases the BEARING TO A POINT `LOOK_AHEAD` DOWN THE LEG, which is
+ *      pure pursuit and is the standard answer: the aim point rotates smoothly
+ *      over the metres before a corner instead of snapping at it, so the hull
+ *      turns INTO the corner while it is still moving. The body may lead its
+ *      own track by a few degrees mid-corner, which is what a tracked vehicle
+ *      steering with its tracks looks like.
+ *
+ *   2. THE THROTTLE WAS A BOOLEAN. `speed = pivoting ? 0 : …` has no middle:
+ *      thirty-five degrees off is full speed and thirty-six is stationary. It
+ *      is now a ramp — full speed inside `TURN_EASE`, down to `TURN_MIN` of it
+ *      at `PIVOT_HOLD`, and zero only past that, which is the hairpin a spoke
+ *      driven back to the hub really does ask for.
+ *
+ * `PIVOT_RATE` was 0.5 rad/s, so the 180 degrees at the end of a spoke took
+ * 6.3 SECONDS of a motionless tank. 0.9 makes that 3.5 s and lets the nose
+ * track a 90 degree corner in 1.7 s, which the ramp above spends at a little
+ * under half speed rather than stopped.
+ */
+const PIVOT_RATE = 0.9;
 const PIVOT_HOLD = 0.6;
+/** Metres down the leg the hull steers at. Half a hull length: far enough that
+ *  a corner arrives as a turn, near enough that the body never leads the track
+ *  it is actually on by more than a few degrees. */
+const LOOK_AHEAD = 4.0;
+/** Heading error the hull drives through at full speed. */
+const TURN_EASE = 0.12;
+/** …and the fraction of its speed it still has at `PIVOT_HOLD`. */
+const TURN_MIN = 0.35;
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
@@ -722,6 +772,7 @@ export class Armour {
     }
     props = null;
     this._ploughClaimed = null;
+    this._propGrid = null;
     if (this.tanks.length) ctx.scene.add(this.group);
 
     ctx.events.on('explosion', this._onExplosion);
@@ -1290,6 +1341,25 @@ export class Armour {
     }
   }
 
+  /**
+   * THE PROP INDEX ON A LATTICE, so the corridor sweep in `_bakeLegPlough` is a
+   * cell lookup instead of 25 039 distance tests per path sample. Built once
+   * for both hulls off the same index `build()` already holds, and dropped with
+   * it — @see `build`, which nulls `_propGrid` beside `_ploughClaimed`.
+   */
+  _propGridOf(props) {
+    if (this._propGrid) return this._propGrid;
+    const cell = 5;
+    const g = new Map();
+    for (const q of props) {
+      const k = Math.floor(q.x / cell) * 65536 + Math.floor(q.z / cell);
+      let c = g.get(k);
+      if (!c) g.set(k, (c = []));
+      c.push(q);
+    }
+    return (this._propGrid = { cell, g });
+  }
+
   /** One leg's worth of piles. @see `_bakePlough`. */
   _bakeLegPlough(tank, legIx, physics, props) {
     const p = tank.legs[legIx];
@@ -1339,10 +1409,113 @@ export class Armour {
     /* ---- bind each pile to the instances that draw it ------------------ */
     // Shared across BOTH hulls, so the two routes can never claim one instance.
     const claimed = this._ploughClaimed ?? (this._ploughClaimed = new Set());
+
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * 「戦車が破壊可能オブジェを破壊していない」 — THE RAY WAS FLYING OVER THEM
+     * ────────────────────────────────────────────────────────────────────────
+     * MEASURED BEFORE IT WAS CHANGED, with `_tankwhy.mjs`, which counts the
+     * prop instances standing inside `PLOUGH_HALF` of the metres a hull
+     * ACTUALLY drove and then asks of each survivor why it is still there:
+     *
+     *     seed 7    RED  62 in the corridor, 35 erased — 27 LEFT STANDING
+     *               BLUE 224 in the corridor, 112 erased — 112 LEFT STANDING
+     *     seed 12   RED  117 / 67 — 50 left standing
+     *               BLUE 208 / 93 — 115 left standing
+     *
+     * Half of everything the hull drove over survived it, and EVERY SINGLE
+     * SURVIVOR was in the same category: bound to no pile at all. None was held
+     * by the other hull's claim and none was in a pile that simply had not
+     * fired yet — so it was never a scheduling problem, it was discovery.
+     *
+     * THE CAUSE IS ONE NUMBER. The pass above finds mass with a FORWARD ray at
+     * `g + 0.55`, and the dressing this street is made of is shorter than that:
+     * the survivors are `prop_sandbag_a/b/c`, `prop_jersey`, `prop_crate_a`,
+     * `prop_barrel_wood`, `prop_jerry_can`, `prop_tyre`, `prop_brick_a/b`,
+     * `prop_rock_a/b`, `prop_litter`, `prop_can`, `prop_bottle`, `prop_shrub`.
+     * A ray half a metre off the road flies clean over a sandbag line, and four
+     * lanes 1.14 m apart miss anything sitting between them.
+     *
+     * So the corridor is now swept against THE PROPS THEMSELVES rather than
+     * against what a ray happened to touch, and the classifier is unchanged —
+     * an instance is measured with one downward ray for its height OVER THE
+     * ROAD `_bakeRide` already found, and mass over `PLOUGH_TOP` is still a
+     * building the hull does not get to erase. That is what keeps a lamp post,
+     * a pier and a plinth run standing while the sandbags go.
+     *
+     * A SWEPT PROP JOINS THE NEAREST PILE WITHIN `PLOUGH_MERGE` and only starts
+     * a new one if it is over `PLOUGH_MIN` — a brick lying in the road beside a
+     * sandbag line goes with the line, and a brick lying in the road on its own
+     * is still not an event.
+     */
+    if (props?.length) {
+      const grid = this._propGridOf(props);
+      const cell = grid.cell;
+      const half = PLOUGH_HALF;
+      const o2 = new THREE.Vector3();
+      const seen = new Set();
+      for (let i = 0; i < p.n; i++) {
+        const cx0 = Math.floor((p.X[i] - half) / cell);
+        const cx1 = Math.floor((p.X[i] + half) / cell);
+        const cz0 = Math.floor((p.Z[i] - half) / cell);
+        const cz1 = Math.floor((p.Z[i] + half) / cell);
+        for (let cx = cx0; cx <= cx1; cx++) {
+          for (let cz = cz0; cz <= cz1; cz++) {
+            const bucket = grid.g.get(cx * 65536 + cz);
+            if (!bucket) continue;
+            for (let k = 0; k < bucket.length; k++) {
+              const q = bucket[k];
+              const dx = q.x - p.X[i];
+              const dz = q.z - p.Z[i];
+              if (dx * dx + dz * dz > half * half) continue;
+              const key = `${q.mesh.id}:${q.slot}`;
+              if (seen.has(key) || claimed.has(key)) continue;
+              seen.add(key);
+              // Its height over the ROAD, never over its own top.
+              o2.set(q.x, p.ROAD[i] + 30, q.z);
+              const t = physics.raycast(o2, down, 45, MASKW);
+              if (!t?.hit) continue;
+              const top = p.ROAD[i] + 30 - t.distance - p.ROAD[i];
+              if (top > PLOUGH_TOP) continue; // structure: it stays
+              let pile = null;
+              let bestD = PLOUGH_MERGE * PLOUGH_MERGE;
+              for (const c of piles) {
+                const ex = c.x - q.x;
+                const ez = c.z - q.z;
+                const d2 = ex * ex + ez * ez;
+                if (d2 < bestD) { bestD = d2; pile = c; }
+              }
+              if (!pile) {
+                if (top < PLOUGH_MIN) continue; // a kerb is not an event
+                pile = { leg: legIx, s: p.S[i], x: q.x, y: p.ROAD[i], z: q.z, top, fired: false, found: [] };
+                piles.push(pile);
+              }
+              pile.top = Math.max(pile.top, top);
+              pile.s = Math.min(pile.s, p.S[i]);
+              (pile.found ?? (pile.found = [])).push({ mesh: q.mesh, slot: q.slot, m: null, wx: q.x, wz: q.z });
+              claimed.add(key);
+            }
+          }
+        }
+      }
+    }
+
     for (const pile of piles) {
       const half = PLOUGH_MERGE * 0.75;
       pile.minX = pile.x - half; pile.maxX = pile.x + half;
       pile.minZ = pile.z - half; pile.maxZ = pile.z + half;
+      /**
+       * …AND THE BOX REACHES ROUND WHAT THE SWEEP FOUND. A sandbag line is
+       * three metres of props on a pile centred at one of them; a box that only
+       * ever reached `PLOUGH_MERGE * 0.75` would draw and unsolid the middle of
+       * it and leave the ends. The growth is bounded by the attach radius: a
+       * prop joins a pile only inside `PLOUGH_MERGE`, so no pile can grow past
+       * it whatever the street is dressed with.
+       */
+      for (const r of pile.found ?? []) {
+        pile.minX = Math.min(pile.minX, r.wx - 0.5); pile.maxX = Math.max(pile.maxX, r.wx + 0.5);
+        pile.minZ = Math.min(pile.minZ, r.wz - 0.5); pile.maxZ = Math.max(pile.maxZ, r.wz + 0.5);
+      }
       /**
        * A pile's own boxes STAND ON the road, so the band has to reach down to
        * the road to contain their side faces — and a hole in the road is how
@@ -1354,7 +1527,8 @@ export class Armour {
       pile.minY = pile.y - 0.2;
       pile.maxY = pile.y + pile.top + 0.9;
       pile.riseY = pile.y + 0.12;
-      pile.inst = [];
+      // The sweep's own finds are already claimed and already exclusive.
+      pile.inst = pile.found ?? [];
       /**
        * AN INSTANCE BELONGS TO EXACTLY ONE PILE, and the alternative was a bug
        * that only showed up in `reset()`. RED's two piles are 2.5 m apart on
@@ -1403,6 +1577,27 @@ export class Armour {
     if (!pos || !n || !sw.mask) return;
     const lists = tank.plough.map(() => []);
     /**
+     * THE PILES ON THEIR OWN LATTICE FIRST. This walks every static triangle on
+     * the map — 214 270 of them — and it used to test each one against EVERY
+     * pile. That was 26 piles; the corridor sweep above finds the dressing the
+     * old forward ray flew over, so it is now several times that, and 214 270 x
+     * n is the wrong shape to grow. One 4 m grid keyed the same way the raze
+     * atlas keys its own turns it back into a cell lookup.
+     */
+    const CELL = 4;
+    const bins = new Map();
+    for (let k = 0; k < tank.plough.length; k++) {
+      const q = tank.plough[k];
+      for (let cx = Math.floor(q.minX / CELL); cx <= Math.floor(q.maxX / CELL); cx++) {
+        for (let cz = Math.floor(q.minZ / CELL); cz <= Math.floor(q.maxZ / CELL); cz++) {
+          const kk = cx * 65536 + cz;
+          let c = bins.get(kk);
+          if (!c) bins.set(kk, (c = []));
+          c.push(k);
+        }
+      }
+    }
+    /**
      * THE WHOLE TRIANGLE HAS TO FIT, not just its centroid — that is the
      * difference between flattening a sandbag line and punching an invisible
      * hole in the front of a building. A centroid test takes a SLICE out of any
@@ -1420,7 +1615,10 @@ export class Armour {
       const hi = Math.max(y0, y1, y2);
       const xlo = Math.min(x0, x1, x2), xhi = Math.max(x0, x1, x2);
       const zlo = Math.min(z0, z1, z2), zhi = Math.max(z0, z1, z2);
-      for (let k = 0; k < tank.plough.length; k++) {
+      const bin = bins.get(Math.floor(((xlo + xhi) * 0.5) / CELL) * 65536 + Math.floor(((zlo + zhi) * 0.5) / CELL));
+      if (!bin) continue;
+      for (let b = 0; b < bin.length; b++) {
+        const k = bin[b];
         const q = tank.plough[k];
         if (xlo < q.minX || xhi > q.maxX) continue;
         if (zlo < q.minZ || zhi > q.maxZ) continue;
@@ -2539,7 +2737,25 @@ export class Armour {
   _setCourse(tank, zoneId) {
     const want = tank.legs.findIndex((l, i) => i > 0 && l.zone === zoneId);
     if (want < 0) return false;
-    if (tank.legIx === want && tank.legDir > 0) return false;
+    /**
+     * ALREADY ON THIS SPOKE. Driving it OUT is nothing to do. Driving it BACK
+     * to the hub is a hull that has just been told to turn round again — the
+     * point it was leaving has been taken off its side while it was leaving —
+     * and the plan it would otherwise lay is "finish the retreat, then come all
+     * the way out again", which is up to 130 m of street for no reason and
+     * reads exactly like a tank that cannot make up its mind. It turns round
+     * where it stands instead.
+     */
+    if (tank.legIx === want) {
+      if (tank.legDir > 0) return false;
+      tank.planN = 0;
+      tank.planI = 0;
+      tank.plan[tank.planN].leg = want;
+      tank.plan[tank.planN++].dir = 1;
+      tank.targetZone = zoneId;
+      this._startPlanStep(tank, true);
+      return true;
+    }
     tank.planN = 0;
     tank.planI = 0;
     if (tank.legIx === 0) {
@@ -2572,21 +2788,47 @@ export class Armour {
 
   /** Advance along the leg the course is on. No raycast, no allocation. */
   _drive(tank, dt) {
+    /**
+     * WHERE IT SHOULD BE, ASKED TWICE A SECOND — AND WHILE IT IS STILL DRIVING.
+     * This used to sit in the `hold` branch, with a copy of it in a second
+     * `else if (tank.state === 'advance')` that could NEVER RUN: the chain
+     * already opened with `if (tank.state === 'advance')`, so the duplicate was
+     * dead from the day it was written and a point taken back under a hull that
+     * was still driving at it did not re-lay the course until the hull had
+     * arrived and stood there. It is asked once, here, before the leg is read,
+     * because `_setCourse` may change which leg that is.
+     */
+    if (tank.state === 'advance' || tank.state === 'hold') {
+      tank.retarget -= dt;
+      if (tank.retarget <= 0) {
+        tank.retarget = RETARGET_EVERY;
+        const want = this._wantZone(tank);
+        if (want && want !== tank.targetZone) this._setCourse(tank, want);
+        else if (!want && tank.state === 'hold') tank.targetZone = null;
+      }
+    }
     const p = tank.legs[tank.legIx];
     /**
-     * THE NOSE CHASES THE LEG. Over `PIVOT_HOLD` off the heading it wants — a
-     * hairpin, or the 180 degrees a spoke driven back to the hub asks for — the
-     * hull turns on the spot instead of driving, which is the only way a wheel
-     * of routes reads as one vehicle rather than as a sprite being slid along a
-     * new line.
+     * THE NOSE CHASES A POINT DOWN THE LEG, NOT THE GROUND UNDER ITS TRACKS.
+     * @see the long note on `PIVOT_RATE` for what it chased before and for the
+     * seconds-at-a-dead-stop that measured it. Over `PIVOT_HOLD` off the
+     * heading it wants — the 180 degrees a spoke driven back to the hub asks
+     * for — the hull still turns on the spot instead of driving, which is the
+     * only way a wheel of routes reads as one vehicle rather than as a sprite
+     * being slid along a new line. A CORNER IS NOT THAT, and no longer costs
+     * the throttle everything.
      */
-    const wantYaw = wrapPi(p.YAW[this._yawIndex(tank, p)] + (tank.legDir < 0 ? Math.PI : 0));
+    const wantYaw = this._aimYaw(tank, p);
     const dy = wrapPi(wantYaw - tank.yaw);
     tank.yaw = wrapPi(tank.yaw + clamp(dy, -PIVOT_RATE * dt, PIVOT_RATE * dt));
-    const pivoting = Math.abs(dy) > PIVOT_HOLD;
+    const off = Math.abs(dy);
+    const pivoting = off > PIVOT_HOLD;
+    const ease = pivoting
+      ? 0
+      : 1 - (1 - TURN_MIN) * clamp((off - TURN_EASE) / (PIVOT_HOLD - TURN_EASE), 0, 1);
 
     if (tank.state === 'advance') {
-      let speed = pivoting ? 0 : tank.target ? SPEED_FIGHT : SPEED_ADVANCE;
+      let speed = (tank.target ? SPEED_FIGHT : SPEED_ADVANCE) * ease;
       /**
        * SHOVING A WALL COSTS MOMENTUM. Without this the hull crosses a pile at
        * exactly the speed it crosses open road and the destruction reads as
@@ -2651,21 +2893,6 @@ export class Armour {
        * `_destroy` and the round reset. What changed is that standing still is
        * no longer the end of the sortie.
        */
-      tank.retarget -= dt;
-      if (tank.retarget <= 0) {
-        tank.retarget = RETARGET_EVERY;
-        const want = this._wantZone(tank);
-        if (want && want !== tank.targetZone) this._setCourse(tank, want);
-        else if (!want) tank.targetZone = null;
-      }
-    } else if (tank.state === 'advance') {
-      // A point taken back while we are still driving at it re-lays the course.
-      tank.retarget -= dt;
-      if (tank.retarget <= 0) {
-        tank.retarget = RETARGET_EVERY;
-        const want = this._wantZone(tank);
-        if (want && want !== tank.targetZone) this._setCourse(tank, want);
-      }
     }
   }
 
@@ -2675,6 +2902,37 @@ export class Armour {
     let i = Math.min(p.n - 1, Math.max(0, Math.round((s / Math.max(1e-4, p.length)) * (p.n - 1))));
     if (i < 0) i = 0;
     return i;
+  }
+
+  /**
+   * PURE PURSUIT: the bearing from where the hull IS to a point `LOOK_AHEAD`
+   * down the leg in the sense it is driving. No allocation and no raycast —
+   * two baked samples and an `atan2`.
+   *
+   * The sense is carried by `legDir` in the ARC rather than by a half turn on
+   * the answer: a hull driving a spoke back to the hub is looking at a point
+   * behind it in arc length, and the bearing to that point IS the way it wants
+   * to be facing. `atan2(dx, dz)` is the same convention `_bakePath` bakes
+   * `YAW` in.
+   *
+   * Within a metre of the aim point the bearing is noise, which is the last
+   * stride of a leg and the frame the hull arrives — the baked yaw is the right
+   * answer there and is what it falls back to.
+   */
+  _aimYaw(tank, p) {
+    const q = clamp(tank.s + LOOK_AHEAD * tank.legDir, 0, p.length);
+    let i = Math.min(p.n - 1, Math.max(0, Math.round((q / Math.max(1e-4, p.length)) * (p.n - 1))));
+    while (i > 0 && p.S[i] > q) i--;
+    while (i < p.n - 1 && p.S[i + 1] < q) i++;
+    const j = Math.min(p.n - 1, i + 1);
+    const span = Math.max(1e-4, p.S[j] - p.S[i]);
+    const t = clamp((q - p.S[i]) / span, 0, 1);
+    const dx = p.X[i] + (p.X[j] - p.X[i]) * t - tank.position.x;
+    const dz = p.Z[i] + (p.Z[j] - p.Z[i]) * t - tank.position.z;
+    if (dx * dx + dz * dz < 1) {
+      return wrapPi(p.YAW[this._yawIndex(tank, p)] + (tank.legDir < 0 ? Math.PI : 0));
+    }
+    return Math.atan2(dx, dz);
   }
 
   /** Has the glacis reached a pile this sortie has not already flattened? */
