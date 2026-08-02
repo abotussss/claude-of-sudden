@@ -430,6 +430,37 @@ const LANE_CLEAR = 3.6;
 const STREET_HEAD = 3.4;
 
 /**
+ * ────────────────────────────────────────────────────────────────────────────
+ * A PERISHABLE HOST — the mass under a site that may stop existing
+ * ────────────────────────────────────────────────────────────────────────────
+ * `host: 'cathedral'` on the three `CATH-*` specs names the ONE case this file
+ * knew about, and naming it was the bug: `MID` is a mass on a building nobody
+ * ever takes down, but three of its 923 chunks are thrown 23 m and come to rest
+ * on the CATHEDRAL'S aisle roof at 12.43 m — and the cathedral is the one
+ * building on this map that is guaranteed to be gone by the end of a match.
+ * Measured at ?seed=7 before this existed: 30 of MID's chunks change the plane
+ * they stand on when `world.cathedral` is razed, three of them by more than
+ * `_floatcheck`'s 1.5 m, the worst by 7.83 m at (25.8, 12.7, 11.2).
+ *
+ * So WHICH BUILDING IS A HOST IS DERIVED AND MEASURED, never listed. Every
+ * record that publishes a destroyed state — `world.demolitions[]` and
+ * `world.cathedral` — is a candidate; the binding is made by dropping the same
+ * ray twice, once against the town as it boots and once with that one record
+ * swapped for its ruin, and keeping only the chunks whose answer MOVED. A site
+ * whose mass rests on nothing perishable gets no binding, no variant array and
+ * no work, which is 17 of the 18 sites and is what makes this safe to
+ * generalise: the poses on the boot map are byte-identical to what they were.
+ *
+ * `HOST_REACH` is the slack round a candidate's own radius, so the spill and
+ * the shards past the footprint are candidates too (`APRON` in
+ * src/world/demolition.js is 1.6 m; the cathedral throws further). It only
+ * widens WHO IS ASKED — the answer is always the measured one.
+ */
+const HOST_REACH = 6.0;
+/** Metres of plane change below which a swap has told us nothing. */
+const HOST_EPS = 0.05;
+
+/**
  * The mass that comes down, in the site's own frame:
  *   +u  out over the lane      +v  along the facade      +y  up from the roof
  *
@@ -578,6 +609,15 @@ export class Airstrike {
     /** Boot-only: what swapping a `host` building for its ruin cost. @see `_host`. */
     this._hostMs = 0;
     this._hostSwaps = 0;
+    /** Boot-only: what deriving the perishable hosts cost. @see `_bakeHostVariants`. */
+    this._hostBakeMs = 0;
+    /** Every building on the map that can stop existing. @see `_perishables`. */
+    this._hosts = null;
+    /**
+     * The (site, host) bindings, flat, so the per-frame compare is one loop over
+     * what actually exists rather than a walk of every site. @see `_syncHosts`.
+     */
+    this._variants = [];
 
     /** Live strikes, indexed the same as `sites`. */
     this._live = [];
@@ -706,6 +746,10 @@ export class Airstrike {
     this.physics = physics;
     this._lib = materials;
 
+    // The candidate hosts have to exist before the first site is built: the
+    // base bake asks them whether the plane the mound rests on is doomed.
+    this._perishables(world, physics);
+
     for (let i = 0; i < STRIKE_SITES.length; i++) {
       const site = this._buildSite(STRIKE_SITES[i], i, world, physics);
       if (site) this.sites.push(site);
@@ -725,9 +769,24 @@ export class Airstrike {
     for (const s of this.sites) this._bakeNavPatch(s, ai, physics);
     this._verifyRoutes(ai);
 
+    /**
+     * AFTER the nav patches, because both of them swap collision round their
+     * probes and neither may be inside the other; and BEFORE `_bootFlag`, so
+     * `?demo=down` / `?cath=down` are a state the sync below then reads rather
+     * than a state the bake has to guess at. @see `_bakeHostVariants`.
+     */
+    this._bakeHostVariants(world, physics);
+
     this._buildSalvos();
     this._buildDemoSalvos();
     this._bootFlag();
+    /**
+     * The map may already have holes in it (`?demo=down`, `?cath=down`, and
+     * `ai`'s cover bake under the latter), so the first compare happens here
+     * rather than on the first frame — nothing should ever be DRAWN in the
+     * pose of a state the level is not in.
+     */
+    this._syncHosts();
 
     this.ready = this.sites.length > 0;
     this.buildMs = performance.now() - t0;
@@ -749,7 +808,8 @@ export class Airstrike {
     console.info(
       `[airstrike] ${authored}/${STRIKE_SITES.length} authored sites + ${demos} whole buildings ` +
         `baked in ${this.buildMs.toFixed(0)}ms ` +
-        `(${this._hostSwaps} host swaps ${this._hostMs.toFixed(0)}ms) — ` +
+        `(${this._hostSwaps} host swaps ${this._hostMs.toFixed(0)}ms, ` +
+        `${this._variants.length} host variant(s) ${this._hostBakeMs.toFixed(0)}ms) — ` +
         `${chunks} chunks, ${cells} nav cells patched, ` +
         this.sites.map((s) => `${s.id}@${s.roofY.toFixed(1)}m`).join(' ')
     );
@@ -1312,7 +1372,36 @@ export class Airstrike {
     }
     rec.setCollision(false);
 
+    /**
+     * ITS OWN RUIN IS ITS OWN HOST, and saying so out loud is what keeps
+     * `_bakeHostVariants` from offering this site a second pose for the very
+     * building it IS. @see `site.hostBase` in `_buildSite`.
+     */
+    site.hostBase = this._selfHost(rec);
+
     return site;
+  }
+
+  /**
+   * The perishable-host entry for a record a demolition site is built FROM,
+   * matched by id so the cathedral's `_buildCathedralSite` adapter resolves to
+   * the same entry `world.cathedral` publishes. A record with no entry (there
+   * is none on this map) gets a private one so the caller has one shape.
+   */
+  _selfHost(rec) {
+    const found = (this._hosts ?? []).find((x) => x.id === rec.id);
+    if (found) return [found];
+    return [
+      {
+        id: rec.id,
+        rec,
+        centre: rec.position?.clone?.() ?? new THREE.Vector3(),
+        reach: 0,
+        swap: (down) => rec.setCollision(down),
+        probeSwap: (down) => rec.setCollision(down),
+        isDown: () => !!rec.down,
+      },
+    ];
   }
 
   /**
@@ -1474,11 +1563,14 @@ export class Airstrike {
       logFacade(spec.id, roofY, facadeU);
     }
 
-    /* ---- everything below settles on the map the event LEAVES --------- */
-    const host = this._host(spec, world);
-    if (host) this._swapHost(host, true, physics);
-
     /* ---- where the rubble ends up ------------------------------------ */
+    /**
+     * The mound's PLAN is decided before any host is swapped, because none of
+     * it asks physics anything: `lane` was measured above against the town as
+     * it stands, and `reach` is authored. Only the PLANE it rests on is a
+     * question about the map the event leaves behind, and that is the next
+     * block down. @see `_hostsForMound`.
+     */
     let moundR = spec.reach * 0.92;
     let moundOut = spec.reach * 0.52;
     {
@@ -1491,6 +1583,10 @@ export class Airstrike {
       }
     }
     const moundC = new THREE.Vector3().copy(base).addScaledVector(u, moundOut);
+
+    /* ---- everything below settles on the map the event LEAVES --------- */
+    const hosts = this._host(spec, world);
+    for (const h of hosts) this._swapHost(h, true, physics);
     /**
      * ────────────────────────────────────────────────────────────────────────
      * THE PLANE THE PILE RESTS ON — NINE PROBES, AND THE MIDDLE ONE WINS
@@ -1511,7 +1607,7 @@ export class Airstrike {
      * wall because there it is most of the disc rather than a corner of it.
      * `_floatcheck.mjs --region=strike` is the gate.
      */
-    const restY = (() => {
+    const probeRest = () => {
       const ys = [];
       const p = this._v;
       for (let i = -1; i < 8; i++) {
@@ -1528,7 +1624,45 @@ export class Airstrike {
       if (!ys.length) return NaN;
       ys.sort((a, b) => a - b);
       return ys[ys.length >> 1];
-    })();
+    };
+    let restY = probeRest();
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * …AND THE PLANE ITSELF MAY BE SOMEBODY ELSE'S DOOMED BUILDING
+     * ────────────────────────────────────────────────────────────────────────
+     * The nine rays above answer about the town AS IT BOOTS, minus whatever
+     * `spec.host` declares. A mound standing on a `world.demolitions` block or
+     * on the cathedral is the CATH-E defect with a different building under it:
+     * a SOLID disc, `_bakeNavPatch`'s walkable cells and eight proxy boxes, all
+     * left in the sky the moment that building is levelled — "戦車が空中に登って
+     * しまいますよ".
+     *
+     * The extra candidates are asked and then MEASURED, in that order, and the
+     * answer is only adopted when it is LOWER. That is the whole safety
+     * argument for generalising this: on a site whose mound stands on the
+     * street, the second probe returns the same plane, nothing is adopted and
+     * the site is bit-for-bit the site it was. A mound that has to choose gets
+     * the razed plane, because a proxy buried inside a building that is still
+     * standing is invisible and harmless, and a proxy in the sky is the bug.
+     */
+    {
+      const extra = this._hostsForMound(moundC, hosts);
+      if (extra.length) {
+        for (const h of extra) this._swapHost(h, true, physics);
+        const alt = probeRest();
+        if (Number.isFinite(alt) && (!Number.isFinite(restY) || alt < restY - HOST_EPS)) {
+          console.info(
+            `[airstrike] ${spec.id}: mound rests on ${extra.map((h) => h.id).join('+')} — ` +
+              `rest plane ${Number.isFinite(restY) ? restY.toFixed(2) : 'n/a'} m -> ${alt.toFixed(2)} m ` +
+              'baked against the ruin'
+          );
+          restY = alt;
+          for (const h of extra) hosts.push(h);
+        } else {
+          for (const h of extra) this._swapHost(h, false, physics);
+        }
+      }
+    }
     moundC.y = Number.isFinite(restY) ? restY : world.groundHeight(moundC.x, moundC.z);
     const moundH = MOUND_H[kind];
     logLane(spec.id, lane, moundOut + moundR);
@@ -1611,8 +1745,16 @@ export class Airstrike {
     site.proxyMesh = proxy;
     site.proxyId = physics.addStatic(proxy, 'concrete', { mask: 0 });
 
+    /**
+     * WHAT WAS RAZED WHILE THIS SITE'S POSES WERE SOLVED, kept so
+     * `_bakeHostVariants` can put the map back into exactly this state before
+     * it asks its own questions — and so it never offers a variant for a host
+     * this bake has already answered for.
+     */
+    site.hostBase = hosts;
+
     // Put the church back up. Nothing has been drawn between the two calls.
-    if (host) this._swapHost(host, false, physics);
+    for (const h of hosts) this._swapHost(h, false, physics);
 
     return site;
   }
@@ -1620,9 +1762,318 @@ export class Airstrike {
   /** One host swap, timed, so the boot log says what it costs. @see `_host`. */
   _swapHost(host, down, physics) {
     const t = performance.now();
-    host.setRazed(down, physics);
+    host.swap(!!down, physics);
     this._hostMs += performance.now() - t;
     this._hostSwaps++;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * EVERY BUILDING ON THIS MAP THAT CAN STOP EXISTING, AS ONE LIST
+   * ────────────────────────────────────────────────────────────────────────────
+   * The two destroyed-state publishers `world` already has, behind one shape:
+   * a circle on the plan, a COLLISION-ONLY swap, and a live `down` flag. Built
+   * once at boot and read from three places — the base bake's mound question,
+   * the per-chunk variant bake, and the per-frame `down` compare.
+   *
+   * COLLISION ONLY, NEVER THE PICTURE, everywhere: the whole point of
+   * `world`'s `setVisual`/`setCollision` split is that a probe may re-ask what
+   * the ground is with the building still visibly standing, at boot, with no
+   * frame drawn between. `world.cathedral` is the exception that proves it —
+   * it is swapped through `setRazed` in the base bake because that is what
+   * `_buildSite` has always done and `setRazed` is what `?cath=down` latches —
+   * so its entry carries `setRazed` for the base bake and plain `setCollision`
+   * for the variant probes, which must never disturb `razed` or fire `onRaze`.
+   *
+   * `world.breaches` is deliberately NOT here. A breach takes ONE ground-storey
+   * elevation off and leaves the storeys above standing on their jambs — the
+   * building does not stop existing, and measured over every settled chunk on
+   * the map (`_hostbake.mjs`, all six breaches swapped one at a time) not one
+   * chunk anywhere changes the plane it stands on. A candidate that can never
+   * bind is a candidate that costs rays at boot to prove a negative.
+   */
+  _perishables(world, physics) {
+    if (this._hosts) return this._hosts;
+    const out = [];
+    for (const rec of world?.demolitions ?? []) {
+      if (typeof rec.setCollision !== 'function' || !rec.position) continue;
+      out.push({
+        id: rec.id,
+        rec,
+        centre: rec.position.clone(),
+        reach: (rec.radius ?? Math.hypot(rec.halfW ?? 8, rec.halfD ?? 8)) + HOST_REACH,
+        swap: (down) => rec.setCollision(down),
+        probeSwap: (down) => rec.setCollision(down),
+        isDown: () => !!rec.down,
+      });
+    }
+    const k = world?.cathedral;
+    if (k && typeof k.setCollision === 'function' && typeof k.setRazed === 'function') {
+      out.push({
+        id: 'CATHEDRAL',
+        rec: k,
+        centre: world.levelToWorld(k.level.x, 0, k.level.z, new THREE.Vector3()),
+        reach: Math.hypot(k.halfW ?? 15, k.halfD ?? 22.5) + HOST_REACH,
+        swap: (down, physics2) => k.setRazed(down, physics2 ?? physics),
+        probeSwap: (down) => k.setCollision(down, physics),
+        isDown: () => !!k.razed,
+      });
+    }
+    this._hosts = out;
+    return out;
+  }
+
+  /**
+   * THE PERISHABLE BUILDINGS THIS SITE'S MOUND STANDS OVER.
+   *
+   * The plan test only decides WHO IS ASKED — `_buildSite` then fires the same
+   * nine rays with them swapped and keeps the answer only if the plane came
+   * DOWN. A mound in the middle of a street is inside nobody's circle and this
+   * returns an empty array, which is the 17-of-18 case.
+   */
+  _hostsForMound(moundC, already) {
+    const out = [];
+    for (const h of this._hosts ?? []) {
+      if (already.includes(h)) continue;
+      const dx = moundC.x - h.centre.x;
+      const dz = moundC.z - h.centre.z;
+      if (dx * dx + dz * dz > h.reach * h.reach) continue;
+      out.push(h);
+    }
+    return out;
+  }
+
+  /* ====================================================================== */
+  /* THE CHUNKS THROWN CLEAR ONTO SOMEBODY ELSE'S DOOMED ROOF               */
+  /* ====================================================================== */
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * ONE ALTERNATIVE POSE PER (SITE, HOST), SPARSE, AND WHY IT IS NOT A CHOICE
+   * MADE AT FIRE TIME
+   * ────────────────────────────────────────────────────────────────────────────
+   * The mound is a disc and its plane is one question. The 923 CHUNKS are not:
+   * they are thrown up to `SCATTER[2]` mound radii clear, so a handful of them
+   * land on a roof twenty metres away that belongs to somebody else. The plane
+   * under a chunk is therefore a per-chunk question with a per-chunk owner, and
+   * the honest shape is a sparse list per (site, host) rather than a second
+   * copy of every array.
+   *
+   * WHY IT IS NOT DECIDED WHEN THE SITE FIRES, WHICH IS THE OBVIOUS ANSWER AND
+   * IS WRONG: MID settles at about t=60 s and the cathedral comes down at
+   * `RULES.cathedralOpenProgress`, measured around t=210 s in a real match.
+   * The rubble is ALREADY ON THE GROUND — its own event finished two and a half
+   * minutes earlier — when the plane under three of its chunks stops existing.
+   * A decision taken at fire time cannot see that, and neither can one taken at
+   * boot. So the state that has to be tracked is the HOST'S, not the site's,
+   * and the moment to act is the host's transition.
+   *
+   * WHAT IS BAKED AND WHAT IS NOT. Everything, at boot, as it is everywhere
+   * else in this file: the chunk indices, the metres each one has to come down,
+   * and the corrected flight time. NOTHING IS SOLVED WHEN THE HOST FALLS —
+   * `_syncHosts` is `+=` over an index list of pre-solved floats, and the frame
+   * a bomb lands does not run it at all. It is also cheap to bake because the
+   * alternative pose is a PURE Y SHIFT: `settlePos` is `groundY + pile +
+   * halfExtent`, and only `groundY` is a question about collision. The plan
+   * position, the scatter draw, the spin, the axis, the delay and the arc are
+   * all decided by RNG and by the chunk's own throw direction and are
+   * identical in both states, so the alternative is the baked pose plus Δ with
+   * no RNG replay and no second `_buildMesh`. The one derived quantity that
+   * does move is `flight`, and it moves in closed form:
+   * `flight = sqrt(2·drop/g)·k` with the same random `k`, so
+   * `flight' = flight·sqrt(drop'/drop)` reproduces it exactly.
+   *
+   * `probeSwap`, never `swap`: this pass must not touch `world.cathedral.razed`
+   * and must not fire `onRaze`. Collision only, restored before it returns, and
+   * the level is left byte-identical to the state it was called in.
+   */
+  _bakeHostVariants(world, physics) {
+    const hosts = this._perishables(world, physics);
+    if (!hosts.length) return;
+    const t0 = performance.now();
+    let rays = 0;
+    let bound = 0;
+    let chunks = 0;
+
+    for (const site of this.sites) {
+      if (site.dropped || !site.meshes.length) continue;
+      const base = site.hostBase ?? [];
+      /**
+       * Only hosts this site's bake has NOT already answered for, and only ones
+       * some settled chunk of this site actually stands over. On this map that
+       * is a single pair — MID over the cathedral — and every other site skips
+       * the whole method on the plan test without firing a ray.
+       */
+      const cand = [];
+      for (const h of hosts) {
+        if (base.includes(h)) continue;
+        const idx = this._chunksOver(site, h);
+        if (idx.length) cand.push({ h, idx });
+      }
+      if (!cand.length) continue;
+
+      // Back into the state this site's poses were solved in, so `y0` is the
+      // number `_buildMesh` actually used rather than a different question.
+      for (const h of base) h.probeSwap(true);
+      const y0 = [];
+      for (const c of cand) {
+        const a = new Float64Array(c.idx.length);
+        for (let i = 0; i < c.idx.length; i++) {
+          a[i] = this._chunkFloor(site, c.idx[i], physics);
+          rays++;
+        }
+        y0.push(a);
+      }
+      for (let ci = 0; ci < cand.length; ci++) {
+        const c = cand[ci];
+        c.h.probeSwap(true);
+        const keep = [];
+        for (let i = 0; i < c.idx.length; i++) {
+          const y1 = this._chunkFloor(site, c.idx[i], physics);
+          rays++;
+          const a = y0[ci][i];
+          if (!Number.isFinite(a) || !Number.isFinite(y1)) continue;
+          if (Math.abs(y1 - a) <= HOST_EPS) continue;
+          keep.push({ ref: c.idx[i], dy: y1 - a });
+        }
+        c.h.probeSwap(false);
+        if (!keep.length) continue;
+        const v = this._makeVariant(site, c.h, keep);
+        if (!v) continue;
+        (site.hostVariants ??= []).push(v);
+        this._variants.push(v);
+        bound++;
+        chunks += keep.length;
+        console.info(
+          `[airstrike] ${site.id}: ${keep.length} chunk(s) rest on ${c.h.id} — ` +
+            `alternative pose baked (worst ${Math.min(...keep.map((x) => x.dy)).toFixed(2)} m)`
+        );
+      }
+      for (const h of base) h.probeSwap(false);
+    }
+
+    this._hostBakeMs = performance.now() - t0;
+    if (bound) {
+      console.info(
+        `[airstrike] perishable hosts: ${bound} site/host binding(s), ${chunks} chunks ` +
+          `carry a second rest pose (${rays} rays, ${this._hostBakeMs.toFixed(0)}ms)`
+      );
+    }
+  }
+
+  /**
+   * The settled chunks of `site` whose plan position is inside `host`'s circle,
+   * as `{ mesh, i }` refs. The circle is generous on purpose — it decides who is
+   * ASKED, and every one of them is then measured. @see `HOST_REACH`.
+   */
+  _chunksOver(site, host) {
+    const out = [];
+    const rr = host.reach * host.reach;
+    for (const mesh of site.meshes) {
+      const s = mesh.userData.settled;
+      if (!s) continue;
+      const n = s.length / 16;
+      for (let i = 0; i < n; i++) {
+        const dx = s[i * 16 + 12] - host.centre.x;
+        const dz = s[i * 16 + 14] - host.centre.z;
+        if (dx * dx + dz * dz > rr) continue;
+        out.push({ mesh, i });
+      }
+    }
+    return out;
+  }
+
+  /** The plane under one settled chunk, asked exactly as `_buildMesh` asked it. */
+  _chunkFloor(site, ref, physics) {
+    const s = ref.mesh.userData.settled;
+    const g = physics.groundHeight(s[ref.i * 16 + 12], s[ref.i * 16 + 14], site.roofY + 1);
+    return Number.isFinite(g) ? g : NaN;
+  }
+
+  /**
+   * Turn a measured list of `{ ref, dy }` into the flat arrays `_syncHosts`
+   * writes: one group per mesh, because `aOff` and `aMot` live on the mesh's own
+   * geometry and `instanceMatrix` on the mesh.
+   */
+  _makeVariant(site, host, keep) {
+    const byMesh = new Map();
+    for (const k of keep) {
+      if (!byMesh.has(k.ref.mesh)) byMesh.set(k.ref.mesh, []);
+      byMesh.get(k.ref.mesh).push(k);
+    }
+    const groups = [];
+    for (const [mesh, list] of byMesh) {
+      const geo = mesh.geometry;
+      const mot = geo.getAttribute('aMot');
+      const off = geo.getAttribute('aOff');
+      if (!mot || !off) continue;
+      const n = list.length;
+      const idx = new Uint32Array(n);
+      const dy = new Float32Array(n);
+      const f0 = new Float32Array(n);
+      const f1 = new Float32Array(n);
+      for (let k = 0; k < n; k++) {
+        const i = list[k].ref.i;
+        idx[k] = i;
+        dy[k] = list[k].dy;
+        f0[k] = mot.array[i * 4 + 1];
+        // Free fall over a longer drop takes longer, and the closed form the
+        // bake used lets us say by exactly how much without re-drawing its die.
+        const restYi = mesh.userData.rest[i * 16 + 13];
+        const setYi = mesh.userData.settled[i * 16 + 13];
+        const drop0 = Math.max(0.5, restYi - setYi);
+        const drop1 = Math.max(0.5, restYi - (setYi + dy[k]));
+        f1[k] = clamp(f0[k] * Math.sqrt(drop1 / drop0), 0.55, 3.1);
+      }
+      groups.push({ mesh, mot, off, idx, dy, f0, f1 });
+    }
+    if (!groups.length) return null;
+    return { site, host, groups, applied: false };
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * THE COMPARE, ONCE A FRAME — the same move `ai.syncCoverBlocks` makes
+   * ────────────────────────────────────────────────────────────────────────────
+   * `world.demolitions[].down` and `world.cathedral.razed` are written by the
+   * salvo, the round reset, `forceDemoNav`, `?demo=down`, `?cath=down`, the
+   * cathedral beat sheet and half a dozen probes. ARCHITECTURE.md already says
+   * why that is READ rather than hooked: "six flags and a compare cannot be
+   * wired up wrong". This is that compare, over at most a handful of bindings.
+   *
+   * When nothing changed it is one boolean read per binding and returns. When a
+   * host does change it is a scatter of pre-solved floats over the chunks that
+   * host owns — 30 of MID's 923 — and it is deliberately NOT on a fire frame:
+   * a site firing does not run this, and a host falling is a different frame
+   * from the strike that is landing on it.
+   */
+  _syncHosts() {
+    const list = this._variants;
+    for (let i = 0; i < list.length; i++) {
+      const v = list[i];
+      const down = v.host.isDown();
+      if (down === v.applied) continue;
+      v.applied = down;
+      const sign = down ? 1 : -1;
+      for (const g of v.groups) {
+        const settled = g.mesh.userData.settled;
+        const mot = g.mot.array;
+        const off = g.off.array;
+        const inst = g.mesh.instanceMatrix.array;
+        const live = v.site.baked;
+        for (let k = 0; k < g.idx.length; k++) {
+          const j = g.idx[k];
+          const d = g.dy[k] * sign;
+          settled[j * 16 + 13] += d;
+          off[j * 3 + 1] += d;
+          mot[j * 4 + 1] = down ? g.f1[k] : g.f0[k];
+          // Already on the ground: move the drawn pose with the baked one.
+          if (live) inst[j * 16 + 13] += d;
+        }
+        g.mot.needsUpdate = true;
+        g.off.needsUpdate = true;
+        if (live) g.mesh.instanceMatrix.needsUpdate = true;
+      }
+    }
   }
 
   /**
@@ -1630,8 +2081,17 @@ export class Airstrike {
    *
    * `_buildDemoSite` has the same problem and solves it with
    * `rec.setCollision(true/false)` round its own probes; a `host` site is the
-   * other case — a mass standing ON a building that will be gone — and there is
-   * exactly one host on this map, so this is a lookup rather than a registry.
+   * other case — a mass standing ON a building that will be gone.
+   *
+   * THIS IS NOW THE DECLARED HALF ONLY, and it is kept because the cathedral's
+   * relationship to these three sites is not a measurement, it is a GUARANTEE:
+   * `MatchSystem._razeCathedral` takes the shell away `RULES.cathedralRazeDelay`
+   * after the ordnance lands, INSIDE THE SAME EVENT, so a single razed-state
+   * bake is right for them by construction and there is no second state to
+   * offer. Every other site's host is derived — `_hostsForMound` for the plane
+   * the mound rests on and `_bakeHostVariants` for the chunks thrown clear of
+   * it — because nothing guarantees anything about WHEN somebody else's
+   * building falls relative to this site's own strike.
    *
    * `world.cathedral.setRazed(down, physics)` is two index-range fills and two
    * collision-mask writes over ranges cached at boot, which is the same swap
@@ -1647,9 +2107,9 @@ export class Airstrike {
    * runs before this and finds no aisle roof to cut a mass off.
    */
   _host(spec, world) {
-    if (spec.host !== 'cathedral') return null;
-    const k = world?.cathedral;
-    return typeof k?.setRazed === 'function' ? k : null;
+    if (spec.host !== 'cathedral') return [];
+    const h = (this._hosts ?? []).find((x) => x.id === 'CATHEDRAL');
+    return h ? [h] : [];
   }
 
   /**
@@ -2688,6 +3148,15 @@ export class Airstrike {
   update(dt, live) {
     if (!this.ready) return;
 
+    /**
+     * ---- has a building under somebody's rubble stopped existing? -------
+     * First, and outside every gate below, for the same reason the final
+     * collapse is: rubble whose ground has gone is wrong whether or not the
+     * round is live, whether or not the scheduler is enabled and whether or
+     * not this system called the event that took it away. @see `_syncHosts`.
+     */
+    this._syncHosts();
+
     /* ---- the flanks, calling it in ------------------------------------ */
     this._pollFlankCall(live);
 
@@ -3078,6 +3547,9 @@ export class Airstrike {
       site.uniforms.uT.value = -1;
       site.uniforms.uAnim.value = 1;
     }
+    // The town being whole again includes the buildings under other people's
+    // rubble: `world` has just been put back up, so the poses go back with it.
+    this._syncHosts();
   }
 
   _siteOf(which) {
@@ -3110,6 +3582,9 @@ export class Airstrike {
     this.sites.length = 0;
     this._live.length = 0;
     this._pending.length = 0;
+    // These hold a mesh and a `world` record each; both outlive this instance.
+    this._variants.length = 0;
+    this._hosts = null;
   }
 }
 
