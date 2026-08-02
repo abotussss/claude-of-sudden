@@ -41,7 +41,10 @@ import { RULES } from './rules.js';
  *    makes it miss. It then has to climb out and come round again, which costs
  *    it a fifth of its life.
  *
- * 2. SHOOTING IT DOWN. Yes, and it is the other half of the answer above. One
+ * 2. SHOOTING IT DOWN. Yes — and IT GOES OFF WHEN YOU DO, at the airframe, on
+ *    the frame the round kills it (@see `_takeRound` for why that beats letting
+ *    the wreck fall and go off where it lands). It is the other half of the
+ *    answer above, with a price on taking the shot late. One
  *    0.62 m box on `LAYER.SHOOT_ONLY` — the layer that is in `MASK.BULLET` and
  *    in neither `MASK.CHARACTER` nor `MASK.SIGHT`, so a moving object in the
  *    air can never cost anybody a route — with `owner: drone`, so a round that
@@ -62,8 +65,10 @@ import { RULES } from './rules.js';
  * ──────────────────────────────────────────────────────────────────────────
  * `_detonate` emits the canonical `explosion` with `damage`, `radius` and
  * `kind: 'grenade'` — which is EXACTLY the payload `AiSystem._updateGrenades`
- * emits for a bot's frag. Everything downstream is therefore literally the same
- * code, not a copy of it:
+ * emits for a bot's frag. THERE IS ONE BLAST PATH AND EVERY END OF A DRONE GOES
+ * THROUGH IT: the dive that connects, the wall it flies into, the life clock
+ * that runs out (`_scuttle`) and now the round that kills it (`_takeRound`).
+ * Everything downstream is therefore literally the same code, not a copy of it:
  *
  *   bots    `ai`'s `explosion` listener — `damage * (1 - d/r)²`, occluded by
  *           `MASK.EXPLOSION`, which is `grenades.js:_damageActors` line for line
@@ -1162,11 +1167,44 @@ export class Drones {
     d.health -= e.amount ?? 0;
     if (d.health > 0) return;
     this.stats.shotDown++;
-    // Shot down is DEAD, not detonated: a warhead that never functioned does
-    // not go off over whoever killed it, which is what makes shooting one
-    // down worth doing.
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * A DESTROYED DRONE FUNCTIONS ITS WARHEAD — 「ドローンは破壊されたときに爆破して」
+     * ────────────────────────────────────────────────────────────────────────
+     * THIS REVERSES THE OLD RULE ON PURPOSE. It used to be that "shot down ≠
+     * detonated", so a kill deleted the threat outright; a kill now sets the
+     * warhead off, and the phase pair says both things happened — `dead` (it
+     * was shot down) immediately followed by `boom` (and the warhead
+     * functioned), so anything counting shoot-downs still counts them.
+     *
+     * WHERE THE BLAST HAPPENS: AT THE AIRFRAME, ON THE FRAME THE ROUND KILLED
+     * IT, and that is the decision rather than a fallout of one.
+     *
+     *   THE ALTERNATIVE WAS A DEAD FALL — kill the flight, let the wreck drop
+     *   and go off where it lands. It is more physical and it is worse to play
+     *   against: the blast then happens somewhere the shooter did not choose,
+     *   several tenths of a second later, out of his sight if the thing falls
+     *   behind a roof. A risk you cannot see coming is not a risk you can
+     *   price.
+     *
+     *   BLOWING IT UP WHERE IT IS makes the range the whole decision, and the
+     *   range is a thing the player is already looking at down his sights: the
+     *   blast is `_fragDef().radius` (7.5 m) around the speck he is shooting.
+     *   One killed at 40 m over the town, or at `droneAltitude` overhead, is a
+     *   firework — the same outcome the old rule gave, because 20 m of air is
+     *   more than the radius. One killed at 6 m on its dive is a frag going off
+     *   at 6 m, which is most of a man. So shooting early is free, shooting
+     *   late costs, and the man who waits until it is close enough to hit
+     *   easily has chosen to eat it.
+     *
+     * AND IT HURTS EVERYONE, unchanged: this is `_detonate` itself, not a
+     * variant of it, so the payload is the same canonical `explosion` with
+     * `kind: 'grenade'` a dive emits and there is still no team test anywhere
+     * downstream. Shooting a hostile drone down over your own squad kills your
+     * own squad.
+     */
     this._emit('dead', d);
-    this._retire(d, 'shot');
+    this._detonate(d);
   }
 
   _retire(d, why) {
