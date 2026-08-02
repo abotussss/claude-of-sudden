@@ -3124,9 +3124,21 @@ export class Agent {
         // How long he stays out, and how long he stays in. A bold man is out for
         // three seconds at a time and back out almost at once; a careful one
         // shows a shoulder for one and hides for two.
+        /**
+         * THE DUTY CYCLE IS A VOLUME-OF-FIRE DIAL AND IT WAS SET TO A HALF.
+         *
+         * Out for 0.98-2.3 s, in for 0.6-2.1 s — so a man at cover with a live
+         * contact spent roughly half of it behind the wall with the trigger up
+         * by construction, on TOP of the burst gap and the reload. The out-leg
+         * is unchanged (it is what `exposure` is FOR, and a careful man still
+         * shows a shoulder rather than a chest); the HIDE is cut to about half,
+         * because ducking is meant to be a beat between two bursts and not the
+         * other half of the fight. He still ducks properly when he is actually
+         * being shot at — that is `SUPPRESSED`, a state, and it is untouched.
+         */
         this.peekTimer = this.peeking
           ? this.rng.range(0.8, 1.6) + tr.exposure * this.rng.range(0.6, 2.4)
-          : this.rng.range(0.35, 1.0) + (1 - tr.exposure) * this.rng.range(0.4, 1.6);
+          : this.rng.range(0.2, 0.55) + (1 - tr.exposure) * this.rng.range(0.2, 0.85);
         /**
          * A SNIPER'S PEEK IS AN AIM, AND IT HAS TO OUTLAST HIS SETTLE.
          *
@@ -4189,10 +4201,31 @@ export class Agent {
        * it off `ammo` is what makes "empty the magazine" the literal default for
        * the sprayers: the last round of a 30 is the last round of the burst.
        */
+      /**
+       * ──────────────────────────────────────────────────────────────────────
+       * AND IT IS STILL NOT ENOUGH — 「敵を補足したらマガジンからにするくらいまで撃つ」
+       * ──────────────────────────────────────────────────────────────────────
+       * MEASURED AGAIN with the floor at four (`_sixaudit.mjs`, seed 7, 414 s,
+       * 1537 pulls): the median pull is 6 and the p95 is 12 against a thirty
+       * round magazine. The window says 6-17 for the median man; what brings it
+       * down is that most pulls END EARLY — 413 of them on `no-LOS` and 172 on
+       * `ducked` — so what a burst window buys is its FLOOR, not its middle.
+       *
+       * The sentence asks for the magazine. So the floor doubles: a disciplined
+       * marksman opens with eleven and a sprayer with twenty-two, a belt gunner
+       * multiplies both by 2.4 and simply does not stop, and the ceiling is
+       * still `this.ammo` — the last round of the magazine is the last round of
+       * the burst, which is what makes "empty it" the literal default.
+       *
+       * IT IS PAID FOR IN THE CONE AND NOWHERE ELSE. @see the bloom in
+       * `_fireRound`, whose cap moves with this: a twenty-two round pull opens
+       * to 2.9x at the bottom of the skill range, so the volume of fire triples
+       * and the damage per minute does not follow it. 「AIMは悪くてもいい」.
+       */
       const t = this.traits.trigger;
       const hold = this.holdFactor;
-      const lo = Math.round((4 + (1 - t) * 6) * hold);
-      const hi = lo + Math.round((4 + (1 - this.skill) * 8 + (1 - t) * 10) * hold);
+      const lo = Math.round((8 + (1 - t) * 12) * hold);
+      const hi = lo + Math.round((5 + (1 - this.skill) * 10 + (1 - t) * 12) * hold);
       this.burstLeft = Math.max(1, Math.min(this.ammo, this.rng.int(lo, Math.max(lo, hi))));
       /** Rounds sent in THIS pull. Drives the bloom. @see `_fireRound`. */
       this.burstFired = 0;
@@ -4202,10 +4235,17 @@ export class Agent {
        * burst — a rifle heard once every two seconds. The suppression term is
        * untouched: being shot at still stops you shooting.
        */
+      /**
+       * …AND HALVED AGAIN, for the same reason and with the same measurement
+       * behind it. At a median pull of 6 rounds (0.6 s of firing) a 0.4-1.2 s
+       * gap is HALF the engagement spent listening. The suppression term is
+       * still here and still untouched in kind — being shot at still stops you
+       * shooting — it is simply no longer the dominant term in a quiet duel.
+       */
       this.burstCooldown =
-        (this.rng.range(0.14, 0.42) + (1 - this.skill) * this.rng.range(0.12, 0.5))
+        (this.rng.range(0.07, 0.21) + (1 - this.skill) * this.rng.range(0.06, 0.25))
           * (0.5 + t * 0.7)
-        + this.suppression * 0.5;
+        + this.suppression * 0.4;
     }
     /**
      * ONE PULL OF THE TRIGGER IS NOT ONE ROUND PER FRAME.
@@ -4267,7 +4307,16 @@ export class Agent {
      * damage per second does not follow it. A disciplined four-round pull is
      * almost exactly as accurate as it was.
      */
-    const bloom = 1 + Math.min(16, this.burstFired ?? 0) * 0.075 * (1.4 - this.skill);
+    /**
+     * THE CAP MOVES WITH THE BURST FLOOR. 16 saturated a third of the way into
+     * a pull that is now eleven to twenty-two rounds long, which would have
+     * made the longer burst FREE — every round past the sixteenth as accurate
+     * as the sixteenth. 24 keeps the price proportional to what is being
+     * bought: a full-magazine pull opens the group to ~2.9x at the bottom of
+     * the skill range, so the map gets three times the noise and not three
+     * times the damage. This is where 「AIMは悪くてもいい」 is actually paid.
+     */
+    const bloom = 1 + Math.min(24, this.burstFired ?? 0) * 0.075 * (1.4 - this.skill);
     /**
      * ADVANCING FIRE COSTS ACCURACY. A man who shoots while he walks (see
      * `shootMoving` in `_combat`) opens his cone by up to 1.5x, so the aggressive
