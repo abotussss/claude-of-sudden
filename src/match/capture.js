@@ -155,9 +155,22 @@ export class CaptureZones {
     this._scoreTimer -= dt;
     if (this._scoreTimer > 0) return;
     this._scoreTimer += RULES.scoreInterval;
+    /**
+     * A SIDE HOLDING FEWER THAN `scoreMinZones` IS PAID NOTHING — 「ポイントの
+     * 加算をもう少しシビアにして」. Sitting on your own home point, the one beside
+     * your own spawn that you did not have to fight for, is not worth anything;
+     * you are paid from the SECOND point on. @see the long note on
+     * `RULES.scoreMinZones`, which has the income table and why this lever
+     * rather than `scorePerZone` or `scoreInterval`.
+     *
+     * `?? 1` so a `rules.js` without the key behaves exactly as before.
+     */
+    const minZones = RULES.scoreMinZones ?? 1;
     const g = this._gains;
-    g[0] = this.ownedBy(0) * RULES.scorePerZone;
-    g[1] = this.ownedBy(1) * RULES.scorePerZone;
+    const held0 = this.ownedBy(0);
+    const held1 = this.ownedBy(1);
+    g[0] = held0 >= minZones ? held0 * RULES.scorePerZone : 0;
+    g[1] = held1 >= minZones ? held1 * RULES.scorePerZone : 0;
     this.score[0] += g[0];
     this.score[1] += g[1];
     this.stats.ticks++;

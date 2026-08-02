@@ -165,6 +165,50 @@ export const RULES = {
   scorePerZone: 2,
   /**
    * ──────────────────────────────────────────────────────────────────────────
+   * HOW MANY ZONES YOU HAVE TO HOLD BEFORE YOU ARE PAID ANYTHING AT ALL
+   * ──────────────────────────────────────────────────────────────────────────
+   * 「またポイントの加算をもう少しシビアにして」 — the accrual is too generous, and
+   * a match should be won by FIGHTING rather than by SITTING.
+   *
+   * WHY THIS LEVER AND NOT THE OTHER TWO. `scoreTarget` is 500 because the
+   * player set it there himself and it must not move. That fixes the budget, so
+   * every other lever trades directly against the ten-minute clock: income has
+   * to stay over 500/600 = 0.833 pt/s or a decisive match cannot finish at all
+   * and every game ends on time with a scoreline. Measured on this build, the
+   * leader prints ~1.07 pt/s and a match runs ~466 s, so there is only about
+   * 20 % of headroom in the whole system. Cutting `scorePerZone` to 1 halves
+   * income (~930 s, past the clock); `scoreInterval` 4 -> 5 is -20 % (~584 s,
+   * 16 s of headroom left). Both make EVERY match longer, including the ones
+   * where somebody is actually winning a fight, which is not what was asked
+   * for — 「シビア」 is about how freely points are given, not about length.
+   *
+   * A MINIMUM HOLDING IS SEVERE EXACTLY WHERE THE COMPLAINT IS. At 2, a side
+   * sitting on ONE point — in this mode, overwhelmingly its own home zone, the
+   * one 39 m from its own spawn that it did not have to fight for — earns
+   * NOTHING. To be paid at all it has to go and take a second, which means
+   * crossing the map to C, E or the cathedral and holding ground somebody else
+   * wants. Income per state, at `scorePerZone` 2 and `scoreInterval` 4:
+   *
+   *                    before        after
+   *   1 zone held      0.5 pt/s      0.0 pt/s   <- the change, and all of it
+   *   2 zones held     1.0 pt/s      1.0 pt/s
+   *   3 zones held     1.5 pt/s      1.5 pt/s
+   *   4 zones held     2.0 pt/s      2.0 pt/s
+   *
+   * WHAT IT DOES TO MATCH LENGTH, FROM THE ARITHMETIC RATHER THAN FROM MATCHES:
+   * almost nothing to a decisive one, and that is the point. A side that is
+   * winning holds two or three points and is paid exactly what it was paid
+   * before, so the ~466 s race is unchanged. What disappears is the drip a
+   * losing side collected for holding its own doorstep: at a 3-1 split the
+   * trailing side goes from 0.5 pt/s to 0, so the GAP opens at 1.5 pt/s instead
+   * of 1.0 and a side that has been pushed off the map can no longer coast to a
+   * respectable score without contesting anything. The one case that genuinely
+   * slows is a 2-2 stalemate broken into 3-1 and back — the loser banks nothing
+   * in between. Set to 1 to restore the old behaviour exactly.
+   */
+  scoreMinZones: 2,
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
    * FIRST SIDE TO THIS WINS — AND IT IS THE KNOB THE WHOLE SCHEDULE HANGS OFF
    * ──────────────────────────────────────────────────────────────────────────
    * "ポイントも５００ポイントにして占領の ２５０は終わるの早い" — and he is right,
@@ -1615,12 +1659,23 @@ export const RULES = {
   /** Metres from the target the warhead functions at. */
   droneTriggerRange: 1.9,
   /**
-   * SHOOTING IT DOWN. 60 HP on a 0.62 m box at `LAYER.SHOOT_ONLY` — three
-   * rounds of the 21-damage rifle, four of a 17, one round of the 125-damage
-   * bolt gun, two shotgun pellets. Hard enough that panic fire does not save
-   * you and fair enough that a man who hears it and turns round does.
+   * SHOOTING IT DOWN, and this figure is MEASURED rather than reasoned.
+   *
+   * The proxy is a 0.31 m sphere on `LAYER.SHOOT_ONLY` — the layer that is in
+   * `MASK.BULLET` and in neither `MASK.CHARACTER` nor `MASK.SIGHT`, so a moving
+   * object in the air can never cost anybody a route. A round through it lands
+   * as TWO `damage:dealt` events, the entry face and the exit face, which is
+   * the same double-count `src/match/tank.js` documents at length under
+   * `oneWoundPerRound` and which no drone of mine is going to fix unilaterally.
+   * So one 21-damage rifle round is worth 30 against it, measured
+   * (`_droneshot.mjs`: 2 rounds, 4 events, 30.0 per round), not 21.
+   *
+   * 90 is therefore THREE rifle rounds, and one round of the 125-damage bolt
+   * gun still takes it out of the sky. Hard enough that panic fire does not
+   * save you, against a 0.62 m target crossing at 10 m/s; fair enough that a
+   * man who hears it and turns round does.
    */
-  droneHealth: 60,
+  droneHealth: 90,
   /** Seconds aloft before it gives up and scuttles itself. */
   droneLife: 45,
   /**
