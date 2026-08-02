@@ -867,7 +867,7 @@ export class Armour {
    * that then routed straight through the cathedral, and is why this reads the
    * way it does.
    */
-  _freeSide(physics, ox, oy, oz, dx, dz, max) {
+  _freeSide(physics, ox, oy, oz, dx, dz, max, props) {
     const o = this._bv ?? (this._bv = new THREE.Vector3());
     const d = this._bv2 ?? (this._bv2 = new THREE.Vector3());
     const MASK = physics.MASK.WORLD;
@@ -885,11 +885,73 @@ export class Armour {
       const t = physics.raycast(o, d, 45, MASK);
       if (!t?.hit) return at;
       const top = oy + 29 - t.distance - (oy - 1.0);
-      if (top > PASS_TOP) return at;
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * "GETS PAST IT" IS TWO DIFFERENT FACTS AND ONE HEIGHT CANNOT CARRY BOTH
+       * ────────────────────────────────────────────────────────────────────
+       * Under the glacis rule the ceiling was 1.8 for both halves and the lie
+       * was small. At `PLOUGH_TOP` 3.2 it is not: a probe that resumes past
+       * anything under 3.2 walks through the 1.9 m merged concrete wall at
+       * world (25, 20) and the 3.4 m masonry shed at (17, 26), and MEASURED
+       * that way the bake lost four of the eight spokes — every one of them
+       * laid straight into masonry and cut back to 0-4 m by `_trimAtBlockers`.
+       * A raised ceiling that costs the hull half its destinations is the
+       * opposite of 「基本何でも破壊して進める」.
+       *
+       * So the two facts are asked separately, in the order they cost:
+       *   • under `CLIMB_TOP` — the track run rides over it, always;
+       *   • up to `PLOUGH_TOP` — only if a `prop_*` instance is standing there
+       *     to be erased, because an instance is the ONLY mass this file can
+       *     actually take off the map (@see `_firePlough`). A merged wall's
+       *     triangles bind to nothing and it stays a wall.
+       */
+      if (top > CLIMB_TOP) {
+        if (top > PASS_TOP) return at;
+        if (!this._ploughableAt(physics, ox + dx * (at + 0.2), oz + dz * (at + 0.2), oy - 1.0, top, props)) {
+          return at;
+        }
+      }
       travelled = at + 0.4;
       if (travelled >= max) return max;
     }
     return travelled;
+  }
+
+  /**
+   * IS THE MASS AT THIS POINT SOMETHING THE HULL CAN ERASE? One cell lookup on
+   * the prop grid plus one downward ray per candidate — the same measurement
+   * `_bakeLegPlough` makes, asked before the route is committed instead of
+   * after. An instance has to ACCOUNT for the height found (within half a
+   * metre): a barrel standing beside a shed does not license driving through
+   * the shed.
+   */
+  _ploughableAt(physics, x, z, roadY, top, props) {
+    if (!props?.length) return false;
+    const grid = this._propGridOf(props);
+    const cell = grid.cell;
+    const R = 1.3;
+    const o = this._bv3 ?? (this._bv3 = new THREE.Vector3());
+    const d = this._bv4 ?? (this._bv4 = new THREE.Vector3(0, -1, 0));
+    const MASKW = physics.MASK.WORLD;
+    for (let cx = Math.floor((x - R) / cell); cx <= Math.floor((x + R) / cell); cx++) {
+      for (let cz = Math.floor((z - R) / cell); cz <= Math.floor((z + R) / cell); cz++) {
+        const bucket = grid.g.get(cx * 65536 + cz);
+        if (!bucket) continue;
+        for (let k = 0; k < bucket.length; k++) {
+          const q = bucket[k];
+          const ex = q.x - x;
+          const ez = q.z - z;
+          if (ex * ex + ez * ez > R * R) continue;
+          o.set(q.x, roadY + 30, q.z);
+          d.set(0, -1, 0);
+          const t = physics.raycast(o, d, 45, MASKW);
+          if (!t?.hit) continue;
+          const h = 30 - t.distance;
+          if (h >= top - 0.5 && h <= PLOUGH_TOP) return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**
@@ -899,7 +961,7 @@ export class Armour {
    * `pts` are WORLD points. A spoke's first point is the approach's own baked
    * end rather than its authored one, so the two legs join without a step.
    */
-  _bakePath(pts, world, physics) {
+  _bakePath(pts, world, physics, props) {
     /* ---- resample the polyline at a fixed step ------------------------- */
     const rx = [];
     const rz = [];
@@ -945,8 +1007,8 @@ export class Armour {
       if (!Number.isFinite(y)) { stop = `no ground at sample ${i}`; break; }
 
       // The side probes RESUME past anything the hull drives over or through.
-      const dR = this._freeSide(physics, x, y + 1.0, z, side.x, side.z, 9);
-      const dL = this._freeSide(physics, x, y + 1.0, z, -side.x, -side.z, 9);
+      const dR = this._freeSide(physics, x, y + 1.0, z, side.x, side.z, 9, props);
+      const dL = this._freeSide(physics, x, y + 1.0, z, -side.x, -side.z, 9, props);
       // Slide to the middle of what was found, then re-probe the ground there.
       const shift = clamp((dR - dL) * 0.5, -LATERAL_MAX, LATERAL_MAX);
       x += side.x * shift;
@@ -1111,7 +1173,7 @@ export class Armour {
     const legs = [];
     const w = new THREE.Vector3();
     const pts = spec.approach.map((p) => world.levelToWorld(p[0], 0, p[1], new THREE.Vector3()));
-    const approach = this._bakePath(pts, world, physics);
+    const approach = this._bakePath(pts, world, physics, props);
     if (!approach) return null;
     this._trimToStandoff(approach, zones, null);
     this._trimAtBlockers(approach, physics, props);
@@ -1131,7 +1193,7 @@ export class Armour {
       const wp = sp.points.map((p, i) =>
         i === 0 ? hub.clone() : world.levelToWorld(p[0], 0, p[1], w.clone())
       );
-      const path = this._bakePath(wp, world, physics);
+      const path = this._bakePath(wp, world, physics, props);
       if (!path) {
         console.warn(`[tank] ${spec.id}->${sp.zone}: SPOKE DROPPED — no drivable route off the hub.`);
         continue;
