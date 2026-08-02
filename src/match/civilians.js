@@ -149,7 +149,15 @@ export const CIVILIAN_PENALTY = 12;
  * opening fight for the three zones happens between the two armies alone.
  */
 const FIRST_WAVE = 28;
-const WAVE_GAP = [42, 78];
+/**
+ * MEASURED, then shortened. At [42, 78] a headless match had TEN of the fifteen
+ * placed at t=260 s of a match that runs 448-520 s, i.e. the last third of the
+ * roster arrives in the last minute or does not arrive at all. [34, 62] lands
+ * all fifteen by roughly t=300, which leaves the whole back half of the match
+ * with the full faction on the map — and the back half is where the buildings
+ * matter, because it is where the cathedral opens and D goes live.
+ */
+const WAVE_GAP = [34, 62];
 const WAVE_SIZE = [2, 4];
 
 /** Tries at finding a room for one man before he waits for the next wave. */
@@ -571,7 +579,18 @@ export class Civilians {
        */
       if (a.hasTarget) continue;
       const far = a.position.distanceTo(c.anchor);
-      if (!c.leashed && far > LEASH_R) {
+      /**
+       * OUT OF THE ROOM IS OUT OF POSITION, AND DISTANCE ALONE DID NOT SAY SO.
+       * Measured over a headless match with the leash on `LEASH_R` only, the
+       * sample at t=104/130/156/182 s had two men each time standing OUTDOORS
+       * three to ten metres from their anchor — inside the leash, outside the
+       * building. Of course: an anchor near a door is ten metres from most of
+       * the street. So the second test is the one the request actually made —
+       * 「基本屋内にのみ滞留」 — asked of the only thing on this map that knows
+       * what indoors means, `NavGrid.indoor`, which is written by
+       * `_carveInteriors` and is strict about the doorstep apron.
+       */
+      if (!c.leashed && (far > LEASH_R || !this._indoors(a.position))) {
         c.leashed = true;
         this.stats.leashed++;
         a.setObjective('pickup', c.anchor);
@@ -581,6 +600,20 @@ export class Civilians {
         a.setObjective('hold', null);
       }
     }
+  }
+
+  /**
+   * Is this point in a room? `NavGrid.indoor` is the flag `_carveInteriors`
+   * writes for cells it re-sampled from INSIDE a building's footprint, and it
+   * is the only honest answer on this map. Two rings and a 1.4 m height
+   * tolerance so a man standing on a doorway cell that fell between lattice
+   * points is not called outdoors on a rounding error.
+   */
+  _indoors(p) {
+    const g = this.ai?.grid;
+    if (!g || !g.indoor) return true;
+    const i = g.nearest(p.x, p.z, p.y, 2, 1.4);
+    return i >= 0 && g.indoor[i] === 1;
   }
 
   /**
