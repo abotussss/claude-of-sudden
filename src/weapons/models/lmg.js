@@ -309,13 +309,17 @@ export function buildLmg() {
         back: [0.9958, -0.0912, -0.0052],
       },
       /**
-       * Support hand under the handguard, seeded from the rifle's solved
-       * pose shifted rearward with the handguard (its rear edge is 35 mm
-       * further back than the rifle's), then refined with gripfit --side=left.
+       * Support hand under the handguard — SEARCHED with gripfit --side=left
+       * (seeded from the rifle's solved pose shifted back with the handguard).
+       * Search result: tip gaps [0.2 0.4 0.5 0.5] mm, wrist 32.7 -> 17.1 deg,
+       * extension 0.953 -> 0.906 (off the clamp), penetration 0.0 mm.
+       * The shooting hand keeps the rifle's searched numbers verbatim: the
+       * grip is the identical part at the identical offset, and the re-search
+       * here scored worse on penetration (17.5 -> 35.8 mm), so it was refused.
        */
       gripL: {
-        pos: [-0.045, 0.0234, -0.2758],
-        finger: [0.8977, 0.3994, -0.1858],
+        pos: [-0.065, 0.0034, -0.2558],
+        finger: [0.7064, 0.1858, -0.683],
         back: [0.1447, -0.9891, 0.0287],
       },
       handguard: {
