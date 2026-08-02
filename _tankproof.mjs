@@ -77,6 +77,39 @@ console.log('  legs   ', JSON.stringify(setup.legs));
 console.log('  steps  ', JSON.stringify(setup.steps));
 console.log('  zones  ', JSON.stringify(setup.zones));
 
+/**
+ * A PORTRAIT OF THE HULL, on `_tankshot.mjs`'s orbit formula, which is the one
+ * rig in this repo that has ever produced a readable tank. `look()` below aims
+ * at a POINT and is right for a pile in the road; it is 180 degrees off
+ * `respawnAt`'s yaw convention for a target beside the camera, and a first pass
+ * of this file photographed two empty streets because of it.
+ */
+async function portrait(id, rel, dist, lookY = 1.7) {
+  const r = await page.evaluate(({ id, rel, dist, lookY }) => {
+    const e = window.__ENGINE__;
+    const ph = e.ctx.peek('physics');
+    const player = e.ctx.peek('player');
+    const m = e.ctx.peek('match');
+    const t = m.tank.tanks.find((x) => x.id === id);
+    const a = t._yaw + rel;
+    const x = t.position.x + Math.sin(a) * dist;
+    const z = t.position.z + Math.cos(a) * dist;
+    const g = ph.groundHeight(x, z, 60);
+    const y = (Number.isFinite(g) ? g : t.position.y) + 0.1;
+    const scratch = m.sites[0].position.clone();
+    scratch.set(x, y, z);
+    const dx = t.position.x - x;
+    const dz = t.position.z - z;
+    const dy = t.position.y + lookY - (y + 1.62);
+    const len = Math.hypot(dx, dy, dz);
+    player.respawnAt(scratch, Math.atan2(-dx, -dz));
+    player.movement.pitch = Math.asin(dy / len);
+    return { d: +Math.hypot(dx, dz).toFixed(1), s: +t.s.toFixed(1), state: t.state, pitch: +(t._pitch * 180 / Math.PI).toFixed(1) };
+  }, { id, rel, dist, lookY });
+  await sleep(450);
+  return r;
+}
+
 async function look(from, at) {
   await page.evaluate(({ from, at }) => {
     const e = window.__ENGINE__;
@@ -130,7 +163,25 @@ await page.waitForFunction(
 await sleep(900);
 await look(camP.from, camP.at);
 await shot('1b-plough-after');
-console.log('  1a/1b plough');
+// …and again once the pieces have finished falling, because "it must not float"
+// is a statement about the SETTLED pose and not about the frame it goes off.
+await page.evaluate(() => {
+  const m = window.__ENGINE__.ctx.peek('match');
+  for (const t of m.tank.tanks) for (const q of t.plough) if (q.fired && q.uniforms) q.uniforms.uT.value = 20;
+});
+await sleep(300);
+await shot('1c-plough-settled');
+console.log('  1a/1b/1c plough');
+
+/**
+ * FROM HERE THE HULL IS PLACED BY HAND, SO IT MUST STOP DRIVING. The first run
+ * of this file photographed two empty streets: `_drive` runs every frame, the
+ * `hold` branch asks `_wantZone` twice a second, every point was neutral, and
+ * the hull laid in a course and left while `look()` was still settling the
+ * camera. Stubbing `_drive` leaves `_pose` and `_fight` alone, so the hull is
+ * still a live, posed, shootable tank — it just stays where it is put.
+ */
+await page.evaluate(() => { window.__ENGINE__.ctx.peek('match').tank._drive = () => {}; });
 
 /* ====================================================================== */
 /* 2. CLIMB — the nose up on a step, from the side                        */
@@ -159,25 +210,12 @@ if (step) {
     return { s: +best.s.toFixed(2), pitchDeg: +(best.pitch * 180 / Math.PI).toFixed(1), y: +best.y.toFixed(2), x: best.x, z: best.z, yaw: best.yaw };
   }, { s: step.s });
   console.log('  climb at s=' + climb.s + ' pitch ' + climb.pitchDeg + ' deg, hull y ' + climb.y);
-  // side-on: 9 m off the hull's own right flank, eye height
-  const camC = await page.evaluate(({ x, z, yaw }) => {
-    const e = window.__ENGINE__;
-    const ph = e.ctx.peek('physics');
-    for (const d of [9, 11, 13, 7]) {
-      for (const side of [1, -1]) {
-        const cx = x + Math.sin(yaw + side * Math.PI / 2) * d;
-        const cz = z + Math.cos(yaw + side * Math.PI / 2) * d;
-        const g = ph.groundHeight(cx, cz, 80);
-        if (Number.isFinite(g) && Math.abs(g - ph.groundHeight(x, z, 80)) < 3) {
-          return { from: [cx, g + 0.1, cz], at: [x, 1.6, z] };
-        }
-      }
-    }
-    return { from: [x + 9, 1, z], at: [x, 1.6, z] };
-  }, climb);
-  await look(camC.from, [camC.at[0], camC.at[1], camC.at[2]]);
+  // Side-on, so the nose-up against the road is the whole photograph.
+  const c1 = await portrait('BLUE', Math.PI * 0.5, 9.5, 1.5);
   await shot('2-climb');
-  console.log('  2 climb');
+  const c2 = await portrait('BLUE', Math.PI * 0.34, 10.5, 1.6);
+  await shot('2b-climb-quarter');
+  console.log('  2 climb', JSON.stringify(c1), JSON.stringify(c2));
 }
 
 /* ====================================================================== */
@@ -197,22 +235,17 @@ const zoneShot = await page.evaluate(() => {
   m.tank._pose(t);
   const z = (m.allZones ?? []).find((q) => q.id === p.zone);
   if (z) z.owner = t.team === 0 ? 1 : 0; // the enemy holds it: it is the fight
-  // camera behind and above the hull, looking past it at the point
-  const dx = z.position.x - t.position.x;
-  const dz = z.position.z - t.position.z;
-  const l = Math.hypot(dx, dz) || 1;
-  const cx = t.position.x - (dx / l) * 13 + (dz / l) * 5;
-  const cz = t.position.z - (dz / l) * 13 - (dx / l) * 5;
-  const g = ph.groundHeight(cx, cz, 80);
-  return {
-    zone: p.zone, standoff: +l.toFixed(1),
-    from: [cx, (Number.isFinite(g) ? g : t.position.y) + 0.1, cz],
-    at: [t.position.x, t.position.y + 1.6, t.position.z],
-  };
+  void ph;
+  const l = Math.hypot(z.position.x - t.position.x, z.position.z - t.position.z);
+  return { zone: p.zone, standoff: +l.toFixed(1) };
 });
 console.log(`  3 zone ${zoneShot.zone}, hull standing ${zoneShot.standoff} m off it`);
-await look(zoneShot.from, zoneShot.at);
+// Astern of the hull, looking past it up the street at the point it is shelling.
+const s3 = await portrait('BLUE', Math.PI, 13, 2.0);
 await shot('3-standoff');
+const s4 = await portrait('BLUE', Math.PI * 0.78, 12, 1.9);
+await shot('3b-standoff-quarter');
+console.log('  3', JSON.stringify(s3), JSON.stringify(s4));
 
 console.log(errs.length ? `ERRORS: ${errs.join(' | ')}` : 'no page errors');
 await browser.close();
