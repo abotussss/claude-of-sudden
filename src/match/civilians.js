@@ -67,6 +67,10 @@
  * `caches.js:prove` and `sites.js` use: a man in a sealed pocket is a man the
  * player can never find, and fifteen of the fifteen could be in one.
  *
+ * WHICH ROOMS ARE ELIGIBLE AT ALL IS A SECOND, NARROWER QUESTION — 「大聖堂付近の
+ * 屋内にのみ出現させて」 — and it is answered once at `place()`: only the buildings
+ * round the church, and not the church. @see the `CATH_SPAN` note.
+ *
  * ── 4. AMBUSH IS AN ABSENCE OF ORDERS ──
  *
  * `Agent._think`'s IDLE branch is: speed zero; if I have a target, fight; else
@@ -159,6 +163,63 @@ const FIRST_WAVE = 28;
  */
 const WAVE_GAP = [34, 62];
 const WAVE_SIZE = [2, 4];
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE CATHEDRAL DISTRICT — 「民間軍は屋内にランダム出現だけど大聖堂付近の屋内にのみ
+ * 出現させて」
+ * ════════════════════════════════════════════════════════════════════════════
+ * They used to arrive in ROOMS ACROSS THE WHOLE TOWN — every building with four
+ * walkable interior cells in it, from the northern sheds to the southern
+ * terrace, which is 80 m either side of the church. The request narrows that to
+ * the buildings AROUND THE CATHEDRAL, and the reading it is written to is the
+ * one that makes them mean something: this is not a militia, it is THIS
+ * DISTRICT'S militia. They are the people who live where capture point D is
+ * about to open, and they are indoors around it before the bombardment makes it
+ * the most contested ground on the map.
+ *
+ * ── THE RADIUS IS MEASURED OFF THE MAP, NOT TYPED ──
+ *
+ * The one length this town publishes about the church is the church's own
+ * footprint, and `world.interiorVolumes` carries it: the cathedral is the first
+ * volume on that list (@see `WorldSystem._buildInteriorVolumes` — it is not a
+ * `BUILDINGS` entry, so it is pushed by hand) and it is an oriented box like
+ * every other one. `CATH_SPAN` is in units of THAT box's own radius, so the
+ * rule reads "a building whose nearest corner is within one cathedral of the
+ * cathedral" and it moves if the church is ever re-planned. Nothing here knows
+ * a metre.
+ *
+ * Distance is centre-to-centre MINUS the candidate's own half-diagonal — the
+ * church's centre to the building's NEAREST CORNER — because a 20 x 36 m block
+ * across the street and a 5 m shed across the street are the same neighbour and
+ * their centres are not.
+ *
+ * ── AND IT WIDENS UNTIL FIFTEEN MEN FIT ──
+ *
+ * A rule that can select two rooms would put the whole faction in one house, so
+ * the span grows by `CATH_STEP` until the district holds `MIN_BUILDINGS` and
+ * enough floor for `TOTAL` men — where ENOUGH is derived rather than guessed:
+ * `SPAWN_CLEAR_CIVIL` is the radius no two of them may be inside, so a square
+ * of that side (`SPAWN_CLEAR_CIVIL²` in the nav grid's own cell area) is the
+ * floor one man occupies. What that selects on this map is reported at boot.
+ *
+ * ── THE CHURCH ITSELF IS NOT ONE OF THEM ──
+ *
+ * It is on `interiorVolumes` and it has by far the most room cells of anything
+ * on the map, so it would take most of the fifteen — and it is the one interior
+ * that must not have them. It BECOMES capture point D, so a militiaman standing
+ * in it is a third side sitting on a live objective; and the shell comes down
+ * mid-match (`world.cathedral.setRazed`), which leaves his anchor, his leash
+ * and his ambush in the open air on `grid.indoor` cells that were baked when
+ * there was a roof over them. 「大聖堂付近」 is the district, and the district is
+ * the buildings round the church.
+ */
+const CATH_SPAN = 1;
+const CATH_STEP = 0.5;
+/** However far it has to widen, it stops before "the whole town" is the answer. */
+const CATH_SPAN_MAX = 6;
+/** Fewer than this and a bag of buildings is not a choice. @see `_nextBuilding`. */
+const MIN_BUILDINGS = 3;
 
 /** Tries at finding a room for one man before he waits for the next wave. */
 const SPAWN_TRIES = 14;
@@ -270,6 +331,12 @@ export class Civilians {
      * spread over the town rather than piled into whichever one the RNG likes.
      */
     this.rooms = [];
+    /**
+     * THE BUILDINGS ROUND THE CHURCH, as indices into `rooms` — and the only
+     * ones anybody is ever placed in. @see `_district`, which chooses them once
+     * from `world.interiorVolumes` at `place()`.
+     */
+    this.district = [];
     this._bag = [];
     this._bagAt = 0;
 
@@ -319,6 +386,7 @@ export class Civilians {
     const g = ai?.grid;
     const vols = world?.interiorVolumes;
     this.rooms.length = 0;
+    this.district.length = 0;
     this.placed = true;
     if (!g || !vols || !vols.length) {
       console.warn('[civil] no nav grid or no interiors — the civilian force stands down');
@@ -353,12 +421,86 @@ export class Civilians {
     }
     let used = 0;
     for (let b = 0; b < this.rooms.length; b++) if (this.rooms[b].length >= 4) used++;
-    this._enabled = n > 0;
+    /**
+     * …AND THEN ONLY THE ONES ROUND THE CHURCH. The census above is still the
+     * whole town because the district is chosen FROM it — and because a report
+     * that only counted the district could not say what was left out.
+     */
+    const near = this._district(world, vols, g.cell ?? 0.8);
+    let dn = 0;
+    for (const b of this.district) dn += this.rooms[b].length;
+    this._enabled = dn > 0;
     console.info(
       `[civil] ${n} ground-floor room cells in ${used}/${vols.length} buildings; ` +
+        `cathedral district ${near.span.toFixed(1)}x its own footprint ` +
+        `(${near.radius.toFixed(1)} m): ${dn} cells in ` +
+        `${this.district.map((b) => vols[b].building).join(', ') || 'nothing'}; ` +
         `${TOTAL} to place (${UNARMED} unarmed)`
     );
-    return n;
+    return dn;
+  }
+
+  /**
+   * WHICH BUILDINGS ARE "NEAR THE CATHEDRAL" — the whole of the rule, run once.
+   * @see the `CATH_SPAN` note for why the radius is the church's own footprint
+   * and why the church itself is not in the answer.
+   *
+   * @returns {{span:number, radius:number}} what it settled on, for the report.
+   */
+  _district(world, vols, cell) {
+    this.district.length = 0;
+    // The candidates are the buildings that could hold anybody at all — the
+    // same `>= 4` bar `_nextBuilding` has always used.
+    const cand = [];
+    for (let b = 0; b < this.rooms.length; b++) if (this.rooms[b].length >= 4) cand.push(b);
+
+    /** The church, by its own published id; by area if the id ever moves. */
+    const cathId = world?.cathedral?.id ?? null;
+    let ci = -1;
+    for (let b = 0; b < vols.length; b++) if (vols[b].building === cathId) { ci = b; break; }
+    if (ci < 0) {
+      let big = -1;
+      for (let b = 0; b < vols.length; b++) {
+        const a = vols[b].hw * vols[b].hd;
+        if (a > big) { big = a; ci = b; }
+      }
+    }
+    if (ci < 0) {
+      // No cathedral on the list at all: fall back to the whole town rather
+      // than to nobody, and say so — an empty faction is a silent failure.
+      console.warn('[civil] no cathedral in world.interiorVolumes — the district is the whole town');
+      for (const b of cand) this.district.push(b);
+      return { span: Infinity, radius: Infinity };
+    }
+
+    const cath = vols[ci];
+    const cathR = Math.hypot(cath.hw, cath.hd);
+    /** How much room floor one man needs. @see the `CATH_SPAN` note. */
+    const perMan = Math.ceil((SPAWN_CLEAR_CIVIL * SPAWN_CLEAR_CIVIL) / (cell * cell));
+    const need = TOTAL * perMan;
+
+    /** Church centre to each candidate's NEAREST CORNER. */
+    const gap = [];
+    for (const b of cand) {
+      const v = vols[b];
+      const d = Math.hypot(v.cx - cath.cx, v.cz - cath.cz) - Math.hypot(v.hw, v.hd);
+      gap.push(b === ci ? Infinity : Math.max(0, d));
+    }
+
+    let span = CATH_SPAN;
+    for (; ; span += CATH_STEP) {
+      this.district.length = 0;
+      let cells = 0;
+      const r = cathR * span;
+      for (let k = 0; k < cand.length; k++) {
+        if (gap[k] > r) continue;
+        this.district.push(cand[k]);
+        cells += this.rooms[cand[k]].length;
+      }
+      if (this.district.length >= MIN_BUILDINGS && cells >= need) break;
+      if (span >= CATH_SPAN_MAX) break;
+    }
+    return { span, radius: cathR * span };
   }
 
   /** A new match: forget everybody and re-arm the schedule. */
@@ -492,17 +634,24 @@ export class Civilians {
     return false;
   }
 
-  /** Shuffled deck of buildings, reshuffled when it runs out. @see `_nextSlot`. */
+  /**
+   * Shuffled deck of buildings, reshuffled when it runs out — DEALT FROM THE
+   * CATHEDRAL DISTRICT and never from the town, which is the whole of where
+   * 「大聖堂付近の屋内にのみ」 is enforced. `district` already carries the `>= 4`
+   * test. @see `_district`.
+   */
   _nextBuilding() {
     if (this._bagAt >= this._bag.length) {
       this._bag.length = 0;
-      for (let b = 0; b < this.rooms.length; b++) if (this.rooms[b].length >= 4) this._bag.push(b);
+      for (const b of this.district) this._bag.push(b);
       for (let i = this._bag.length - 1; i > 0; i--) {
         const j = this.rng.int(0, i);
         const t = this._bag[i]; this._bag[i] = this._bag[j]; this._bag[j] = t;
       }
       this._bagAt = 0;
-      if (!this._bag.length) return 0;
+      // NOT zero: building 0 is the cathedral on this map and the district is
+      // deliberately not it. `_place` reads `rooms[-1]` as undefined and skips.
+      if (!this._bag.length) return -1;
     }
     return this._bag[this._bagAt++];
   }
