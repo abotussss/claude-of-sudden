@@ -87,6 +87,7 @@ import { Airstrike, JET_LEAD } from './airstrike.js';
 import { Bomber } from './bomber.js';
 import { Strafe } from './strafe.js';
 import { Armour } from './tank.js';
+import { Drones } from './drone.js';
 import { AmmoDrops } from './ammo.js';
 import { Caches } from './caches.js';
 import { Reinforcements } from './reinforce.js';
@@ -216,6 +217,20 @@ const RESUPPLY_RANGE = 22;
  * merely low is not, which is why the two are ranked and not merged.
  */
 const NEED_RANGE = 38;
+/**
+ * THE BLAST RADIUS AT WHICH ORDNANCE STARTS TAKING WALLS OFF, in metres.
+ *
+ * `world.damageAt(p, strength)` wants a strength in `match`'s own units and its
+ * bar is 1.0 ("1 is a tank main-gun round"). The `explosion` listener in
+ * `init` divides the blast's own radius by this, so the number IS the
+ * threshold: 12 m puts the airstrike (24), the zone bombardment (16), the
+ * bomber's stick (15) and the cathedral barrage (14) over the bar — 爆撃 and
+ * 砲撃, which is what was asked for — and leaves the strafing cannon (8) and a
+ * hand grenade (7.5) under it. A frag through a window must not take an
+ * elevation off, or the six cache houses are open before the first aircraft
+ * flies. @see the long note on the listener.
+ */
+const BREACH_BLAST_R = 12;
 /** Kinds that hand a bot rounds. @see `Caches.takeForBot` for what each gives. */
 const AMMO_KINDS = new Set(['ammo', 'vantage', 'weapon']);
 const GRENADE_KINDS = new Set(['grenade']);
@@ -590,6 +605,29 @@ export class MatchSystem {
     this._lifeN = 0;
     if (typeof window !== 'undefined') window.__REINFORCE__ = this.reinforce;
 
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * THE SUICIDE DRONES — 「ドローンは自爆系のドローン…敵味方合わせて３０機」
+     * ──────────────────────────────────────────────────────────────────────
+     * The sixth thing in the sky and the only one that is not an EVENT: there
+     * is no telegraph, no `coBusy` and no `armRound`, because thirty launches
+     * over one match is a background pressure rather than a scene. It stands
+     * down for nothing and nothing stands down for it — the whole design is
+     * that it is always possible, which is what makes the lock warning the
+     * player's real defence. @see src/match/drone.js.
+     *
+     * It takes the SAME hostile list the tank crew does, through the same
+     * callback, so spawn protection and the local player are handled in one
+     * place for both weapons.
+     */
+    this.drones = new Drones(ctx, { rng: this.rng.fork() }).build();
+    this.drones.enemies = (team, out) => this._tankEnemies(team, out);
+    this.drones.launchPoint = (team, out) => this._droneLaunchPoint(team, out);
+    this.drones.onLock = (l) => this._droneLock(l);
+    this.drones.onLaunch = (d) => this._droneLaunched(d);
+    if (patcher) for (const m of this.drones.materials) patcher.patch(m);
+    if (typeof window !== 'undefined') window.__DRONES__ = this.drones;
+
     this.tank.enemies = (team, out) => this._tankEnemies(team, out);
     this.tank.onKill = (t, by) => this._onTankKill(t, by);
     /**
@@ -859,6 +897,75 @@ export class MatchSystem {
       if (!e || !this._isPlayer(e.target)) return;
       this._playerLastAttacker = e.source ?? null;
     });
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * BOMBING AND SHELLING TAKE A WALL OFF — 「家がもっと爆撃や砲撃で壊れるように
+     * して…今は屋内が安全すぎる」
+     * ────────────────────────────────────────────────────────────────────────
+     * `world.damageAt` was specified for the tank's main gun and `src/match/
+     * tank.js` calls it on a shell impact. That leaves the request half done:
+     * the two words in it are 爆撃 and 砲撃 — BOMBING and SHELLING — and neither
+     * of those is a tank. An airstrike could land on a cache house and the
+     * house did not notice.
+     *
+     * ONE LISTENER ON `explosion` RATHER THAN A CALL IN EACH WEAPON, and that
+     * is a deliberate choice about ownership. Five files emit `explosion` —
+     * airstrike.js, bomber.js, strafe.js, tank.js and this one's own zone
+     * bombardment and cathedral barrage — and three of them are owned by other
+     * agents right now. A call per site would be five edits in four files to
+     * express one rule, and the rule is not about any of them: it is "ordnance
+     * this heavy opens a wall it lands beside". `explosion` is the event every
+     * one of them already publishes, so the rule is written once, here, and a
+     * new air weapon inherits it without being told.
+     *
+     * STRENGTH IS DERIVED FROM THE BLAST'S OWN RADIUS, which is what makes the
+     * rule discriminate instead of firing on everything with a fireball.
+     * `world`'s bar is 1.0 (`BREACH_STRENGTH`, "1 is a tank main-gun round"),
+     * and `radius / BREACH_R` puts the map's ordnance either side of it:
+     *
+     *              radius   strength   opens a wall?
+     *   airstrike     24      2.00      yes — 爆撃
+     *   zone bombard  16      1.33      yes — 砲撃
+     *   bomber stick  15      1.25      yes — 爆撃
+     *   cath barrage  14      1.17      yes — 砲撃
+     *   tank main      9      0.75      no — and it does not need to; tank.js
+     *                                   calls `damageAt` itself on the impact
+     *                                   point at strength 1, which is a DIRECT
+     *                                   HIT rather than a near miss
+     *   strafe cannon  8      0.67      no
+     *   grenade      7.5      0.63      no — a frag through a window must not
+     *                                   take an elevation off, or the houses
+     *                                   are open before the first aircraft
+     *                                   flies
+     *
+     * `world` still owns every other decision — which elevation is breachable,
+     * whether it is already open, whether the blast is inside that wall's
+     * `reach`, the visual swap, the collision masks and the rubble ramp — so
+     * this is one call and a log line. Null is the answer almost every time and
+     * costs a handful of vector subtractions; `peek` and cached, because
+     * `match` must stay playable on a `world` with no cache houses in it.
+     */
+    on('explosion', (e) => {
+      if (!e?.position || !(e.radius > 0)) return;
+      /**
+       * `BREACH_BLAST_R` is a module const in THIS file and not a `RULES` key
+       * on purpose: `src/match/rules.js` belongs to another agent this session,
+       * and a `RULES.x` that does not exist yet reads `undefined`, which makes
+       * `radius / undefined` NaN and `NaN < 1` FALSE — i.e. the guard inverts
+       * and every grenade on the map takes a wall off. A local const cannot
+       * fail that way.
+       */
+      const strength = e.radius / BREACH_BLAST_R;
+      if (!(strength >= 1)) return;
+      const world = this._world ?? (this._world = this.ctx.peek('world'));
+      const breach = world?.damageAt?.(e.position, strength);
+      if (!breach) return;
+      console.info(
+        `[match] BLAST BREACHED ${breach.name ?? breach.id} — ` +
+          `${breach.holeW?.toFixed?.(1) ?? '?'}x${breach.holeH?.toFixed?.(1) ?? '?'} m, ` +
+          `r${e.radius.toFixed(0)} blast at ${e.position.x.toFixed(1)}, ${e.position.z.toFixed(1)}`
+      );
+    });
 
     if (this.domination) {
       console.info(
@@ -1033,6 +1140,13 @@ export class MatchSystem {
     this.strafe?.reset();
     // Both hulls back in their pockets, invisible, colliders off, wreck hidden.
     this.tank?.reset();
+    /**
+     * AND THE THIRTY GO BACK ON THE SHELF. The budget is per MATCH, so this is
+     * the one call that makes "thirty a match" true across a restart: anything
+     * aloft is retired, both counters go to zero and the alternation starts on
+     * RED again. It is idempotent and costs five array writes.
+     */
+    this.drones?.reset();
     /**
      * ──────────────────────────────────────────────────────────────────────
      * AND THE CACHE HOUSES GET THEIR WALLS BACK
@@ -2651,6 +2765,13 @@ export class MatchSystem {
      * `Reinforcements._land`.
      */
     this.reinforce?.update(dt, live);
+    /**
+     * THE DRONES. Like the five above they run their own clock in every phase —
+     * one that is diving when the whistle goes still has to finish diving — and
+     * like them they only LAUNCH during LIVE. `_matchProgress()` is the pacing
+     * term and is two divides and a compare. @see `RULES.droneLaunchPad`.
+     */
+    this.drones?.update(dt, live && this.domination, this._matchProgress());
 
     // Dead players watch. Written here, in update(), so it lands before `ui`
     // and `render` read the camera this frame.
@@ -2713,10 +2834,15 @@ export class MatchSystem {
     }
     if (!w) {
       for (const a of this.air) a.setFocus(null);
+      // The drones read the same point, by reference: they are the one thing in
+      // the sky that steers toward it continuously rather than drawing against
+      // it once, so a copy per refresh would be a copy nobody reads.
+      if (this.drones) this.drones.focus = null;
       return;
     }
     f.multiplyScalar(1 / w);
     for (const a of this.air) a.setFocus(f);
+    if (this.drones) this.drones.focus = f;
   }
 
   /**
@@ -4119,6 +4245,61 @@ export class MatchSystem {
     if (b.shot >= RULES.zoneBombardShells) b.zone = null;
   }
 
+  /* ------------------------------------------------------------- drones -- */
+
+  /**
+   * WHERE A SIDE'S DRONES COME OUT OF — its own base spawn cluster, which is
+   * the one piece of ground that side always holds. Written into the caller's
+   * vector; nothing here allocates.
+   *
+   * It is the BASE and never a forward spawn on purpose: a loitering munition
+   * that appears on top of a contested zone is an artillery piece, and the
+   * flight in from the back of the map is most of what makes the sound a
+   * warning rather than a surprise.
+   */
+  _droneLaunchPoint(team, out) {
+    const c = this._spawnCentre[team === this.attackers ? 'attack' : 'defend'];
+    if (!c) return null;
+    out.copy(c);
+    out.y = this.ai.groundAt(out.x, out.z, out.y + 4);
+    return out;
+  }
+
+  /**
+   * ONE LAUNCHED. It is announced only to the side it is coming FOR, and only
+   * as a killfeed row rather than a banner: thirty of these a match through the
+   * banner would bury the plant, the capture and the kill it is already
+   * carrying. The rotor is the real announcement — @see `Drones._sound`.
+   */
+  _droneLaunched(d) {
+    if (!this.ui?.killfeed) return;
+    this.ui.killfeed.push({
+      attacker: d.name,
+      victim: 'AIRBORNE',
+      headshot: false,
+      mine: false,
+      attackerFriendly: d.team === this.playerTeam,
+    });
+  }
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════
+   * YOU HAVE BEEN LOCKED — 「捕捉されたら捕捉されたUIを出してほしい」
+   * ═══════════════════════════════════════════════════════════════════════
+   * This is the whole difference between a fun threat and an unfair one, and it
+   * is the same argument `src/ui/airalert.js` makes at length about the air
+   * events: a weapon that fires correctly and is never announced has, from the
+   * seat, not happened. A drone is worse than an airstrike in that respect — it
+   * comes from behind, it is 0.62 m across and it is aimed at ONE man.
+   *
+   * `ui` is `match`'s to drive, so the drone hands over a reused record and does
+   * not know a HUD exists, exactly as the three air weapons do through
+   * `_announceAir`. The record is read synchronously and never retained.
+   */
+  _droneLock(l) {
+    this.ui?.droneLock?.(l);
+  }
+
   /* ------------------------------------------------------------- armour -- */
 
   /**
@@ -5152,6 +5333,7 @@ export class MatchSystem {
     this.bomber?.dispose();
     this.strafe?.dispose();
     this.tank?.dispose();
+    this.drones?.dispose();
     this.reinforce?.dispose();
     if (typeof window !== 'undefined') {
       if (window.__STRIKE__ === this.airstrike) delete window.__STRIKE__;
