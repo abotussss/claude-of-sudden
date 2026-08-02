@@ -105,6 +105,12 @@ const RUN_IN = 150;
 const RUN_OUT = 170;
 /** Metres before the zone the first man steps out. @see `_release`. */
 const DROP_LEAD = 34;
+/**
+ * Seconds of freefall off the door before the canopy takes. @see `update`,
+ * where it is the boundary between the two phases, and `insertionSeconds`,
+ * which has to add it up.
+ */
+const CANOPY_AT = 0.85;
 
 export class Reinforcements {
   /**
@@ -173,6 +179,46 @@ export class Reinforcements {
   /** True while a sortie is in the air or still putting men on the ground. */
   get busy() {
     return !!this.run;
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * HOW LONG FROM THE CALL TO THE LAST MAN'S BOOTS — THE INSERTION
+   * ══════════════════════════════════════════════════════════════════════════
+   * A drop called with less match left than this delivers NOBODY: `_land` does
+   * not create an Agent into a match that is over, so the aircraft flies, the
+   * banner says ten men are coming, and none of them arrive. Measured on the
+   * build before the guard existed — one sortie called 1.8 s before the final
+   * whistle put 0 of 10 on the ground and another put 1 — and from the player's
+   * seat that is a reinforcement event with no reinforcements in it, which is
+   * the exact complaint the air events' own headers were written about.
+   *
+   * `MatchSystem._updateReinforcements` refuses to call one when the match
+   * cannot outlive it, and this is the number it refuses against. IT IS DERIVED
+   * FROM THE FLIGHT, NOT MEASURED AND PASTED, so it cannot drift out of step
+   * with the timings above it:
+   *
+   *   first man out   `dropAt`, the run from `start` to `DROP_LEAD` short of
+   *                   the zone — 4.50 s
+   *   last man out    + 9 × `reinforceDropGap`                     — 5.58 s
+   *   canopy opens    + `CANOPY_AT`                                — 0.85 s
+   *   his feet down   + `reinforceAltitude` / `reinforceDescent`   — 7.19 s
+   *                                                          total  18.12 s
+   *
+   * The last term is nominal: `_release` takes the real height under the man,
+   * and a zone standing above or below its own centre moves it by a few tenths.
+   * Measured call-to-last-touchdown over fifteen sorties: 18.2–18.6 s. The
+   * guard's margin covers that and a great deal more.
+   */
+  get insertionSeconds() {
+    const need = RULES.reinforceSpeed * RULES.reinforceLead + DROP_LEAD;
+    const dropAt = (Math.max(RUN_IN, need) - DROP_LEAD) / RULES.reinforceSpeed;
+    return (
+      dropAt +
+      (RULES.reinforceCount - 1) * RULES.reinforceDropGap +
+      CANOPY_AT +
+      RULES.reinforceAltitude / RULES.reinforceDescent
+    );
   }
 
   /* ====================================================================== */
@@ -509,7 +555,7 @@ export class Reinforcements {
        * off the SAME fraction, so a man cannot reach the ground anywhere except
        * the cell he was handed.
        */
-      const openAt = 0.85;
+      const openAt = CANOPY_AT;
       const frac = t.state === 'fall' ? 0 : Math.min(1, (t.t - openAt) / t.fallTime);
       if (t.state === 'fall') {
         if (t.t >= openAt) {

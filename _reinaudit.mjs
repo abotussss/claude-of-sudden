@@ -47,6 +47,8 @@ const res = await page.evaluate(async () => {
         team: o.team,
         label: o.label,
         score: m.score.slice(),
+        /** What the guard believed when it let this one through. */
+        lifeSaid: +m._matchLifeLeft().toFixed(1),
         centre: { x: +o.centre.x.toFixed(1), y: +o.centre.y.toFixed(1), z: +o.centre.z.toFixed(1) },
         approach: o.approach
           ? { x: +o.approach.x.toFixed(1), z: +o.approach.z.toFixed(1) }
@@ -210,6 +212,7 @@ const res = await page.evaluate(async () => {
     return { name: r.name, n: s.length, worst, total: +total.toFixed(1) };
   });
   return {
+    insertion: +m.reinforce.insertionSeconds.toFixed(2),
     walk,
     /**
      * A man who is killed thirty seconds in has six samples and no chance to
@@ -243,9 +246,22 @@ console.log(
   `  calls ${res.stats.calls} · qualifying polls R/B ${res.stats.windows[0]}/${res.stats.windows[1]} · ` +
     `stats.landed R/B ${res.stats.landed[0]}/${res.stats.landed[1]} · stats.lost R/B ${res.stats.lost[0]}/${res.stats.lost[1]}`
 );
+/**
+ * THE GUARD. `lifeSaid` is what the estimate claimed at the call and
+ * `lifeReal` is what the match actually had — the pair is the estimator's
+ * error at the only instant where it is allowed to matter.
+ */
+console.log(
+  `  GUARD: insertion ${res.insertion}s · refused ${res.stats.late} sortie(s)` +
+    (res.stats.lateAt.length
+      ? `: ${res.stats.lateAt
+          .map((l) => `${T[l.team]} t=${l.t}s ${l.score[0]}-${l.score[1]} said ${l.life}s < ${l.need}s (really had ${(res.end - l.t).toFixed(1)}s)`)
+          .join(' | ')}`
+      : '')
+);
 for (const d of res.drops) {
   console.log(
-    `  DROP ${T[d.team]} t=${d.t}s score ${d.score[0]}-${d.score[1]} · ${d.label} owner=${
+    `  DROP ${T[d.team]} t=${d.t}s score ${d.score[0]}-${d.score[1]} · life said ${d.lifeSaid}s, really ${(res.end - d.t).toFixed(1)}s · ${d.label} owner=${
       d.zoneOwner === 'BASE' ? 'BASE' : d.zoneOwner === d.team ? `${T[d.team]} (OWN)` : `!!${d.zoneOwner}`
     }`
   );

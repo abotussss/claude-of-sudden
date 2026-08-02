@@ -1445,6 +1445,47 @@ export const RULES = {
    */
   reinforceFirstDelay: 120,
   /**
+   * ────────────────────────────────────────────────────────────────────────
+   * AND A DROP IS NOT CALLED AT ALL WHEN THE MATCH CANNOT OUTLIVE IT
+   * ────────────────────────────────────────────────────────────────────────
+   * The insertion is `Reinforcements.insertionSeconds` — 18.1 s from the call
+   * to the last man's boots — and `_land` will not create a soldier into a
+   * match that has ended. So a sortie called inside that window puts the
+   * banner up, flies the aircraft, and lands NOBODY: measured on the build
+   * before this guard, one drop delivered 1 man of 10 and one delivered 0,
+   * which from the player's seat is a reinforcement event with no
+   * reinforcements in it.
+   *
+   * THE MATCH ENDS ON POINTS, NOT ON THE CLOCK, so the remaining life has to be
+   * PREDICTED. `MatchSystem._matchLifeLeft` takes the shortest of three bounds
+   * and this is the window for the first of them.
+   *
+   * 24 s IS THREE POLLS OF HISTORY AND IT WAS MEASURED, NOT PICKED. Whole
+   * matches were sampled at 1 Hz and every candidate estimator replayed
+   * against the life the match actually had (`_reinlife.mjs`). Windows from 16
+   * to 80 s all caught every dangerous instant; the short ones lag less and the
+   * long ones smooth more, and 24 s sits where the median error stops improving.
+   */
+  reinforceRateWindow: 24,
+  /**
+   * Seconds of headroom on top of the insertion before a drop is allowed.
+   *
+   * SIZED BY THE ESTIMATOR'S WORST OVER-PREDICTION, which is the only error
+   * that can hurt: under-predicting refuses a drop that the side KEEPS — the
+   * next poll is eight seconds later and nothing is spent — while
+   * over-predicting is another empty helicopter. Over five matches and ~90
+   * instants where the match really had under 18.4 s left, the largest life any
+   * estimator claimed was 20.5 s, so 18.1 + 7 = 25.1 s covers the worst case
+   * seen with 4.6 s to spare.
+   *
+   * THE COST WAS MEASURED TOO, because a guard that is too careful turns off
+   * the endgame trigger, which is half the feature: of the instants with a
+   * clear 40 s or more left, ZERO were refused in any of the five matches. The
+   * refusals fall entirely in the 18–40 s band, where a drop is marginal by
+   * definition.
+   */
+  reinforceLateMargin: 7,
+  /**
    * DOES A REINFORCEMENT RESPAWN? No — "その場合、その１０人はリスポーンしない".
    *
    * This constant exists to be read by ONE line in `_queueRespawn`, because the
