@@ -1943,9 +1943,14 @@ export class Airstrike {
         this._variants.push(v);
         bound++;
         chunks += keep.length;
+        // A loop, not a spread: `keep` is 30 long on this map and there is no
+        // upper bound on it in the code, and `Math.min(...a)` is an argument
+        // list.
+        let worst = 0;
+        for (const x of keep) if (x.dy < worst) worst = x.dy;
         console.info(
           `[airstrike] ${site.id}: ${keep.length} chunk(s) rest on ${c.h.id} — ` +
-            `alternative pose baked (worst ${Math.min(...keep.map((x) => x.dy)).toFixed(2)} m)`
+            `alternative pose baked (worst ${worst.toFixed(2)} m)`
         );
       }
       for (const h of base) h.probeSwap(false);
@@ -1993,6 +1998,12 @@ export class Airstrike {
    * Turn a measured list of `{ ref, dy }` into the flat arrays `_syncHosts`
    * writes: one group per mesh, because `aOff` and `aMot` live on the mesh's own
    * geometry and `instanceMatrix` on the mesh.
+   *
+   * BOTH STATES ARE STORED ABSOLUTE RATHER THAN AS ONE DELTA APPLIED AND
+   * UNAPPLIED. Every buffer here is a Float32Array, so `x + d` then `- d` is
+   * not always `x`, and a round reset that stands the town back up toggles
+   * every binding. Absolute values make the swap idempotent and driftless, and
+   * cost three more small arrays per binding at boot.
    */
   _makeVariant(site, host, keep) {
     const byMesh = new Map();
@@ -2008,23 +2019,29 @@ export class Airstrike {
       if (!mot || !off) continue;
       const n = list.length;
       const idx = new Uint32Array(n);
-      const dy = new Float32Array(n);
-      const f0 = new Float32Array(n);
+      const y0 = new Float32Array(n); // settled world y, host standing
+      const y1 = new Float32Array(n); // …and with it razed
+      const o0 = new Float32Array(n); // aOff.y, host standing
+      const o1 = new Float32Array(n);
+      const f0 = new Float32Array(n); // aMot.y (flight), host standing
       const f1 = new Float32Array(n);
       for (let k = 0; k < n; k++) {
         const i = list[k].ref.i;
+        const dy = list[k].dy;
         idx[k] = i;
-        dy[k] = list[k].dy;
+        y0[k] = mesh.userData.settled[i * 16 + 13];
+        y1[k] = y0[k] + dy;
+        o0[k] = off.array[i * 3 + 1];
+        o1[k] = o0[k] + dy;
         f0[k] = mot.array[i * 4 + 1];
         // Free fall over a longer drop takes longer, and the closed form the
         // bake used lets us say by exactly how much without re-drawing its die.
         const restYi = mesh.userData.rest[i * 16 + 13];
-        const setYi = mesh.userData.settled[i * 16 + 13];
-        const drop0 = Math.max(0.5, restYi - setYi);
-        const drop1 = Math.max(0.5, restYi - (setYi + dy[k]));
+        const drop0 = Math.max(0.5, restYi - y0[k]);
+        const drop1 = Math.max(0.5, restYi - y1[k]);
         f1[k] = clamp(f0[k] * Math.sqrt(drop1 / drop0), 0.55, 3.1);
       }
-      groups.push({ mesh, mot, off, idx, dy, f0, f1 });
+      groups.push({ mesh, mot, off, idx, y0, y1, o0, o1, f0, f1 });
     }
     if (!groups.length) return null;
     return { site, host, groups, applied: false };
@@ -2065,21 +2082,22 @@ export class Airstrike {
       const down = v.host.isDown();
       if (down === v.applied) continue;
       v.applied = down;
-      const sign = down ? 1 : -1;
       for (const g of v.groups) {
         const settled = g.mesh.userData.settled;
         const mot = g.mot.array;
         const off = g.off.array;
         const inst = g.mesh.instanceMatrix.array;
         const live = v.site.baked;
+        const sy = down ? g.y1 : g.y0;
+        const so = down ? g.o1 : g.o0;
+        const sf = down ? g.f1 : g.f0;
         for (let k = 0; k < g.idx.length; k++) {
           const j = g.idx[k];
-          const d = g.dy[k] * sign;
-          settled[j * 16 + 13] += d;
-          off[j * 3 + 1] += d;
-          mot[j * 4 + 1] = down ? g.f1[k] : g.f0[k];
+          settled[j * 16 + 13] = sy[k];
+          off[j * 3 + 1] = so[k];
+          mot[j * 4 + 1] = sf[k];
           // Already on the ground: move the drawn pose with the baked one.
-          if (live) inst[j * 16 + 13] += d;
+          if (live) inst[j * 16 + 13] = sy[k];
         }
         g.mot.needsUpdate = true;
         g.off.needsUpdate = true;
