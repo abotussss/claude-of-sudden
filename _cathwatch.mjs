@@ -152,11 +152,66 @@ const sweep = () =>
       }
       if (n) rows.push({ id: s.id, kind: s.kind, baked: s.baked, drawn, n, worst, at });
     }
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * AND THEN EVERYTHING ELSE IN THE SKY, BECAUSE THE PLAYER IS NOT LOOKING AT
+     * `airstrike.sites`
+     * ────────────────────────────────────────────────────────────────────────
+     * The pass above walks the rubble THIS system owns. Photographed down the
+     * nave 45 s after the dust, the ruin still had a scatter of dark masses
+     * hanging over it that the pass had just reported clean — because they
+     * belong to somebody else. So this is the same question asked of the SCENE:
+     * every visible mesh and every instance of every InstancedMesh whose
+     * underside is more than `HIGH` metres over the ruin floor and within 45 m
+     * of the crossing, counted by the object's own name. It names the owner
+     * instead of guessing, which is the whole point.
+     */
+    const HIGH = 8;
+    const w = e.ctx.peek('world');
+    const vol = w.interiorVolumes.find((x) => x.building === w.cathedral.id);
+    const cx = vol?.cx ?? 0;
+    const cz = vol?.cz ?? 0;
+    const floorY = w.cathedral?.floorY ?? 0;
+    const sky = new Map();
+    const wp = new V3();
+    const wq = e.camera.quaternion.clone();
+    const ws = new V3();
+    const m4 = new M4();
+    e.scene.updateMatrixWorld(true);
+    e.scene.traverseVisible((o) => {
+      if (!o.isMesh && !o.isInstancedMesh) return;
+      const tally = (x, y, z, half) => {
+        if (Math.hypot(x - cx, z - cz) > 45) return;
+        if (y - half < floorY + HIGH) return;
+        const key = o.name || o.type;
+        const r = sky.get(key) ?? { n: 0, hi: -Infinity, at: null };
+        r.n++;
+        if (y > r.hi) {
+          r.hi = +y.toFixed(1);
+          r.at = [+x.toFixed(1), +y.toFixed(1), +z.toFixed(1)];
+        }
+        sky.set(key, r);
+      };
+      if (o.isInstancedMesh) {
+        const arr = o.instanceMatrix.array;
+        for (let i = 0; i < arr.length; i += 16) {
+          m4.fromArray(arr, i).premultiply(o.matrixWorld);
+          m4.decompose(wp, wq, ws);
+          tally(wp.x, wp.y, wp.z, Math.max(ws.x, ws.y, ws.z) * 0.5);
+        }
+      } else {
+        o.getWorldPosition(wp);
+        const rr = o.geometry?.boundingSphere?.radius ?? 0;
+        tally(wp.x, wp.y, wp.z, rr * Math.max(o.scale.x, o.scale.y, o.scale.z));
+      }
+    });
+
     return {
       t: +e.ctx.time.elapsed.toFixed(1),
       razed: e.ctx.peek('world').cathedral?.razed,
       struck: sites.filter((s) => s.struck).map((s) => `${s.id}${s.baked ? '' : '(unsettled)'}`).join(' '),
       rows,
+      sky: [...sky].map(([k, v]) => ({ owner: k, n: v.n, hi: v.hi, at: v.at })).sort((a, b) => b.n - a.n),
     };
   }, { CAIR });
 
@@ -239,14 +294,27 @@ if (SHOTS) {
   poses.push({ id: 'inside_up', from: at(0, 1.7, -2), to: at(3, 14, 24) });
   poses.push({ id: 'nave_low', from: at(0, 2.2, -26), to: at(0, 10, 10) });
   poses.push({ id: 'aisle_low', from: at(11, 2.2, -18), to: at(-4, 9, 12) });
-  poses.push({ id: 'skyline_w', from: at(-40, 6, -34), to: at(0, 12, 0) });
-  poses.push({ id: 'skyline_e', from: at(40, 6, 34), to: at(0, 12, 0) });
+  poses.push({ id: 'skyline_s', from: at(0, 24, -70), to: at(0, 12, 0) });
+  poses.push({ id: 'skyline_n', from: at(0, 24, 70), to: at(0, 12, 0) });
+  // The one the bug was found in, and again with a long lens on the sky itself.
+  poses.push({ id: 'nave_sky', from: at(0, 2.2, -26), to: at(0, 22, 10), fov: 22 });
+  poses.push({ id: 'cross_sky', from: at(0, 1.7, 0), to: at(0, 26, 12), fov: 30 });
   for (const p of poses) {
     await page.evaluate((pose) => {
       const e = window.__ENGINE__;
       const V3 = e.camera.position.constructor;
       e.camera.position.set(pose.from[0], pose.from[1], pose.from[2]);
       e.camera.lookAt(new V3(pose.to[0], pose.to[1], pose.to[2]));
+      // A long lens on the sky: a 60 deg frame of a 45 m ruin makes a chunk 20 m
+      // up four pixels across, which is how this got called fixed twice.
+      if (pose.fov) {
+        e.camera.userData.owFov ??= e.camera.fov;
+        e.camera.fov = pose.fov;
+        e.camera.updateProjectionMatrix();
+      } else if (e.camera.userData.owFov) {
+        e.camera.fov = e.camera.userData.owFov;
+        e.camera.updateProjectionMatrix();
+      }
       e.ctx.peek('player')?.teleport?.(e.camera.position, e.camera.rotation);
     }, p);
     await page.waitForTimeout(700);
@@ -266,6 +334,12 @@ for (const m of marks) {
   console.log(`\n─── ${m.label} — t=${m.t}, razed=${m.razed} ───`);
   console.log(`  struck: ${m.struck || 'none'}`);
   if (!m.rows.length) console.log('  no drawn chunk with more than 1.5 m of air under it');
+  if (m.sky?.length) {
+    console.log('  IN THE SKY OVER THE RUIN (visible mass 8 m+ over the floor, within 45 m of the crossing):');
+    for (const s of m.sky) console.log(`    ${String(s.n).padStart(6)} x ${s.owner.padEnd(30)} highest ${s.hi} m at ${JSON.stringify(s.at)}`);
+  } else {
+    console.log('  nothing visible in the sky over the ruin');
+  }
   for (const r of m.rows) {
     console.log(
       `  ${r.id.padEnd(10)} ${r.kind.padEnd(6)} baked=${String(r.baked).padEnd(5)} drawn ${String(r.drawn).padStart(5)}` +
