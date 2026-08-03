@@ -2643,9 +2643,9 @@ export class Agent {
     // Has he the legs? @see the latch in `update`: he runs until the fuel is
     // gone and then walks until `SPRINT_REARM` of it is back.
     if (!this._sprintArmed) return 0;
-    // Is anybody in front of him? Counted last because it is the one that
-    // changes most often, and it is what keeps forty men arriving faster from
-    // becoming forty men in one doorway. @see `_move`.
+    // Is anybody in front of him? This is what keeps forty men arriving faster
+    // from becoming forty men in one doorway, and it costs nothing here — the
+    // count was taken on the avoidance pass `_move` already walks.
     if (this._ahead > 0) return 0;
     // Is he pointed down the leg? The player's own `sprintForwardDot`, against
     // the direction he actually travelled last frame (avoidance included), so a

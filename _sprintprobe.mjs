@@ -36,6 +36,16 @@ const URL = args.url ?? 'http://127.0.0.1:4505/';
 const SEED = +(args.seed ?? 7);
 const TICKS = +(args.ticks ?? 600);
 const SCALE = +(args.scale ?? 4);
+/**
+ * `--nosprint` IS THE BEFORE-BUILD, MEASURED ON THE AFTER-BUILD. Every
+ * behavioural line the sprint added is downstream of what `_sprintGate`
+ * returns — `moveScale` is read there and nowhere else, `_ahead` is only ever
+ * counted — so a gate stubbed to 0 is the old `_advance` exactly, and the two
+ * halves of the comparison then share a build, a seed and a machine. The check
+ * that this is true rather than merely plausible is `meanMoveSpeed`: it comes
+ * back at the pre-change build's own 3.15 / 3.25.
+ */
+const NOSPRINT = !!args.nosprint;
 
 const browser = await chromium.launch({
   headless: true,
@@ -50,6 +60,17 @@ const wait = (n) => page.evaluate((k) => new Promise((r) => {
   let i = 0; const t = () => (++i >= k ? r() : requestAnimationFrame(t)); requestAnimationFrame(t);
 }), n);
 await page.evaluate((s) => { window.__ENGINE__.ctx.time.scale = s; }, SCALE);
+if (NOSPRINT) {
+  await page.waitForFunction(() => (window.__ENGINE__.ctx.peek('ai')?.agents ?? []).length > 0,
+    null, { timeout: 180000 });
+  const off = await page.evaluate(() => {
+    const a = window.__ENGINE__.ctx.peek('ai').agents[0];
+    if (!a || !a.constructor?.prototype?._sprintGate) return false;
+    a.constructor.prototype._sprintGate = () => 0;
+    return true;
+  });
+  if (!off) throw new Error('could not stub _sprintGate');
+}
 await page.waitForFunction(() => {
   const m = window.__ENGINE__.ctx.peek('match');
   return m && String(m.phase).toLowerCase() === 'live';
@@ -153,5 +174,5 @@ const r = await page.evaluate(() => {
   };
 });
 
-console.log(JSON.stringify({ url: URL, seed: SEED, scale: SCALE, pageerrors: errs, ...r }, null, 2));
+console.log(JSON.stringify({ url: URL, seed: SEED, scale: SCALE, sprint: !NOSPRINT, pageerrors: errs, ...r }, null, 2));
 await browser.close();
