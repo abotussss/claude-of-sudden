@@ -753,6 +753,52 @@ const OFFGRID_TOL = 1.5;
  */
 const SIDE_FAN = [2, -2, 3, -3, 4, 1, -1];
 
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * A HULL IS A MOVING SOLID AND THE HEIGHT FIELD IS BAKED AT BOOT
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「戦車への物理判定つけて、キャラが通り過ぎることが可能なので」. `match` publishes the
+ * plan rectangle of every hull on the field through the `ai.vehicles` contract
+ * (`solid`, `crushing`, `halfW`, `halfL`, `bodyLow`, `bodyHigh` beside the
+ * `position`/`yaw`/`alive` that were already there), and the two halves of
+ * dealing with it are the two halves men already use on each other:
+ *
+ *   STEER ROUND IT — `_move`'s local avoidance loop, the same repulsion +
+ *   tangential term that keeps a squad from walking through itself, with the
+ *   closest point on a RECTANGLE instead of a circle. This is what makes a man
+ *   whose path is crossed by a hull go round rather than into it, and it is
+ *   the only half that runs when he is not touching one.
+ *
+ *   BE PUSHED BY IT — `_clearHulls`, after the controller has integrated. A
+ *   7 m object driving at 4.6 m/s cannot be avoided by steering alone and MUST
+ *   NOT be put in the nav grid, so the man is de-penetrated out of it through
+ *   `CharacterController.move`: swept, sliding and refusable by a wall, so a
+ *   shove can never place him inside geometry or on a nav island.
+ *
+ * NOBODY IS EVER WEDGED. A man a MOVING hull cannot shove clear is being
+ * pressed into something, and that is the crush that produced the original
+ * stuck epidemic with a bigger pusher — so he is run over instead
+ * (`CRUSH_DPS`, applied in lumps so a hit reaction cannot play every frame). A
+ * man a STOPPED hull cannot shove clear is not being crushed by anything, so
+ * after `HULL_PIN_GRACE` the hull simply stops blocking HIM: a wreck in a lane
+ * whose shoulder is narrower than a capsule may not queue a platoon against
+ * itself for the rest of the match. @see `src/match/tank.js`'s `BODY_HALF_W`.
+ */
+/** Metres beyond the hull's own rectangle at which men start to give way. */
+const HULL_AVOID = 2.2;
+/** Repulsion and along-the-flank weights, against 1.0 for the path itself. */
+const HULL_PUSH = 1.4;
+const HULL_SLIDE = 1.6;
+/** Most a single de-penetration may travel, metres. */
+const HULL_SHOVE_MAX = 0.9;
+/** Clearance left beyond the face so the next frame does not re-shove him. */
+const HULL_SKIN = 0.05;
+/** Damage per second under a moving hull, and the lump it is applied in. */
+const CRUSH_DPS = 110;
+const CRUSH_LUMP = 26;
+/** Seconds a STOPPED hull holds a man it cannot shove before letting him by. */
+const HULL_PIN_GRACE = 0.6;
+
 let _nextId = 1;
 
 export class Agent {
@@ -1294,6 +1340,12 @@ export class Agent {
     this.patrolPoints = opts.patrol ?? null;
     this.patrolIndex = 0;
     this.stuckTimer = 0;
+    /**
+     * Under a hull: seconds he has been pinned by one that cannot run him over,
+     * and the crush damage owed by one that can. @see `_clearHulls`.
+     */
+    this._hullPin = 0;
+    this._crush = 0;
     this.vaultCooldown = 0;
     /** How high the vault arc humps. Raised for a parapet. @see `_stepOff`. */
     this.vaultLift = 0.42;
@@ -1401,6 +1453,9 @@ export class Agent {
     this._sense(dt);
     this._think(dt);
     this._move(dt);
+    // A man can now DIE inside `_move` — a hull that has him pinned against a
+    // wall runs him over there. @see `_clearHulls`.
+    if (!this.alive) return;
     // AFTER the move, because the question it asks is about the move that was
     // just integrated: did the man who wanted to go somewhere actually go.
     this._trackProgress(dt);
@@ -4032,6 +4087,71 @@ export class Agent {
       if (want === 0) want = this.desiredSpeed * 0.35;
     }
 
+    /**
+     * …AND ROUND A HULL, which is the same term with a rectangle in place of a
+     * circle. A tank is not in the height field and never will be (@see
+     * `HULL_AVOID`), so A* routes men straight through one and this is what
+     * bends the walk. The tangential weight is the larger of the two on
+     * purpose: pure repulsion off a 7 m object that has STOPPED is a man
+     * standing two metres from it for the rest of the match, whereas a slide
+     * along its flank is a man walking round the end of it. Nothing here
+     * allocates — the closest-point solve is eight scalars.
+     */
+    const veh = this.ai.vehicles;
+    if (veh) {
+      for (let i = 0; i < veh.length; i++) {
+        const v = veh[i];
+        if (!v || v.solid !== true) continue;
+        const dx = this.position.x - v.position.x;
+        const dz = this.position.z - v.position.z;
+        const reach = v.halfL + this.radius + HULL_AVOID;
+        if (dx * dx + dz * dz > reach * reach) continue;
+        const rel = this.position.y - v.position.y;
+        if (rel > v.bodyHigh || rel + this.height < v.bodyLow) continue;
+        const vs = Math.sin(v.yaw);
+        const vc = Math.cos(v.yaw);
+        // the hull's own frame: +Z is the nose, +X is the right track
+        const lx = dx * vc - dz * vs;
+        const lz = dx * vs + dz * vc;
+        const hw = v.halfW + this.radius;
+        const hl = v.halfL + this.radius;
+        // closest point on the rectangle, and the vector out of it
+        let ex = lx - (lx < -hw ? -hw : lx > hw ? hw : lx);
+        let ez = lz - (lz < -hl ? -hl : lz > hl ? hl : lz);
+        let d = Math.hypot(ex, ez);
+        if (d > HULL_AVOID) continue;
+        if (d < 1e-3) {
+          // inside it: straight out of the nearer flank. `_clearHulls` is the
+          // half that actually moves him; this only points him the right way.
+          ex = lx < 0 ? -1 : 1;
+          ez = 0;
+          d = 1;
+        } else {
+          ex /= d;
+          ez /= d;
+        }
+        const fall = 1 - d / HULL_AVOID;
+        // out of the hull's frame and into the world
+        const ox = ex * vc + ez * vs;
+        const oz = -ex * vs + ez * vc;
+        this._steer.x += ox * fall * HULL_PUSH;
+        this._steer.z += oz * fall * HULL_PUSH;
+        // …and along it, on the side he is already going. Deterministic: the
+        // sign comes from his own steer, or from his id when he has none.
+        let tx = -oz;
+        let tz = ox;
+        const along = tx * this._steer.x + tz * this._steer.z;
+        if (along < 0 || (along === 0 && this.id % 2 === 0)) {
+          tx = -tx;
+          tz = -tz;
+        }
+        this._steer.x += tx * fall * HULL_SLIDE;
+        this._steer.z += tz * fall * HULL_SLIDE;
+        // a man standing in a street a tank is coming down gets out of it
+        if (want < this.desiredSpeed * 0.6) want = this.desiredSpeed * 0.6;
+      }
+    }
+
     if (this._steer.lengthSq() > 1e-6) this._steer.normalize();
 
     // speed: ease toward the request so starts and stops have weight
@@ -4072,6 +4192,12 @@ export class Agent {
       const px = this.position.x;
       const pz = this.position.z;
       c.move(vx * dt, this.velocity.y * dt, vz * dt);
+      /**
+       * …AND OUT OF ANY HULL HE IS STANDING INSIDE. It runs on the CONTROLLER
+       * and before `position` is read back, so the shove is part of this
+       * frame's move rather than a correction applied to a stale one.
+       */
+      if (this.ai.vehicles) this._clearHulls(dt);
       this.position.copy(c.position);
       this.grounded = c.grounded;
       if (c.grounded && this.velocity.y < 0) this.velocity.y = 0;
@@ -4117,6 +4243,92 @@ export class Agent {
       this.position.x += this._steer.x * this.speed * dt;
       this.position.z += this._steer.z * this.speed * dt;
     }
+  }
+
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * OUT OF THE TANK. 「戦車への物理判定つけて、キャラが通り過ぎることが可能なので」
+   * ──────────────────────────────────────────────────────────────────────────
+   * The half of the hull block that MOVES a man, run straight after the
+   * controller has integrated his own step. @see `HULL_AVOID` for the whole
+   * argument; the three things worth knowing at the code are:
+   *
+   *   IT PUSHES THROUGH `CharacterController.move`, NEVER THROUGH `position`.
+   *   That is the entire safety property: `move` is a swept, sliding,
+   *   de-penetrating resolve against the static BVH, so a shove is REFUSED by
+   *   a wall instead of driving a capsule into one, and no shove can put a man
+   *   somewhere `findPath` returns 0 from. Writing `position` directly would
+   *   have been three lines shorter and would have rebuilt the stuck epidemic.
+   *
+   *   THREE ATTEMPTS, MEASURED. Near flank, far flank, then out whichever end
+   *   he is nearer; the rectangle test is re-run after each, so "did it work"
+   *   is an answer rather than an assumption. The nose is tried LAST because a
+   *   man shoved forward is a man the same hull meets again next frame.
+   *
+   *   AND HE IS NEVER LEFT WEDGED. Still inside after three, with the hull
+   *   under power: he is under the tracks, and he is run over. Still inside
+   *   after three with the hull STOPPED: nothing is crushing him, so the hull
+   *   releases HIM after `HULL_PIN_GRACE` and he walks through it.
+   *
+   * Allocates nothing and costs two sin/cos plus a handful of scalars per live
+   * hull per man — at most two hulls, and only for men within its own length.
+   */
+  _clearHulls(dt) {
+    const veh = this.ai.vehicles;
+    const c = this.controller;
+    if (!veh || !c) return;
+    let pinnedBy = null;
+    for (let i = 0; i < veh.length; i++) {
+      const v = veh[i];
+      if (!v || v.solid !== true) continue;
+      // A hull that has started moving again can shove, so it stops releasing.
+      if (v.crushing === true) this._hullPin = 0;
+      const hw = v.halfW + this.radius;
+      const hl = v.halfL + this.radius;
+      const vs = Math.sin(v.yaw);
+      const vc = Math.cos(v.yaw);
+      for (let k = 0; k <= 3; k++) {
+        // beside it, not on a roof over it or in a cellar under it
+        const rel = c.position.y - v.position.y;
+        if (rel > v.bodyHigh || rel + this.height < v.bodyLow) break;
+        const dx = c.position.x - v.position.x;
+        const dz = c.position.z - v.position.z;
+        // the hull's own frame: +Z is the nose, +X is the right track
+        const lx = dx * vc - dz * vs;
+        const lz = dx * vs + dz * vc;
+        if (Math.abs(lx) >= hw || Math.abs(lz) >= hl) break;
+        if (k === 3 || this._hullPin > HULL_PIN_GRACE) {
+          pinnedBy = v;
+          break;
+        }
+        const side = lx < 0 ? -1 : 1;
+        const ex = k === 2 ? 0 : k === 0 ? side : -side;
+        const ez = k === 2 ? (lz < 0 ? -1 : 1) : 0;
+        const push = Math.min(HULL_SHOVE_MAX, (ex ? hw - lx * ex : hl - lz * ez) + HULL_SKIN);
+        c.move((ex * vc + ez * vs) * push, 0, (-ex * vs + ez * vc) * push);
+      }
+    }
+    if (!pinnedBy) {
+      this._hullPin = 0;
+      this._crush = 0;
+      return;
+    }
+    if (pinnedBy.crushing !== true) {
+      this._hullPin += dt;
+      return;
+    }
+    /**
+     * In lumps rather than per frame: `applyDamage` plays a hit reaction, and
+     * one a frame is a man vibrating under a tank rather than dying under one.
+     */
+    this._crush += CRUSH_DPS * dt;
+    if (this._crush < CRUSH_LUMP) return;
+    const lump = this._crush;
+    this._crush = 0;
+    // `point`/`dir` null: `die` falls back to his own chest, and a crush has no
+    // direction to flinch from. The hull is the SOURCE, which is what puts it
+    // in the killfeed — `match._onActorDeath` already knows a tank kills.
+    this.applyDamage(lump, 'torso', null, null, pinnedBy);
   }
 
   /**

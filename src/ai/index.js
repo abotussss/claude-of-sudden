@@ -443,8 +443,26 @@ export class AiSystem {
      *       isVehicle:true,            // opts in to the armour rules below
      *       aimPoint:Vector3,          // WHERE to shoot it — @see `actorChest`
      *       yaw:number,                // its heading — @see `armourWorth`
-     *       firedAt:number }           // when its guns last fired, elapsed s —
+     *       firedAt:number,            // when its guns last fired, elapsed s —
      *                                  // the suppression clause reads it
+     *       solid:boolean,             // a man may not stand inside it. TRUE
+     *                                  // FOR A WRECK: `alive` is shootable,
+     *                                  // `solid` is on the field at all
+     *       crushing:boolean,          // it is under power, so a man it cannot
+     *                                  // shove clear is run over rather than
+     *                                  // let through
+     *       halfW, halfL,              // its plan rectangle about `position`
+     *       bodyLow, bodyHigh }        // and the height band above it
+     *
+     * THE LAST FIVE ARE THE PHYSICAL HULL — 「戦車への物理判定つけて、キャラが通り
+     * 過ぎることが可能なので」. They are published rather than assumed because `ai`
+     * may not know a vehicle's dimensions any more than it may know its local
+     * frame, and they are read in exactly two places, both in `Agent`:
+     * `_move`'s local-avoidance loop steers men round a hull, and
+     * `_clearHulls` de-penetrates the ones a hull has driven onto. NOTHING
+     * HERE TOUCHES THE NAV GRID — @see the `HULL_AVOID` note in `agent.js` for
+     * why a 7 m moving solid cannot go into a height field baked at boot, and
+     * why nobody can be wedged by one.
      *
      * `match` owns the roster, so it hands the LIVE ARRAY over once
      * (`this.ai.vehicles = this.tank.tanks`) and every entry's `alive` flag does
