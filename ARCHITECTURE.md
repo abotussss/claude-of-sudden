@@ -276,6 +276,16 @@ player's own eyes find one. Killing an unarmed one takes `CIVILIAN_PENALTY`
 (12) off your side's capture score, floored at zero, and only when the local
 player himself fired.
 
+THEY ARE THE CATHEDRAL DISTRICT'S OWN — 「大聖堂付近の屋内にのみ出現させて」 — and the
+district is measured off `world.interiorVolumes` rather than authored: a
+building qualifies when its NEAREST CORNER is inside `CATH_SPAN` of the
+cathedral's own footprint radius from the church's centre, widening by
+`CATH_STEP` until it holds three buildings and 5 m × 5 m of room floor per man.
+On this map that selects W2, W3, E2 and E3 at 1.0 × 27.0 m — 1953 of the town's
+3715 room cells — and the church itself is excluded on purpose: it becomes
+capture point D and `setRazed` takes the roof off it mid-match, which would
+leave a man's anchor, his leash and his ambush standing in the open.
+
 ```js
 world.interiorVolumes // [{ building, cx, cz, c, s, hw, hd, floorY, probeY }]
 ```
@@ -465,12 +475,12 @@ Emit and listen via `ctx.events`. Payloads are plain objects. The canonical set:
 | ↳ | FIGHTER SUPPORT FIRE — an aircraft crossing low along one of four fixed lines with its gun open, walking 11-31 cannon impacts down a lane in about a second. `inbound` is the launch (the aeroplane and its gun are the telegraph, ~3.3 s before the first round lands); `impact` fires once per impact that carries a blast, which is every fourth one — see the DAMAGE IS SAMPLED note in the file; `settled` is when the grit stops moving. It changes no collision and no navigation. The payload object is REUSED — copy what you need. See `src/match/strafe.js`. | |
 
 | `match:drone` | `{ phase, id, team, position }` | match |
-| ↳ | A SUICIDE DRONE, at each beat of its life: `launch` out of a side's base, `lock` when it has taken a man and started his warning, `dive` when it commits, `boom` when the warhead functions, `dead` when it was shot down before it could. Thirty a match, both sides combined, paced on `_matchProgress`; at most `RULES.droneMaxAloft` are ever in the air. The payload object is REUSED — copy what you need. `match.drones.list` is the live array, published for the same reason `match.tank.tanks` is: a rotor is a CONTINUOUS sound and cannot be built off a one-shot event. See `src/match/drone.js`. | |
+| ↳ | A SUICIDE DRONE, at each beat of its life: `launch` out of a side's base, `lock` when it has taken a man and started his warning, `dive` when it commits, `boom` when the warhead functions, `dead` when a round killed it. A KILL IS NOT AN ESCAPE — 「ドローンは破壊されたときに爆破して」 — so `dead` is immediately followed by `boom` at the airframe, on the frame the round landed: shooting one down at altitude is a firework and shooting one down at 6 m on its dive is a frag at 6 m. `_takeRound` falls into `_detonate` itself, so there is one blast path and it is the dive's. Thirty a match, both sides combined, paced on `_matchProgress`; at most `RULES.droneMaxAloft` are ever in the air. The payload object is REUSED — copy what you need. `match.drones.list` is the live array, published for the same reason `match.tank.tanks` is: a rotor is a CONTINUOUS sound and cannot be built off a one-shot event. See `src/match/drone.js`. | |
 
 | `weapon:flash` | `{ position, radius, duration }` | weapons / ai |
 | ↳ | A FLASHBANG HAS FUNCTIONED. Emitted by BOTH throwers — `ThrownGrenades._flash` for the player's and `AiSystem._detonateThrown` for a bot's — with identical payloads, which is the whole mechanism: `ai` blinds every soldier inside `radius` with a real `MASK.EXPLOSION` line of sight from ONE listener, so a bang is a bang whoever threw it. `duration` is the full effect at the centre; a man at the edge gets a fraction of it. Bots implement the blind as NOT ACQUIRING (`pickVisibleHostile` returns null) plus a suppression shove — they keep walking, keep shooting at what they already believed, and simply cannot find anything new. @see `Agent.blind`. | |
 | `weapon:smoke` | `{ position, radius, duration }` | weapons / ai |
-| ↳ | A SCREEN IS BURNING, and it is a wall to the AI as well as to the eye. Same two emitters, same payload. `ai` keeps at most six live volumes as a flat array of five numbers each and refuses any sightline through the opaque core of one (`AiSystem._smokeBlocks`, inside `_sightTo`) — SYMMETRICALLY, so a bot cannot use his own cloud as a firing position either. `fx` draws it off `addSmokeSource`; nothing in `physics` knows it exists. | |
+| ↳ | A SCREEN IS BURNING, and it is a wall to the AI as well as to the eye. Same two emitters, same payload. `ai` keeps at most six live volumes as a flat array of five numbers each and refuses any sightline through the opaque core of one (`AiSystem._smokeBlocks`, inside `_sightTo`) — SYMMETRICALLY, so a bot cannot use his own cloud as a firing position either. `fx` draws it off `addSmokeSource`; nothing in `physics` knows it exists. THE RADIUS ON THE EVENT IS THE ONE THAT COUNTS: the listener takes it from the payload (`× SMOKE_CORE`) and holds no figure of its own, so the player's can is 8 m — 「スモークの煙の範囲を広げて ８メートルくらい」, `smoke.smokeRadius` in `weapons/defs.js` — and is 8 m of cover from a bot's eye without a line of `src/ai` moving. A bot's OWN can still writes 6.5 from a literal in `_detonateThrown`. | |
 
 Additive fields on existing payloads, all optional and all ignorable:
 
