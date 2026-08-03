@@ -3167,6 +3167,19 @@ export class Armour {
           if (dx * dx + dz * dz > r * r) continue;
           if (y > b.maxY + 3.0 || y < b.minY - 3.0) continue;
           this._eraseBlock(b, sw);
+          /**
+           * AND WHATEVER WAS STANDING ON IT GOES WITH IT. `_contact` razes
+           * `RAZE_UP` 2.6 m over the HULL, which does not reach the top of a
+           * 3.4 m pier — so a prop resting up there would be left hanging in
+           * the air over ground the block used to occupy, which is the
+           * 「浮いてる瓦礫」 this project has shipped three times. Its own
+           * footprint, its own height, plus a metre.
+           */
+          this._razeAt(
+            (b.minX + b.maxX) * 0.5, b.y, (b.minZ + b.maxZ) * 0.5,
+            Math.max(b.maxX - b.minX, b.maxZ - b.minZ) * 0.5 + 0.4,
+            b.top + 1.5, 1.0
+          );
           a.fired.push(b);
           n++;
         }
