@@ -2278,7 +2278,29 @@ export class Agent {
          * map were the ones who stayed down longest and the attack spent 21 % of
          * its life in SUPPRESSED against 8.8 % before.
          */
-        if (this.suppression < 0.3 + this.traits.exposure * 0.5) {
+        /**
+         * ══════════════════════════════════════════════════════════════════
+         * …AND TWO HUNDRED HEALTH IS TWICE THE BODY, SO IT IS HALF THE FEAR
+         * ══════════════════════════════════════════════════════════════════
+         * MEASURED (`_elitestate.mjs`, seed 7, the real drop called early): on
+         * a contested landing the ten spent **61.8 % of their lives in
+         * SUPPRESSED**, crouching 62.4 % of the time and moving 32.8 %, with a
+         * target in sight on 93.6 % of samples and the trigger up on 17.2 %.
+         * SUPPRESSED is `desiredSpeed = 0`, `crouch = true`, `wantFire = false`
+         * — it IS 「固まってしゃがんでるだけ」, exactly, as a state name.
+         *
+         * The thresholds are a conscript's, and an elite does not have a
+         * conscript's body: `ELITE.health` is 200 against 100, so the same
+         * volume of incoming fire is half as dangerous to him and going to
+         * ground at the same suppression is behaviour calibrated for a man he
+         * is not. He ducks at 1.9x (@see the entry test below) and he is back
+         * up at 2.4x, which for `exposure` 0.72 is "down only under genuinely
+         * heavy fire, and up again the moment it slackens". Everybody else's
+         * numbers are untouched, and the state itself is untouched — this is a
+         * threshold on one flag, not a special case in the machine.
+         */
+        if (this.suppression
+          < (0.3 + this.traits.exposure * 0.5) * (this.elite ? 2.4 : 1)) {
           // Somebody has this angle ranged. Coming back up in the same spot he
           // was just driven out of is how a man dies twice — the dwell and the
           // repath are both spent, so the first thing COMBAT does is move him.
@@ -2320,8 +2342,11 @@ export class Agent {
 
     // Ducking is a personality, not a constant: 0.75 for the boldest man on the
     // map, 1.55 for the most careful. The old flat 1.15 is the middle of that.
+    // The other half of the elite's suppression thresholds. @see the exit test
+    // in the SUPPRESSED case above for the measurement and the argument.
     if (this.state === STATE.COMBAT && this.cover
-      && this.suppression > 1.7 - this.traits.exposure * 0.8) {
+      && this.suppression
+        > (1.7 - this.traits.exposure * 0.8) * (this.elite ? 1.9 : 1)) {
       this._setState(STATE.SUPPRESSED);
       // A man who has just been driven behind his cover says so. High priority,
       // long per-kind cooldown: it is news the first time and noise the fourth.
@@ -2654,21 +2679,53 @@ export class Agent {
         // by a quarter on its own — which is the right direction: one man in
         // front of three is braked harder than two abreast of two.
         /**
-         * AND THE ELITE SQUAD IS HELD TIGHTER — "チームで動かして".
+         * ══════════════════════════════════════════════════════════════════
+         * THE ELITE SQUAD WAS HELD TIGHTER AND IT IS WHY THEY DO NOT MOVE
+         * ══════════════════════════════════════════════════════════════════
+         * 「精鋭は動いてないのなんで？？なんでもっと活発的に動いて占領いかないの？？？
+         *  固まってるだけ？？？…固まってしゃがんでるだけなのやめろ」
          *
-         * `LEAD_SLACK` is 9 m, which is right for fifteen conscripts who only
-         * have to not arrive fifteen seconds apart. Ten men who cannot respawn
-         * and whose whole job is to take a point RELIABLY have to arrive
-         * together or they are ten separate one-man assaults, each killed by
-         * the men holding it before the next one lands. Half the slack and a
-         * harder brake — still a brake and never a stop, so nothing
-         * `stuckcheck` or `_unstick` reads changes sign.
+         * "Half the slack and a harder brake" was written for cohesion and it
+         * is a cage. MEASURED (`_elitestate.mjs`, seed 7, the real drop called
+         * early and watched for 150 game-seconds, against the ORDINARY men of
+         * the same side at the same instant):
+         *
+         *                              elite      ordinary
+         *   metres per man-minute      101.4        239.9
+         *   share of samples moving     71.7 %       81.7 %
+         *   mean speed while moving     2.36 m/s     4.89 m/s
+         *   crouching                   12.7 %       12.8 %
+         *   a live hull within 34 m      0.0 %        0.0 %
+         *   mean distance to own
+         *     fireteam centroid         23.2 m       16.5 m
+         *
+         * Read those together. They INTEND to move nearly as often as anybody
+         * and they cover 42 % of the ground, which is the brake's elite floor
+         * to two significant figures — 0.42 — and not a coincidence. They are
+         * not crouching more than anybody else, and no tank is anywhere near
+         * them, so neither the crouch nor `_tankDodge` is the mechanism.
+         *
+         * WHY IT PINS THEM. The elite slack is 4.5 m and the elite decay 0.08
+         * a metre, so the floor is reached at 11.75 m of lead — and their real
+         * dispersion is 23 m. Every elite on the leading side of his own team
+         * is therefore at the floor PERMANENTLY, and it is self-feeding:
+         * `ft.centre` counts the braked men, so the centroid does not advance
+         * either, so nobody is ever released. Ten men crawling at a third of
+         * walking pace, in a lump, is exactly 固まってる.
+         *
+         * SO THE SLACK GOES TO PARITY AND THE FLOOR GOES UP. Cohesion is kept
+         * — it is still the same brake, still `LEAD_SLACK`, still applied to
+         * the man in front — but the elite floor is 0.72 rather than 0.42,
+         * i.e. a brisk walk rather than a shuffle, because the failure mode for
+         * TEN men who never respawn is not "they arrived three seconds apart",
+         * it is "they never arrived". A squad that cannot outpace the ground it
+         * is sweeping is not a squad, it is a monument.
          */
-        const slack = this.elite ? LEAD_SLACK * 0.5 : LEAD_SLACK;
+        const slack = LEAD_SLACK;
         const lead = ft.centre.distanceTo(dest) - dist;
         if (lead > slack) {
-          this.desiredSpeed *= Math.max(this.elite ? 0.42 : 0.55,
-            1 - (lead - slack) * (this.elite ? 0.08 : 0.05));
+          this.desiredSpeed *= Math.max(this.elite ? 0.72 : 0.55,
+            1 - (lead - slack) * 0.05);
         }
       }
       /**
