@@ -1125,6 +1125,51 @@ export function buildCathedral(A) {
      */
     const EYE_CAP = 1.52;
     const EYE_LOW = 1.36;
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * AND `EYE_CAP` WAS A HEIGHT WHEN IT NEEDED TO BE A LEVEL — 「瓦礫の高さを
+     * 下げろ 瓦礫を地面に埋めるなりして視認性確保しろ Dサイトの縁の部分には瓦礫を
+     * そもそもおくな」
+     * ────────────────────────────────────────────────────────────────────────
+     * `EYE_CAP` is a height ABOVE `groundAt`, and `groundAt` is the rubble
+     * field, which is 0.12 m in the middle of the crossing and 0.84 m — its own
+     * `WALK_CAP` — out where the rim ring stood. So the same "1.5 m of cover"
+     * came out 0.72 m taller at the rim than on the point, and `_dheight.mjs`
+     * measured what that did: the tomb chests topped 2-8 cm OVER the eye of the
+     * man beside them and the rim ring topped 47-61 cm over it. Every one of
+     * those masses was authored inside the window and every one of them was a
+     * wall, because the window was measured from a floor that moves.
+     *
+     * So the cap is an absolute LEVEL now, taken off the lowest floor the ruin
+     * can have — `fieldAt` floors at 0.12 — so it holds wherever the mass ends
+     * up standing and a mass on high ground is simply BURIED to reach it, which
+     * is the shape the player asked for in as many words.
+     *
+     *   RUIN_FLOOR   SEC.floor + 0.12   the lowest ground anywhere in the ruin
+     *   RUIN_EYE     + 1.62             …and the lowest standing eye on it
+     *   SIGHT_TOP    - 0.14             nothing near D reaches this
+     *   COVER_TOP    RUIN_FLOOR + 1.34  …and cover clears `_bakeCover`'s 1.32
+     *
+     * That is a 12 cm window rather than 30, and it is 12 cm that HOLDS: a man
+     * anywhere on the ruin floor sees over everything inside `SIGHT_R` of the
+     * crossing, and the cover he is standing behind still counts.
+     */
+    const RUIN_FLOOR = SEC.floor + 0.12;
+    const RUIN_EYE = RUIN_FLOOR + 1.62;
+    const SIGHT_TOP = RUIN_EYE - 0.14;
+    const COVER_TOP = RUIN_FLOOR + 1.34;
+    /**
+     * How far the level reaches. `_dceiling.mjs` re-casts every ray in D past
+     * anything inside a given radius and reports the reach D would then have:
+     * inside 13 m it is worth 0.8 m of mean reach, inside 15 m 1.6 m, inside
+     * 16 m 3.9 m. 17 covers the crossing, the rim, the near arcade and the near
+     * vault rafts — everything a man on the point is looking THROUGH.
+     */
+    const SIGHT_R = 17.0;
+    /** Clamp a mass standing on `gy` so its top can never break D's horizon. */
+    const seeOver = (gy, h) => Math.min(h, SIGHT_TOP - gy);
+    /** …and so it still clears the standing-cover test from the cell beside it. */
+    const coverBand = (gy, h) => Math.min(Math.max(h, COVER_TOP - gy), SIGHT_TOP - gy);
     /** Grey rubble, ash and broken render — the palette the shell was built in. */
     const RUBBLE = ['concrete_dark', 'concrete', 'plaster_white', 'plaster_cream', 'plaster_sand', 'roof_screed'];
     const RUB_W = [0.2, 0.2, 0.16, 0.16, 0.16, 0.12];
@@ -1980,6 +2025,27 @@ export function buildCathedral(A) {
        */
       const RING = [0.55, 1.05, 2.05, 2.62, 3.62, 4.20, 5.42];
       /**
+       * ────────────────────────────────────────────────────────────────────
+       * …AND THE RING IS OFF THE RIM ALTOGETHER — 「Dサイトの縁の部分には瓦礫を
+       * そもそもおくな」
+       * ────────────────────────────────────────────────────────────────────
+       * Two passes of this section answered 「埋まりすぎ」 by moving the drum
+       * OUT of the circle and on to the rim, and the rim is the one place it
+       * must not be: it is what stands between a man in the middle and
+       * everything outside. So the ring leaves the rim for the AISLES and the
+       * far bays — 14.4 m and out, behind the arcade line — where it is
+       * already behind the two flank elevations and costs the point nothing,
+       * and it is clamped to stay inside the shell's own walls on its own
+       * bearing rather than punched through them.
+       *
+       * `plan()` is that clamp: the distance from the crossing to the inside
+       * face of the shell along a bearing, less a block's own half-diagonal.
+       */
+      const plan = (a, m) => Math.min(
+        (HW - T - m) / Math.max(1e-3, Math.abs(Math.cos(a))),
+        (HD - T - m) / Math.max(1e-3, Math.abs(Math.sin(a)))
+      );
+      /**
        * SEVEN ARCS, AND NONE OF THEM ARE INSIDE THE CIRCLE ANY MORE.
        *
        * The first version put all of them on a 5.2-7.2 m ring, which is an
@@ -2009,8 +2075,13 @@ export function buildCathedral(A) {
          * ring included, outside the point. 10.2 now, for the sightline rather
          * than for the nav grid: a metre of extra stand-off is a degree and a
          * half of azimuth each side of every lane it is not standing in.
+         *
+         * 14.4-17.6 NOW, AND IT IS NOT A STAND-OFF ANY MORE — it is the rim
+         * being cleared. Anything nearer than about fourteen metres is on D's
+         * rim from somewhere in the circle, and the player has said not to put
+         * rubble there at all. @see the note on `plan` above.
          */
-        const rr = rng.range(10.2, 13.2);
+        const rr = Math.min(rng.range(14.4, 17.6), plan(a, 2.0));
         /**
          * 1.3-2.35 m WAS THE CANYON. Seven arcs of drum at chest-to-head height
          * on a ring ten metres out is a revetment round the capture point: from
@@ -2026,7 +2097,6 @@ export function buildCathedral(A) {
           const aa = a + (k * seg) / (2.2 * rr);
           const u = Math.cos(aa) * rr;
           const v = Math.sin(aa) * rr;
-          const hh = h * (k === 0 ? 1 : rng.range(0.62, 0.92));
           const ry = -aa + rng.range(-0.12, 0.12);
           /**
            * ON the rubble, like the chests. The ring sits at 10.2-13.2 m, which
@@ -2034,8 +2104,17 @@ export function buildCathedral(A) {
            * datumed on the tile is buried at the far end of that range and
            * standing proud at the near one — an arc that is half-buried is a
            * metre of cover that vanished and a metre that never appears.
+           *
+           * …AND HALF-BURIED IS NOW THE POINT. Out at 14-17 m the field is
+           * running at its own `WALK_CAP`, so `seeOver` takes most of a drum
+           * block's height off it and what is left is a course or two of
+           * masonry lying in the heap. That is 「瓦礫を地面に埋めるなりして」
+           * said in the one place it costs nothing: a man on D sees the length
+           * of the aisle over it either way.
            */
           const gy = groundAt(u, v);
+          const hh = seeOver(gy, h * (k === 0 ? 1 : rng.range(0.62, 0.92)));
+          if (hh < 0.25) continue;
           A.add(k === 0 ? 'plaster_sand' : 'concrete_dark', box,
             LL(IDENT, X(u), gy + hh / 2, Z(v), ry, seg / 3.0, hh, rng.range(0.6, 0.95),
               0, rng.range(-0.12, 0.12)),
@@ -2064,16 +2143,20 @@ export function buildCathedral(A) {
          */
         const a = RING[i * 2] + rng.range(-0.1, 0.1);
         // 9.6 for the same reach arithmetic as the arcs, with a raft's own
-        // fatter half-extent in it; 10.6 now, with the arcs.
-        const rr = rng.range(10.6, 13.4);
+        // fatter half-extent in it; 10.6 now, with the arcs. 14.8 now, OFF the
+        // rim with them — a raft is the widest single mass the drum left and
+        // the rim is the one place the player has said not to put one.
+        const rr = Math.min(rng.range(14.8, 18.0), plan(a, 2.4));
         const u = Math.cos(a) * rr;
         const v = Math.sin(a) * rr;
         // …and tipped further over than it was, so it is a raft lying down
         // rather than a raft on edge. 2.7 m of shell standing eleven metres
-        // from the point was the single tallest thing on D's horizon.
-        const h = rng.range(1.15, EYE_CAP - 0.04);
+        // from the point was the single tallest thing on D's horizon. Now it is
+        // lying in the aisle heap with most of itself under the heap: `seeOver`
+        // is an absolute level, so what stands proud is what the field leaves.
         const ry = rng.range(-1.2, 1.2);
         const gy = groundAt(u, v);
+        const h = seeOver(gy, rng.range(1.15, EYE_CAP - 0.04));
         A.add('roof_screed', box,
           LL(IDENT, X(u), gy + h / 2, Z(v), ry, rng.range(2.6, 3.6), h, rng.range(0.6, 0.9),
             0, rng.range(0.25, 0.55)), { masks: [0.6, rng.range(0.5, 1.0), 0.35] });
@@ -2081,8 +2164,12 @@ export function buildCathedral(A) {
         // the ribs that ran over the shell, snapped and still on it — laid ON
         // the raft now, not standing proud of it
         for (let k = 0; k < 2; k++) {
+          // …and a rib is DRAWN, which is exactly why it is levelled too: a
+          // drawn rib standing over `SIGHT_TOP` stops no bullet and the player
+          // cannot know that. It is a bearing he believes he has lost.
           A.add('concrete', soft,
-            LL(IDENT, X(u + rng.range(-1.2, 1.2)), gy + h * rng.range(0.55, 0.88), Z(v + rng.range(-0.8, 0.8)),
+            LL(IDENT, X(u + rng.range(-1.2, 1.2)),
+              Math.min(gy + h * rng.range(0.55, 0.88), SIGHT_TOP - 0.2), Z(v + rng.range(-0.8, 0.8)),
               ry + rng.range(-0.3, 0.3), rng.range(1.8, 3.0), 0.4, 0.5, 0, rng.range(-0.4, 0.4)),
             { masks: [0.9, 0.45, 0.25] });
         }
@@ -2111,16 +2198,25 @@ export function buildCathedral(A) {
          * 1.9 m and at 9.6 its corner plus the bot ring reached r = 7.3 —
          * measured, the single deepest bite the rim took out of the circle.
          */
-        const rr = 11.4;
+        /**
+         * …AND IT IS AGAINST THE AISLE WALL NOW, which is as far as a bearing
+         * that runs across the plan can carry it: `plan` is the inside face of
+         * the flank, and the lantern's own half-diagonal is 1.9 m of it. The
+         * rim keeps nothing — this was the largest single mass on it.
+         */
+        const rr = Math.min(15.4, plan(a, 2.2));
         const u = Math.cos(a) * rr;
         const v = Math.sin(a) * rr;
         const ry = a + 0.4;
-        const lh = EYE_CAP - 0.04;
         const gy = groundAt(u, v);
+        const lh = seeOver(gy, EYE_CAP - 0.04);
         A.add('plaster_cream', box, LL(IDENT, X(u), gy + lh / 2, Z(v), ry, 3.2, lh, 2.5,
           0.16, 0.1), { masks: [0.5, 0.6, 0.45] });
         A.box('concrete', X(u), gy + lh / 2, Z(v), 3.0, lh, 2.4, ry);
-        A.add('concrete_dark', soft, LL(IDENT, X(u + Math.cos(ry) * 1.7), gy + lh * 0.62, Z(v - Math.sin(ry) * 1.7),
+        // the broken face, leaning off it — and levelled with it, because a
+        // drawn 2.2 m plate is a bearing the player believes he has lost
+        A.add('concrete_dark', soft, LL(IDENT, X(u + Math.cos(ry) * 1.7),
+          Math.min(gy + lh * 0.62, SIGHT_TOP - 1.1), Z(v - Math.sin(ry) * 1.7),
           ry, 0.5, 2.2, 2.6, 0.2, 0), { masks: [0.95, 0.35, 0.12] });
         // the finial, snapped off and lying across it rather than sticking up
         const fin = tubeY(0.12, 2.2, { radial: 6 });
@@ -2171,9 +2267,23 @@ export function buildCathedral(A) {
          * cell beside it and still sits under the 1.62 m eye of the man on it.
          * @see the note on `EYE_CAP`, which has both numbers and the 30 cm
          * window they leave.
+         *
+         * ────────────────────────────────────────────────────────────────
+         * AND THE 30 cm WINDOW WAS BEING SPENT ON THE FIELD — 「瓦礫の高さを
+         * 下げろ」
+         * ────────────────────────────────────────────────────────────────
+         * `groundAt` at these four squares is 0.28-0.44 m, and the middle of
+         * the crossing is 0.12: a chest sized `+EYE_CAP` off its own ground
+         * therefore topped out 2-8 cm OVER the eye of the man standing in the
+         * middle of the point, which `_dheight.mjs` measured directly and
+         * which is twelve of the seventy-two bearings from D's centre ending
+         * at six metres. `coverBand` is the same window written as two LEVELS
+         * instead of two heights — over `_bakeCover`'s 1.32 m from the cell
+         * beside it, under the lowest standing eye the ruin floor can carry —
+         * so it holds whatever the field is doing under this particular chest.
          */
         const gy = groundAt(tu, tv);
-        const h = rng.range(EYE_LOW + 0.06, EYE_CAP - 0.02);
+        const h = coverBand(gy, rng.range(EYE_LOW + 0.06, EYE_CAP - 0.02));
         A.add('concrete', box, LL(IDENT, X(tu), gy + h / 2, Z(tv), ry + rng.range(-0.1, 0.1),
           2.6, h, 1.25, rng.range(-0.06, 0.06), rng.range(-0.06, 0.06)),
           { masks: [rng.range(0.5, 0.9), rng.range(0.55, 1.0), 0.45] });
@@ -2182,7 +2292,8 @@ export function buildCathedral(A) {
         const cs = Math.cos(ry);
         const sn = Math.sin(ry);
         A.add('concrete_dark', box,
-          LL(IDENT, X(tu + cs * rng.range(0.9, 1.5)), gy + h * rng.range(0.4, 0.66), Z(tv - sn * rng.range(0.9, 1.5)),
+          LL(IDENT, X(tu + cs * rng.range(0.9, 1.5)),
+            Math.min(gy + h * rng.range(0.4, 0.66), SIGHT_TOP - 0.5), Z(tv - sn * rng.range(0.9, 1.5)),
             // …and leaning at a shallower angle: a 2 m lid propped at 0.9 rad
             // reaches 1.74 m, which is a head-height plate that stops no round.
             ry + rng.range(-0.3, 0.3), 2.0, 0.22, 1.25, 0, rng.range(0.22, 0.5)),
@@ -2191,7 +2302,10 @@ export function buildCathedral(A) {
         // its whole footprint over the chest's own dead square — and inside
         // `EYE_CAP`, which is the whole of 「視認性を改善しろ」 on this point.
         if (slab++ < 3) {
-          const sh = rng.range(EYE_CAP - 0.06, EYE_CAP);
+          // the slab's top is exactly `gy + sh`, so this is the same level cap
+          // the chest under it carries — the dome came through the tomb and
+          // stopped where the tomb stopped it.
+          const sh = Math.max(h, Math.min(rng.range(EYE_CAP - 0.06, EYE_CAP), SIGHT_TOP - gy));
           A.add('roof_screed', box,
             LL(IDENT, X(tu + cs * rng.range(-0.35, 0.35)), gy + h + (sh - h) / 2 - 0.15,
               Z(tv - sn * rng.range(-0.35, 0.35)), ry + rng.range(-0.25, 0.25),
@@ -2208,7 +2322,12 @@ export function buildCathedral(A) {
         for (let k = 0; k < 4; k++) {
           const s = rng.range(0.22, 0.55);
           lump(rng.float() < 0.5 ? 'plaster_white' : 'concrete',
-            tu + rng.range(-1.6, 1.6), gy + (k ? rng.range(0.02, 0.16) : h + s * 0.2), tv + rng.range(-1.2, 1.2), s, 0.55);
+            tu + rng.range(-1.6, 1.6),
+            // …and the one on the lid sits IN the break rather than on top of
+            // it: a 0.55 m boulder proud of a levelled chest is 30 cm of
+            // skyline on the capture point that stops nothing.
+            Math.min(gy + (k ? rng.range(0.02, 0.16) : h + s * 0.2), SIGHT_TOP - s * 0.6),
+            tv + rng.range(-1.2, 1.2), s, 0.55);
         }
       }
     }
