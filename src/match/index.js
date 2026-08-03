@@ -567,7 +567,15 @@ export class MatchSystem {
       }
       for (const sp of this.spawns.defend) navRoutes.push([sp.position, site.hold]);
     }
-    this.airstrike = new Airstrike(ctx, { rng: this.rng.fork(), routes: navRoutes }).build();
+    /**
+     * AND THE CAPTURE CIRCLES THEMSELVES, for the same reason the routes are
+     * handed over: `match` owns the layout and the strike must not bury a point.
+     * `allZones` again, and for the same reason — D is not live until the
+     * cathedral comes down and the cathedral's own 2156 chunks land on it.
+     * @see `Airstrike._keepLow`.
+     */
+    const navZones = this.allZones.map((z) => ({ id: z.id, position: z.position, radius: z.radius }));
+    this.airstrike = new Airstrike(ctx, { rng: this.rng.fork(), routes: navRoutes, zones: navZones }).build();
     if (patcher) for (const site of this.airstrike.sites) for (const m of site.materials) patcher.patch(m);
     this.bomber = new Bomber(ctx, { rng: this.rng.fork() }).build();
     this.strafe = new Strafe(ctx, { rng: this.rng.fork() }).build();

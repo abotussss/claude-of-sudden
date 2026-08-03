@@ -583,6 +583,72 @@ const SETTLE_AT = 6.5;
  *  multiples of the site's own mound radius. @see `site.scatter`. */
 const SCATTER = [0.28, 1.15, 2.45];
 
+/* -------------------------------------------------------------------------- */
+/* A SITE WHOSE MOUND IS CENTRED ON A CAPTURE POINT MAY NOT BURY IT            */
+/* -------------------------------------------------------------------------- */
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「瓦礫による視認性の悪さが問題 視認性を改善しろ」— THE FIFTH REPORT, AND THE
+ * FIRST TIME ANYTHING MEASURED THE THING HE WAS LOOKING AT
+ * ────────────────────────────────────────────────────────────────────────────
+ * The `CATHEDRAL` site is the only mass on this map whose mound centre is INSIDE
+ * a capture circle — `_buildCathedralSite` puts 2156 chunks on the crossing, and
+ * the crossing is site D. Measured on the real scheduled collapse (not
+ * `?cath=down`, which never creates a chunk): 740 settled chunks inside D's 8 m
+ * circle, 599 of them standing ABOVE A 1.62 m EYE, the tallest 3.25 m. From D's
+ * centre, all 36 bearings were stopped inside 4 m and no two men on the point
+ * could see each other.
+ *
+ * FOUR PASSES CALLED THAT ZONE CLEAR, and every one of them was cast at
+ * `MASK.WORLD`. These chunks are DRAWN-ONLY — `blocking: false`, not one
+ * triangle in the BVH — so a sightline ray goes straight through the wall of
+ * masonry and reports the metres behind it. `_dsight.mjs` now casts against the
+ * drawn mass as well; @see the header there.
+ *
+ * WHY THIS IS THE SETTLE'S BUG AND NOT THE ZONE'S. The chunks carry no
+ * collision, cost nothing to move and are decoration; the capture point is the
+ * point of the map's headline event. `moundH` for a demolition is 0.3 m — this
+ * pile was never authored to be chest-high — and every metre of it is
+ * `Math.max(c.hx, c.hy, c.hz)`, the half-extent of a basilica-sized fragment
+ * standing proud of the floor it came to rest on.
+ *
+ * SO THE MASS IS GRADED, NOT DELETED. Inside `KEEP_LOW.r` of the point a settled
+ * chunk's top is held to `KEEP_LOW.cap` above the ZONE'S OWN FLOOR, and outside
+ * it the ceiling climbs at `KEEP_LOW.slope` until it stops biting and the pile
+ * is exactly the pile it was. Nothing is moved sideways, nothing is dropped, the
+ * flight is untouched and the mass thrown clear into the two flank streets —
+ * `scatter` is 1.02-1.35 of an 18 m radius, i.e. 18-24 m out — never comes near
+ * the profile. What changes is that the middle of the objective is a rubble
+ * FIELD instead of a rubble WALL. 「しょぼい」 is a thin collapse; this is the
+ * same collapse with its own crater graded flat, which is what a pancaked
+ * crossing looks like anyway.
+ *
+ * THE THREE NUMBERS.
+ *   cap    1.0 m, which is the crouch eye (`STANCE.crouch.eye` is 1.02) — so it
+ *          is cover you get behind crouched and fire over standing, and it is
+ *          0.6 m under the standing eye rather than 1.6 m over it.
+ *   r      11 m: the 8 m capture circle plus the three a man steps out to. The
+ *          circle alone is not enough and that was measured too — flattening
+ *          only inside it leaves a ring wall on the rim and D still answered
+ *          5.4 m of reach with 43 % of bearings blind.
+ *   slope  0.22, a 12° glacis. It is what carries the ceiling from the crouch
+ *          line back up to the untouched pile over the eleven metres to the end
+ *          of the nave, and it is the term that buys the long bearings: with it,
+ *          D reads 14.9 m of mean reach, 94 % of bearings clearing the circle
+ *          and 0 % blind, against A's 13.0/58/23 and C's 18.9/66/14.
+ *
+ * A `null` zone list, or a site whose mound is in the street like the other
+ * seventeen, skips all of this and the site is bit-for-bit the site it was.
+ */
+const KEEP_LOW = {
+  /** Metres above the zone's own floor a settled chunk's top may reach. */
+  cap: 1.0,
+  /** Metres from the zone centre the flat cap applies over. */
+  r: 11,
+  /** Metres the ceiling climbs per metre beyond `r`, back to the natural pile. */
+  slope: 0.22,
+};
+
 const UP = new THREE.Vector3(0, 1, 0);
 
 /* -------------------------------------------------------------------------- */
@@ -600,6 +666,11 @@ export class Airstrike {
      * `match` because `match` owns the layout. Used once, by `_verifyRoutes`.
      */
     this._routes = opts.routes ?? [];
+    /**
+     * The capture circles, handed in by `match` for the same reason `routes` is:
+     * `match` owns the layout. Read once, at boot, by `_keepLow`.
+     */
+    this._zones = opts.zones ?? [];
     this.enabled = true;
     this.sites = [];
     /** The block events, resolved from `SALVOS` at boot. */
@@ -1353,6 +1424,8 @@ export class Airstrike {
     // meshes: `_buildMesh` reads `moundR`, `moundRU`, `moundH`, `roofY` and the
     // palette while it is solving the trajectories, and they are solved once.
     if (opts) Object.assign(site, opts);
+    /** Read by `_buildMesh` while it solves the poses, so it is set first. */
+    site.keepLow = this._keepLow(site.mound, site.id);
     site.materials = SURFACE_FOR.demo.map((name) => this._makeMaterial(name, site.uniforms));
 
     /**
@@ -1734,6 +1807,8 @@ export class Airstrike {
       },
     };
     site.materials = surfaces.map((name) => this._makeMaterial(name, site.uniforms));
+    /** Read by `_buildMesh` while it solves the poses, so it is set first. */
+    site.keepLow = this._keepLow(site.mound, site.id);
 
     for (let m = 0; m < chunks.length; m++) {
       if (!chunks[m].length) continue;
@@ -1757,6 +1832,48 @@ export class Airstrike {
     for (const h of hosts) this._swapHost(h, false, physics);
 
     return site;
+  }
+
+  /**
+   * THE CAPTURE CIRCLE THIS SITE'S MOUND IS SITTING ON, IF IT IS SITTING ON ONE.
+   *
+   * The test is the MOUND CENTRE inside the circle, not "some chunk lands in
+   * it": a strike in the next street throws a dozen fragments across a point and
+   * that is rubble on a battlefield, while a mound centred on the objective is
+   * the objective replaced by a pile. Measured on this map, exactly one site
+   * answers — `CATHEDRAL` on D — and the other seventeen return null without
+   * touching a single settled pose. @see `KEEP_LOW`.
+   *
+   * The zone's OWN floor is the datum and that is the whole of why the first
+   * attempt at this failed. A ceiling measured from the plane each chunk came to
+   * rest on is a ceiling that follows the rubble heap up: the cathedral ruin
+   * stands over a metre proud of the crossing in places, so "1 m above what is
+   * under it" was still two and a half metres over the man standing on the
+   * point, and the sightlines barely moved.
+   */
+  _keepLow(mound, id) {
+    for (const z of this._zones) {
+      if (!z?.position || !(z.radius > 0)) continue;
+      const dx = mound.x - z.position.x;
+      const dz = mound.z - z.position.z;
+      if (dx * dx + dz * dz > z.radius * z.radius) continue;
+      console.info(
+        `[airstrike] ${id}: mound is centred on capture point ${z.id} — settled chunks held to ` +
+          `${KEEP_LOW.cap.toFixed(2)} m over the point out to ${KEEP_LOW.r} m, then a ` +
+          `${KEEP_LOW.slope} glacis back to the pile`
+      );
+      return {
+        id: z.id,
+        x: z.position.x,
+        z: z.position.z,
+        /** The plane a man on this point stands on. @see the note above. */
+        y: z.position.y,
+        r: KEEP_LOW.r,
+        cap: KEEP_LOW.cap,
+        slope: KEEP_LOW.slope,
+      };
+    }
+    return null;
   }
 
   /** One host swap, timed, so the boot log says what it costs. @see `_host`. */
@@ -2267,7 +2384,29 @@ export class Airstrike {
       const floor = physics.groundHeight(settlePos.x, settlePos.z, site.roofY + 1);
       const groundY = Number.isFinite(floor) ? floor : moundC.y;
       const pile = scatter ? 0 : site.moundH * (1 - rr * rr);
-      settlePos.y = groundY + pile + Math.max(c.hx, c.hy, c.hz) * 0.72;
+      const half = Math.max(c.hx, c.hy, c.hz);
+      settlePos.y = groundY + pile + half * 0.72;
+
+      /**
+       * …AND IT MAY NOT STAND OVER THE CAPTURE POINT IT LANDED ON.
+       *
+       * A ceiling, applied ONLY where it is lower than the pose already solved —
+       * so a chunk that came to rest under the line is untouched, and no chunk
+       * is ever lifted. `half` is the largest half-extent, i.e. the top of the
+       * box whatever the spin does to it, so the bound holds for the pose that
+       * is actually drawn rather than for an axis-aligned idealisation of it.
+       *
+       * Everything downstream is solved from `settlePos` — `drop`, `flight`, the
+       * `aOff` throw and the settled matrix are all below this line — so the
+       * chunk falls the extra distance in flight instead of being teleported
+       * when it lands. @see `KEEP_LOW`.
+       */
+      const low = site.keepLow;
+      if (low) {
+        const rz = Math.hypot(settlePos.x - low.x, settlePos.z - low.z);
+        const ceil = low.y + low.cap + Math.max(0, rz - low.r) * low.slope - half;
+        if (ceil < settlePos.y) settlePos.y = ceil;
+      }
 
       /* ---- the curve, solved here and never again --------------------- */
       // Shock reaches a chunk at ~340 m/s of *apparent* propagation; slowed to
