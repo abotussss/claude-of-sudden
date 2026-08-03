@@ -141,6 +141,18 @@ const CATH_BEATS = [
   // one line either way; what it buys is the two events reading as one.
   [9.0, 'armour'],
   [RULES.cathedralOpenDelay, 'open'],
+  /**
+   * 「また増援は大聖堂破壊イベントの後に敵チームに到着させる仕様に変更して」 — the
+   * LAST beat, and it ARMS the drop rather than flying it. Every other entry in
+   * this sheet does its thing on the frame it is played; this one cannot,
+   * because the sheet it is in has a salvo, a bomber and a strafe run in the
+   * air and `_updateReinforcements` stands a helicopter down for all three (and
+   * for the cathedral event itself). So the beat sets a flag and the poll flies
+   * it on the first clear frame after the event is spent — which is the same
+   * "wait for clear air" courtesy the drop has always owed the other four
+   * weapons, now with something to wait for. @see `_updateReinforcements`.
+   */
+  [RULES.cathedralOpenDelay, 'reinforce'],
 ];
 
 /**
@@ -586,14 +598,14 @@ export class MatchSystem {
     /**
      * THE REINFORCEMENT DROP — the fifth thing in the sky, and the only one that
      * is not a weapon. @see src/match/reinforce.js for the aircraft and the
-     * fall, `_updateReinforcements` for when, and `RULES.reinforceDeficit` for
-     * why the trigger is the SCORE GAP and not `_matchProgress`.
+     * fall, `_updateReinforcements` for when and for whom, and the `reinforce`
+     * beat of `CATH_BEATS` for what arms it.
      *
      * It is deliberately NOT in `this.air`: it has no `armRound`, it takes no
      * `setFocus` (its target is a held zone, not the centroid of the fight), and
-     * it must not appear in any other system's `coBusy` or a sixty-second-long
-     * comeback would stand the whole sky down. The one-way courtesy — it waits
-     * for clear air, nothing waits for it — is in `_updateReinforcements`.
+     * it must not appear in any other system's `coBusy` or a whole minute of
+     * helicopter would stand the sky down. The one-way courtesy — it waits for
+     * clear air, nothing waits for it — is in `_updateReinforcements`.
      */
     this.reinforce = new Reinforcements(ctx, { rng: this.rng.fork() }).build();
     this.reinforce.onLand = (i, p, yaw) =>
@@ -605,14 +617,23 @@ export class MatchSystem {
     this._reinforceTeam = -1;
     this._reinforcePoll = RULES.reinforcePoll;
     /**
+     * THE CATHEDRAL HAS FALLEN AND THE ENEMY HAS NOT SURGED YET. Set by the
+     * `reinforce` beat, cleared when the sortie actually flies (or when there is
+     * no slot left to fly it into), and reset with the round.
+     */
+    this._reinforcePending = false;
+    /**
      * REPORTED, NOT GAMEPLAY, and it exists because the brief asks a question
-     * that cannot be answered from the rules: how often does it actually fire,
-     * for which side, at what score, and did it change the result.
-     * `windows` counts polls at which a side QUALIFIED — the gap between it and
-     * `calls` is what `reinforceChance` is doing.
+     * that cannot be answered from the rules: when does it actually fire, for
+     * which side, at what score, and did it change the result.
+     *
+     * `windows` IS GONE WITH THE QUALIFYING POLL. It counted polls at which a
+     * side met the old score-gap condition, and the gap between it and `calls`
+     * was what `reinforceChance` was doing; there is no condition and no dice
+     * any more, so the number would only ever have been zero.
      */
     this.reinforceStats = {
-      calls: 0, windows: [0, 0], landed: [0, 0], lost: [0, 0], at: [],
+      calls: 0, landed: [0, 0], lost: [0, 0], at: [],
       /** Sorties refused because the match could not outlive the insertion. */
       late: 0, lateAt: [],
     };
@@ -1215,17 +1236,21 @@ export class MatchSystem {
     const restored = this.world?.breachAll?.(false) ?? 0;
     if (restored) console.info(`[match] ${restored} breached wall(s) rebuilt for the new round`);
     /**
-     * THE DROP GOES BACK IN ITS BOX WITH EVERYTHING ELSE. A new match is a new
-     * scoreline, so both sides get their one sortie back — and any canopy still
-     * in the air belongs to a match that no longer exists. `_reinforceUsed` is
-     * the ceiling and `reinforceStats` is only reported, so it is left to
-     * accumulate across a restart on purpose: a probe running several matches
-     * wants the total.
+     * THE DROP GOES BACK IN ITS BOX WITH EVERYTHING ELSE. A new match has a new
+     * cathedral to knock down, so both sides get their one sortie back — and any
+     * canopy still in the air belongs to a match that no longer exists.
+     * `_reinforcePending` MUST be cleared here too: a match that ended between
+     * the arming beat and a clear frame would otherwise start the next one with
+     * a drop owed, which is the one way this event could fire without a
+     * cathedral. `_reinforceUsed` is the ceiling and `reinforceStats` is only
+     * reported, so it is left to accumulate across a restart on purpose: a probe
+     * running several matches wants the total.
      */
     this.reinforce?.reset();
     this._reinforceUsed[0] = 0;
     this._reinforceUsed[1] = 0;
     this._reinforceTeam = -1;
+    this._reinforcePending = false;
     this._reinforcePoll = RULES.reinforcePoll;
     // Last match's scoreline predicts nothing about this one's, and a stale
     // sample would read as a side scoring 400 points in one poll.
@@ -2878,10 +2903,13 @@ export class MatchSystem {
           this._updateMapEvents(dt);
           this._updateBombard(dt);
           /**
-           * TEN MEN FOR WHOEVER IS LOSING. It is polled here, INSIDE the
-           * domination branch and after the score tick, so the gap it reads is
-           * this frame's and not last frame's — the same reason `capture.update`
-           * runs before `_assignObjectives`. @see `_updateReinforcements`.
+           * TEN MEN FOR THE PLAYER'S ENEMY, ONCE THE CATHEDRAL IS DOWN. Polled
+           * here, INSIDE the domination branch and immediately AFTER
+           * `_updateMapEvents` — which is what plays the cathedral beat that
+           * arms it — so the drop is considered on the same frame the event
+           * that owes it finishes rather than on the next. It also sits after
+           * the score tick, which is what `_matchLifeLeft` reads.
+           * @see `_updateReinforcements`.
            */
           this._updateReinforcements(dt);
         }
@@ -3291,54 +3319,59 @@ export class MatchSystem {
 
   /**
    * ══════════════════════════════════════════════════════════════════════════
-   * TEN MEN FOR THE SIDE THAT IS LOSING, ONCE, AND THEY DO NOT COME BACK
+   * THE CATHEDRAL FALLS, AND THE ENEMY SURGES — ten men, once, no respawn
    * ══════════════════════════════════════════════════════════════════════════
-   * "大幅に負けている（１００ポイント差とか、残り１００ポイントに相手チームがなったら）
-   *  チームはたまに増援として１０人追加されるようにしてAI"
+   * 「また増援は大聖堂破壊イベントの後に敵チームに到着させる仕様に変更して」
    *
    * ────────────────────────────────────────────────────────────────────────
-   * IT IS NOT ON `_matchProgress`, AND THAT IS THE ONE DESIGN DECISION HERE
+   * WHAT THIS IS NOT ANY MORE
    * ────────────────────────────────────────────────────────────────────────
-   * Every other scheduled event in this file fires on
-   * `max(elapsed/matchTime, leader/scoreTarget)` — the districts, the cathedral,
-   * the final collapse — because they are about the SHAPE of a match and have to
-   * land at the same point in it whether it is decided on points in four minutes
-   * or runs the clock out in ten.
-   *
-   * This one must not be, and the reason is that `_matchProgress` reads the
-   * LEADER. It says how close the match is to ending and it says NOTHING about
-   * whether it is close: 400-390 and 400-120 are the same progress and they are
-   * opposite matches. A comeback mechanic hung off it would fire in the second
-   * one — which is right — and equally in the first, which is a rubber band on a
-   * game somebody is winning fairly. So the trigger is the two things the player
-   * actually named, and both are about the GAP or about the loser:
-   *
-   *   • `RULES.reinforceDeficit` behind — being ground down, at any point in the
-   *     match.
-   *   • the enemy within `RULES.reinforceEndgame` of `scoreTarget` AND AHEAD OF
-   *     US — a match about to end, where the trailing side may be only forty
-   *     behind. Both halves are load-bearing: without the second, a close finish
-   *     qualifies the LEADER too, and half the drops measured on the build
-   *     before it were exactly that. @see the block on `endgame` below.
+   * It was a COMEBACK: a hundred-point deficit or a losing side in the endgame
+   * opened a window, and a dice roll per poll picked a moment inside it. Every
+   * line of that is deleted — the deficit, the endgame branch and its
+   * `theirs > mine` trailing-side test, the chance roll, and the two-side loop
+   * that polled `[0, 1]` looking for a loser. There is no losing side in this
+   * rule. There is an EVENT and there is the player's enemy.
    *
    * ────────────────────────────────────────────────────────────────────────
-   * "たまに" IS A ROLL PER POLL AND NOT A TIMER. @see `RULES.reinforceChance`
+   * WHY IT MOVED, AND IT IS A TIMING FAILURE WITH NUMBERS ON IT
    * ────────────────────────────────────────────────────────────────────────
-   * The condition is sticky — a side a hundred behind is usually still a hundred
-   * behind eight seconds later — so "fire when true" would mean "fire the
-   * instant you fall behind" and every match with a drop in it would have it at
-   * the same moment. The window opens; the dice decide when inside it.
+   * Measured over five seeds on the old trigger: 4 drops, EVERY ONE through the
+   * endgame branch, landing at t = 463-505 s of matches 525-532 s long. The ten
+   * men existed for 20-70 SECONDS and took 0.00-0.40 kills each — an elite
+   * squad with health 200 and skill 0.88-0.98 that never got to be one. The
+   * cause was arithmetic: `reinforceDeficit` 100 does not open mid-match under
+   * the `zonePayout` curve, so the deficit branch never fired at all and only
+   * the last-ninety-seconds branch could. The cathedral fires at
+   * `RULES.cathedralScore` 300 of 500 — about three fifths of the way in,
+   * t ≈ 288 s at three zones held — which is 160 s or more of match for them.
    *
-   * BOTH SIDES ARE POLLED. The map is symmetric and so is this: whichever side
-   * is losing gets the offer, including the human's. A mechanic that only ever
-   * helped the bots would read as the game cheating, and one that only ever
-   * helped the player would read as the game apologising.
+   * ────────────────────────────────────────────────────────────────────────
+   * THE RECIPIENT IS DERIVED FROM `playerTeam`, NEVER FROM A TEAM INDEX
+   * ────────────────────────────────────────────────────────────────────────
+   * `1 - this.playerTeam`, and the subtraction is the point. `RULES.playerTeam`
+   * is `TEAM.RED` = 0 TODAY and the HUD paints friend and foe RELATIVE to it —
+   * `_announceReinforce` reads `_reinforceTeam === this.playerTeam` to choose
+   * between "REINFORCEMENTS INBOUND" and "ENEMY REINFORCEMENTS", and
+   * `ui.isFriendlyTarget` does the same for every actor. Code in this project
+   * that keyed off a raw index instead has shipped the wrong colour twice. A
+   * literal `1` here would be correct until the day `playerTeam` moves and then
+   * would tell the human that ten hostiles are friends.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * WHY IT IS ARMED HERE AND NOT FLOWN BY THE BEAT ITSELF
+   * ────────────────────────────────────────────────────────────────────────
+   * `_cathBeat('reinforce')` sets `_reinforcePending` and nothing else, because
+   * the frame it plays on is the busiest in the match: the collapse salvo, the
+   * bomber and the strafe run are all in the air, and a helicopter stands down
+   * for every one of them (below). So the flag is the arming and this poll is
+   * the firing, on the first clear frame after the event is spent — usually the
+   * first poll after `_cath.t` goes back to -1.
    */
   _updateReinforcements(dt) {
     const r = this.reinforce;
     if (!r?.ready) return;
     const t = RULES.matchTime - this.roundClock;
-    if (t < RULES.reinforceFirstDelay) return;
     this._reinforcePoll -= dt;
     if (this._reinforcePoll > 0) return;
     this._reinforcePoll = RULES.reinforcePoll;
@@ -3346,9 +3379,13 @@ export class MatchSystem {
      * THE SCORE GOES IN THE RING BEFORE ANY OF THE STAND-DOWNS BELOW, so the
      * history is unbroken whether or not this poll could have called anything —
      * a rate measured across a gap where an airstrike happened to be busy would
-     * be a rate measured over the wrong span.
+     * be a rate measured over the wrong span. It also runs from the first live
+     * poll rather than from a delay, so the ring is full long before the
+     * cathedral can arm anything. @see `_matchLifeLeft`.
      */
     this._sampleLife(t);
+    /** Nothing owed. This is every poll of the first half of the match. */
+    if (!this._reinforcePending) return;
     /**
      * ONE SORTIE IN THE SKY AT A TIME, AND NOT UNDER SOMEBODY ELSE'S. A
      * helicopter is not in the other three weapons' `coBusy` — adding it would
@@ -3356,89 +3393,52 @@ export class MatchSystem {
      * stands down for them, because flying a slow airframe into a telegraphed
      * salvo is two events fighting for the same four seconds of the player's
      * attention, which is the exact failure `_announceAir`'s header records.
+     * The last of the four is the cathedral event itself, which is now always
+     * the reason this poll is being asked at all.
      */
     if (r.busy) return;
     if (this.airstrike?.busy || this.bomber?.busy || this.strafe?.busy) return;
     if (this._cath.t >= 0) return;
 
-    for (const team of [0, 1]) {
-      if (this._reinforceUsed[team] >= RULES.reinforceMaxPerTeam) continue;
-      const mine = this.score[team];
-      const theirs = this.score[1 - team];
-      const behind = theirs - mine >= RULES.reinforceDeficit;
-      /**
-       * ────────────────────────────────────────────────────────────────────
-       * THE ENDGAME TRIGGER IS "THE ENEMY IS ABOUT TO WIN", AND `theirs > mine`
-       * IS WHAT MAKES THAT A DIFFERENT SENTENCE FROM "THE MATCH IS ALMOST OVER"
-       * ────────────────────────────────────────────────────────────────────
-       * Without it the condition is symmetric in a close finish — at 466-424
-       * BOTH sides are within a hundred of `scoreTarget`, so the side that is
-       * WINNING qualifies for a comeback. MEASURED on the build before this
-       * line: six matches, eight drops, and FOUR of the eight were called for
-       * the leader (RED +42 on seed 11, +18 on seed 7, +34 on seed 19, +24 on
-       * seed 23) — ten free men for the side already ahead, which is the exact
-       * inverse of "形勢逆転要素". `_updateReinforcements` is polled `[0, 1]` in
-       * order and returns on the first call, so the leader also got FIRST
-       * refusal of the dice.
-       *
-       * The requirement names the losing side and nothing else — "大幅に負けて
-       * いる（…残り１００ポイントに相手チームがなったら）チーム" — and the
-       * bracket is a description of WHICH KIND of losing counts, not a second,
-       * side-agnostic trigger. So the endgame window is the enemy inside
-       * `reinforceEndgame` of the target AND us behind him, by any margin: the
-       * trailing side in a decided match is often only forty back, which is
-       * what this branch exists to catch and what `behind` cannot.
-       *
-       * It is a STRICT inequality, so a dead-level 450-450 gives nobody ten
-       * men. Two sides that are tied are not a side that is losing, and firing
-       * for both would be the "reinforce everybody" reading the player was
-       * asked about and rejected.
-       */
-      const endgame = RULES.scoreTarget - theirs <= RULES.reinforceEndgame && theirs > mine;
-      if (!behind && !endgame) continue;
-      this.reinforceStats.windows[team]++;
-      /**
-       * `Rng` HAS NO `chance()`. It has `float()`, `range`, `int`, `signed`,
-       * `gauss`, `pick`, `disc` and `fork` — and the first version of this line
-       * called a method that does not exist, which threw inside the poll every
-       * eight seconds for a whole match and meant the drop could never fire.
-       * Measured: seed 11 opened SEVEN qualifying windows for RED and produced
-       * zero drops and three page errors. A feature guarded by a throw is a
-       * feature that is off.
-       */
-      if (this.rng.float() >= RULES.reinforceChance) continue;
-      /**
-       * ──────────────────────────────────────────────────────────────────────
-       * AND THE LAST QUESTION: IS THERE ENOUGH MATCH LEFT FOR THE MEN TO ARRIVE?
-       * ──────────────────────────────────────────────────────────────────────
-       * AFTER THE DICE ON PURPOSE. Here the roll has already said "this is the
-       * sortie", so `late` counts sorties that would have flown and did not —
-       * the honest number for "what did the guard cost" — rather than every
-       * poll at which somebody happened to qualify.
-       *
-       * Nothing is spent. `_reinforceUsed` is untouched, exactly as when
-       * `_callReinforcement` finds nowhere to land, so a side refused by a
-       * pessimistic estimate still has its drop eight seconds later. That is
-       * what makes a conservative margin nearly free: the cost of being wrong
-       * early is a delay, and the cost of being wrong late is an empty
-       * helicopter.
-       */
-      const life = this._matchLifeLeft();
-      const need = r.insertionSeconds + RULES.reinforceLateMargin;
-      if (life < need) {
-        this.reinforceStats.late++;
-        if (this.reinforceStats.lateAt.length < 8)
-          this.reinforceStats.lateAt.push({
-            team,
-            t: +t.toFixed(1),
-            score: this.score.slice(),
-            life: +life.toFixed(1),
-            need: +need.toFixed(1),
-          });
-        continue;
-      }
-      if (this._callReinforcement(team, t, behind, endgame)) return;
+    /** THE SIDE THE PLAYER IS NOT ON. @see the header — never a literal. */
+    const team = 1 - this.playerTeam;
+    if (this._reinforceUsed[team] >= RULES.reinforceMaxPerTeam) {
+      // Its one sortie is spent. The debt cannot be paid, so stop carrying it.
+      this._reinforcePending = false;
+      return;
     }
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * AND THE LAST QUESTION: IS THERE ENOUGH MATCH LEFT FOR THE MEN TO ARRIVE?
+     * ──────────────────────────────────────────────────────────────────────
+     * KEPT, AND IT IS THE ONE GUARD THAT EARNED ITS PLACE BY FAILING WITHOUT
+     * IT. `_land` does not create an Agent into a match that is over, so a
+     * sortie called with less than `insertionSeconds` left puts the banner up,
+     * flies the aircraft over the map and delivers NOBODY — measured, one
+     * sortie put 0 of 10 men on the ground and another put 1.
+     *
+     * On this trigger it should never bind: the cathedral lands with 160 s or
+     * more still to play. "Should never" is not "cannot" — the match ends on
+     * POINTS and a side on five zones prints faster than any of this was tuned
+     * against — and the cost of keeping it is a delay, because nothing is
+     * spent. `_reinforcePending` stays true and the next poll is eight seconds
+     * later, exactly as when `_callReinforcement` finds nowhere to land.
+     */
+    const life = this._matchLifeLeft();
+    const need = r.insertionSeconds + RULES.reinforceLateMargin;
+    if (life < need) {
+      this.reinforceStats.late++;
+      if (this.reinforceStats.lateAt.length < 8)
+        this.reinforceStats.lateAt.push({
+          team,
+          t: +t.toFixed(1),
+          score: this.score.slice(),
+          life: +life.toFixed(1),
+          need: +need.toFixed(1),
+        });
+      return;
+    }
+    if (this._callReinforcement(team, t)) this._reinforcePending = false;
   }
 
   /** One score sample into the ring. @see `_matchLifeLeft`. */
@@ -3518,7 +3518,7 @@ export class MatchSystem {
    * Fly one. Returns false when there was nowhere to put the men, in which case
    * nothing is spent and the next poll tries again.
    */
-  _callReinforcement(team, t, behind, endgame) {
+  _callReinforcement(team, t) {
     const zone = this._dropZone(team);
     const landings = this._dropPoints(team, zone);
     if (!landings.length) {
@@ -3536,8 +3536,8 @@ export class MatchSystem {
       team,
       label,
       centre: zone ? zone.position : landings[0],
-      // The aircraft crosses its OWN side's ground before it crosses the drop
-      // zone, so a comeback never flies in over the people it is coming to fight.
+      // The aircraft crosses the RECEIVING side's own ground before it crosses
+      // the drop zone, so the run is never four seconds up the enemy's throat.
       approach,
       landings,
     });
@@ -3550,12 +3550,13 @@ export class MatchSystem {
       t: +t.toFixed(1),
       score: this.score.slice(),
       zone: zone?.id ?? 'BASE',
-      reason: behind ? (endgame ? 'behind+endgame' : 'behind') : 'endgame',
+      /** ONE TRIGGER NOW. The old `behind`/`endgame` reasons went with it. */
+      reason: 'cathedral',
     });
     console.info(
       `[match] REINFORCEMENTS: ${TEAM_NAME[team]} + ${landings.length} (no respawn) at ` +
         `t=${t.toFixed(0)}s score ${this.score[0]}-${this.score[1]} · ${label} · ` +
-        `${behind ? 'behind' : ''}${behind && endgame ? '+' : ''}${endgame ? 'endgame' : ''}`
+        `after the cathedral · player is ${TEAM_NAME[this.playerTeam]}`
     );
     return true;
   }
@@ -3568,13 +3569,13 @@ export class MatchSystem {
    * ten men put down on the quiet end of the map are ten men who spend the rest
    * of the match walking.
    *
-   * IT MAY RETURN NULL, AND THE FALLBACK IS DELIBERATE. The side this event
-   * exists for is the side that is being beaten, and a side a hundred points
-   * behind very often holds NOTHING — which would make a comeback mechanic
-   * unable to fire in exactly the match it was written for. So a side with no
-   * zone drops on its own base cluster instead, which is ground it certainly
-   * holds and which `resolveLayout` has already proved. The log and the
-   * announcement both say which it was.
+   * IT MAY RETURN NULL, AND THE FALLBACK IS DELIBERATE. The recipient is now
+   * fixed — the player's enemy — and there is no rule that says he holds
+   * anything at the moment the cathedral comes down; a side pinned on its base
+   * would otherwise be a side whose scripted event silently cannot fire. So a
+   * side with no zone drops on its own base cluster instead, which is ground it
+   * certainly holds and which `resolveLayout` has already proved. The log and
+   * the announcement both say which it was.
    */
   _dropZone(team) {
     let best = null;
@@ -4057,6 +4058,20 @@ export class MatchSystem {
         // @see `RULES.tankAfterCathedral`.
         this.tank?.armAfter?.(RULES.tankAfterCathedral);
         break;
+      case 'reinforce': {
+        /**
+         * THE OTHER CONSEQUENCE — 「増援は大聖堂破壊イベントの後に敵チームに到着
+         * させる」. One line here as well, and it is an ARM rather than a call:
+         * @see the beat's own note in `CATH_BEATS` and `_updateReinforcements`,
+         * which owns every reason a drop can still be refused.
+         */
+        this._reinforcePending = true;
+        console.info(
+          `[match] cathedral aftermath ARMS the reinforcement drop for ` +
+            `${TEAM_NAME[1 - this.playerTeam]} (the player's enemy)`
+        );
+        break;
+      }
       default:
         break;
     }

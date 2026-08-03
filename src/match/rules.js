@@ -297,9 +297,11 @@ export const RULES = {
    * roughly 0.6 of the numbers above — t ≈ 288 at three zones, t ≈ 330 at two
    * — and the whole cathedral act (barrage, collapse, D, both tanks) takes 25 s
    * behind it, so it lands with 160-215 s of match still to play in every
-   * column. The slower climb buys the elite reinforcement drop room it did not
-   * have: it was measured arriving at t = 463-505 s of 525-532 s matches, so
-   * the ten men existed for 20-70 s and could not do the job they are for. `districtSalvoProgress` [0.20, 0.28] is still ahead of it and
+   * column. THAT WINDOW IS NOW THE ELITE REINFORCEMENT DROP'S OWN, because the
+   * drop hangs off the cathedral: on the old score-gap trigger it was measured
+   * arriving at t = 463-505 s of 525-532 s matches, so the ten men existed for
+   * 20-70 s and could not do the job they are for. @see the reinforcement block
+   * below. `districtSalvoProgress` [0.20, 0.28] is still ahead of it and
    * `finalCollapseProgress` 0.82 — 410 points — is still behind it.
    *
    * Five entries plus the zero. A sixth zone would need a sixth entry; the
@@ -1566,85 +1568,76 @@ export const RULES = {
   respawnSafeRadius: 26,
 
   /* ══════════════════════════════════════════════════════════════════════ */
-  /* THE REINFORCEMENT DROP — the comeback, and nothing else                */
+  /* THE REINFORCEMENT DROP — the cathedral's consequence, and nothing else  */
   /* ══════════════════════════════════════════════════════════════════════ */
   /**
-   * "ゲリライベントとして増援イベントで 大幅に負けている（１００ポイント差とか、残り
-   *  １００ポイントに相手チームがなったら）チームはたまに増援として１０人追加される
-   *  ようにしてAI その場合、その１０人はリスポーンしない 形勢逆転要素なだけで、
-   *  リスポーンなし 増援は占領されているサイト付近からヘリでパラシュート降下して登場
-   *  するようにして"
+   * 「また増援は大聖堂破壊イベントの後に敵チームに到着させる仕様に変更して」
    *
-   * A side that is being beaten badly gets ten more men, ONCE, and those ten
-   * never come back. It is a lever on the shape of a lost match and it is not a
-   * lever on anything else — @see `reinforceRespawns` for why "does not respawn"
-   * is a property of the MAN and not a branch in the spawn path.
+   * IT IS NOT A COMEBACK ANY MORE, AND BOTH HALVES OF THAT SENTENCE CHANGED.
+   * The trigger is the CATHEDRAL DESTRUCTION EVENT rather than a score gap, and
+   * the recipient is ALWAYS THE SIDE THE PLAYER IS NOT ON rather than whoever
+   * is losing. The cathedral falls, and the enemy surges. Everything else about
+   * the drop is untouched: ten men, helicopter and parachute, landing near a
+   * zone their own side holds, and they never come back — @see
+   * `reinforceRespawns` for why "does not respawn" is a property of the MAN and
+   * not a branch in the spawn path.
    *
    * ────────────────────────────────────────────────────────────────────────
-   * WHY THERE ARE TWO TRIGGERS AND NOT ONE
+   * WHY THE TIMING HAD TO MOVE, WITH THE NUMBERS THAT MOVED IT
    * ────────────────────────────────────────────────────────────────────────
-   * The player named both and they are not the same match. A hundred-point gap
-   * is a side being ground down — it can happen at 150-50 with two thirds of the
-   * match left. A side within a hundred of `scoreTarget` is a match that is
-   * about to END, and the trailing side may be only forty behind. `MatchSystem`
-   * ORs them, so the drop can be a mid-match correction or a last stand, which
-   * are the two things a comeback mechanic is for.
-   */
-  /** Points behind before a side is "大幅に負けている". */
-  reinforceDeficit: 100,
-  /**
-   * …or the enemy is within this many of winning AND IS AHEAD OF US. At
-   * `scoreTarget` 500 this is the enemy on 400+, which measures at roughly the
-   * last minute and a half of a decided match — late enough to be a last stand,
-   * early enough that ten men walking off a drop zone can still reach a capture
-   * point and hold it.
+   * The elite squad has always been strong and had never been able to show it.
+   * Measured over five seeds on the score-gap trigger: FOUR drops, every one of
+   * them through the endgame branch, landing at t = 463-505 s of matches
+   * 525-532 s long — so the ten men existed for 20-70 SECONDS and took
+   * 0.00-0.40 kills each, nowhere near the 「一人で４人はキル」 they are built
+   * for. The cause was arithmetic rather than tuning: a 100-point gap never
+   * opens mid-match under the `zonePayout` curve, so only the last-minute-and-a-
+   * half branch could ever fire.
    *
-   * "AND IS AHEAD OF US" IS NOT IMPLIED BY THE NUMBER AND HAD TO BE WRITTEN
-   * DOWN. In a close finish both sides are inside a hundred of the target, so
-   * the distance on its own qualifies the LEADER — measured, four of eight
-   * drops over six matches went to the side that was winning. The subject of
-   * the requirement is 「大幅に負けているチーム」 and the test lives in
-   * `MatchSystem._updateReinforcements`, where the reasoning is written out.
+   * Hanging the drop on the cathedral fixes that outright. `cathedralScore` 300
+   * of `scoreTarget` 500 is about three fifths of the way in — t ≈ 288 s at
+   * three zones held — which leaves 160 s or more of match for the ten men to
+   * be in.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * WHAT WAS DELETED WITH THE OLD TRIGGER, SO NOBODY GOES LOOKING FOR IT
+   * ────────────────────────────────────────────────────────────────────────
+   * `reinforceDeficit` (100 points behind), `reinforceEndgame` (the enemy
+   * within 100 of the target AND ahead of us), `reinforceChance` (0.22 per
+   * poll) and `reinforceFirstDelay` (120 s) existed for ONE job between them:
+   * choosing a losing side and a random moment to give it ten men. There is no
+   * losing side in the requirement any more and no moment to choose — the
+   * cathedral chooses it — so all four are gone rather than left at values
+   * nothing reads. The `endgame` branch and its `theirs > mine` test went with
+   * them; that line was itself a fix for drops landing on the WINNER, which is
+   * a bug that cannot exist in a rule with no score term in it.
    */
-  reinforceEndgame: 100,
   /** Men in a drop. "１０人追加". */
   reinforceCount: 10,
   /**
-   * ────────────────────────────────────────────────────────────────────────
-   * WHAT "たまに" IS, AND WHY IT IS A DICE ROLL AND NOT A TIMER
-   * ────────────────────────────────────────────────────────────────────────
-   * The condition above is STICKY: a side that is a hundred behind is usually
-   * still a hundred behind ten seconds later. So a plain "fire when true" is not
-   * "たまに", it is "the instant you fall behind" — and the drop would land at
-   * the same point in every match that has one, which is a rubber band with a
-   * different name.
+   * SECONDS BETWEEN ATTEMPTS, AND IT IS NO LONGER A DICE ROLL.
    *
-   * So the condition only opens a WINDOW, and every `reinforcePoll` seconds
-   * inside it the side rolls `reinforceChance`. At 0.22 on an 8 s poll the
-   * expected wait is ~32 s of qualifying, and the distribution has a long enough
-   * tail that two matches with the same scoreline drop at different moments —
-   * which is what makes it read as an event rather than as a mechanic.
+   * It survived the trigger change because it is two things that are still
+   * needed and neither is a qualification test:
    *
-   * MEASURED — @see the commit message for the table. The number to watch is
-   * the FRACTION OF MATCHES IN WHICH IT FIRES AT ALL: a comeback that never
-   * happens is not a mechanic and one that always happens is a rubber band.
+   *   1. THE SAMPLE CADENCE for the life estimator's ring — `_sampleLife` is
+   *      what `_matchLifeLeft` reads and `reinforceRateWindow` is measured in
+   *      these. Eight seconds gives three samples inside the 24 s window.
+   *   2. THE RETRY CADENCE. The drop is armed by the cathedral and then has to
+   *      WAIT: the collapse's own salvo, bomber and strafe are in the air, and
+   *      a side may momentarily hold nowhere to land. Retrying on this clock
+   *      rather than per frame is what keeps a refusal free — `_dropPoints`
+   *      builds ten Vector3s and must not do it sixty times a second.
    */
   reinforcePoll: 8,
-  reinforceChance: 0.22,
   /**
-   * ONE PER SIDE PER MATCH. It is "形勢逆転要素" — a chance to turn it round —
-   * and a side that can call ten men every time it falls behind is a side that
-   * is never behind. Both sides may have one, so the ceiling on the map is
-   * twenty extra actors on top of forty; that cost is measured, not assumed.
+   * ONE PER SIDE PER MATCH. The cathedral event fires once, so in practice the
+   * enemy's single drop is already the only one — this is the ceiling that says
+   * so in one place, and it is what keeps a re-armed or replayed event from
+   * putting twenty extra actors on the map. Both sides have a slot; only the
+   * player's enemy ever spends one.
    */
   reinforceMaxPerTeam: 1,
-  /**
-   * Seconds into a LIVE match before the first drop may be called. A side that
-   * is a hundred behind in the first two minutes is a side that lost one
-   * exchange, not a side that is losing — and the map events this schedule is
-   * built around have not happened yet.
-   */
-  reinforceFirstDelay: 120,
   /**
    * ────────────────────────────────────────────────────────────────────────
    * AND A DROP IS NOT CALLED AT ALL WHEN THE MATCH CANNOT OUTLIVE IT
@@ -1679,11 +1672,15 @@ export const RULES = {
    * estimator claimed was 20.5 s, so 18.1 + 7 = 25.1 s covers the worst case
    * seen with 4.6 s to spare.
    *
-   * THE COST WAS MEASURED TOO, because a guard that is too careful turns off
-   * the endgame trigger, which is half the feature: of the instants with a
-   * clear 40 s or more left, ZERO were refused in any of the five matches. The
-   * refusals fall entirely in the 18–40 s band, where a drop is marginal by
-   * definition.
+   * THE COST WAS MEASURED TOO, because a guard that is too careful turns the
+   * feature off: of the instants with a clear 40 s or more left, ZERO were
+   * refused in any of the five matches. The refusals fall entirely in the
+   * 18–40 s band, where a drop is marginal by definition. On the cathedral
+   * trigger it should never bind at all — the collapse lands with 160 s or more
+   * still to play — and it is kept precisely because "should never" is not
+   * "cannot": the match ends on POINTS, a side on five zones prints faster than
+   * any of this was tuned against, and the failure it prevents is a helicopter
+   * with nobody in it.
    */
   reinforceLateMargin: 7,
   /**
@@ -1704,8 +1701,9 @@ export const RULES = {
    *
    * The aircraft is the telegraph, exactly as the bomber's is: it is on screen
    * and audible for `reinforceLead` seconds before the first man steps out, so
-   * the other side gets to see ten men coming and do something about it. A
-   * comeback that arrives without warning is a spawn camp in reverse.
+   * the player gets to see ten men coming and do something about it. It matters
+   * MORE now than it did as a comeback: the drop is always the enemy's, so this
+   * is the only warning the human ever gets.
    */
   reinforceLead: 4.5,
   /** Metres above the drop zone the aircraft runs. High enough to read against the sky. */

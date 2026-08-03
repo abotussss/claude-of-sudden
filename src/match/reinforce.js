@@ -8,10 +8,16 @@ import { mergeGeometries } from './caches.js';
  * ════════════════════════════════════════════════════════════════════════════
  * MATCH — THE REINFORCEMENT DROP. The helicopter, the canopies, and nothing else.
  * ════════════════════════════════════════════════════════════════════════════
- * "ゲリライベントとして増援イベントで 大幅に負けている（１００ポイント差とか、残り
- *  １００ポイントに相手チームがなったら）チームはたまに増援として１０人追加されるように
- *  してAI その場合、その１０人はリスポーンしない 形勢逆転要素なだけで、リスポーンなし
- *  増援は占領されているサイト付近からヘリでパラシュート降下して登場するようにして"
+ * "その場合、その１０人はリスポーンしない … 増援は占領されているサイト付近からヘリで
+ *  パラシュート降下して登場するようにして"
+ * 「また増援は大聖堂破壊イベントの後に敵チームに到着させる仕様に変更して」
+ *
+ * The SECOND line replaced the trigger and the recipient: the drop is no longer
+ * a comeback for whoever is losing, it is the cathedral's consequence and it is
+ * always the player's enemy who gets it. NOTHING IN THIS FILE MOVED FOR IT —
+ * the aircraft, the canopies and the ten men are identical, because this file
+ * has never known who is winning or why it was called. @see
+ * `MatchSystem._updateReinforcements`.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * WHAT THIS FILE IS, AND WHAT IT DELIBERATELY IS NOT
@@ -236,8 +242,8 @@ export class Reinforcements {
     this.buildMs = performance.now() - t0;
     console.info(
       `[reinforce] baked in ${this.buildMs.toFixed(0)}ms — ${RULES.reinforceCount} canopies, ` +
-        `drop at ${RULES.reinforceDeficit} behind or enemy within ${RULES.reinforceEndgame}, ` +
-        `${(RULES.reinforceChance * 100).toFixed(0)}% per ${RULES.reinforcePoll}s poll, ` +
+        `armed by the cathedral collapse for the player's ENEMY side, retried every ` +
+        `${RULES.reinforcePoll}s until the sky is clear, ` +
         `${RULES.reinforceMaxPerTeam} per side, NO RESPAWN`
     );
     return this;
@@ -428,8 +434,10 @@ export class Reinforcements {
    *  - `label`     the zone's name, for the announcement.
    *  - `centre`    THREE.Vector3, the drop zone. The run is aimed through it.
    *  - `approach`  THREE.Vector3, a point the aircraft should come FROM —
-   *                `match` passes the side's own base, so the helicopter always
-   *                crosses friendly ground before it crosses the objective.
+   *                `match` passes the receiving side's own base, so the
+   *                helicopter always crosses that side's ground before it
+   *                crosses the objective rather than flying up the enemy's
+   *                throat for four seconds.
    *  - `landings`  one THREE.Vector3 per man, already snapped to a nav cell and
    *                proved. THIS FILE NEVER INVENTS ONE: a paratrooper landing on
    *                a roof or in a sealed courtyard is `ensureReachable` silently
