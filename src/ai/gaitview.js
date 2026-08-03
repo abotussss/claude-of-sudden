@@ -251,6 +251,7 @@ function record(cfg) {
 /** Mirror of the animator's own phase rate, so the driver can size a cycle. */
 function strideHzFor(cfg) {
   const s = cfg.speed;
+  if (cfg.clip === 'sprint') return Math.max(1.3, s / 2.55);
   if (cfg.clip === 'run') return Math.max(1.1, s / 2.05);
   if (cfg.clip === 'walk') return Math.max(0.55, s / 1.42);
   if (cfg.clip === 'crouchWalk') return Math.max(0.4, s / 0.95);
