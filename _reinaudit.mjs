@@ -243,7 +243,9 @@ const res = await page.evaluate(async () => {
 const T = ['RED', 'BLUE'];
 console.log(`\n=== seed ${res.seed} · ${res.end}s · phase "${res.phase}" · score ${res.score[0]}-${res.score[1]} · winner ${res.winner < 0 ? 'DRAW' : T[res.winner]}`);
 console.log(
-  `  calls ${res.stats.calls} · qualifying polls R/B ${res.stats.windows[0]}/${res.stats.windows[1]} · ` +
+  // `stats.windows` was deleted with the score-gap trigger: there is no
+  // qualifying poll any more, the cathedral arms the drop. @see _cathdrop.mjs.
+  `  calls ${res.stats.calls} · ` +
     `stats.landed R/B ${res.stats.landed[0]}/${res.stats.landed[1]} · stats.lost R/B ${res.stats.lost[0]}/${res.stats.lost[1]}`
 );
 /**

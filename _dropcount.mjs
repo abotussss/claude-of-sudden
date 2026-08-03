@@ -3,11 +3,12 @@
  * when the reinforcement drop fired, for which side, at what score, and what the
  * result was.
  *
- * "A comeback mechanic that never fires is not a mechanic, and one that always
- * fires is a rubber band" — so the two numbers that matter are the fraction of
- * matches with a drop in them, and whether the side that got one went on to win.
- * `windows` is the third: how many polls a side QUALIFIED at, which is the gap
- * `RULES.reinforceChance` is opening between "could have" and "did".
+ * WRITTEN AGAINST THE COMEBACK TRIGGER, WHICH NO LONGER EXISTS. The drop is now
+ * armed by the cathedral collapse and always goes to the player's enemy — @see
+ * `_cathdrop.mjs`, which times that — so the question this file was built to
+ * answer ("does the comeback fire often enough, and does it rubber-band?") has
+ * no subject. What still holds up is the second half: THE COST OF TWENTY EXTRA
+ * ACTORS, measured below in the same run.
  *
  * THE COST OF TWENTY EXTRA ACTORS IS MEASURED IN THE SAME RUN, because a
  * feature that adds half a roster and a perf regression must not be able to hide
@@ -134,7 +135,8 @@ const res = await page.evaluate(async () => {
 const TEAM = ['RED', 'BLUE'];
 console.log(`\n  seed ${res.seed} · match ${res.end}s · phase "${res.phase}" · score ${JSON.stringify(res.score)} · winner ${res.winner < 0 ? 'DRAW' : TEAM[res.winner]}`);
 console.log(
-  `  DROPS ${res.stats.calls} · qualifying polls R/B ${res.stats.windows[0]}/${res.stats.windows[1]} · ` +
+  // `stats.windows` was deleted with the score-gap trigger. @see _cathdrop.mjs.
+  `  DROPS ${res.stats.calls} · ` +
     `landed R/B ${res.stats.landed[0]}/${res.stats.landed[1]} · killed-for-good R/B ${res.stats.lost[0]}/${res.stats.lost[1]}`
 );
 for (const a of res.stats.at) {

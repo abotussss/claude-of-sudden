@@ -277,7 +277,8 @@ const tally = (arr, k) => {
 };
 
 console.log(`\n=== seed ${res.seed} · ran ${res.end}s · phase "${res.phase}" · score ${res.score.join('-')}`);
-console.log(`    reinforceStats: calls ${res.stats.calls} · windows R/B ${res.stats.windows.join('/')} · landed ${res.stats.landed.join('/')} · refused-late ${res.stats.late}`);
+// `stats.windows` was deleted with the score-gap trigger. @see _cathdrop.mjs.
+console.log(`    reinforceStats: calls ${res.stats.calls} · landed ${res.stats.landed.join('/')} · refused-late ${res.stats.late}`);
 if (res.dropT < 0) {
   console.log('    NO DROP IN THIS MATCH — nothing below is measurable.');
 } else {
