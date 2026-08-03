@@ -20,6 +20,17 @@
  *                    destination over time spent walking at it.
  *   arrivalsPerMin   the other half of the same sentence — legs completed per
  *                    man-minute of transit, which is throughput rather than pace
+ *   farSpeed         AND THE ONE WITH THE SMALLEST ERROR BAR: mean speed over
+ *                    men in ADVANCE with more than 16 m still to walk, i.e. the
+ *                    only population the gate can ever say yes to. Every
+ *                    whole-match figure above is contaminated by the change's
+ *                    own success — men who arrive sooner spend the time they
+ *                    saved standing on an objective or in a firefight, both of
+ *                    which are slow, so a faster roster reports a lower mean
+ *                    speed and a lower closing rate while doing exactly what it
+ *                    was asked to. `farSpeed` and `farClosing` cannot move for
+ *                    that reason, and a match only produces ~20 arrivals in ten
+ *                    minutes against ~6000 of these.
  *   legs             time from being handed an objective more than 18 m away to
  *                    standing within 2.5 m of it, per man per objective
  *   sprintShare      share of moving samples with the sprint flag up (0 before)
@@ -84,6 +95,7 @@ await page.evaluate(() => {
     n: 0, sumSpeed: 0, moveN: 0, moveSum: 0, sprintN: 0, noTarget: 0,
     legs: [], open: new Map(), t0: ctx.time.elapsed, t: 0, states: {},
     byGun: {}, closed: 0, transitT: 0, arrivals: 0, prev: new Map(), last: 0,
+    farN: 0, farSum: 0, farClosed: 0, farT: 0,
   };
   window.__S__ = S;
   window.__TICK__ = () => {
@@ -123,6 +135,14 @@ await page.evaluate(() => {
         S.transitT += dtick;
         if (pv.d > d) S.closed += pv.d - d;
       }
+      if (d > 16 && a.state === 'advance') {
+        S.farN++;
+        S.farSum += a.speed;
+        if (pv && pv.key === key && dtick > 0 && dtick < 2) {
+          S.farT += dtick;
+          if (pv.d > d) S.farClosed += pv.d - d;
+        }
+      }
       S.prev.set(k, { key, d });
       const leg = S.open.get(k);
       if (!leg || leg.key !== key) {
@@ -156,6 +176,9 @@ const r = await page.evaluate(() => {
     meanMoveSpeed: +(S.moveSum / Math.max(1, S.moveN)).toFixed(3),
     sprintShare: +(S.sprintN / Math.max(1, S.moveN)).toFixed(3),
     noTargetShare: +(S.noTarget / Math.max(1, S.n)).toFixed(3),
+    farSpeed: +(S.farSum / Math.max(1, S.farN)).toFixed(3),
+    farClosing: +(S.farClosed / Math.max(1e-6, S.farT)).toFixed(3),
+    farSamples: S.farN,
     closingRate: +(S.closed / Math.max(1e-6, S.transitT)).toFixed(3),
     transitManSeconds: +S.transitT.toFixed(0),
     metresMadeGood: +S.closed.toFixed(0),
