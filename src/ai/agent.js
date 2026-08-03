@@ -326,6 +326,47 @@ const RESERVE_MUL = 4.5;
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
+ * MAGAZINE DISCIPLINE BETWEEN CONTACTS — 「敵を視認して数発だけ撃っている」
+ * ════════════════════════════════════════════════════════════════════════════
+ * The per-sighting volume has been raised four times and the SHARE OF SIGHTINGS
+ * ENDING UNDER TEN ROUNDS has not moved once: ~32 % before the last pass and
+ * ~32 % after it. That share is the literal complaint, and the refusal census
+ * says where its time goes — `reloading` **55.2 %** of every frame in which a
+ * man had his eyes on somebody and sent nothing, `dry` 4-7.5 %.
+ *
+ * So the man who sees somebody and sends four rounds is usually a man who was
+ * ALREADY in a magazine change when it happened. And the reason he was is that
+ * until this constant existed there was exactly one thing that could start one:
+ * `ammo <= 0`. A bot never topped up. He fired his magazine down to two rounds,
+ * lost the angle, walked three hundred metres to the next capture point with
+ * two rounds in the gun, and started a 2.35 s change on the first man he saw.
+ *
+ * A SOLDIER RELOADS WHEN NOTHING IS HAPPENING. `TOPUP_FRAC` is how empty the
+ * magazine has to be before he bothers — two thirds, which is one good pull
+ * spent — and the only other condition is that the contact is properly over
+ * (`hasTarget` is a 6.5 s memory, so `!hasTarget` is already six and a half
+ * seconds since he last had anybody, and no shorter test is used).
+ *
+ * IT COSTS NOTHING IN ROUNDS AND THAT IS DELIBERATE. The transfer is
+ * `magSize - ammo` and never a fresh magazine, so the partial is not thrown
+ * away and `reserve` buys exactly as many rounds fired as it did before this
+ * existed. `dry` cannot rise because nothing is wasted; what moves is WHEN the
+ * reload happens. @see the abort in `_shoot`, which is the other half: a change
+ * begun in a lull is given up the moment the lull ends.
+ *
+ * MEASURED (`_engage.mjs`, seeds 7 and 11, per SIGHTING — eyes actually on him):
+ *
+ *   share ending under ten rounds     34.5 / 30.8  ->  26.4 / 25.6 %
+ *   share ending with none at all     22.0 / 23.2  ->  16.0 /  9.4 %
+ *   median rounds                       23 /  20   ->    26 /  27
+ *   he was on under a third of a mag   14.2 / 8.3  ->   5.8 /  6.0 %
+ *   he was on a full magazine          39.2 / 29.6 ->  55.1 / 40.4 %
+ *   `dry` share of the refusal board    3.8 / 5.7  ->   0.2 /  0.0 %
+ */
+const TOPUP_FRAC = 0.67;
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
  * HOW LONG A MAN MAY STAND ON THE SPOT HE WAS SENT TO BEFORE HE WORKS THE ROOM
  * ════════════════════════════════════════════════════════════════════════════
  * 「AIが屋内にいるとき、外にも出ないしその場で突っ立ったままです」 — and the post
@@ -1350,6 +1391,17 @@ export class Agent {
     this.startReserve = this.reserve;
     /** Magazine empty AND nothing left to load. Set in `_shoot`. */
     this.dry = false;
+    /**
+     * ROUNDS OWED TO THE MAGAZINE BY A TOP-UP THAT IS STILL RUNNING, and 0 when
+     * he is not in one. @see the top-up block in `_shoot` for the whole argument.
+     *
+     * It is a PENDING transaction and that is the point: an empty-magazine
+     * reload credits the rounds the instant it starts, which is invisible
+     * because `_shoot` returns on `animator.reloading` anyway — but a top-up can
+     * be ABORTED, and crediting at the start would make an aborted top-up a free
+     * instant reload. Nothing moves off `reserve` until the change finishes.
+     */
+    this._topUp = 0;
     /**
      * Cone half-angle, radians. 0.030 at the top of the range down to 0.085 at
      * the bottom — a poor shooter is 2.8x wider, which at 25 m is the difference
@@ -5303,6 +5355,36 @@ export class Agent {
     // including theirs. `match` flips this.
     if (this.ai.combatEnabled === false) this.wantFire = false;
 
+    /**
+     * ════════════════════════════════════════════════════════════════════════
+     * A TOP-UP THAT FINISHED, AND A TOP-UP THAT SOMEBODY WALKED INTO
+     * ════════════════════════════════════════════════════════════════════════
+     * @see `_topUp` and the block at the bottom of this method. The rounds move
+     * here, on the frame the change completes, so an aborted change costs him
+     * the time he spent and hands him nothing.
+     */
+    if (this._topUp > 0 && !this.animator.reloading) {
+      const got = Math.min(this._topUp, this.reserve, this.magSize - this.ammo);
+      this.reserve -= got;
+      this.ammo += got;
+      this._topUp = 0;
+    }
+    /**
+     * AND THE ABORT. A magazine change a man chose to make in a quiet moment is
+     * not a commitment to stand there while somebody shoots him: he has rounds
+     * in the gun by construction (the empty branch below owns the other case),
+     * so the answer to a contact is to bring the old magazine back up.
+     *
+     * `hasTarget` and not `targetVisible`, and the same 0.15 of suppression the
+     * sprint gate uses, so the three sentences about "a contact has happened to
+     * this man" stay the same sentence. An empty-magazine reload is NOT
+     * abortable and must not be — there is nothing to bring back up.
+     */
+    if (this._topUp > 0 && this.animator.reloading
+      && this.ammo > 0 && (this.hasTarget || this.suppression > 0.15)) {
+      this._topUp = 0;
+      this.animator.cancelReload();
+    }
     if (this.animator.reloading || this.animator.vaulting) return;
     /**
      * ══════════════════════════════════════════════════════════════════════
@@ -5351,6 +5433,32 @@ export class Agent {
       if (this.reserve <= this.magSize) {
         this.ai.radio?.say(this, 'ammolow', 'ammolow', null, false);
       }
+      return;
+    }
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * …AND HE TOPS UP IN THE QUIET — @see `TOPUP_FRAC` for the whole argument
+     * ══════════════════════════════════════════════════════════════════════
+     * Placed AFTER the empty branch so it can never race it, and before the
+     * trigger so a man who has just decided to reload does not also fire.
+     *
+     * `working` and `post` are left out of it on purpose: a man on a cache
+     * errand or holding a window is doing something with a clock of its own and
+     * this is not urgent enough to interrupt either.
+     *
+     * The radio is silent for this one. "RELOADING" is a call for somebody to
+     * take over an angle, and a man topping up in an empty street has no angle
+     * to hand over; `weapon:reload` still goes out, because the sound and the
+     * animation are the same magazine change either way.
+     */
+    if (this._topUp === 0
+      && !this.hasTarget && this.suppression <= 0.15
+      && !this.working && !this.post
+      && this.reserve > 0
+      && this.ammo < this.magSize * TOPUP_FRAC) {
+      this._topUp = Math.min(this.magSize - this.ammo, this.reserve);
+      this.animator.reload(this.reloadTime);
+      this.ai.emitReload(this);
       return;
     }
     /**

@@ -244,6 +244,25 @@ export class Animator {
     return this.reloadT >= 0;
   }
 
+  /**
+   * THE MAGAZINE GOES BACK IN. A man who started a top-up in a lull and had
+   * somebody walk into his sights brings the old magazine back up rather than
+   * finishing the change — @see `Agent._shoot`, which is the only caller and
+   * which only calls it when there are rounds in the gun to bring back up.
+   *
+   * It is a hard cut and not a rewind on purpose: `reloadAdd` is a pose offset
+   * with no state of its own, so clearing the clock puts the arms back on the
+   * aim additive on the next frame, which is what "he snaps the rifle up" is.
+   */
+  cancelReload() {
+    this.reloadT = -1;
+  }
+
+  /** 0..1 through the magazine change, or 0 when he is not in one. */
+  get reloadProgress() {
+    return this.reloadT >= 0 ? this.reloadT / Math.max(1e-3, this.reloadDur) : 0;
+  }
+
   vault(duration = 0.85) {
     this.vaultT = 0;
     this.vaultDur = duration;
