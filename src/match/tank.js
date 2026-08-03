@@ -56,13 +56,21 @@
  *   • IT ADDS NO STATIC COLLISION AND NO NAV CHANGE. The hull is three moving
  *     `physics.addCollider` boxes on `LAYER.SHOOT_ONLY` — the layer that is in
  *     `MASK.BULLET` and in neither `MASK.CHARACTER` nor `MASK.SIGHT`. Rounds
- *     hit it, characters walk through it, A* never hears about it and the BVH
- *     is never rebuilt. `tools/navcheck.mjs`, `lanecheck` and `fightcheck` all
- *     measure a map this feature is invisible to. That IS the trade: you cannot
- *     take cover behind the hull. A 3.3 m solid moving down a lane that thirty
- *     men are pathing through, on a grid baked at boot, is how you get thirty
- *     men stuck against it — and a wreck that stops where a capture point is is
- *     the "blocks a zone permanently" failure by another name.
+ *     hit it, A* never hears about it and the BVH is never rebuilt.
+ *     `tools/navcheck.mjs`, `lanecheck` and `fightcheck` all measure a map this
+ *     feature is invisible to. That IS the trade: you cannot take cover behind
+ *     the hull. A 3.3 m solid moving down a lane that thirty men are pathing
+ *     through, on a grid baked at boot, is how you get thirty men stuck against
+ *     it — and a wreck that stops where a capture point is is the "blocks a
+ *     zone permanently" failure by another name.
+ *     IT IS STILL SOLID TO PEOPLE, and that is not a contradiction: the block
+ *     is DYNAMIC and per capsule, resolved once a frame beside the men who are
+ *     near it, and it changes no collider, no triangle and no nav cell.
+ *     「戦車への物理判定つけて、キャラが通り過ぎることが可能なので」 — @see the
+ *     `BODY_HALF_W` note, `_shovePlayer` here and `Agent._clearHulls` in
+ *     `src/ai`. A man who cannot be shoved clear is run over or, when the hull
+ *     is stopped, let through; nobody is ever wedged and no lane is ever
+ *     corked, which is what keeps this half of the guarantee true.
  *   • IT STANDS ONLY ON THE POINT IT IS ATTACKING. This is the guarantee that
  *     CHANGED, and it changed because the player asked for the thing it
  *     forbade: 「戦車自体も占領できる物体として、つまり占領サイトにいたら占領％を加算
@@ -286,8 +294,9 @@ const HULL_L = 6.9;
  * after `_bakePath` has slid the sample onto the middle of the span it found.
  * That is a squeeze rather than a comfortable street, and a squeeze is what a
  * tank in a town does. IT IS NOT A COLLISION RISK IN EITHER DIRECTION — the
- * hull carries no `MASK.CHARACTER` collision and is not simulated against the
- * world at all; it is posed along a baked centreline, so the cost of a tight
+ * hull is not simulated against the world at all and NOTHING BELOW GIVES IT
+ * WORLD COLLISION (being solid to a man is resolved on the man's capsule, not
+ * on the hull's); it is posed along a baked centreline, so the cost of a tight
  * fit is a track edge visually grazing a kerb, and the cost of a loose one is a
  * hull that never leaves the square. Under `HULL_W` itself the span test still
  * ends the leg, because that is a wall rather than a squeeze.
@@ -299,6 +308,72 @@ const LATERAL_MAX = 3.0;
 const STEP = 1.25;
 /** A route shorter than this is not a sortie. */
 const MIN_ROUTE = 16;
+
+/* ---- the hull as an obstacle to PEOPLE ----------------------------------- */
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「戦車への物理判定つけて、キャラが通り過ぎることが可能なので」 — YOU COULD WALK
+ * STRAIGHT THROUGH IT, AND THE COLLISION LAYER IS NOT THE FIX
+ * ────────────────────────────────────────────────────────────────────────────
+ * The three boxes are `LAYER.SHOOT_ONLY`, which is in `MASK.BULLET` and in
+ * neither `MASK.CHARACTER` nor `MASK.WORLD`, and every note in this file said
+ * that layer is why a man walks through a hull. IT IS NOT, and the difference
+ * matters because the obvious one-word fix does nothing at all:
+ *
+ *   `physics.addCollider` COLLIDERS ARE A RAYCAST FEATURE. They are consulted
+ *   by `PhysicsSystem._raycastColliders` and by nothing else. The character
+ *   controller is `new CharacterController(this.staticWorld, …)` and every
+ *   sweep, overlap and depenetration it runs goes to the TRIANGLE BVH — which
+ *   is baked from `addStatic` meshes and cannot hold a moving object. So
+ *   `layer |= LAYER.CLIP` would put the hull in `MASK.CHARACTER` and change
+ *   nothing whatsoever: no capsule in this engine ever asks a collider where it
+ *   is. Verified before writing a line of this: `physics/index.js:236` is the
+ *   only `colliders` array, `physics/character.js` never touches it.
+ *
+ * A 3.3 m hull also may not go into the BVH — the nav grid is baked at boot off
+ * that same static world (@see the header) and a per-frame `rebuildStatic()` is
+ * not a cost that exists. So THE SOLID IS RESOLVED WHERE THE MEN ARE, once per
+ * frame, against the hull's plan rectangle: `Armour._shovePlayer` for the one
+ * capsule that is not an `Agent`, and `Agent._clearHulls` in `src/ai` for the
+ * other thirty. Both do the same three things and both push through the
+ * character controller's own `move()`, so a shove is a swept, sliding,
+ * de-penetrating move against the real world and CANNOT put a man inside
+ * geometry — which is the whole reason a moving 40 t solid is safe here at all.
+ *
+ * WHAT HAPPENS WHEN A HULL MEETS A MAN, in one place:
+ *   1. HE IS PUSHED ASIDE — out of the nearest flank first, the far flank
+ *      second, fore-or-aft last. The hull never slows down and never steers:
+ *      its drive is a baked arc length with no world collision (@see
+ *      `CLEARANCE`), and a hull that stopped for a man could be parked for the
+ *      rest of the match by one bot standing in the street.
+ *   2. IF THE SHOVE CANNOT CLEAR HIM AND THE HULL IS MOVING, he is run over —
+ *      `CRUSH_DPS` while he stays pinned. Pinned means a wall on one side and a
+ *      hull on the other, which is exactly the wedge that produced the original
+ *      stuck epidemic; a man who dies there is a man who is not wedged there.
+ *   3. IF THE SHOVE CANNOT CLEAR HIM AND THE HULL IS NOT MOVING (holding on a
+ *      point, or a wreck), he is RELEASED after `PIN_GRACE` and walks through.
+ *      A stopped hull must never be able to cork a lane: `_bakePath` only
+ *      demands `HULL_W + CLEARANCE` = 3.55 m of street for a 3.3 m hull, so the
+ *      shoulder beside a parked wreck can be 12 cm — narrower than a man. The
+ *      graceless alternative is thirty men queued against a wreck for the rest
+ *      of the match, and no amount of steering fixes a gap a capsule does not
+ *      fit through. Being able to walk through a stopped hull in the one lane
+ *      where there is no way past it is the cheaper failure by a distance.
+ */
+/** Half the hull's plan footprint. Matches the `hull` collider box. */
+const BODY_HALF_W = HULL_W * 0.5;
+const BODY_HALF_L = 3.45;
+/** The band above `tank.position.y` the body occupies, for the height test. */
+const BODY_LOW = 0.15;
+const BODY_HIGH = 2.35;
+/** Most a single shove may travel, metres. A hull advances 0.08 m per frame. */
+const SHOVE_MAX = 0.9;
+/** Clearance left beyond the face so the next frame does not re-shove him. */
+const SHOVE_SKIN = 0.05;
+/** Damage per second to a man a moving hull has pinned against something. */
+const CRUSH_DPS = 110;
+/** Seconds a STOPPED hull holds a man it cannot shove before letting him by. */
+const PIN_GRACE = 0.6;
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
@@ -638,10 +713,12 @@ const TANK_LEAD = 6.0;
  * from the far end of a 6.9 m hull — and a wreck can no more stand on a point
  * than it could before. It is measured per leg and printed at boot.
  *
- * (The hull was never a nav obstacle in the first place: three moving
- * `LAYER.SHOOT_ONLY` boxes, invisible to `MASK.CHARACTER` and to A*. The
- * stand-off is about what the player sees standing on his point, not about
- * whether men can walk.)
+ * (The hull is not a NAV obstacle: it changes no cell of the height field and
+ * A* has never heard of it. It IS solid to a capsule that is standing where it
+ * is — @see the `BODY_HALF_W` note — but that block is dynamic, is resolved
+ * against the real world through the man's own controller, and releases rather
+ * than wedges. The stand-off is about what the player sees standing on his
+ * point, not about whether men can walk.)
  */
 const ZONE_STANDOFF = 16;
 /**
@@ -1095,10 +1172,12 @@ export class Armour {
    * worth two men" is expressed to a counter that counts entries.
    *
    * A WRECK IS NOT A BODY. `alive` goes false the frame the hull brews up, so a
-   * knocked-out tank standing in a circle contributes nothing and — being three
-   * `LAYER.SHOOT_ONLY` boxes that `MASK.CHARACTER` and `MASK.WORLD` cannot see
-   * — blocks nothing either. It is scenery on the point, which is the only part
-   * of the old "never in a circle" guarantee this change spends.
+   * knocked-out tank standing in a circle contributes nothing to the capture.
+   * It IS solid to a man now (`solid` outlives `alive` — @see the
+   * `BODY_HALF_W` note), but it can neither be captured with nor cork the
+   * circle: a wreck never crushes, and a man it cannot shove aside is let
+   * through after `PIN_GRACE`. It is scenery on the point, which is the only
+   * part of the old "never in a circle" guarantee this change spends.
    *
    * AND NEITHER IS A HULL DRIVING PAST. `hold` is the state a tank has ARRIVED
    * in, and it is the only state that does not move. That is not a nicety: the
@@ -1986,6 +2065,31 @@ export class Armour {
        * can SEE it doing. Written by `_mainGun` and `_coax`, reset by `_roll`.
        */
       firedAt: -1e9,
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * …AND SO A MAN CANNOT WALK THROUGH IT — the rest of the `ai.vehicles`
+       * contract. @see the `BODY_HALF_W` note for why a collision layer could
+       * not do this and what the three rules are.
+       * ────────────────────────────────────────────────────────────────────
+       *   solid     it is on the field: a man may not stand inside it. TRUE
+       *             FOR A WRECK TOO — `alive` means shootable and stops at the
+       *             brew-up, but forty tonnes of dead steel is still forty
+       *             tonnes of steel to walk into.
+       *   crushing  it is under power. The only state in which a man who
+       *             cannot be shoved clear is run over rather than let by.
+       *   halfW/halfL/bodyLow/bodyHigh   the plan rectangle and the height
+       *             band, in metres, around `position` and `yaw`. Published
+       *             rather than assumed because `ai` may not know a hull's
+       *             dimensions any more than it may know its local frame.
+       */
+      solid: false,
+      crushing: false,
+      halfW: BODY_HALF_W,
+      halfL: BODY_HALF_L,
+      bodyLow: BODY_LOW,
+      bodyHigh: BODY_HIGH,
+      /** Seconds the local player has been pinned. @see `_shovePlayer`. */
+      playerPin: 0,
       /** Contact-breach cadence — @see the `damageAt` call in `_drive`. */
       breachIn: 0,
       /** THE WHEEL. `legs[0]` is the approach and its end is the hub; every
@@ -3887,6 +3991,10 @@ export class Armour {
    * `MASK.BULLET` and in neither `MASK.CHARACTER` nor `MASK.SIGHT`, which is
    * what makes a moving 3.3 m obstacle safe on a nav grid baked at boot.
    *
+   * THEY ARE NOT WHAT STOPS A MAN, and adding a layer bit here would not make
+   * them: a `physics.addCollider` collider is only ever consulted by a RAY.
+   * @see the `BODY_HALF_W` note for what is solid and where it is resolved.
+   *
    * `owner` is the tank, so a round that lands on it comes back through the
    * canonical `damage:dealt` path with the shooter attached — which is where
    * kill credit, the friend/foe hitmarker filter and the score come from.
@@ -3956,6 +4064,11 @@ export class Armour {
     tank.yaw = tank.legs[0].YAW[0];
     tank.health = RULES.tankHealth;
     tank.alive = true;
+    // It is a solid to people from the moment it leaves its pocket, and it
+    // stays one as a wreck. @see the `BODY_HALF_W` note.
+    tank.solid = true;
+    tank.crushing = true;
+    tank.playerPin = 0;
     tank.hold = HOLD_TIME;
     tank.holdT = 0;
     tank.target = null;
@@ -4013,12 +4126,19 @@ export class Armour {
           // The wreck stays; the clock stops so the shader's clamp is settled.
           tank.uniforms.uT.value = 30;
         }
+        // A wreck is still steel. It cannot run anybody over (`crushing` was
+        // cleared in `_destroy`), so a man it cannot shove is let by.
+        this._shovePlayer(tank, dt);
         continue;
       }
       tank.stats.liveT += dt;
       this._drive(tank, dt);
       this._fight(tank, dt);
       this._pose(tank);
+      // Under power in `advance`; standing on its point in `hold`. Only the
+      // first runs a man over. @see the `BODY_HALF_W` note.
+      tank.crushing = tank.state === 'advance';
+      this._shovePlayer(tank, dt);
     }
 
     /**
@@ -4422,10 +4542,11 @@ export class Armour {
        * but nothing acts on it.
        *
        * IT STILL CANNOT BLOCK A CAPTURE POINT, which is the guarantee that had
-       * to survive this change: the hull is three `LAYER.SHOOT_ONLY` boxes, so
-       * A* never sees it however long it sits there, and the route ends 24 m
-       * off D (printed at boot). A permanent wreck is in neither a lane nor a
-       * circle. @see the header.
+       * to survive this change: A* never sees a hull however long it sits
+       * there — the height field is baked at boot and nothing here writes to
+       * it — and the route ends 24 m off D (printed at boot). A permanent wreck
+       * is in neither a lane nor a circle, and a man it cannot shove aside is
+       * let through rather than held. @see the header and `PIN_GRACE`.
        */
       tank.hold -= dt;
       /**
@@ -4498,6 +4619,10 @@ export class Armour {
   _park(tank) {
     tank.state = 'parked';
     tank.alive = false;
+    // Back in its pocket: it is nobody's obstacle again.
+    tank.solid = false;
+    tank.crushing = false;
+    tank.playerPin = 0;
     tank.root.visible = false;
     for (const c of tank.colliders) c.c.enabled = false;
     this._emit('clear', tank);
@@ -4608,6 +4733,78 @@ export class Armour {
       this._m.compose(this._v, ZERO_Q, this._sc);
       this._m.premultiply(parent.matrixWorld);
       c.c.setMatrix(this._m);
+    }
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE HULL, AGAINST THE ONE CAPSULE THAT IS NOT AN `Agent`
+   * ────────────────────────────────────────────────────────────────────────
+   * 「戦車への物理判定つけて、キャラが通り過ぎることが可能なので」. The other thirty
+   * capsules are `src/ai`'s and are handled by `Agent._clearHulls` on exactly
+   * these rules; @see the `BODY_HALF_W` note for why this is not a collision
+   * layer and what the three rules are.
+   *
+   * THE PUSH GOES THROUGH `CharacterController.move`, never through
+   * `character.position`, and that is the safety property the whole feature
+   * rests on: `move` is a swept, sliding, de-penetrating resolve against the
+   * static BVH, so a shove can be REFUSED by a wall and can never put the
+   * player inside geometry. Three attempts — near flank, far flank, then out
+   * whichever end he is nearer — and the test after each is the same rectangle
+   * test, so "did it work" is measured rather than assumed.
+   *
+   * Allocates nothing: eight locals and a `Vector3.set` on the player's own
+   * published feet vector, which is written so anything reading `player`
+   * this frame sees where he actually is (the controller is authoritative for
+   * the next fixed step either way).
+   */
+  _shovePlayer(tank, dt) {
+    if (!tank.solid) return;
+    const player = this._player ?? (this._player = this.ctx.peek('player'));
+    const c = player?.character;
+    if (!c || player.dead) {
+      tank.playerPin = 0;
+      return;
+    }
+    const hw = tank.halfW + c.radius;
+    const hl = tank.halfL + c.radius;
+    const s = Math.sin(tank.yaw);
+    const co = Math.cos(tank.yaw);
+
+    for (let k = 0; k <= 3; k++) {
+      // Beside it, not on a roof over it or in a cellar under it.
+      const rel = c.position.y - tank.position.y;
+      if (rel > tank.bodyHigh || rel + c.height < tank.bodyLow) {
+        tank.playerPin = 0;
+        return;
+      }
+      const dx = c.position.x - tank.position.x;
+      const dz = c.position.z - tank.position.z;
+      // The hull's own frame: +Z is the nose, +X is the right track.
+      const lx = dx * co - dz * s;
+      const lz = dx * s + dz * co;
+      if (Math.abs(lx) >= hw || Math.abs(lz) >= hl) {
+        tank.playerPin = 0;
+        return;
+      }
+      if (k === 3) break; // three shoves and he is still inside it
+      // A hull that has stopped may not cork a lane. @see `PIN_GRACE`.
+      if (tank.playerPin > PIN_GRACE) return;
+      const side = lx < 0 ? -1 : 1;
+      const ex = k === 2 ? 0 : k === 0 ? side : -side;
+      const ez = k === 2 ? (lz < 0 ? -1 : 1) : 0;
+      const out = ex ? hw - lx * ex : hl - lz * ez;
+      const push = Math.min(SHOVE_MAX, out + SHOVE_SKIN);
+      c.move((ex * co + ez * s) * push, 0, (-ex * s + ez * co) * push);
+      player.feetPosition?.set(c.position.x, c.position.y, c.position.z);
+    }
+
+    if (tank.crushing) {
+      // Nowhere to put him and forty tonnes still moving. A man who dies here
+      // is a man who is not wedged here for the rest of the match.
+      player.applyDamage?.(CRUSH_DPS * dt, tank.position, { type: 'explosion' });
+    } else {
+      tank.playerPin += dt;
     }
   }
 
@@ -5154,6 +5351,10 @@ export class Armour {
     if (!tank.alive) return;
     tank.alive = false;
     tank.state = 'dead';
+    // The wreck is still a solid to walk into, and it is no longer a thing
+    // that can run anybody over. @see the `BODY_HALF_W` note.
+    tank.crushing = false;
+    tank.playerPin = 0;
     tank.health = 0;
     tank.stats.deaths++;
     tank.target = null;
@@ -5309,6 +5510,9 @@ export class Armour {
       tank.ploughDrag = 0;
       tank.state = 'parked';
       tank.alive = false;
+      tank.solid = false;
+      tank.crushing = false;
+      tank.playerPin = 0;
       tank.s = 0;
       tank.legIx = 0;
       tank.legDir = 1;
