@@ -46,10 +46,36 @@ const MAX_LIVE = 6;
  */
 const SMOKE_R = 10;
 /**
+ * THE FOOTPRINT, as a fraction of the can's radius.
+ *
+ * `Ambience._puff` spends its `radius` on EVERY dimension of a puff at once:
+ * the puff is born inside `±0.6 * radius`, it is `radius * (0.7..1.2)` across
+ * when it is born, it wanders on `radius * 0.5` of turbulence. So this one
+ * number is the cloud, and the old `0.22` was emitting the whole 10 m screen
+ * inside a 2.6 m disc — 「実質３mくらいしかスモークでてない」, exactly.
+ *
+ * 0.62 puts the spawn disc at ±3.7 m and the newborn puff at ~5.9 m across, so
+ * the drawn edge lands near the 10 m the def publishes. @see `_smoke`.
+ *
+ * A BOT'S OWN CAN IS STILL DRAWN THE OLD WAY. `AiSystem._detonateThrown` does
+ * not call this method — it has its own `addSmokeSource` call with its own
+ * `rate: 26` and `radius * 0.22` — so a bot's screen covers the same 10 m of
+ * sightline as the player's and still draws the 3 m of it. That file is not
+ * this one's to edit; the numbers to copy across are the three here.
+ */
+const SMOKE_FOOT = 0.62;
+/**
  * `Ambience._puff` sizes a puff at `radius * growth`, so this is a RATIO and
  * not a distance. @see the note in `_smoke`, which is where it is spent.
  */
-const SMOKE_GROWTH = 5.85;
+const SMOKE_GROWTH = 1.8;
+/**
+ * PUFFS PER SECOND, and `SMOKE_RATE * SMOKE_LIFE` is the live sprite count:
+ * 585, up from the 195 that a 2.6 m footprint could get away with. @see the
+ * cap in `_smoke`, which is what keeps that off a low-tier particle ring.
+ */
+const SMOKE_RATE = 78;
+const SMOKE_LIFE = 7.5;
 
 class Thrown {
   constructor() {
@@ -295,30 +321,49 @@ export class ThrownGrenades {
     const rad = def.smokeRadius ?? SMOKE_R;
     this._v.copy(position);
     this._v.y += 0.1;
+    /**
+     * THE RATE IS CAPPED BY THE RING IT SPAWNS INTO, not by taste alone.
+     *
+     * `rate x life` IS the live sprite count — 78 x 7.5 is 585 — and they all
+     * come out of `fx.lit`, whose capacity is a share of `q.particleBudget`:
+     * 2805 slots on the default tier but 935 on `low`. At 585 a single can
+     * would be two thirds of a low-tier ring and two cans would wrap it inside
+     * a puff's own lifetime, which does not just truncate the cloud's tail — it
+     * evicts the blood, the dust and the impact puffs that share the layer.
+     *
+     * A quarter of the ring is the most one can may take. It binds on `low`
+     * alone (31/s there, near the 26 this always was) and leaves medium, high
+     * and ultra at the photographed 78.
+     */
+    const slots = fx?.lit?.capacity ?? 0;
+    const rate = slots > 0 ? Math.min(SMOKE_RATE, (slots * 0.25) / SMOKE_LIFE) : SMOKE_RATE;
     fx?.addSmokeSource?.(this._v, {
       duration: dur,
       // A smoke can is a firehose, not a chimney: many puffs a second, wide,
       // rising slowly, pale rather than sooty, and living long enough that the
       // cloud is a wall instead of a plume.
-      rate: 26,
-      radius: rad * 0.22,
+      rate,
+      radius: rad * SMOKE_FOOT,
       rise: 0.85,
       dark: 0.04,
-      life: 7.5,
+      life: SMOKE_LIFE,
       /**
        * A MULTIPLIER, NOT A SIZE — `Ambience._puff` grows a puff to
-       * `radius * growth`, and `radius` above is already `rad * 0.22`. So the
-       * old `rad * 0.9` made the DRAWN puff scale with rad², and widening the
-       * can from 6.5 to 8 m would have grown each sprite by half again: 12.7 m
-       * of sprite for 8 m of cover, which is the fog bank rather than the
-       * screen. `SMOKE_GROWTH` is the constant that reproduces the 6.5 m can's
-       * own drawn puff (`rad * 1.29`) and makes it LINEAR in `rad`, so the
-       * cloud grows exactly as fast as the radius it is supposed to describe.
+       * `radius * growth`, so this and `SMOKE_FOOT` above are the two halves of
+       * one number and they were pulling against each other.
        *
-       * The particle cost does not move: `rate` and `life` are unchanged, so it
-       * is the same ~195 live sprites it always was. Coverage does not thin out
-       * either — a puff's area and the cloud's area both scale with rad², so
-       * the overlap that makes it opaque is the same at 8 m as at 6.5.
+       * `0.22 x 5.85` drew a 12.9 m sprite from a 2.2 m footprint: a handful of
+       * enormous puffs born inside a tiny disc. It reads as 3 m because a puff
+       * is only that big at the END of its life, by which time `alphaCurve` 1.7
+       * has all but erased it — what you actually SEE is the young puff, and
+       * the young puff is the footprint. That is the whole of the bug, and it
+       * is also why 40 m came apart: 8.8 x 5.85 is a 51 m sprite.
+       *
+       * The product is nearly what it was (1.29 -> 1.12 of `rad`), so a sprite
+       * has not grown; the footprint it is born in has, by 2.8x. What that
+       * costs is density: the same 195 sprites spread over 2.8x the ground
+       * photographed as a haze you could read a wall through, so `rate` pays
+       * for it. @see the note on the cap above.
        */
       growth: SMOKE_GROWTH,
       ember: 0,
