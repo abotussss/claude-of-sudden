@@ -417,8 +417,12 @@ export class AudioSystem {
       document.body.appendChild(el);
       this._panicEl = el;
     }
+    // `failed` is set by two different faults and they need different answers:
+    // three boots that threw, and an error storm that outlived two rebuilds.
     const why = this.failed
-      ? 'FAILED — three boots threw'
+      ? (this.bootAttempts >= 3
+        ? 'FAILED — three boots threw'
+        : `FAILED — error storm survived ${this.restarts} rebuild(s)`)
       : this.bootAttempts > 0
         ? `boot ${this.bootAttempts}/3 threw — click to retry`
         : this.stats.started

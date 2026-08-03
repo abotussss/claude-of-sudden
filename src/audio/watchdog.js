@@ -194,6 +194,25 @@ export class AudioWatchdog {
         // Put the listeners back rather than waiting for one that never comes.
         if (this.resumeTries === 4) audio._armGesture?.();
       }
+      /**
+       * AND THE PANEL STILL PAINTS. This `return` used to be unconditional, so
+       * a suspended context — the single most common way for a player to end up
+       * with no sound at all — froze the diagnostic display on whatever numbers
+       * it happened to be showing when the context went away. The one line that
+       * would have told him what was wrong (`AUDIO suspended`) and the one
+       * counter that would have told him the game was trying (`resume N`) were
+       * the two the panel stopped updating.
+       *
+       * `snapshot()` is null-safe and reads cached samples plus AudioParam
+       * values, all of which are still valid on a suspended context. The rms
+       * figures go stale, which is correct: nothing is being rendered.
+       */
+      if (this.visible && wall >= this._paint) {
+        this._paint = wall + 0.25;
+        this._build();
+        if (this._el) this._el.style.display = 'block';
+        this._render();
+      }
       return;
     }
 
