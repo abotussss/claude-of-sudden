@@ -1395,14 +1395,19 @@ export const WEAPON_DEFS = {
      * fallback and explains what had to move with it.
      */
     /**
-     * 「スモークの範囲今の５倍にして」 — 8 -> 40 m, and that is a much bigger
-     * change than the number looks. A capture zone's own sightlines measure
-     * 19-22 m of reach, so ONE can now screens a whole objective and then some.
-     * It is deliberate and it is what was asked for; the knock-ons to watch are
-     * that `ai` refuses every sightline through the volume, so a screen this
-     * size takes a zone off the map for its 14 s duration.
+     * 10 m, after 40 broke the drawing.
+     *
+     * 「スモークの範囲今の５倍にして」 took it 8 -> 40 and the cloud came apart
+     * on screen — 「スモークがグラフィック崩れしてる」 — so the ask became
+     * 「１０mカバーできればいい正しく描画できているなら」: coverage is the point
+     * and it is worth nothing if the puffs do not read as smoke.
+     *
+     * `SMOKE_GROWTH` already makes the drawn puff linear in this radius rather
+     * than quadratic, which is what let 6.5 -> 8 pass cleanly; 40 evidently
+     * walked off the end of what `rate` 26 and `life` 7.5 can fill. 10 is a
+     * quarter of that and only a quarter over the 8 that was known good.
      */
-    smokeRadius: 40,
+    smokeRadius: 10,
     /** No blast at all, and no flash. The `explosion` event is not fired for
      *  this kind — see `_detonate` — because there is nothing to explode. */
     blastRadius: 0,

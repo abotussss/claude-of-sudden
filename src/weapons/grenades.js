@@ -44,7 +44,7 @@ const MAX_LIVE = 6;
  * that file's number to move and it is left alone here; until it does, a bot's
  * screen is a fifth narrower than the player's.
  */
-const SMOKE_R = 40;
+const SMOKE_R = 10;
 /**
  * `Ambience._puff` sizes a puff at `radius * growth`, so this is a RATIO and
  * not a distance. @see the note in `_smoke`, which is where it is spent.
