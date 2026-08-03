@@ -359,6 +359,12 @@ const MIN_ROUTE = 16;
  *      of the match, and no amount of steering fixes a gap a capsule does not
  *      fit through. Being able to walk through a stopped hull in the one lane
  *      where there is no way past it is the cheaper failure by a distance.
+ *
+ * `_tankblock.mjs` measures all of it against a hull that is really rolling —
+ * the player dropped on the hull centre, the player WALKING at the flank, and
+ * every man's frames spent inside a rectangle; `_tankstuck.mjs` asks the
+ * `stuckcheck` question with both hulls forced onto the field and reports how
+ * close to a hull the men who are not moving actually are.
  */
 /** Half the hull's plan footprint. Matches the `hull` collider box. */
 const BODY_HALF_W = HULL_W * 0.5;
