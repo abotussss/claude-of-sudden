@@ -1932,7 +1932,17 @@ export function buildCathedral(A) {
        * portal to the apse door is the thing this section exists to break and
        * it is broken twenty metres from D, not next to it.
        */
-      const near = Math.hypot(u, v) < 13.5;
+      /**
+       * 13.5 -> 14.5, AND IT IS ONE RAFT. `_whatbox.mjs` named the last thing
+       * inside fourteen metres of D that still broke the eye: this list's
+       * (5.8, -12.4), which is 13.69 m from the crossing and therefore missed
+       * the `near` test by nineteen centimetres. `_dheight.mjs` measured it at
+       * 0.82 m OVER the standing eye across four bearings of D's horizon — the
+       * only mass under 14 m still doing that. The other five are unmoved: the
+       * nearest of them is 10.9 m and already under the cap, the farthest 20.4,
+       * and the 45 m shot down the nave is still broken twenty metres out.
+       */
+      const near = Math.hypot(u, v) < 14.5;
       const h = near ? rng.range(1.2, EYE_CAP - 0.08) : rng.range(1.9, 2.8);
       const w = rng.range(3.4, 4.8);
       const d = rng.range(2.6, 4.2);

@@ -55,10 +55,27 @@ const out = await page.evaluate((RMAX) => {
   const ci = g.index(g.cellX(C.x), g.cellZ(C.z));
   const cf = g.flags[ci] ? g.floor[ci] : 0;
   const EYEY = cf + 1.62;
+  /**
+   * WORLD -> THE CATHEDRAL'S OWN u,v. The level frame is rotated ~33.7° in
+   * world space (`Assembler.xform`), so "world x is u" is wrong by ten metres
+   * at the far end of the nave — it named the wrong mass twice before this was
+   * written. Take the basis off `levelToWorld` and project.
+   */
+  const w = e.ctx.peek('world');
+  const V3 = e.camera.position.constructor;
+  const O = w.levelToWorld(0, 0, 0, new V3());
+  const EX = w.levelToWorld(1, 0, 0, new V3()).sub(O);
+  const EZ = w.levelToWorld(0, 0, 1, new V3()).sub(O);
+  const CC = w.levelToWorld(w.cathedral.level.x, 0, w.cathedral.level.z, new V3());
+  const uv = (x, zz) => {
+    const px = x - CC.x, pz = zz - CC.z;
+    return [+(px * EX.x + pz * EX.z).toFixed(1), +(px * EZ.x + pz * EZ.z).toFixed(1)];
+  };
   const rings = [];
   for (let r = 2; r <= RMAX; r += 0.5) {
     let top = -99;
     let topA = 0;
+    let topAt = [0, 0];
     const over = [];
     for (let a = 0; a < 72; a++) {
       const th = (a / 72) * 6.283185;
@@ -66,10 +83,10 @@ const out = await page.evaluate((RMAX) => {
       const zz = C.z + Math.sin(th) * r;
       const h = ph.raycast(x, cf + 8, zz, 0, -1, 0, 12, MASK);
       const y = h.hit ? h.point.y : cf;
-      if (y > top) { top = y; topA = Math.round((th * 180) / Math.PI); }
-      if (y > EYEY) over.push(Math.round((th * 180) / Math.PI));
+      if (y > top) { top = y; topA = Math.round((th * 180) / Math.PI); topAt = uv(x, zz); }
+      if (y > EYEY) over.push([Math.round((th * 180) / Math.PI), ...uv(x, zz), +(y - EYEY).toFixed(2)]);
     }
-    rings.push({ r, top: +(top - EYEY).toFixed(2), topA, over: over.length, overA: over });
+    rings.push({ r, top: +(top - EYEY).toFixed(2), topA, topAt, over: over.length, overA: over });
   }
   return { cf: +cf.toFixed(2), EYEY: +EYEY.toFixed(2), rings };
 }, RMAX);
@@ -80,8 +97,15 @@ for (const r of out.rings) {
   const bar = r.top > 0 ? '#'.repeat(Math.min(30, Math.round(r.top * 20))) : '';
   console.log(
     `   ${String(r.r).padStart(5)}m  ${String(r.top).padStart(7)}m  ${String(r.topA).padStart(4)}°  ` +
-      `${String(r.over).padStart(3)}  ${bar}`
+      `${String(r.over).padStart(3)}  at local u ${String(r.topAt[0]).padStart(6)} v ${String(r.topAt[1]).padStart(6)}  ${bar}`
   );
+}
+console.log('\n  every sample over the eye inside 17 m — local u,v and how far over');
+for (const r of out.rings) {
+  if (r.r > 17) continue;
+  for (const [a, u, v, d] of r.overA) {
+    console.log(`   r ${String(r.r).padStart(5)}m  ${String(a).padStart(3)}°  u ${String(u).padStart(6)}  v ${String(v).padStart(6)}  +${d} m`);
+  }
 }
 console.log('\n  pageErrors', errs.length ? errs.slice(0, 4) : 'none');
 await browser.close();
