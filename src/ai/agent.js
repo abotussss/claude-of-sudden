@@ -3590,7 +3590,25 @@ export class Agent {
          * a sprayer is at 0.95, a marksman at 0.45, and rounds into a wall
          * still cost the player nothing.
          */
-        this.wantFire = this.rng.float() < 0.4 + (1 - tr.trigger) * 0.55;
+        /**
+         * ══════════════════════════════════════════════════════════════════
+         * AND THIS COIN FLIP GOES TOO — 「なんで数発ずつ？？」
+         * ══════════════════════════════════════════════════════════════════
+         * MEASURED (`_fourprobe.mjs`, seed 7, 2637 contact samples): **17.3 %
+         * of all contact time** was a man LEANT OUT OF COVER, at a window he
+         * knows somebody is behind, who lost this roll. It is the second
+         * largest refusal on the board after the walk, and it is the same
+         * mistake in the same shape: discipline written as a random number.
+         *
+         * A man who is peeking has already decided to be exposed. The decision
+         * that costs him something has been made; holding the round afterwards
+         * buys nothing but silence. So he fires, and what is left of the
+         * personality is `SUPPRESS_WINDOW` — how stale a last-known he is
+         * willing to shoot at — plus the cone, which `_fireRound` opens with
+         * every round of the pull. Rounds into a wall still cost the player
+         * nothing, which is why this was always the safest gate to delete.
+         */
+        this.wantFire = true;
         // Rounds into a window nobody is holding are only useful if somebody
         // knows they are covering fire, so this one is on the net too — at the
         // longest per-kind cooldown in the table, because it is a state and not
