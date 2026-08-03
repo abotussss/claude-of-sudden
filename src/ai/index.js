@@ -366,7 +366,16 @@ const SMOKE_CORE = 0.78;
  * is a growth of 36 and a sprite the size of the district. Mirrored from
  * `grenades.js`, where the same bug was already fixed.
  */
-const SMOKE_R = 40;
+/**
+ * AND THE MIRROR HAS ALREADY EARNED ITS LATCH. This was written at 40 against
+ * `weapons/defs.js` and `weapons/grenades.js`, and both of them came back to 10
+ * one commit later (`b65f0e8`, "40 broke the drawing"). The default is followed
+ * back down here for tidiness; what matters is that a build in which it had NOT
+ * been would still have thrown a 10 m can, because `_smokeR` takes the real
+ * figure off the first `weapon:smoke` that goes off. That is the whole reason
+ * it is a latch and not a literal.
+ */
+const SMOKE_R = 10;
 const SMOKE_T = 14;
 const SMOKE_GROWTH = 5.85;
 /** How much of his own flash a man who was warned about it takes. */
