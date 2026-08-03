@@ -50,23 +50,37 @@ const place = (u, v, rise, aimY) => page.evaluate(([u, v, rise, aimY]) => {
   const V3 = e.camera.position.constructor;
   const from = w.levelToWorld(u, 0, v + w.cathedral.level.z, new V3());
   const at = w.levelToWorld(0, 0, w.cathedral.level.z, new V3());
-  const h = phys.raycast(from.x, 90, from.z, 0, -1, 0, 140, phys.MASK.WORLD);
-  const y = (h.hit ? h.point.y : 0) + rise;
+  /**
+   * `rise` is over the CROSSING's own floor, not over whatever the camera is
+   * standing on: the first cut measured off the local surface and four of the
+   * eight "standing" eyes came back from rooftops eleven metres up, which is a
+   * different photograph of a different question.
+   */
+  const g = phys.raycast(at.x, 90, at.z, 0, -1, 0, 140, phys.MASK.WORLD);
+  const y = (g.hit ? g.point.y : 0) + rise;
   e.camera.position.set(from.x, y, from.z);
   e.camera.lookAt(new V3(at.x, aimY, at.z));
   e.ctx.peek('player')?.teleport?.(e.camera.position, e.camera.rotation);
   return { y: +y.toFixed(2) };
 }, [u, v, rise, aimY]);
 
-const R = 42;
+const R = 34;
 const shots = [];
 for (let i = 0; i < 8; i++) {
   const a = (i / 8) * Math.PI * 2;
-  shots.push([`ring-${String(Math.round((a * 180) / Math.PI)).padStart(3, '0')}`,
-    Math.sin(a) * R, Math.cos(a) * R, 1.62, 9]);
+  const tag = String(Math.round((a * 180) / Math.PI)).padStart(3, '0');
+  /*
+   * A man in the street, and the same bearing from ABOVE the neighbouring
+   * roofs. The first cut put the raised eye at 11 m, which is a parapet's
+   * height: half those frames were a rooftop and a wall. 20 m clears the
+   * block behind the camera and puts the whole plan in the frame, which is
+   * the view the question 「大聖堂そのものを無くすのは禁止」 is asked of.
+   */
+  shots.push([`ring-${tag}`, Math.sin(a) * R, Math.cos(a) * R, 1.62, 6]);
+  shots.push([`up-${tag}`, Math.sin(a) * (R + 10), Math.cos(a) * (R + 10), 20, 2]);
 }
-shots.push(['air-sw', -34, -34, 26, 4]);
-shots.push(['air-ne', 34, 34, 26, 4]);
+shots.push(['air-sw', -30, -30, 30, 2]);
+shots.push(['air-ne', 30, 30, 30, 2]);
 for (const [tag, u, v, rise, aimY] of shots) {
   const p = await place(u, v, rise, aimY);
   await frames(35);
