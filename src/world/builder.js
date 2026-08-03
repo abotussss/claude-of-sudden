@@ -555,6 +555,32 @@ export class Assembler {
     _cm.makeScale(c.sx, c.sy, c.sz);
     _cm.setPosition(c.cx, c.cy, c.cz);
     _cm.premultiply(wm);
+    /**
+     * …AND THE INSTANCED PROPS ARE PROXIES TOO. `?boxtag` says "EVERY collision
+     * proxy, with the line that authored it" and it only ever saw `box()` and
+     * `clipBox()` — the hand-authored slabs. Most of the solid mass a player
+     * walks into is not one of those, it is a crate or a drum an instanced
+     * `put()` dropped, and asking "what is the solid at world 47.7, 13.3" of
+     * one of those got no answer at all. `p.matrices` is emptied at `finalize`,
+     * so unless it is recorded HERE the instance is unattributable after boot.
+     * Null when off, and the whole block costs nothing then.
+     */
+    if (Assembler.TAG) {
+      // The world extents, not the prototype's: `wm` carries the placement
+      // scale, so the basis column lengths are the size of the box that is
+      // actually in the BVH.
+      const e = _cm.elements;
+      Assembler.TAG.push({
+        k: 'prop', id: p.id, surface: c.surface,
+        sx: Math.hypot(e[0], e[1], e[2]),
+        sy: Math.hypot(e[4], e[5], e[6]),
+        sz: Math.hypot(e[8], e[9], e[10]),
+        wx: _cm.elements[12], wy: _cm.elements[13], wz: _cm.elements[14],
+        wry: Math.atan2(wm.elements[8], wm.elements[10]),
+        scope: this._scope?.id ?? null,
+        at: new Error().stack,
+      });
+    }
     this._accum(c.surface).add(UNIT_BOX, _cm);
   }
 

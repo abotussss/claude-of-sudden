@@ -177,6 +177,11 @@ export function buildBuilding(A, rng, spec, hooks = null) {
     spec,
     floorY: [],
     doors: [],
+    /**
+     * The doorways cut in the INTERIOR partitions, one entry per opening, on
+     * every floor. @see `buildInterior`, which fills this in as it cuts them.
+     */
+    innerDoors: [],
     balconies: [],
     roofY: 0,
     windows: [],
@@ -1461,6 +1466,25 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
         });
         for (const hole of holes) {
           doorUnit(A, pm, hole, rng, { t: it, leaf: rng.float() < 0.4, open: 1.4, leafKey: 'wood_dark' });
+          /**
+           * PUBLISH THE INTERNAL DOORWAYS.
+           *
+           * These are openings a player walks through, exactly like the ones in
+           * `info.doors`, and until now they existed only as a local `holes`
+           * array inside this function — so nothing downstream could name them,
+           * measure them, or keep anything out of them. The centre is given in
+           * the same level frame as `doors[].wp`, with the wall's own INWARD
+           * axis, so a probe or a keep-clear pass can step through the opening
+           * rather than guess at which side of the leaf it is standing on.
+           */
+          // `worldOf` returns a SHARED scratch triple — slice the first before
+          // asking for the second or both names point at the same numbers.
+          const hp = worldOf(pm, hole.x, 0, 0).slice();
+          const hn = worldOf(pm, hole.x, 0, 1);
+          info.innerDoors.push({
+            floor: f, x: hp[0], z: hp[2], y: fy, w: hole.w,
+            nx: hn[0] - hp[0], nz: hn[2] - hp[2],
+          });
         }
       }
     }
