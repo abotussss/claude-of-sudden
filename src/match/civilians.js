@@ -13,11 +13,23 @@
  *  逃走します（攻撃してこない） 民間軍の武装している人は攻撃してきます 逃走以外で屋外
  *  に逃げることはない 基本屋内にのみ滞留 AI性能としては中の下くらいにして」
  *
- * A third side of FIFTEEN, all of them hostile to the player, that lives in the
- * buildings rather than on the streets: TEN with an AK and a bandolier who
- * ambush whoever walks into their room, and FIVE with nothing who run when they
- * are seen. Killing one of the ten is free. Killing one of the five TAKES
- * CAPTURE SCORE OFF YOUR SIDE.
+ * A third side, all of them hostile to the player, that lives in the buildings
+ * rather than on the streets: EIGHTEEN with an AK and a bandolier who hold the
+ * doorways and go at whoever comes through them, and SIX with nothing who run
+ * when they are seen. Killing one of the eighteen is free. Killing one of the
+ * six TAKES CAPTURE SCORE OFF YOUR SIDE.
+ *
+ * 「民間平や民間人はもっと屋内にポップさせて もっと攻撃して邪魔してきて」 is the second
+ * pass over them and it moved three things, each of which has its own note:
+ * HOW MANY (@see `TOTAL` — fifteen to twenty-four, and the extra nine are
+ * mostly rifles), WHERE (@see `DOOR_TRIES` — an armed man is offered his
+ * building's thresholds before its back rooms) and WHAT HE DOES ABOUT SOMEBODY
+ * IN HIS HOUSE (@see `HUNT_R` — he stops waiting and closes). The fourth thing
+ * it moved is not in this file at all: how hard he FIGHTS is his persona, which
+ * is drawn inside the `Agent` constructor — @see `drawCivilPersona` in
+ * src/ai/index.js, where aggression, patience and trigger discipline moved and
+ * `skill` deliberately did not, because 「AI性能としては中の下くらいに」 has not
+ * been withdrawn and 「AIMは悪くてもいい」 is the same sentence.
  *
  * ════════════════════════════════════════════════════════════════════════════
  * THE FOUR DECISIONS, AND WHY EACH ONE IS THE WAY IT IS
@@ -71,16 +83,21 @@
  * 屋内にのみ出現させて」 — and it is answered once at `place()`: only the buildings
  * round the church, and not the church. @see the `CATH_SPAN` note.
  *
- * ── 4. AMBUSH IS AN ABSENCE OF ORDERS ──
+ * ── 4. AMBUSH IS AN ABSENCE OF ORDERS, AND OBSTRUCTION IS ONE ORDER ──
  *
  * `Agent._think`'s IDLE branch is: speed zero; if I have a target, fight; else
  * if I have an objective, advance; else if I have a patrol route, patrol. A
  * civilian is given no objective and no patrol route, so he stands in the room
  * this file chose — not where a bot patrol expects, not moving, not making
  * noise — until somebody walks into his line, and then he opens fire at the
- * 9 m his traits want. That is 「基本的に隠れること、不意打ちをしてきます」 and it
- * is written already; the only thing this file adds is a LEASH, because a fight
- * he loses can walk him out of the door and 「逃走以外で屋外に逃げることはない」.
+ * range his traits want. That is 「基本的に隠れること、不意打ちをしてきます」 and it
+ * is written already; what this file adds to it is a LEASH, because a fight he
+ * loses can walk him out of the door and 「逃走以外で屋外に逃げることはない」 — and
+ * ONE order, the intercept, because 「邪魔してきて」 is not satisfied by a man who
+ * waits to be walked into. @see `HUNT_R`: it fires only when a hostile is on a
+ * room cell within a room's distance of him, it can only ever send him to
+ * another room cell inside his own leash, and it is dropped the instant he has
+ * a target of his own.
  *
  * ════════════════════════════════════════════════════════════════════════════
  * ALLOCATION
@@ -88,7 +105,9 @@
  * `update()` runs every frame. The per-frame work is a slice of the roster, not
  * the whole of it, and every vector it touches is preallocated here. The one
  * expensive thing — the A* proof — happens at most `SPAWN_TRIES` times per man
- * per match, i.e. fifteen times.
+ * per match, i.e. `TOTAL` times. The intercept adds at most three `nearest`
+ * probes per armed man per `HUNT_REPICK`, and only for the ones who have
+ * somebody standing in their building.
  */
 
 import * as THREE from 'three';
@@ -102,9 +121,31 @@ const ROLE = Object.freeze({ armed: 'civil', unarmed: 'civilUnarmed' });
 /** …and the two dresses. @see `CIVIL_VARIANTS` in src/ai/soldier.js. */
 const VARIANT = Object.freeze({ armed: 'civilArmed', unarmed: 'civilUnarmed' });
 
-/** 「全部で１５人のみ出現させて そのうち民間人は５人」 */
-const TOTAL = 15;
-const UNARMED = 5;
+/**
+ * 「全部で１５人のみ出現させて そのうち民間人は５人」 was the first number, and
+ * 「民間平や民間人はもっと屋内にポップさせて」 is the second one: MORE OF THEM, INDOORS.
+ *
+ * TWENTY-FOUR, AND THE EXTRA NINE ARE MOSTLY RIFLES. The split moves from 10:5
+ * to 18:6 rather than 16:8, and the reason is that the two kinds are not the
+ * same request. The armed ones are what 「もっと攻撃して邪魔してきて」 asks for —
+ * they are the interference. The unarmed ones are the identification tax
+ * (`CIVILIAN_PENALTY` per body, and only the player's own trigger can pay it),
+ * so scaling them 1:1 with the militia would multiply the thing he did NOT ask
+ * to have more of. Six still spreads five-plus flights over a match and still
+ * means a room can hold one.
+ *
+ * WHAT IT COSTS, HONESTLY: the roster is 20 v 20 plus up to 20 reinforcements
+ * plus two hulls and two drones, so this is +9 actors on a worst case of ~84 —
+ * about an eighth more AI. It buys nothing per frame in THIS file (the shepherd
+ * pass is 4 Hz over the live list) and everything it costs is `src/ai`'s think
+ * budget. @see the `stuckcheck` note in the report.
+ *
+ * The district has to hold them: `_district` widens until it has floor for
+ * `TOTAL` men, and at 24 the need is 960 cells against the 1953 W2/W3/E2/E3
+ * already publish — so the span does not move and 「大聖堂付近」 is unchanged.
+ */
+const TOTAL = 24;
+const UNARMED = 6;
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -152,17 +193,25 @@ export const CIVILIAN_PENALTY = 12;
  * the room once, in the first minute". The first wave is late enough that the
  * opening fight for the three zones happens between the two armies alone.
  */
-const FIRST_WAVE = 28;
+const FIRST_WAVE = 20;
 /**
  * MEASURED, then shortened. At [42, 78] a headless match had TEN of the fifteen
  * placed at t=260 s of a match that runs 448-520 s, i.e. the last third of the
- * roster arrives in the last minute or does not arrive at all. [34, 62] lands
+ * roster arrives in the last minute or does not arrive at all. [34, 62] landed
  * all fifteen by roughly t=300, which leaves the whole back half of the match
  * with the full faction on the map — and the back half is where the buildings
  * matter, because it is where the cathedral opens and D goes live.
+ *
+ * …AND SHORTENED AGAIN FOR NINE MORE MEN, because the schedule is what decides
+ * whether a bigger faction is actually MORE PRESENCE INDOORS or just a longer
+ * tail: 24 men at [34,62] × 2-4 would still be arriving at t=400. At [20,38] ×
+ * 3-5 the whole faction is placed by roughly t=170 with the first wave at 20 s,
+ * which is still after the opening fight for the three zones and is now early
+ * enough that a building is dangerous the first time somebody enters it rather
+ * than the third.
  */
-const WAVE_GAP = [34, 62];
-const WAVE_SIZE = [2, 4];
+const WAVE_GAP = [20, 38];
+const WAVE_SIZE = [3, 5];
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -223,6 +272,34 @@ const MIN_BUILDINGS = 3;
 
 /** Tries at finding a room for one man before he waits for the next wave. */
 const SPAWN_TRIES = 14;
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE DOORWAY IS THE OBSTRUCTION — 「邪魔してきて」
+ * ════════════════════════════════════════════════════════════════════════════
+ * A militiaman in the middle of a back room is a man the attacker meets if he
+ * decides to; a militiaman covering the threshold is a man he has to deal with
+ * to use the building at all. That is the difference between an ambush and
+ * INTERFERENCE, and it is a placement decision rather than a behaviour one.
+ *
+ * A THRESHOLD CELL IS DERIVED, NEVER AUTHORED — the same rule the rest of this
+ * file lives by. It is a room cell (`grid.indoor === 1`) with a WALKABLE
+ * neighbour that is NOT a room cell at roughly its own height: the inside face
+ * of a doorway, since `_carveInteriors` is strict about the apron and the apron
+ * is exactly what is on the other side of a door. The height test is what keeps
+ * a balcony lip or a stair head from being called a door.
+ *
+ * IT IS A BIAS AND NOT A RULE. The first `DOOR_TRIES` of an armed man's
+ * `SPAWN_TRIES` are drawn from his building's threshold list and the rest from
+ * the whole room census, so a building whose doors are all taken (they are
+ * 5 m apart at the most — @see `SPAWN_CLEAR_CIVIL`) still fills up inside
+ * instead of deferring the man to the next wave. The unarmed five are never
+ * drawn this way: a civilian standing in the doorway is a civilian the player
+ * meets at the range where a mistake is likeliest, and the whole point of the
+ * value split is that he gets to make the identification at a distance.
+ */
+const DOOR_TRIES = 8;
+/** Metres a threshold cell's outside neighbour may differ in height. */
+const DOOR_STEP = 1;
 /** Nobody appears inside this many metres of the player unless a wall is between. */
 const SPAWN_CLEAR_PLAYER = 26;
 /** …or of any soldier of either army, LOS or not. A man who pops in is a bug. */
@@ -275,6 +352,48 @@ const LEASH_HOME = 3.5;
  * moved house: past it he goes back inside whether or not he is being shot at.
  */
 const OUT_GRACE = 6;
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * HE COMES TO YOU — the other half of 「もっと攻撃して邪魔してきて」
+ * ════════════════════════════════════════════════════════════════════════════
+ * AMBUSH IS AN ABSENCE OF ORDERS, and that is still what he is: no objective,
+ * no patrol, standing in the room this file put him in. What it also was, and
+ * should not be, is a man who does nothing until somebody walks into his exact
+ * line of sight — you could cross his building diagonally and never be his
+ * problem, which is scenery that occasionally shoots.
+ *
+ * So a militiaman with a HOSTILE INSIDE HIS OWN WALLS moves on him. Three
+ * things make that a nuisance rather than a scripted charge:
+ *
+ *   HE ONLY HEARS WHAT IS IN THE HOUSE. `HUNT_R` is a room away, and both men
+ *   must be on `grid.indoor` cells — the militiaman AND the hostile. A man in
+ *   the street outside is not his business and does not move him. This is not
+ *   clairvoyance, it is the one thing a man standing in a small building
+ *   genuinely knows.
+ *
+ *   THE POINT HE WALKS TO IS INDOORS AND INSIDE HIS LEASH, always. It is
+ *   probed along the bearing to the hostile and rejected unless it lands on a
+ *   room cell within `LEASH_R` of his anchor, so the manoeuvre cannot put him
+ *   in the street and cannot fight the leash — 「逃走以外で屋外に逃げることは
+ *   ない」 survives it untouched.
+ *
+ *   IT STOPS THE MOMENT HE HAS A TARGET. Once he can see somebody the fight
+ *   belongs to `Agent._combat` and this file has no business in it; the order
+ *   is dropped, which puts him back in the hands of his own cover selection.
+ *
+ * `pickup` and not `push` deliberately, for the reason the leash already gives:
+ * `push` and `hold` are `holdish` in `Agent` and roll a sector spot 3-13 m out,
+ * which is happy to be through a wall. `pickup` walks to the point it was
+ * given. It is also the one verb `setObjective` does not announce on the net,
+ * which matters here for nothing — a militiaman's radio is `Infinity` — but is
+ * the right verb anyway.
+ */
+const HUNT_R = 16;
+/** He does not walk onto the man; he closes to somewhere he can shoot from. */
+const HUNT_MIN = 2.2;
+/** Seconds between re-aiming an intercept, so he does not re-path every tick. */
+const HUNT_REPICK = 1.6;
 
 /**
  * FLEEING — 「民間人は見つけられた場合は逃走します」.
@@ -332,6 +451,13 @@ export class Civilians {
      */
     this.rooms = [];
     /**
+     * …AND THE SUBSET OF THEM THAT COVERS A DOOR. `doors[b]` is the room cells
+     * of building `b` with the apron on the other side of one wall — where an
+     * armed man is put so that using the building means dealing with him.
+     * @see `DOOR_TRIES`.
+     */
+    this.doors = [];
+    /**
      * THE BUILDINGS ROUND THE CHURCH, as indices into `rooms` — and the only
      * ones anybody is ever placed in. @see `_district`, which chooses them once
      * from `world.interiorVolumes` at `place()`.
@@ -356,6 +482,10 @@ export class Civilians {
       deferred: 0,
       /** Times a man was walked back inside. */
       leashed: 0,
+      /** Armed men placed covering a doorway rather than a back room. */
+      onDoor: 0,
+      /** Times a militiaman was sent at somebody inside his own building. */
+      hunted: 0,
       /** Times an unarmed man broke and ran. */
       fled: 0,
     };
@@ -386,6 +516,7 @@ export class Civilians {
     const g = ai?.grid;
     const vols = world?.interiorVolumes;
     this.rooms.length = 0;
+    this.doors.length = 0;
     this.district.length = 0;
     this.placed = true;
     if (!g || !vols || !vols.length) {
@@ -400,7 +531,7 @@ export class Civilians {
      * building it belongs to is asked of the volume's own oriented rect, the
      * same test `_carveInteriors` used to write the flag in the first place.
      */
-    for (let b = 0; b < vols.length; b++) this.rooms.push([]);
+    for (let b = 0; b < vols.length; b++) { this.rooms.push([]); this.doors.push([]); }
     let n = 0;
     for (let iz = 0; iz < g.nz; iz++) {
       for (let ix = 0; ix < g.nx; ix++) {
@@ -428,13 +559,18 @@ export class Civilians {
      */
     const near = this._district(world, vols, g.cell ?? 0.8);
     let dn = 0;
-    for (const b of this.district) dn += this.rooms[b].length;
+    let dd = 0;
+    for (const b of this.district) {
+      dn += this.rooms[b].length;
+      dd += this._thresholds(g, b);
+    }
     this._enabled = dn > 0;
     console.info(
       `[civil] ${n} ground-floor room cells in ${used}/${vols.length} buildings; ` +
         `cathedral district ${near.span.toFixed(1)}x its own footprint ` +
         `(${near.radius.toFixed(1)} m): ${dn} cells in ` +
-        `${this.district.map((b) => vols[b].building).join(', ') || 'nothing'}; ` +
+        `${this.district.map((b) => vols[b].building).join(', ') || 'nothing'}, ` +
+        `${dd} of them on a threshold; ` +
         `${TOTAL} to place (${UNARMED} unarmed)`
     );
     return dn;
@@ -503,6 +639,40 @@ export class Civilians {
     return { span, radius: cathR * span };
   }
 
+  /**
+   * WHICH OF BUILDING `b`'s ROOM CELLS COVER A DOOR, measured once at `place()`
+   * and only for the district — nobody is ever placed outside it. @see the
+   * `DOOR_TRIES` note for what a threshold is and why the height test is there.
+   *
+   * @returns {number} how many it found.
+   */
+  _thresholds(g, b) {
+    const cells = this.rooms[b];
+    const out = this.doors[b];
+    if (!out) return 0;
+    out.length = 0;
+    if (!cells || !g?.indoor || !g.flags) return 0;
+    const nx = g.nx, nz = g.nz;
+    for (let k = 0; k < cells.length; k++) {
+      const i = cells[k];
+      const ix = i % nx, iz = (i / nx) | 0;
+      const y = g.floor[i];
+      for (let d = 0; d < 4; d++) {
+        const jx = ix + (d === 0 ? 1 : d === 1 ? -1 : 0);
+        const jz = iz + (d === 2 ? 1 : d === 3 ? -1 : 0);
+        if (jx < 0 || jz < 0 || jx >= nx || jz >= nz) continue;
+        const j = g.index(jx, jz);
+        // Walkable, NOT a room, and at this cell's own height: the apron on
+        // the other side of a door, rather than a party wall or a balcony lip.
+        if (g.flags[j] === 0 || g.indoor[j] === 1) continue;
+        if (!(Math.abs(g.floor[j] - y) <= DOOR_STEP)) continue;
+        out.push(i);
+        break;
+      }
+    }
+    return out.length;
+  }
+
   /** A new match: forget everybody and re-arm the schedule. */
   reset() {
     // The agents themselves are gone — `_beginRound` calls `ai.clearAgents()`.
@@ -520,6 +690,8 @@ export class Civilians {
     s.unreachable = 0;
     s.deferred = 0;
     s.leashed = 0;
+    s.onDoor = 0;
+    s.hunted = 0;
     s.fled = 0;
   }
 
@@ -557,8 +729,8 @@ export class Civilians {
 
   /**
    * A FEW MEN, SOMEWHERE NOBODY IS LOOKING. The kind is drawn against what is
-   * left rather than fixed per wave, so the five unarmed ones are spread over
-   * the whole match instead of arriving together — a wave that is all civilians
+   * left rather than fixed per wave, so the unarmed ones are spread over the
+   * whole match instead of arriving together — a wave that is all civilians
    * would be a wave the player learns to recognise.
    */
   _wave(player) {
@@ -581,7 +753,16 @@ export class Civilians {
       const b = this._nextBuilding();
       const cells = this.rooms[b];
       if (!cells || cells.length < 4) continue;
-      const i = cells[this.rng.int(0, cells.length - 1)];
+      /**
+       * AN ARMED MAN IS OFFERED THE DOORS FIRST. @see `DOOR_TRIES`: the bias
+       * is in the POOL and not in the test, so a building whose thresholds are
+       * all occupied falls through to its rooms on the later tries instead of
+       * losing the man to the next wave.
+       */
+      const door = this.doors[b];
+      const onDoor = !unarmed && t < DOOR_TRIES && door != null && door.length > 0;
+      const pool = onDoor ? door : cells;
+      const i = pool[this.rng.int(0, pool.length - 1)];
       const x = g.worldX(i % g.nx);
       const z = g.worldZ((i / g.nx) | 0);
       const y = g.floor[i];
@@ -600,9 +781,15 @@ export class Civilians {
        * puts a man in a corner looking at the space somebody has to cross to
        * reach him. `Agent` re-aims the moment he has a target, so this only
        * decides where he is looking while he waits — which is the whole of it.
+       *
+       * …AND A MAN ON A THRESHOLD FACES THE OTHER WAY, because his room is
+       * behind him: the whole value of that cell is the doorway, and a doorway
+       * holder looking at his own back wall is a doorway nobody is holding.
        */
       const v = this.ctx.peek('world')?.interiorVolumes?.[b];
-      const yaw = v ? Math.atan2(v.cx - x, v.cz - z) : this.rng.range(0, Math.PI * 2);
+      const yaw = v
+        ? Math.atan2(v.cx - x, v.cz - z) + (onDoor ? Math.PI : 0)
+        : this.rng.range(0, Math.PI * 2);
       const agent = this.ai.spawn(
         unarmed ? VARIANT.unarmed : VARIANT.armed,
         this._v,
@@ -627,8 +814,13 @@ export class Civilians {
         leashed: false,
         /** Elapsed time he was first found outdoors, or 0. @see `OUT_GRACE`. */
         outSince: 0,
+        /** He is walking at somebody inside his own walls. @see `HUNT_R`. */
+        hunting: false,
+        /** Elapsed time his next intercept may be re-aimed. */
+        huntAt: 0,
       });
       this.stats.spawned[unarmed ? 1 : 0]++;
+      if (onDoor) this.stats.onDoor++;
       return true;
     }
     return false;
@@ -719,12 +911,21 @@ export class Civilians {
   }
 
   /**
-   * The leash and the flight, in one pass over fifteen men at 4 Hz.
+   * The leash, the flight and the intercept, in one pass over the live roster
+   * at 4 Hz.
    *
-   * ORDER MATTERS: a fleeing man is not leashed. Running outdoors is the ONE
-   * thing 「逃走以外で屋外に逃げることはない」 permits, and a leash that fired
-   * during a flight would walk a terrified civilian back into the room he is
-   * running away from.
+   * ORDER MATTERS TWICE:
+   *
+   *   A FLEEING MAN IS NOT LEASHED. Running outdoors is the ONE thing
+   *   「逃走以外で屋外に逃げることはない」 permits, and a leash that fired during a
+   *   flight would walk a terrified civilian back into the room he is running
+   *   away from.
+   *
+   *   AN INTERCEPT IS ASKED BEFORE THE LEASH AND ANSWERS TO IT. @see `HUNT_R`.
+   *   The point he is sent to is indoors and inside `LEASH_R` of his anchor by
+   *   construction, so the two orders can never pull against each other; and
+   *   the hunt is dropped — clearing `leashed` with it — the moment its reason
+   *   goes, which puts the leash back in charge on the very next tick.
    */
   _shepherd(player) {
     const now = this.ctx.time.elapsed;
@@ -762,6 +963,13 @@ export class Civilians {
       const inside = this._indoors(a.position);
       c.outSince = inside ? 0 : (c.outSince || now);
       const overstayed = !inside && now - c.outSince > OUT_GRACE;
+      /**
+       * HE COMES TO YOU. Only while he is indoors and only while he has no
+       * target of his own — both are tested inside `_hunt` — so this can never
+       * override the leash's "he has been outdoors too long" branch and never
+       * reaches into a firefight. @see `HUNT_R`.
+       */
+      if (!c.unarmed && inside && !overstayed && this._hunt(c, seen, now)) continue;
       if (a.hasTarget && !overstayed) continue;
       const far = a.position.distanceTo(c.anchor);
       /**
@@ -777,6 +985,9 @@ export class Civilians {
        */
       if (!c.leashed && (far > LEASH_R || !inside)) {
         c.leashed = true;
+        // An intercept that ended with him out of position is over: the leash
+        // is the order now, and two owners of one objective is a fight.
+        c.hunting = false;
         this.stats.leashed++;
         a.setObjective('pickup', c.anchor);
       } else if (c.leashed && (far < 1.2 || (far < LEASH_HOME && inside))) {
@@ -785,6 +996,84 @@ export class Civilians {
         a.setObjective('hold', null);
       }
     }
+  }
+
+  /**
+   * A MILITIAMAN WITH SOMEBODY IN HIS BUILDING GOES AT HIM — the 「邪魔してきて」
+   * half of the request, and the whole of what this file adds to his aggression
+   * (the rest of it is his persona and lives in `src/ai`). @see `HUNT_R`.
+   *
+   * @returns {boolean} true while an intercept is standing, i.e. this man's
+   * orders are already decided and the leash must not touch him this tick.
+   */
+  _hunt(c, player, now) {
+    const a = c.agent;
+    /**
+     * THE FIGHT OUTRANKS THE HUNT. Once he can see somebody, `Agent._combat`
+     * owns him — cover, peeking, the burst, the grenade — and an objective on
+     * top of that is this file second-guessing the one part of him that is
+     * genuinely good at its job.
+     */
+    if (a.hasTarget || !player || player.dead || !player.position) {
+      return this._dropHunt(c);
+    }
+    const p = player.position;
+    if (a.position.distanceTo(p) > HUNT_R || !this._indoors(p)) return this._dropHunt(c);
+    if (now >= c.huntAt) {
+      c.huntAt = now + HUNT_REPICK;
+      if (!this._huntPoint(c, p)) return this._dropHunt(c);
+      if (!c.hunting) this.stats.hunted++;
+      c.hunting = true;
+      // The hunt supersedes a leash in progress; it cannot leave the building.
+      c.leashed = false;
+      a.setObjective('pickup', this._v2);
+    }
+    return c.hunting;
+  }
+
+  /** Forget an intercept, hand the man back to the leash. Always false. */
+  _dropHunt(c) {
+    if (c.hunting) {
+      c.hunting = false;
+      c.leashed = false;
+      // No orders at all is what an ambusher is. @see `_shepherd`.
+      c.agent.setObjective('hold', null);
+    }
+    return false;
+  }
+
+  /**
+   * SOMEWHERE HE CAN SHOOT FROM, ON THE WAY TO THE MAN — probed along the
+   * bearing at three depths and rejected unless it lands on a room cell inside
+   * the leash. The path from here to there is A*'s problem, exactly as it is
+   * for the leash; what this decides is only that the destination is a place a
+   * militiaman is allowed to be.
+   *
+   * @returns {boolean} true with the point in `_v2`.
+   */
+  _huntPoint(c, p) {
+    const g = this.ai?.grid;
+    if (!g || !g.indoor) return false;
+    const a = c.agent;
+    let dx = p.x - a.position.x;
+    let dz = p.z - a.position.z;
+    const len = Math.hypot(dx, dz);
+    if (len < HUNT_MIN) return false;
+    dx /= len; dz /= len;
+    // Never onto the man himself, and never further than the leash allows.
+    const reach = Math.min(len - HUNT_MIN * 0.5, LEASH_R);
+    if (reach < HUNT_MIN) return false;
+    for (const frac of [1, 0.66, 0.4]) {
+      const r = reach * frac;
+      if (r < HUNT_MIN) continue;
+      const i = g.nearest(a.position.x + dx * r, a.position.z + dz * r, a.position.y, 2, 1.4);
+      if (i < 0 || g.indoor[i] !== 1) continue;
+      this._v2.set(g.worldX(i % g.nx), g.floor[i], g.worldZ((i / g.nx) | 0));
+      if (this._v2.distanceTo(c.anchor) > LEASH_R) continue;
+      if (this._v2.distanceTo(a.position) < HUNT_MIN) continue;
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -913,6 +1202,7 @@ export class Civilians {
       `alive ${this.aliveCount} · player killed ${s.killedByPlayer[0]} armed / ` +
       `${s.killedByPlayer[1]} unarmed (-${s.penalty} pts) · ` +
       `other killed ${s.killedByOther[0]}/${s.killedByOther[1]} · ` +
+      `on doors ${s.onDoor}/${s.spawned[0]} · intercepts ${s.hunted} · ` +
       `leashed ${s.leashed} · fled ${s.fled} · ` +
       `unreachable rooms ${s.unreachable} · deferred ${s.deferred}`
     );
