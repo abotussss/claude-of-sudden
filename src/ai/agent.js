@@ -4260,15 +4260,21 @@ export class Agent {
    *   somewhere `findPath` returns 0 from. Writing `position` directly would
    *   have been three lines shorter and would have rebuilt the stuck epidemic.
    *
-   *   THREE ATTEMPTS, MEASURED. Near flank, far flank, then out whichever end
-   *   he is nearer; the rectangle test is re-run after each, so "did it work"
-   *   is an answer rather than an assumption. The nose is tried LAST because a
-   *   man shoved forward is a man the same hull meets again next frame.
+   *   THREE ATTEMPTS, AND WHAT COUNTS IS PROGRESS RATHER THAN ARRIVAL. Near
+   *   flank, far flank, then out whichever end he is nearer — but the next
+   *   direction is only tried when the last one GAINED NOTHING, measured as
+   *   the travel actually achieved along the direction asked for. Trying them
+   *   all every frame is the bug this sentence exists to prevent: shove 0.9 m
+   *   left, 0.9 m back right, 0.9 m astern, and a man in the middle of a hull
+   *   ends the frame in the middle of the hull and is "pinned" — measured, it
+   *   crushed 29 men in one sortie. A shove that is working is left alone, the
+   *   `SHOVE_MAX` cap simply spends two or three frames getting him out, and
+   *   sliding along a wall counts as zero because the gain is projected.
    *
-   *   AND HE IS NEVER LEFT WEDGED. Still inside after three, with the hull
-   *   under power: he is under the tracks, and he is run over. Still inside
-   *   after three with the hull STOPPED: nothing is crushing him, so the hull
-   *   releases HIM after `HULL_PIN_GRACE` and he walks through it.
+   *   AND HE IS NEVER LEFT WEDGED. Blocked in all three, with the hull under
+   *   power: there is a wall on both sides and forty tonnes on top, and he is
+   *   run over there. Blocked in all three with the hull STOPPED: nothing is
+   *   crushing him, so the hull releases HIM after `HULL_PIN_GRACE`.
    *
    * Allocates nothing and costs two sin/cos plus a handful of scalars per live
    * hull per man — at most two hulls, and only for men within its own length.
@@ -4305,7 +4311,15 @@ export class Agent {
         const ex = k === 2 ? 0 : k === 0 ? side : -side;
         const ez = k === 2 ? (lz < 0 ? -1 : 1) : 0;
         const push = Math.min(HULL_SHOVE_MAX, (ex ? hw - lx * ex : hl - lz * ez) + HULL_SKIN);
-        c.move((ex * vc + ez * vs) * push, 0, (-ex * vs + ez * vc) * push);
+        const wx = ex * vc + ez * vs;
+        const wz = -ex * vs + ez * vc;
+        const bx = c.position.x;
+        const bz = c.position.z;
+        c.move(wx * push, 0, wz * push);
+        // Projected onto the direction asked for: a capsule that slid along a
+        // wall gained nothing and the next flank is tried, a capsule that
+        // travelled is on its way out and is left to finish next frame.
+        if ((c.position.x - bx) * wx + (c.position.z - bz) * wz > push * 0.35) break;
       }
     }
     if (!pinnedBy) {

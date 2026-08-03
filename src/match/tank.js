@@ -4750,8 +4750,10 @@ export class Armour {
    * rests on: `move` is a swept, sliding, de-penetrating resolve against the
    * static BVH, so a shove can be REFUSED by a wall and can never put the
    * player inside geometry. Three attempts — near flank, far flank, then out
-   * whichever end he is nearer — and the test after each is the same rectangle
-   * test, so "did it work" is measured rather than assumed.
+   * whichever end he is nearer — and the NEXT one is only tried when the last
+   * gained nothing along the direction it asked for. Firing all three every
+   * frame puts a man in the middle of a hull back in the middle of the hull;
+   * @see the same note on `Agent._clearHulls`, which measured what that costs.
    *
    * Allocates nothing: eight locals and a `Vector3.set` on the player's own
    * published feet vector, which is written so anything reading `player`
@@ -4795,8 +4797,20 @@ export class Armour {
       const ez = k === 2 ? (lz < 0 ? -1 : 1) : 0;
       const out = ex ? hw - lx * ex : hl - lz * ez;
       const push = Math.min(SHOVE_MAX, out + SHOVE_SKIN);
-      c.move((ex * co + ez * s) * push, 0, (-ex * s + ez * co) * push);
+      const wx = ex * co + ez * s;
+      const wz = -ex * s + ez * co;
+      const bx = c.position.x;
+      const bz = c.position.z;
+      c.move(wx * push, 0, wz * push);
       player.feetPosition?.set(c.position.x, c.position.y, c.position.z);
+      // A shove that GAINED ground is left to finish next frame; only a shove
+      // that was refused tries the next flank. @see `Agent._clearHulls` for the
+      // measurement that made this necessary — trying all three every frame
+      // returns a man in the middle of a hull to the middle of the hull.
+      if ((c.position.x - bx) * wx + (c.position.z - bz) * wz > push * 0.35) {
+        tank.playerPin = 0;
+        return;
+      }
     }
 
     if (tank.crushing) {
