@@ -1394,7 +1394,15 @@ export const WEAPON_DEFS = {
      * the eye. @see `SMOKE_R` in `weapons/grenades.js`, which mirrors it as the
      * fallback and explains what had to move with it.
      */
-    smokeRadius: 8,
+    /**
+     * 「スモークの範囲今の５倍にして」 — 8 -> 40 m, and that is a much bigger
+     * change than the number looks. A capture zone's own sightlines measure
+     * 19-22 m of reach, so ONE can now screens a whole objective and then some.
+     * It is deliberate and it is what was asked for; the knock-ons to watch are
+     * that `ai` refuses every sightline through the volume, so a screen this
+     * size takes a zone off the map for its 14 s duration.
+     */
+    smokeRadius: 40,
     /** No blast at all, and no flash. The `explosion` event is not fired for
      *  this kind — see `_detonate` — because there is nothing to explode. */
     blastRadius: 0,
