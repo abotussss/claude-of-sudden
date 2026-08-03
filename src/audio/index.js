@@ -289,9 +289,36 @@ export class AudioSystem {
     };
     /** How many times the graph has been rebuilt under it. @see _restartGraph */
     this.restarts = 0;
+    /**
+     * BOOT ATTEMPTS, AND WHY THEY ARE COUNTED.
+     *
+     * `start()` used to set `failed = true` on its FIRST throw, and `failed` is
+     * checked on the way in — so one bad boot was a session with no sound at
+     * all, no way back, and nothing on screen to say why. That is not a
+     * theoretical shape: `start()` builds a NoiseBank, a Mixer, four convolution
+     * reverbs, a spatial field, an ambience bed and a battle layer, and it does
+     * it inside a gesture handler on whatever audio device the player happens to
+     * have plugged in at that instant. A device that is being switched, a
+     * context the browser refuses once, an OS that has audio focus elsewhere —
+     * any of them throws, and every one of them is TRANSIENT. The next click
+     * should get sound.
+     *
+     * So a boot failure re-arms the gesture and is retried, and only the third
+     * consecutive one is treated as a real, permanent fault. Same shape as
+     * `_error()`'s "two rebuilds that both fail is fatal, a third would be a
+     * loop", for the same reason.
+     */
+    this.bootAttempts = 0;
+    /** What each failed boot threw, in order. Read it off `diagnose()`. */
+    this.bootErrors = [];
     this._offs = [];
     this._gestureHandler = null;
     this._ambienceApi = null;
+    /** The dead-graph half of the F9 panel. @see _armPanicKey */
+    this._panicKey = null;
+    this._panicEl = null;
+    this._panicVisible = false;
+    this._panicNext = 0;
   }
 
   /* ================================================================ */
@@ -307,7 +334,106 @@ export class AudioSystem {
     // land builds the graph. Capture mode never gestures, so shots render in
     // silence and stay byte-identical.
     this._armGesture();
+    this._armPanicKey();
     if (typeof window !== 'undefined') window.__AUDIO__ = this;
+  }
+
+  /**
+   * F9 WHEN THERE IS NO GRAPH TO ASK.
+   *
+   * `AudioWatchdog` owns the diagnostic panel, and it registers its own F9 key
+   * inside `watchdog.start()` — which only runs once `start()` has succeeded,
+   * and which `_teardown()` disposes. Its `update()` is called from
+   * `AudioSystem.update()`, one line BELOW `if (!this.running) return`.
+   *
+   * So the panel that exists to tell a player why he has no sound was reachable
+   * only while he had sound. Press F9 on a dead subsystem and nothing happened
+   * at all — no key, no element, no clue, which is exactly the state a report of
+   * 「一切合切音がなくなった」 comes from.
+   *
+   * This is the other half: a key that is armed from `init()` — before any
+   * gesture, before any context — and a panel drawn from OUTSIDE the audio
+   * update, whose whole job is to report the things that are still true when
+   * the graph is gone (did it ever start, what did it throw, is a retry armed).
+   * When the real panel is alive this defers to it completely and draws nothing.
+   */
+  _armPanicKey() {
+    if (this._panicKey || typeof addEventListener !== 'function') return;
+    this._panicKey = (e) => {
+      if (e.code !== 'F9') return;
+      // The watchdog has its own F9 and its own panel; two handlers would
+      // toggle each other's state. While it is alive this one is inert.
+      if (this.running && this.watchdog) return;
+      this._panicVisible = !this._panicVisible;
+      this._panicNext = 0;
+      if (!this._panicVisible) this._hidePanic();
+      e.preventDefault();
+    };
+    addEventListener('keydown', this._panicKey);
+    try {
+      const q = typeof location !== 'undefined' ? location.search : '';
+      if (/[?&]audiodbg=1/.test(q)) this._panicVisible = true;
+    } catch { /* no location in a worker/test host */ }
+  }
+
+  _disarmPanicKey() {
+    if (this._panicKey && typeof removeEventListener === 'function') {
+      removeEventListener('keydown', this._panicKey);
+    }
+    this._panicKey = null;
+    this._hidePanic();
+    this._panicVisible = false;
+  }
+
+  _hidePanic() {
+    if (this._panicEl?.parentNode) this._panicEl.parentNode.removeChild(this._panicEl);
+    this._panicEl = null;
+  }
+
+  /**
+   * Draw the dead-graph panel. Called from the TOP of `update()`, above the
+   * `running` guard and outside the try that swallows subsystem throws, so it
+   * paints in precisely the states the real panel cannot: never booted, torn
+   * down, and failed. Rate limited to 4 Hz; allocates one div, once.
+   */
+  _paintPanic() {
+    if (this.running && this.watchdog) { if (this._panicEl) this._hidePanic(); return; }
+    if (!this._panicVisible || typeof document === 'undefined' || !document.body) return;
+    const wall = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    if (wall < this._panicNext) return;
+    this._panicNext = wall + 0.25;
+    if (!this._panicEl) {
+      const el = document.createElement('div');
+      el.id = 'ow-audiodead';
+      // Same inline-only rule the watchdog's panel follows: `src/ui` owns the
+      // stylesheet and this must not need a line in it.
+      el.style.cssText = [
+        'position:fixed', 'top:8px', 'right:8px', 'z-index:2147483000',
+        'font:11px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace',
+        'color:#ffd9d9', 'background:rgba(24,6,6,0.86)', 'border:1px solid rgba(255,90,90,0.9)',
+        'border-radius:5px', 'padding:7px 9px', 'white-space:pre', 'pointer-events:none',
+        'max-width:52ch', 'text-shadow:0 1px 2px #000',
+      ].join(';');
+      document.body.appendChild(el);
+      this._panicEl = el;
+    }
+    const why = this.failed
+      ? 'FAILED — three boots threw'
+      : this.bootAttempts > 0
+        ? `boot ${this.bootAttempts}/3 threw — click to retry`
+        : this.stats.started
+          ? 'torn down after boot'
+          : 'NOT STARTED — waiting for a click/keypress';
+    const errs = this.bootErrors.length
+      ? this.bootErrors.map((e) => `  #${e.n} ${e.name || 'Error'}: ${e.msg}`.slice(0, 90)).join('\n')
+      : '  (nothing thrown — the graph was simply never built)';
+    this._panicEl.textContent =
+      'AUDIO  NO GRAPH  F9 to hide\n' +
+      `${why}\n` +
+      `running ${this.running}  failed ${this.failed}  started ${this.stats.started}\n` +
+      `ctx ${this.actx?.state ?? 'none'}  gesture ${this._gestureHandler ? 'armed' : 'disarmed'}  ` +
+      `rebuilds ${this.restarts}\n` +
+      `boot errors:\n${errs}`;
   }
 
   /**
@@ -362,12 +488,41 @@ export class AudioSystem {
       this.running = true;
       this.stats.started = true;
       this.stats.contextState = actx.state;
+      // A boot that worked clears the strike count: three failures spread over a
+      // long session, each of which the next click recovered from, is a flaky
+      // device and not a broken game.
+      this.bootAttempts = 0;
       console.info(`[audio] online @ ${actx.sampleRate} Hz`);
       return true;
     } catch (err) {
-      console.warn('[audio] disabled:', err?.message ?? err);
-      this.failed = true;
+      /**
+       * A BOOT FAILURE IS NOT THE END OF THE MATCH. @see `bootAttempts`.
+       *
+       * `_teardown()` first — it stops loop sources and closes the context, and
+       * a half-built graph left connected is worse than none. Then decide
+       * whether to give the next gesture a go.
+       */
+      this.bootAttempts++;
+      this.bootErrors.push({
+        n: this.bootAttempts,
+        msg: String(err?.message ?? err),
+        name: String(err?.name ?? ''),
+        at: Math.round((typeof performance !== 'undefined' ? performance.now() : 0)),
+      });
+      if (this.bootErrors.length > 6) this.bootErrors.shift();
       this._teardown();
+      if (this.bootAttempts >= 3) {
+        this.failed = true;
+        console.warn('[audio] disabled after 3 failed boots:', err?.message ?? err);
+      } else {
+        console.warn(
+          `[audio] boot ${this.bootAttempts}/3 failed — will retry on the next gesture:`,
+          err?.message ?? err
+        );
+        // The gesture that got us here disarmed itself before calling `start()`.
+        // Put it back, or the retry has nothing to fire it.
+        this._armGesture();
+      }
       return false;
     }
   }
@@ -393,6 +548,7 @@ export class AudioSystem {
 
   dispose() {
     this._disarmGesture();
+    this._disarmPanicKey();
     for (const off of this._offs) off();
     this._offs.length = 0;
     this._teardown();
@@ -404,6 +560,12 @@ export class AudioSystem {
   /* ================================================================ */
 
   update(dt, ctx) {
+    /**
+     * ABOVE THE GUARD AND OUTSIDE THE TRY, ON PURPOSE. This is the one thing in
+     * the subsystem that has to keep working when the subsystem does not.
+     * @see _paintPanic
+     */
+    try { this._paintPanic(); } catch { /* a panel must never take the frame down */ }
     if (!this.running) return;
     try {
       const actx = this.actx;
@@ -609,9 +771,29 @@ export class AudioSystem {
     this._lastEnemyFire = -99;
   }
 
-  /** The diagnostic snapshot, for the console: `__AUDIO__.diagnose()`. */
+  /**
+   * The diagnostic snapshot, for the console: `__AUDIO__.diagnose()`.
+   *
+   * WHEN THERE IS NO GRAPH IT SAYS WHY. This used to return the bare string
+   * `'audio not running'`, which is true of a subsystem waiting for its first
+   * click, of one that threw three times, and of one that was torn down by an
+   * error storm — three completely different faults with three different
+   * answers, reported identically. Asking a player to read this out only helps
+   * if it distinguishes them.
+   */
   diagnose() {
-    const snap = this.watchdog?.snapshot() ?? { error: 'audio not running' };
+    const snap = this.watchdog?.snapshot() ?? {
+      error: 'audio not running',
+      running: this.running,
+      failed: this.failed,
+      everStarted: this.stats.started,
+      bootAttempts: this.bootAttempts,
+      bootErrors: this.bootErrors.slice(0),
+      contextState: this.actx?.state ?? 'none',
+      gestureArmed: !!this._gestureHandler,
+      rebuilds: this.restarts,
+      errorsTotal: this.stats.errorsTotal ?? 0,
+    };
     console.info('[audio] diagnostics', snap);
     return snap;
   }
