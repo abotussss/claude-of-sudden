@@ -377,7 +377,43 @@ const SMOKE_CORE = 0.78;
  */
 const SMOKE_R = 10;
 const SMOKE_T = 14;
-const SMOKE_GROWTH = 5.85;
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * AND THE DRAWING DRIFTED FOR THE THIRD TIME — 「実質３mくらいしかスモークでてない」
+ * ════════════════════════════════════════════════════════════════════════════
+ * The player's can was just fixed and a bot's was not, because `_detonateThrown`
+ * had its own `addSmokeSource` call carrying its own `rate: 26` and
+ * `radius * 0.22` while `ev.radius` — the GAMEPLAY figure, latched off the
+ * player's own `weapon:smoke` — was already the full 10 m. A bot's screen
+ * therefore refused 10 m of sightline in `_smokeBlocks` and drew about 3 m of
+ * cloud, symmetrically for both sides, which is a lie the player can see.
+ *
+ * THE THREE NUMBERS ARE READ OFF `src/weapons/grenades.js` — `SMOKE_FOOT`,
+ * `SMOKE_GROWTH` and `SMOKE_RATE`, which is where they are recorded and argued.
+ * They are RETYPED and not imported because ARCHITECTURE.md rule 2 forbids the
+ * import, exactly as `SMOKE_R` and the `WEAPONS` rack are retyped; what is new
+ * is that there is now ONE drawing path inside this file (`_smokeDraw`) instead
+ * of a second inline copy, so the next change has one place to land.
+ *
+ * FOOT and GROWTH are two halves of one number. `Ambience._puff` spends
+ * `radius` on the spawn disc, the newborn puff's width AND the turbulence, and
+ * then sizes the puff at `radius * growth`. `0.22 x 5.85` was a 12.9 m sprite
+ * born inside a 2.6 m disc: what the eye reads is the YOUNG puff, and the young
+ * puff is the footprint. `0.62 x 1.8` is the same product against a footprint
+ * 2.8x wider, which is the whole of the fix.
+ *
+ * THE RATE IS NOT OPTIONAL AND IT IS NOT TASTE. `rate x life` IS the live
+ * sprite count — 78 x 7.5 is 585 — and they come out of `fx.lit`, which is a
+ * share of `q.particleBudget` and is 935 slots on the `low` tier. That layer is
+ * shared with blood, dust and impact puffs, so two cans at 585 would wrap the
+ * ring inside a single puff's lifetime and evict all of it. A quarter of the
+ * ring is the most one can may take; it binds on `low` alone (~31/s there, near
+ * the 26 this always was) and leaves every other tier at the photographed 78.
+ */
+const SMOKE_FOOT = 0.62;
+const SMOKE_GROWTH = 1.8;
+const SMOKE_RATE = 78;
+const SMOKE_LIFE = 7.5;
 /** How much of his own flash a man who was warned about it takes. */
 const FLASH_OWN_SIDE = 0.3;
 
@@ -2582,6 +2618,35 @@ export class AiSystem {
    * is the same distance-and-line-of-sight test, because a flashbang the human
    * is standing next to has to blind the human.
    */
+  /**
+   * A BOT'S CAN, DRAWN AT THE SIZE IT IS PLAYED AT. @see the `SMOKE_FOOT` block.
+   *
+   * The one place in `src/ai` that talks to `fx.addSmokeSource`, so the two
+   * copies that drifted twice are now one. `rad` is the GAMEPLAY radius — the
+   * same figure `_addSmoke` builds the sightline volume from — and every
+   * dimension of the cloud is derived from it here rather than being carried in
+   * beside it, which is how they came apart in the first place.
+   */
+  _smokeDraw(position, rad, duration) {
+    const fx = this.ctx.peek('fx');
+    if (!fx?.addSmokeSource) return;
+    // A quarter of the lit ring is the most one can may take. @see SMOKE_RATE.
+    const slots = fx.lit?.capacity ?? 0;
+    const rate = slots > 0 ? Math.min(SMOKE_RATE, (slots * 0.25) / SMOKE_LIFE) : SMOKE_RATE;
+    fx.addSmokeSource(position, {
+      duration,
+      rate,
+      radius: rad * SMOKE_FOOT,
+      rise: 0.85,
+      dark: 0.04,
+      life: SMOKE_LIFE,
+      // A MULTIPLIER, NOT A SIZE. @see the note on `SMOKE_FOOT`.
+      growth: SMOKE_GROWTH,
+      ember: 0,
+      haze: 0.85,
+    });
+  }
+
   _detonateThrown(kind, p, team = -1) {
     const ev = this._throwEvent;
     ev.position.set(p.x, p.y + 0.14, p.z);
@@ -2595,19 +2660,7 @@ export class AiSystem {
     if (kind === 'smoke') {
       ev.radius = this._smokeR;
       ev.duration = SMOKE_T;
-      const fx = this.ctx.peek('fx');
-      fx?.addSmokeSource?.(ev.position, {
-        duration: ev.duration,
-        rate: 26,
-        radius: ev.radius * 0.22,
-        rise: 0.85,
-        dark: 0.04,
-        life: 7.5,
-        // A RATIO, not a distance. @see `SMOKE_GROWTH`.
-        growth: SMOKE_GROWTH,
-        ember: 0,
-        haze: 0.85,
-      });
+      this._smokeDraw(ev.position, ev.radius, ev.duration);
       this.ctx.peek('audio')?.play?.('impact', ev.position, { surface: 'metal', energy: 1, level: 0.9 });
       this.ctx.events.emit('weapon:smoke', ev);
       return;
