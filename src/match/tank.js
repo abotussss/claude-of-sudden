@@ -414,9 +414,103 @@ const PLOUGH_MIN = 0.3;
  * across it. Each sample carries the road under it and the step on top of it
  * separately (@see `_bakeRide`), and a fired pile drops its step.
  */
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「また戦車は破壊可能なオブジェは破壊せよ 大聖堂入り口目の前の破壊可能そうな立方体
+ *  オブジェはなんで壊れないの？？」 — THE FIFTH REPORT, AND THE CEILING WAS NEVER
+ *  THE KNOB
+ * ────────────────────────────────────────────────────────────────────────────
+ * GO AND NAME THE OBJECT FIRST. `?boxtag` + `_cubewhy.mjs`, standing on the
+ * parvis outside the great portal, seed 7:
+ *
+ *   d 2.5 m  box concrete  world [-16.98, 1.70, -25.50]  size 3.6 x 3.4 x 3.6
+ *            stands 3.39 m over the parvis · CUBE · bound to 0 prop instances
+ *            level [0, -32.25] · buildPier (src/world/sitework.js:366)
+ *
+ * That is `CATH south pier` in `SITEWORKS` — authored (0, -21.5, 2.4 x 2.4,
+ * h 3.4), the gate-line pier that stands dead centre of the south forecourt so
+ * the way into the precinct is two 3.3 m slots instead of open tarmac. Its twin
+ * `CATH north pier` is the same box at level [0, +29.25]. It is a 3.6 m
+ * coursed-masonry CUBE with a plinth course, a capping band and a painted band
+ * at hand height, standing on its own in the middle of a square: it reads as an
+ * object because it IS one, and it is the thing he is looking at.
+ *
+ * BOTH KNOWN MECHANISMS REFUSE IT, AND ONLY ONE OF THEM IS A NUMBER:
+ *
+ *   1. NO INSTANCE, NO ERASE. It is merged masonry — one `A.box` proxy and a
+ *      few hundred triangles inside `world_concrete`, with no `prop_*`
+ *      InstancedMesh behind it. `_ploughableAt`, `_bakeLegPlough` and
+ *      `_buildRazeAtlas` all bind through an instance, so NOTHING in this file
+ *      could ever have removed it. Four passes of ceiling-raising could not
+ *      have touched it at any value.
+ *   2. …and it is 3.39 m, over `PASS_TOP` 3.0 as well. Which is why the sweep
+ *      at 3.2 lost a leg: this pier read PASSABLE to a side probe and BLOCKING
+ *      to `_trimAtBlockers`, because those two asked different questions.
+ *
+ * SO THE ANSWER IS A SECOND KIND OF ERASABLE MASS, NOT A HIGHER CEILING.
+ * `_buildBlockAtlas` measures the map's own free-standing BLOCKS at boot — a
+ * height field over the whole map, flooded into islands, where an island that
+ * is small in plan, thick in both plan axes, short, and ringed on every side by
+ * clear road is an OBJECT standing in the street rather than a piece of a
+ * building. Then it erases one the same way a scope does: degenerate indices
+ * over its own drawn triangles and a mask fill over its own collision. Nothing
+ * is added, nothing is built at fire time, and the mass genuinely stops
+ * existing — it is not driven through and left standing.
+ *
+ * WHAT THE RULE TAKES ON THE BUILT MAP (`_blockcensus.mjs`, seed 7): 547
+ * islands of mass, 28 taken —
+ *
+ *   5  `buildPier`      the two CATH gate piers (3.34 m — the cubes), the two
+ *                       plaza throat piers (2.95 m), and the A connector
+ *                       blockhouse (2.57 m), which the note over `CLIMB_TOP`
+ *                       records as unremovable and route-pinching
+ *   7  `buildPlinth`    the waist-high pads on the capture points
+ *   6  `rubbleMound`    free piles of masonry
+ *   5  `wrecks`         burnt-out cars
+ *   5  the market-stall / barrier / sandbag clusters
+ *
+ * AND WHAT IT REFUSES, WHICH IS THE PART THAT MATTERS. Not one triangle of
+ * `buildBuilding`, `buildCathedral`, `buildPerimeter` or `wallRun`
+ * (`src/world/cordon.js`, the map boundary) is taken. Three guards do it and
+ * each was put there by a measurement:
+ *
+ *   `BLOCK_TOP`   a building is 3.45 m per storey and 8.65-13 m of shell; the
+ *                 island is simply too tall.
+ *   `BLOCK_THIN`  a WALL is thin. The first census took compound-wall panels
+ *                 (`buildPerimeter`, 3.95 x 0.45 x 3.6) and a cordon panel
+ *                 beside them, because a 0.45 m wall floods as a 1-cell island
+ *                 and passed every size test. A block is thick in BOTH plan
+ *                 axes; the map's boundary can never be one.
+ *   the RING      every cell round the island must read clear road. A gatehouse
+ *                 built flush to a block's face (`A north gatehouse`) is part
+ *                 of that block and is refused, which is right.
+ *
+ * `world.interiorVolumes` is a fourth, redundant guard: anything standing in an
+ * enterable building's footprint is refused whatever its size.
+ */
+/** The lattice the height field is sampled on. */
+const BLOCK_CELL = 1.0;
+/** Mass under this over the road is not an object, it is a kerb. */
+const BLOCK_MIN = 0.35;
+/** …and over this it is a building. The CATH piers stand 3.39 m. */
+const BLOCK_TOP = 3.6;
+/** Widest a free-standing block may be in either plan axis. */
+const BLOCK_PLAN = 5.0;
+/** …and narrowest, in BOTH. This is what keeps a WALL from ever being one. */
+const BLOCK_THIN = 2.0;
+/** How much of its own bounding box the island has to fill. */
+const BLOCK_FILL = 0.6;
+/** How far outside the measured box a triangle may still belong to the block. */
+const BLOCK_PAD = 0.35;
+/** Cell of the lookup grid the hull and the gun ask through. */
+const BLOCK_LOOKUP = 4;
+
 /** Mass no taller than this over the road is not a wall to a side probe: the
- *  hull either erases it (@see `PLOUGH_TOP`) or drives over it. */
-const PASS_TOP = PLOUGH_TOP;
+ *  hull either erases it (@see `PLOUGH_TOP` for a prop pile, `BLOCK_TOP` for a
+ *  free-standing block) or drives over it. It is the HIGHER of the two, so the
+ *  probe and `_trimAtBlockers` are asking about the same set of mass — the two
+ *  disagreeing at 3.2 is what cost a leg in the sweep above. */
+const PASS_TOP = Math.max(PLOUGH_TOP, BLOCK_TOP);
 /**
  * ────────────────────────────────────────────────────────────────────────────
  * RAISED 1.6 -> 2.6 — 「戦車はもっと瓦礫を乗り越えていいし家や壁は破壊できるように
@@ -1042,6 +1136,19 @@ export class Armour {
     } catch (err) {
       console.warn('[tank] prop index failed — the plough is disabled', err);
     }
+    /**
+     * BEFORE the hulls, because the routes are baked against it: `_ploughableAt`
+     * asks `_blockAt` whether a 3.4 m pier is mass the hull can take off, and
+     * `_trimAtBlockers` cuts a leg at anything it cannot. @see
+     * `_buildBlockAtlas`.
+     */
+    try {
+      this._buildBlockAtlas(world, physics);
+    } catch (err) {
+      console.warn('[tank] block atlas failed — merged masonry stays standing', err);
+      this._blocks = null;
+      this._blockTri = null;
+    }
     for (const spec of ROUTES) {
       const tank = this._buildTank(spec, world, physics, props);
       if (tank) this.tanks.push(tank);
@@ -1167,6 +1274,14 @@ export class Armour {
    * the shed.
    */
   _ploughableAt(physics, x, z, roadY, top, props) {
+    /**
+     * A FREE-STANDING BLOCK ACCOUNTS FOR ITS OWN HEIGHT, and it is asked first
+     * because it is one cell lookup and no raycast. This is the half of the
+     * answer four ceiling passes could not reach: the 3.39 m pier on the
+     * cathedral's parvis has no instance to bind to and is erasable anyway.
+     * @see `_buildBlockAtlas`.
+     */
+    if (this._blockAt(x, z, top)) return true;
     if (!props?.length) return false;
     const grid = this._propGridOf(props);
     const cell = grid.cell;
@@ -1562,8 +1677,16 @@ export class Armour {
       // Only rises `_bakeRide`'s horizontal ray PROVED are standing mass — a
       // market awning over an open road is driven under, not trimmed at.
       if (!p.SOLID?.[i]) { run = 0; continue; }
-      let erasable = false;
-      if (grid) {
+      /**
+       * A FREE-STANDING BLOCK IS ERASABLE, and this is the line the fifth
+       * report turns on: the 3.39 m gate pier on the cathedral's parvis has no
+       * `prop_*` instance for the sweep below to find, so it read as a wall
+       * here and CUT BOTH HULLS' APPROACH 17 m SHORT of the square — which is
+       * also the inconsistency the `PLOUGH_TOP` sweep recorded at 3.2 without
+       * being able to name. @see `_buildBlockAtlas`.
+       */
+      let erasable = !!this._blockAt(p.X[i], p.Z[i], rise);
+      if (!erasable && grid) {
         const cell = grid.cell;
         const c0 = Math.floor((p.X[i] - PLOUGH_HALF) / cell);
         const c1 = Math.floor((p.X[i] + PLOUGH_HALF) / cell);
@@ -2210,6 +2333,9 @@ export class Armour {
       const zlo = Math.min(z0, z1, z2), zhi = Math.max(z0, z1, z2);
       const bin = bins.get(Math.floor(((xlo + xhi) * 0.5) / CELL) * 65536 + Math.floor(((zlo + zhi) * 0.5) / CELL));
       if (!bin) continue;
+      // A triangle belongs to exactly one eraser. @see the `claimed` note above
+      // — two owners means whichever restores second writes a zero back.
+      if (this._blockTri?.[t]) continue;
       for (let b = 0; b < bin.length; b++) {
         const k = bin[b];
         const q = tank.plough[k];
@@ -2501,6 +2627,9 @@ export class Armour {
     const lists = new Array(recs.length);
     let bound = 0;
     for (let t = 0; t < nTri; t++) {
+      // Claimed by a free-standing block already. @see `_buildBlockAtlas`, and
+      // the `_ploughClaimed` note above for why one owner per triangle.
+      if (this._blockTri?.[t]) continue;
       const o = t * 9;
       const x0 = pos[o], y0 = pos[o + 1], z0 = pos[o + 2];
       const x1 = pos[o + 3], y1 = pos[o + 4], z1 = pos[o + 5];
@@ -2615,6 +2744,405 @@ export class Armour {
         for (let i = 0; i < rec.tris.length; i++) sw.mask[rec.tris[i]] = rec.trisWas[i];
       }
       rec.fired = false;
+    }
+    a.fired.length = 0;
+  }
+
+  /* ====================================================================== */
+  /* THE BLOCK ATLAS: MERGED MASONRY THE HULL IS ALLOWED TO TAKE OFF         */
+  /* ====================================================================== */
+
+  /**
+   * MEASURE THE MAP'S FREE-STANDING BLOCKS, AND BIND BOTH HALVES OF EACH ONE.
+   * @see the long note over `BLOCK_TOP` for what this is answering and for the
+   * census of what it takes and refuses on the built map.
+   *
+   * THREE PASSES, ALL AT BOOT, NOTHING SOLVED AFTERWARDS:
+   *
+   *  1. A HEIGHT FIELD over the whole map on `BLOCK_CELL`: one downward ray per
+   *     cell, minus `world.groundHeight`, so every cell carries the height of
+   *     the mass OVER THE ROAD rather than over sea level. ~150 ms at 1 m on a
+   *     300 x 300 m map, once, and it is the only ray work here.
+   *
+   *  2. A FLOOD over the cells that hold mass, into islands, and the guards.
+   *     An island is a block if it is `BLOCK_THIN`..`BLOCK_PLAN` across in BOTH
+   *     plan axes, fills `BLOCK_FILL` of its own bounding box, tops out under
+   *     `BLOCK_TOP` over the road, is ringed on every side by cells under
+   *     `BLOCK_MIN`, and is not inside any `world.interiorVolumes` footprint.
+   *
+   *  3. THE BINDING, and it is the same rule `_bindPloughCollision` proved:
+   *     THE WHOLE TRIANGLE HAS TO FIT inside the block's own measured box. A
+   *     centroid test would take a slice out of anything that merely passes
+   *     through, leave it drawn, and give the player a window he can shoot
+   *     through and cannot see. Two sets come out of it —
+   *
+   *       the COLLISION triangles, out of the packed BVH array, zeroed in
+   *         `sw.mask` at fire time exactly as a pile's are;
+   *       the DRAWN triangles, out of `world.A.staticMeshes` — the merged
+   *         batches themselves — collapsed to degenerate indices at fire time
+   *         exactly as `Assembler.setScopeVisible` does it. A triangle whose
+   *         three indices are the same vertex has zero area and is discarded
+   *         before rasterisation in the forward draw, the depth prepass and all
+   *         four shadow cascades, because they share the index buffer.
+   *
+   *     THAT SECOND SET IS THE WHOLE POINT. Zeroing only the collision would be
+   *     a hull driving through masonry that is still standing behind it, which
+   *     is the failure the note over `PLOUGH_TOP` refuses in as many words.
+   *
+   * NOTHING IS EVER ADDED. Collision is only removed, so a nav grid baked at
+   * boot can only become more walkable than it was measured to be and
+   * `stuckcheck` cannot regress on account of this. Every write is saved
+   * ABSOLUTELY (never a delta) and the arrays are preallocated here, so `fire`
+   * is a pair of fills and `reset()` is exact — @see the note in `_firePlough`
+   * about the 1428 triangles that were not `LAYER.STATIC` to begin with.
+   */
+  _buildBlockAtlas(world, physics) {
+    this._blocks = null;
+    this._blockTri = null;
+    const sw = physics?.staticWorld;
+    const pos = sw?.pos;
+    const nTri = sw?.triCount ?? 0;
+    if (!pos || !nTri || !sw.mask || !world?.A?.staticMeshes) return;
+    const t0 = performance.now();
+
+    /* ---- 1. the height field --------------------------------------- */
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let z0 = Infinity;
+    let z1 = -Infinity;
+    for (let t = 0; t < nTri; t++) {
+      const o = t * 9;
+      for (let v = 0; v < 3; v++) {
+        const x = pos[o + v * 3];
+        const z = pos[o + v * 3 + 2];
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (z < z0) z0 = z;
+        if (z > z1) z1 = z;
+      }
+    }
+    // The ground sheet runs well past the playable map; the field does not.
+    x0 = Math.max(x0, -160);
+    x1 = Math.min(x1, 160);
+    z0 = Math.max(z0, -160);
+    z1 = Math.min(z1, 160);
+    if (!(x1 > x0) || !(z1 > z0)) return;
+    const nx = Math.ceil((x1 - x0) / BLOCK_CELL);
+    const nz = Math.ceil((z1 - z0) / BLOCK_CELL);
+    const H = new Float32Array(nx * nz);
+    for (let i = 0; i < nx; i++) {
+      const x = x0 + (i + 0.5) * BLOCK_CELL;
+      for (let j = 0; j < nz; j++) {
+        const z = z0 + (j + 0.5) * BLOCK_CELL;
+        const road = world.groundHeight(x, z);
+        const g = physics.groundHeight(x, z, 40);
+        H[i * nz + j] = Number.isFinite(g) && Number.isFinite(road) ? g - road : 0;
+      }
+    }
+    const fieldMs = performance.now() - t0;
+
+    /* ---- 2. flood, and the guards ----------------------------------- */
+    const owner = new Int32Array(nx * nz).fill(-1);
+    const stack = [];
+    const vols = world.interiorVolumes ?? [];
+    const list = [];
+    let isles = 0;
+    for (let si = 0; si < nx; si++) {
+      for (let sj = 0; sj < nz; sj++) {
+        const sk = si * nz + sj;
+        if (owner[sk] >= 0 || H[sk] <= BLOCK_MIN) continue;
+        isles++;
+        let i0 = si;
+        let i1 = si;
+        let j0 = sj;
+        let j1 = sj;
+        let cells = 0;
+        let hi = 0;
+        owner[sk] = isles;
+        stack.length = 0;
+        stack.push(sk);
+        while (stack.length) {
+          const c = stack.pop();
+          const ci = (c / nz) | 0;
+          const cj = c % nz;
+          cells++;
+          if (ci < i0) i0 = ci;
+          if (ci > i1) i1 = ci;
+          if (cj < j0) j0 = cj;
+          if (cj > j1) j1 = cj;
+          if (H[c] > hi) hi = H[c];
+          for (let d = 0; d < 4; d++) {
+            const ni = ci + (d === 0 ? 1 : d === 1 ? -1 : 0);
+            const nj = cj + (d === 2 ? 1 : d === 3 ? -1 : 0);
+            if (ni < 0 || nj < 0 || ni >= nx || nj >= nz) continue;
+            const nk = ni * nz + nj;
+            if (owner[nk] >= 0 || H[nk] <= BLOCK_MIN) continue;
+            owner[nk] = isles;
+            stack.push(nk);
+          }
+        }
+        const wpl = (i1 - i0 + 1) * BLOCK_CELL;
+        const dpl = (j1 - j0 + 1) * BLOCK_CELL;
+        if (wpl > BLOCK_PLAN || dpl > BLOCK_PLAN) continue;
+        if (wpl < BLOCK_THIN || dpl < BLOCK_THIN) continue;
+        if (hi > BLOCK_TOP) continue;
+        if (cells / ((i1 - i0 + 1) * (j1 - j0 + 1)) < BLOCK_FILL) continue;
+        // …and one cell of clear road all the way round it.
+        let ring = 0;
+        for (let i = i0 - 1; i <= i1 + 1 && ring <= BLOCK_MIN; i++) {
+          for (let j = j0 - 1; j <= j1 + 1; j++) {
+            if (i > i0 - 1 && i < i1 + 1 && j > j0 - 1 && j < j1 + 1) continue;
+            if (i < 0 || j < 0 || i >= nx || j >= nz) { ring = 99; break; }
+            const h = H[i * nz + j];
+            if (h > ring) ring = h;
+          }
+        }
+        if (ring > BLOCK_MIN) continue;
+        const cx = x0 + ((i0 + i1 + 1) / 2) * BLOCK_CELL;
+        const cz = z0 + ((j0 + j1 + 1) / 2) * BLOCK_CELL;
+        let inside = false;
+        for (const v of vols) {
+          const dx = cx - v.cx;
+          const dz = cz - v.cz;
+          const u = dx * v.c + dz * v.s;
+          const t = -dx * v.s + dz * v.c;
+          if (Math.abs(u) < v.hw + 1.6 && Math.abs(t) < v.hd + 1.6) { inside = true; break; }
+        }
+        if (inside) continue;
+        const road = world.groundHeight(cx, cz);
+        list.push({
+          ix: list.length,
+          x: cx, z: cz, y: Number.isFinite(road) ? road : 0, top: hi,
+          minX: cx - wpl / 2 - BLOCK_PAD, maxX: cx + wpl / 2 + BLOCK_PAD,
+          minZ: cz - dpl / 2 - BLOCK_PAD, maxZ: cz + dpl / 2 + BLOCK_PAD,
+          minY: (Number.isFinite(road) ? road : 0) - 0.8,
+          maxY: (Number.isFinite(road) ? road : 0) + hi + 0.7,
+          tris: null, trisWas: null, draws: null, fired: false,
+        });
+      }
+    }
+    if (!list.length) return;
+
+    /* ---- 3a. the collision triangles --------------------------------- */
+    const lookup = new Map();
+    const keyOf = (cx, cz) => cx * 65536 + cz;
+    for (const b of list) {
+      for (let cx = Math.floor(b.minX / BLOCK_LOOKUP); cx <= Math.floor(b.maxX / BLOCK_LOOKUP); cx++) {
+        for (let cz = Math.floor(b.minZ / BLOCK_LOOKUP); cz <= Math.floor(b.maxZ / BLOCK_LOOKUP); cz++) {
+          const k = keyOf(cx, cz);
+          let c = lookup.get(k);
+          if (!c) lookup.set(k, (c = []));
+          c.push(b);
+        }
+      }
+    }
+    const mark = new Uint8Array(nTri);
+    const cTris = list.map(() => []);
+    for (let t = 0; t < nTri; t++) {
+      const o = t * 9;
+      const ax = pos[o], ay = pos[o + 1], az = pos[o + 2];
+      const bx = pos[o + 3], by = pos[o + 4], bz = pos[o + 5];
+      const gx = pos[o + 6], gy = pos[o + 7], gz = pos[o + 8];
+      const xlo = Math.min(ax, bx, gx), xhi = Math.max(ax, bx, gx);
+      const zlo = Math.min(az, bz, gz), zhi = Math.max(az, bz, gz);
+      const bin = lookup.get(keyOf(
+        Math.floor(((xlo + xhi) * 0.5) / BLOCK_LOOKUP),
+        Math.floor(((zlo + zhi) * 0.5) / BLOCK_LOOKUP)
+      ));
+      if (!bin) continue;
+      const ylo = Math.min(ay, by, gy), yhi = Math.max(ay, by, gy);
+      for (let i = 0; i < bin.length; i++) {
+        const b = bin[i];
+        if (xlo < b.minX || xhi > b.maxX) continue;
+        if (zlo < b.minZ || zhi > b.maxZ) continue;
+        if (ylo < b.minY || yhi > b.maxY) continue;
+        cTris[b.ix].push(t);
+        mark[t] = 1;
+        break;
+      }
+    }
+
+    /* ---- 3b. the drawn triangles, out of the merged batches ---------- */
+    let drawn = 0;
+    for (const b of list) b.draws = [];
+    for (const mesh of world.A.staticMeshes.values()) {
+      const geo = mesh?.geometry;
+      const index = geo?.index;
+      const pAttr = geo?.getAttribute?.('position');
+      if (!index || !pAttr) continue;
+      const idx = index.array;
+      const vp = pAttr.array;
+      const tris = idx.length / 3;
+      /** block ix -> the index-array offsets of its triangles in this mesh. */
+      let hits = null;
+      for (let t = 0; t < tris; t++) {
+        const o = t * 3;
+        const i0 = idx[o] * 3;
+        const i1 = idx[o + 1] * 3;
+        const i2 = idx[o + 2] * 3;
+        const ax = vp[i0], bx = vp[i1], gx = vp[i2];
+        const xlo = Math.min(ax, bx, gx);
+        const xhi = Math.max(ax, bx, gx);
+        const az = vp[i0 + 2], bz = vp[i1 + 2], gz = vp[i2 + 2];
+        const zlo = Math.min(az, bz, gz);
+        const zhi = Math.max(az, bz, gz);
+        const bin = lookup.get(keyOf(
+          Math.floor(((xlo + xhi) * 0.5) / BLOCK_LOOKUP),
+          Math.floor(((zlo + zhi) * 0.5) / BLOCK_LOOKUP)
+        ));
+        if (!bin) continue;
+        const ay = vp[i0 + 1], by = vp[i1 + 1], gy = vp[i2 + 1];
+        const ylo = Math.min(ay, by, gy);
+        const yhi = Math.max(ay, by, gy);
+        for (let i = 0; i < bin.length; i++) {
+          const b = bin[i];
+          if (xlo < b.minX || xhi > b.maxX) continue;
+          if (zlo < b.minZ || zhi > b.maxZ) continue;
+          if (ylo < b.minY || yhi > b.maxY) continue;
+          // It lies flat on the carriageway: it IS the road, not the block.
+          if (yhi <= b.y + 0.12) continue;
+          if (!hits) hits = new Map();
+          let l = hits.get(b.ix);
+          if (!l) hits.set(b.ix, (l = []));
+          l.push(o);
+          drawn++;
+          break;
+        }
+      }
+      if (!hits) continue;
+      for (const [ix, offs] of hits) {
+        list[ix].draws.push({
+          index, arr: idx, off: Int32Array.from(offs),
+          was: new idx.constructor(offs.length * 3),
+          lo: offs[0], hi: offs[offs.length - 1] + 3,
+        });
+      }
+    }
+
+    /* ---- preallocate every saved buffer, so firing allocates nothing -- */
+    let kept = 0;
+    let cTot = 0;
+    for (const b of list) {
+      b.tris = Int32Array.from(cTris[b.ix]);
+      b.trisWas = new sw.mask.constructor(b.tris.length);
+      cTot += b.tris.length;
+      if (b.tris.length || b.draws.length) kept++;
+    }
+    this._blocks = { list, lookup, keyOf, fired: [] };
+    this._blockTri = mark;
+    console.info(
+      `[tank] block atlas: ${isles} islands of mass -> ${list.length} free-standing blocks ` +
+        `(${kept} bound: ${cTot} collision triangles, ${drawn} drawn triangles), ` +
+        `field ${nx}x${nz} in ${fieldMs.toFixed(0)}ms, total ${(performance.now() - t0).toFixed(0)}ms`
+    );
+  }
+
+  /**
+   * IS THERE A BLOCK AT THIS POINT THAT ACCOUNTS FOR `top` METRES OF MASS? One
+   * cell lookup and a box test — the question `_ploughableAt` and
+   * `_trimAtBlockers` ask before a route is committed. `top` is measured over
+   * the road, the same way the atlas measured the block.
+   */
+  _blockAt(x, z, top) {
+    const a = this._blocks;
+    if (!a) return null;
+    const bin = a.lookup.get(a.keyOf(Math.floor(x / BLOCK_LOOKUP), Math.floor(z / BLOCK_LOOKUP)));
+    if (!bin) return null;
+    for (let i = 0; i < bin.length; i++) {
+      const b = bin[i];
+      if (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) continue;
+      if (top > b.top + 0.5) continue;
+      return b;
+    }
+    return null;
+  }
+
+  /**
+   * A HULL OR A SHELL REACHED ONE. Every free-standing block whose measured box
+   * is inside `r` of the point stops being drawn and stops being solid, in one
+   * pass over the cells the contact touches — no search and no allocation.
+   */
+  _breakBlocksAt(x, y, z, r) {
+    const a = this._blocks;
+    if (!a) return 0;
+    const sw = this.physics?.staticWorld;
+    const c0 = Math.floor((x - r) / BLOCK_LOOKUP);
+    const c1 = Math.floor((x + r) / BLOCK_LOOKUP);
+    const d0 = Math.floor((z - r) / BLOCK_LOOKUP);
+    const d1 = Math.floor((z + r) / BLOCK_LOOKUP);
+    let n = 0;
+    for (let cx = c0; cx <= c1; cx++) {
+      for (let cz = d0; cz <= d1; cz++) {
+        const bin = a.lookup.get(a.keyOf(cx, cz));
+        if (!bin) continue;
+        for (let i = 0; i < bin.length; i++) {
+          const b = bin[i];
+          if (b.fired) continue;
+          // Nearest point of the block's own box, not its centre: a glacis that
+          // has driven into the face of a 3.6 m pier is 1.8 m from its middle.
+          const dx = x < b.minX ? b.minX - x : x > b.maxX ? x - b.maxX : 0;
+          const dz = z < b.minZ ? b.minZ - z : z > b.maxZ ? z - b.maxZ : 0;
+          if (dx * dx + dz * dz > r * r) continue;
+          if (y > b.maxY + 3.0 || y < b.minY - 3.0) continue;
+          this._eraseBlock(b, sw);
+          a.fired.push(b);
+          n++;
+        }
+      }
+    }
+    return n;
+  }
+
+  /** The primitive: degenerate indices over what it drew, zeroes over what it
+   *  stopped. Both saved ABSOLUTELY — @see the note in `_firePlough`. */
+  _eraseBlock(b, sw) {
+    b.fired = true;
+    for (let d = 0; d < b.draws.length; d++) {
+      const rec = b.draws[d];
+      const arr = rec.arr;
+      const off = rec.off;
+      for (let i = 0; i < off.length; i++) {
+        const o = off[i];
+        rec.was[i * 3] = arr[o];
+        rec.was[i * 3 + 1] = arr[o + 1];
+        rec.was[i * 3 + 2] = arr[o + 2];
+        arr[o + 1] = arr[o];
+        arr[o + 2] = arr[o];
+      }
+      rec.index.addUpdateRange(rec.lo, rec.hi - rec.lo);
+      rec.index.needsUpdate = true;
+    }
+    if (sw?.mask && b.tris) {
+      for (let i = 0; i < b.tris.length; i++) {
+        b.trisWas[i] = sw.mask[b.tris[i]];
+        sw.mask[b.tris[i]] = 0;
+      }
+    }
+  }
+
+  /** Put every block back up before the next round. */
+  _restoreBlocks() {
+    const a = this._blocks;
+    if (!a?.fired.length) return;
+    const sw = this.physics?.staticWorld;
+    for (const b of a.fired) {
+      for (let d = 0; d < b.draws.length; d++) {
+        const rec = b.draws[d];
+        const arr = rec.arr;
+        const off = rec.off;
+        for (let i = 0; i < off.length; i++) {
+          const o = off[i];
+          arr[o] = rec.was[i * 3];
+          arr[o + 1] = rec.was[i * 3 + 1];
+          arr[o + 2] = rec.was[i * 3 + 2];
+        }
+        rec.index.addUpdateRange(rec.lo, rec.hi - rec.lo);
+        rec.index.needsUpdate = true;
+      }
+      if (sw?.mask && b.tris) {
+        for (let i = 0; i < b.tris.length; i++) sw.mask[b.tris[i]] = b.trisWas[i];
+      }
+      b.fired = false;
     }
     a.fired.length = 0;
   }
@@ -3542,6 +4070,28 @@ export class Armour {
         const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
         fx?.dust?.(at.x, tank.position.y + 0.5, at.z, 1.8);
       }
+      /**
+       * …AND THE MASONRY OBJECT GOES WITH IT — 「破壊可能なオブジェは破壊せよ」.
+       * The three erasers on this clock now cover the three kinds of mass a
+       * hull actually meets: an instanced prop (`_razeAt`), a breachable house
+       * wall (`world.damageAt`), and a free-standing merged block — the gate
+       * pier on the cathedral's parvis, the plinths on a capture point, the
+       * blockhouse in a connector. @see `_buildBlockAtlas`.
+       */
+      const broke = this._breakBlocksAt(at.x, tank.position.y, at.z, CONTACT_RAZE_R);
+      if (broke) {
+        tank.stats.razed += broke;
+        tank.ploughDrag = PLOUGH_DRAG;
+        const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
+        if (fx) {
+          fx.dust?.(at.x, tank.position.y + 0.9, at.z, 3.0);
+          fx.hazeRing?.(at.x, tank.position.y + 0.6, at.z, 2.6, 14, 0.5, 1.6);
+        }
+        const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+        audio?.play?.('strike_rubble', at, {
+          level: 0.75, dur: 1.8, maxDist: 160, gain: 1.2, occlusion: 0.4,
+        });
+      }
       const breach = world?.damageAt?.(at, 1) ?? null;
       if (!breach) continue;
       tank.stats.breaches++;
@@ -4064,6 +4614,15 @@ export class Armour {
     tank.stats.razed += razed;
 
     /**
+     * …AND THE MASONRY IN THE STREET WITH IT. `_razeAt` stops at anything with
+     * no `prop_*` instance behind it, which is every piece of free-standing
+     * merged masonry on this map — the gate piers on the cathedral's parvis
+     * above all. A main-gun round takes one off. @see `_buildBlockAtlas`.
+     */
+    const broke = this._breakBlocksAt(at.x, at.y, at.z, RAZE_R);
+    tank.stats.razed += broke;
+
+    /**
      * ──────────────────────────────────────────────────────────────────────
      * …AND A HOUSE LOSES A WALL — 「物資やビーコンのある家も破壊できるようにして」
      * ──────────────────────────────────────────────────────────────────────
@@ -4542,6 +5101,9 @@ export class Armour {
     this.disarm();
     // Every stall the guns took off the map goes back up before the next round.
     this._restoreRaze();
+    // …and every free-standing block the hulls drove through. @see
+    // `_buildBlockAtlas`.
+    this._restoreBlocks();
     for (const tank of this.tanks) {
       // Every pile the last round flattened goes back up before the next one.
       this._restorePlough(tank);

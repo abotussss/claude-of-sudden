@@ -1,0 +1,10 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch({ headless: true, args: ['--use-angle=metal','--ignore-gpu-blocklist','--mute-audio'] });
+const p = await b.newPage({ viewport: { width: 800, height: 600 } });
+const errs = []; p.on('pageerror', (e) => errs.push(String(e.message)));
+p.on('console', (m) => { const t = m.text(); if (/\[tank\]|block atlas|raze atlas|SORTIE/.test(t)) console.log('  ' + t); });
+await p.goto(`${process.argv[2]}?capture=1&seed=${process.argv[3] ?? 7}`, { waitUntil: 'domcontentloaded' });
+await p.waitForFunction('window.__READY__===true', null, { timeout: 300000 });
+await p.evaluate(() => new Promise((d) => { let i=0; const t=()=>(++i>=90?d():requestAnimationFrame(t)); requestAnimationFrame(t); }));
+console.log(errs.length ? 'PAGEERROR: ' + errs.slice(0,3).join(' | ') : 'boot clean, 0 pageerrors');
+await b.close();
