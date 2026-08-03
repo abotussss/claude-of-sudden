@@ -341,6 +341,34 @@ const DRONE_NOTICE = 18;
  */
 const SMOKE_MAX = 6;
 const SMOKE_CORE = 0.78;
+/**
+ * ══════════════════════════════════════════════════════════════════════════
+ * A BOT'S CAN IS THE SAME CAN THE PLAYER THROWS — 「スモークの範囲今の５倍にして」
+ * ══════════════════════════════════════════════════════════════════════════
+ * `_detonateThrown` wrote `ev.radius = 6.5` from a bare literal, and the player's
+ * screen has just gone to 40 m (`weapons/defs.js:smoke.smokeRadius`). The event
+ * that literal rides out on is the SAME event `_addSmoke` builds the sightline
+ * volume from, so a bot was throwing a screen a sixth of the size of the one
+ * being thrown at him — and `_smokeBlocks` runs in both directions, so it was
+ * an asymmetry in what each side could hide behind, not a cosmetic one.
+ *
+ * `ai` may not import `weapons/defs.js` (@see ARCHITECTURE.md rule 2), so these
+ * are a MIRROR, exactly as the `WEAPONS` rack in agent.js mirrors the gun table
+ * — but a mirror that CORRECTS ITSELF: `_smokeR` is latched from the radius the
+ * player's own `weapon:smoke` carries the first time one goes off, so the two
+ * numbers cannot drift apart again without the drift being repaired in flight.
+ * Three unnamed literals in one file is how they drifted the first time; there
+ * is now one named number and it is checked against the authority at runtime.
+ *
+ * `SMOKE_GROWTH` is a RATIO and not a distance — `Ambience._puff` sizes a puff
+ * at `radius * growth` where `radius` is already `rad * 0.22`. The bot path
+ * still carried the OLD quadratic form (`ev.radius * 0.9`), which at a 40 m can
+ * is a growth of 36 and a sprite the size of the district. Mirrored from
+ * `grenades.js`, where the same bug was already fixed.
+ */
+const SMOKE_R = 40;
+const SMOKE_T = 14;
+const SMOKE_GROWTH = 5.85;
 /** How much of his own flash a man who was warned about it takes. */
 const FLASH_OWN_SIDE = 0.3;
 
@@ -569,6 +597,8 @@ export class AiSystem {
     this._smoke = new Float64Array(SMOKE_MAX * 5);
     this._smokeN = 0;
     this._smokeNext = 0;
+    /** What a can is worth, mirrored and then latched from the real one. @see `SMOKE_R`. */
+    this._smokeR = SMOKE_R;
     /** Suppression against armour — @see clause 3 of `armourWorth`. Flipped
      *  only by `_tankfight.mjs`, to report the engagement rate both ways. */
     this.armourSuppress = true;
@@ -993,7 +1023,11 @@ export class AiSystem {
      */
     on('weapon:smoke', (e) => {
       if (!e || !e.position) return;
-      this._addSmoke(e.position, e.radius ?? 6.5, e.duration ?? 14);
+      // THE LATCH. @see `SMOKE_R`: whatever the authority currently says rides
+      // out on this event, so the mirror is repaired the first time one goes off
+      // rather than the next time somebody reads both files side by side.
+      if (typeof e.radius === 'number' && e.radius > 0) this._smokeR = e.radius;
+      this._addSmoke(e.position, e.radius ?? this._smokeR, e.duration ?? SMOKE_T);
     });
 
     on('player:footstep', (e) => {
@@ -2550,8 +2584,8 @@ export class AiSystem {
      */
     ev.team = team;
     if (kind === 'smoke') {
-      ev.radius = 6.5;
-      ev.duration = 14;
+      ev.radius = this._smokeR;
+      ev.duration = SMOKE_T;
       const fx = this.ctx.peek('fx');
       fx?.addSmokeSource?.(ev.position, {
         duration: ev.duration,
@@ -2560,7 +2594,8 @@ export class AiSystem {
         rise: 0.85,
         dark: 0.04,
         life: 7.5,
-        growth: ev.radius * 0.9,
+        // A RATIO, not a distance. @see `SMOKE_GROWTH`.
+        growth: SMOKE_GROWTH,
         ember: 0,
         haze: 0.85,
       });
