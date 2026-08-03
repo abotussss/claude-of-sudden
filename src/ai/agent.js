@@ -1515,6 +1515,21 @@ export class Agent {
     this.sprintFuel = SPRINT_FUEL;
     this._sprintArmed = true;
     this._ahead = 0;
+    /**
+     * WHAT THE FIRETEAM BRAKE TOOK OFF HIM THIS FRAME, as a multiplier on
+     * `desiredSpeed`; 1 is untouched. @see the brake in `_advance`.
+     *
+     * It exists because the gate and the legs disagree and nothing could say by
+     * how much: `_sprintGate` passes a man (`sprinting` true) and then the brake
+     * multiplies the sprint it just granted him back down, so a census of the
+     * GATE reports a running man and the speed histogram reports a walking one.
+     * Measured (`_engage.mjs`, seed 7): the gate grants a run on **61 %** of
+     * travel samples and **70.7 %** of the men it grants one to are below a
+     * flat-out run when the tape measure comes out.
+     *
+     * Cleared in `update` beside `sprinting`, for the same reason.
+     */
+    this._brakeCut = 1;
     this.crouch = false;
     this.cover = null;
     this.coverPos = new THREE.Vector3();
@@ -1678,7 +1693,30 @@ export class Agent {
      * — @see the field block in the constructor.
      */
     if (this.sprinting) {
-      this.sprintFuel -= dt;
+      /**
+       * ══════════════════════════════════════════════════════════════════════
+       * HE PAYS FOR THE RUN HE GOT, NOT THE ONE HE WAS GRANTED
+       * ══════════════════════════════════════════════════════════════════════
+       * `sprinting` is the GATE's verdict and it is set before the fireteam
+       * brake runs, so a man out in front of his own team was charged a full
+       * second of a 6.45 m/s tank for a second spent walking at 4.3 — the brake
+       * takes his speed and the clock took his wind for it anyway.
+       *
+       * IT IS THE NEAR-FIELD BUG WEARING A DIFFERENT HAT, and that is why it is
+       * fixed here rather than filed as tidiness. The man the player can see is
+       * by construction the man furthest forward — he is the one who reached the
+       * far side of the map first — which is exactly the man the brake is
+       * pointed at. Measured (`_engage.mjs`, seed 7, inside 60 m of the player):
+       * `winded` is **17.2 %** of travel samples there against **4.6 %** across
+       * the whole map, and half of what is left sits in the 4-5 m/s band, which
+       * is `walkPace`. So the men he watches are men who spent a tank they never
+       * got to use and are now walking it off in front of him.
+       *
+       * `_brakeCut` is last frame's, which is the frame the fuel was actually
+       * spent on. No new state, no clause in the gate, and a man who is NOT
+       * braked is charged exactly what he was charged before.
+       */
+      this.sprintFuel -= dt * (this._brakeCut > 0 ? this._brakeCut : 1);
       // Out of wind. `_sprintArmed` is a LATCH and not a threshold test: without
       // it a man at exactly the re-arm mark alternates run/walk every frame.
       if (this.sprintFuel <= 0) { this.sprintFuel = 0; this._sprintArmed = false; }
@@ -1688,6 +1726,7 @@ export class Agent {
     }
     this._wasSprinting = this.sprinting;
     this.sprinting = false;
+    this._brakeCut = 1;
 
     // a path the frame budget deferred: ask again before anything else does
     if (this.pathPending) this._goTo(this._pendingDest);
@@ -2866,9 +2905,12 @@ export class Agent {
         const slack = LEAD_SLACK;
         const lead = ft.centre.distanceTo(dest) - dist;
         if (lead > slack) {
+          const before = this.desiredSpeed;
           const braked = this.desiredSpeed
             * Math.max(this.elite ? 0.72 : 0.55, 1 - (lead - slack) * 0.05);
           this.desiredSpeed = Math.max(braked, Math.min(walkPace, this.desiredSpeed));
+          // What it cost him, for the fuel clock and for the census. @see `_brakeCut`.
+          this._brakeCut = this.desiredSpeed / before;
         }
       }
       /**
@@ -2989,6 +3031,17 @@ export class Agent {
    * diversion or the objective — so a man is measured against where he is
    * actually walking rather than against the flag.
    */
+  /**
+   * The gate's own thresholds, published for the probes that reproduce its
+   * order (`_engage.mjs`, `_fourprobe.mjs`). They were retyped as literals in
+   * three harnesses and two of them were a pass out of date, which reports a
+   * refusal the gate does not make. Getters on the prototype: no per-agent
+   * storage and nothing allocated.
+   */
+  get _sprintThreatR() { return SPRINT_THREAT_R; }
+
+  get _sprintStartD() { return SPRINT_START; }
+
   _sprintGate(dist, allow) {
     if (!allow) return 0;
     // The two the state machine already knows about. Suppression is a QUARTER
@@ -2999,7 +3052,33 @@ export class Agent {
     // `_detourTimer` and `stuckRung` are `_unstick`'s, and a manoeuvre to get
     // out of something is not a leg to run down.
     if (this.working || this.post || this.postClimbing || this.crouch) return 0;
-    if (!this.hasMoveTarget || this._detourTimer > 0 || this.stuckRung !== 0) return 0;
+    if (!this.hasMoveTarget || this._detourTimer > 0) return 0;
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * THE LADDER REFUSES A MANOEUVRE, NOT A MAN WHO IS MOVING AGAIN
+     * ══════════════════════════════════════════════════════════════════════
+     * `stuckRung !== 0` was a blanket refusal, and `_trackProgress` only retires
+     * the ladder after TWO clean windows — deliberately, so a man shuffled two
+     * metres by the crowd is not sent back to rung one. The cost of that
+     * deliberate hysteresis is `STUCK_WINDOW` seconds in which a man who is
+     * demonstrably walking a good leg carries the ladder's stamp and may not run.
+     *
+     * AND IT LANDS ALMOST ENTIRELY IN FRONT OF THE PLAYER, through a dwell bias
+     * nothing had accounted for: a man crossing the near field at a run is
+     * inside it for two seconds and a man on the ladder is inside it for as long
+     * as the ladder lasts, so the near field FILLS UP with the men who were
+     * refused a run. Measured (`_engage.mjs`, inside 60 m of the player):
+     * `unstick:rung` is **23.9 %** (seed 7) and **58.9 %** (seed 11) of travel
+     * samples there against **5.5 %** across the whole map.
+     *
+     * So the refusal keeps its whole job — a man who is not moving is still
+     * refused, at every rung — and gives up only the tail: one clean
+     * `STUCK_CLEAR` window of real ground covered and he may run again, while
+     * `stuckRung` stays set and the ladder keeps counting exactly as it did.
+     * `tools/stuckcheck.mjs` is the price of this and it was run against it:
+     * 2 / 41 wedged and 0 / 41 barely moving, which is the standing baseline.
+     */
+    if (this.stuckRung !== 0 && this._progGood < 1) return 0;
     // A call-out that concerns HIM. Distance-qualified on purpose — a contact
     // sixty metres away on the other flank is not a reason to stop running.
     if (this.lastKnownAge < 4
