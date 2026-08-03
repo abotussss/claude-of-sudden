@@ -76,18 +76,52 @@ export function inBuilding(x, z, m = 0.3) {
  * the test that enforces it. Flat dressing (stains, litter, patches) has no
  * proxy and is not filtered.
  */
-export function keepClear(x, z) {
+export function keepClear(x, z, rad = 0) {
   for (let i = 0; i < KEEPOUT.length; i++) {
     const dx = x - KEEPOUT[i][0];
     const dz = z - KEEPOUT[i][1];
-    if (dx * dx + dz * dz < KEEPOUT[i][2] * KEEPOUT[i][2]) return false;
+    const r = KEEPOUT[i][2] + rad;
+    if (dx * dx + dz * dz < r * r) return false;
   }
   for (let i = 0; i < DOORWAYS.length; i++) {
     const dx = x - DOORWAYS[i][0];
     const dz = z - DOORWAYS[i][1];
-    if (dx * dx + dz * dz < DOORWAYS[i][2] * DOORWAYS[i][2]) return false;
+    const r = DOORWAYS[i][2] + rad;
+    if (dx * dx + dz * dz < r * r) return false;
   }
   return true;
+}
+
+/**
+ * SLIDE A SOLID SET PIECE OFF A THRESHOLD RATHER THAN DELETE IT.
+ *
+ * `keepClear` answers yes or no and every caller that got "no" dropped the
+ * piece — which is fine for one crate out of six hundred in a lane and wrong
+ * for a hand-authored set piece, because a tyre stack that exists to break a
+ * 30 m sightline does not stop being needed when the door beside it moved.
+ * `SET_PIECES.tyres[0]` sits inside E1's side-1 doorway on every seed and has
+ * since the bay solver last moved that door; `_doorblock.mjs` names it.
+ *
+ * Rings out from the authored spot in 0.4 m steps and returns the first legal
+ * point on open ground, or null when there is none inside `reach`. Draws NO
+ * random numbers, so a piece rescued this way cannot shift the rest of the
+ * level's dice. `rad` is the piece's own footprint radius — a prop is not a
+ * point, and neither is a tyre stack.
+ */
+export function shiftOpen(x, z, rad = 0, reach = 3.2) {
+  if (keepClear(x, z, rad)) return [x, z];
+  const rings = Math.max(1, Math.round(reach / 0.4));
+  for (let ring = 1; ring <= rings; ring++) {
+    const step = ring * 0.4;
+    for (let k = 0; k < 12; k++) {
+      const a = (k / 12) * Math.PI * 2 + ring * 0.26;
+      const px = x + Math.cos(a) * step;
+      const pz = z + Math.sin(a) * step;
+      if (!isOpen(px, pz, 0.25)) continue;
+      if (keepClear(px, pz, rad)) return [px, pz];
+    }
+  }
+  return null;
 }
 
 /**
@@ -1526,7 +1560,18 @@ export function tyreStack(A, rng, x, y, z, n) {
 }
 
 function tyreStacks(A, rng) {
-  for (const [x, z, n] of SET_PIECES.tyres) {
+  for (const [ax, az, n] of SET_PIECES.tyres) {
+    /**
+     * A 0.68 m solid column standing 0.7 m high, and it was placed on an
+     * authored coordinate with nothing consulted. `SET_PIECES.tyres[0]` is
+     * 1.1-1.4 m outside E1's side-1 door, dead on the centre line: the capsule
+     * cannot get past it in any lane, on any seed. The stack is cover the
+     * street needs, so it slides to the nearest open ground off the threshold
+     * rather than being deleted, and everything bolted to it — the skirt, the
+     * proxy, the tyre leaning against it — goes with it. @see `shiftOpen`.
+     */
+    const p = shiftOpen(ax, az, 0.48) ?? [ax, az];
+    const [x, z] = p;
     const y = groundY(x, z);
     tyreStack(A, rng, x, y, z, n);
     groundSkirt(A, rng, x, y, z, 0.42);
@@ -1740,21 +1785,70 @@ function dressBuilding(A, rng, info) {
       const wp = worldOf(dr.pm, dr.x + rng.range(-0.2, 0.2), 2.55, -0.12);
       A.put('sign_hang', wp[0], wp[1], wp[2], ryOf(dr.pm) + Math.PI, rng.range(0.85, 1.15), [1, 1.2, 1]);
     }
-    // step, mat, and the junk that lives beside a doorway
-    const wp = worldOf(dr.pm, dr.x, 0.02, -0.55);
+    /**
+     * ─────────────────────────────────────────────────────────────────────
+     * THE JUNK THAT LIVES *BESIDE* A DOORWAY — 「なぜ屋内で通路可能な扉とかの
+     * 出入り口に邪魔な物理判定のある障害物置くの」
+     * ─────────────────────────────────────────────────────────────────────
+     * This loop is the single biggest producer of blocked thresholds on the
+     * map and it had both halves of the classic wrong. `_doorblock.mjs` blamed
+     * it for W2's side-1 door, E2's side-3 door and N2's side-2 door on seed 1
+     * alone, with a crate and a planter standing in the opening.
+     *
+     *   IT NEVER ASKED. `setDoorways` derives a keep-clear circle on every
+     *   threshold on the map before a single prop is placed, and `keepClear`
+     *   is what every other pass consults — this one, the one that deliberately
+     *   aims at a doorway, did not. Three of the seven picks (`crate_b`,
+     *   `jerry_can`, `planter`) carry a collision proxy 0.4-0.7 m across.
+     *
+     *   AND IT SCATTERED ON THE LEVEL'S AXES, NOT THE FACE'S. The offsets were
+     *   +-1.3 in X and +-1.0 in Z off a point in front of the door, whatever
+     *   side the door was on — so on a side-1 or side-3 elevation the "1.3 m
+     *   along the wall" ran 1.3 m OUT INTO THE STREET and the "1.0 m out from
+     *   the wall" ran along it. Both blocked doors on seed 1 were on side 1
+     *   and side 3. Placing in the door's own panel frame is what makes "along
+     *   the face" mean anything.
+     *
+     * Nothing is dropped. The piece is chosen BEFORE its spot — so the spot is
+     * cleared for the thing that is actually going in it, the same rule
+     * `interiors.js` had to adopt — and a solid one slides ALONG THE FACE,
+     * away from the door, until the threshold is clear. That is where a
+     * doorstep's junk really sits: against the wall, beside the step, not on
+     * it. Litter and sandbags carry no proxy and are not moved.
+     */
+    const SIDE = ['bucket', 'crate_b', 'stool', 'sandbag_a', 'litter', 'jerry_can', 'planter'];
     for (let i = 0; i < rng.int(1, 4); i++) {
-      const ox = wp[0] + rng.range(-1.3, 1.3);
-      const oz = wp[2] + rng.range(-1.0, 1.0);
+      const id = rng.pick(SIDE);
+      const s = rng.range(0.85, 1.1);
+      const ry = rng.float() * 6.28;
+      const mk = rng.range(1.0, 1.4);
+      let along = rng.range(-1.3, 1.3);
+      const out = rng.range(0.35, 1.35);
+      const rad = A.footprintR(id, s);
+      const legal = (t) => {
+        const q = worldOf(dr.pm, dr.x + t, 0.02, -out);
+        return isOpen(q[0], q[2], 0.15) && (rad === 0 || keepClear(q[0], q[2], rad));
+      };
+      if (rad > 0 && !legal(along)) {
+        /**
+         * The nearest legal offset along this face, searched OUTWARD from the
+         * rolled one in both directions so the piece keeps the side of the door
+         * the dice put it on whenever both sides work. 4.2 m is a bay and a
+         * half; past that the facade belongs to something else.
+         */
+        let found = null;
+        for (let k = 1; k <= 28 && found === null; k++) {
+          const d = k * 0.15;
+          if (legal(along + d)) found = along + d;
+          else if (legal(along - d)) found = along - d;
+        }
+        if (found === null) continue;   // this whole elevation is threshold
+        along = found;
+      }
+      const wp = worldOf(dr.pm, dr.x + along, 0.02, -out);
+      const ox = wp[0], oz = wp[2];
       if (!isOpen(ox, oz, 0.15)) continue;
-      A.put(
-        rng.pick(['bucket', 'crate_b', 'stool', 'sandbag_a', 'litter', 'jerry_can', 'planter']),
-        ox,
-        groundY(ox, oz),
-        oz,
-        rng.float() * 6.28,
-        rng.range(0.85, 1.1),
-        [1, rng.range(1.0, 1.4), 1]
-      );
+      A.put(id, ox, groundY(ox, oz), oz, ry, s, [1, mk, 1]);
     }
   }
 
@@ -2195,16 +2289,47 @@ export function scatterDebris(A, rng) {
       const faceYaw = Math.atan2(near.nx, near.nz);
       for (let k = 0; k < stack; k++) {
         // Shoved back into the wall and spread along it, not out into the lane.
-        const along = k === 0 ? 0 : rng.range(-0.85, 0.85);
+        let along = k === 0 ? 0 : rng.range(-0.85, 0.85);
         const into = k === 0 ? rng.range(0, 0.35) : rng.range(0.05, 0.5);
-        const px = x + ax * along - near.nx * into;
-        const pz = z + az * along - near.nz * into;
-        if (inBuilding(px, pz, 0.25) || !isOpen(px, pz, 0.1)) continue;
         // Anything that carries collision is barred from the plant areas and
         // the spawn pockets. Ask the prototype rather than pattern-matching the
         // id: the list of solid props lives in props.js and nowhere else.
         const pid = k === 0 ? id : rng.pick(['crate_a', 'crate_b', 'crate_flat', 'pallet', 'box_card_a', 'box_card_b', 'bucket', 'tyre', 'sandbag_a']);
-        if (A.isSolid(pid) && !keepClear(px, pz)) continue;
+        /**
+         * …AND IT IS BARRED BY ITS BODY, NOT BY ITS CENTRE. A goods huddle is
+         * placed AGAINST A FACADE and a doorway is a hole in a facade, so this
+         * is the one outdoor pass whose whole purpose puts it next to
+         * thresholds. `keepClear(px, pz)` with no radius passed a carton whose
+         * centre cleared a door circle by 2 cm and whose body stood 0.2 m
+         * inside it: `_doorblock.mjs` blamed this loop for E3's side-3 door on
+         * seed 8. Same rule as everything else that can seal a way through —
+         * the prop's own `footprintR`, and it SLIDES ALONG THE WALL rather than
+         * being dropped, so the lane keeps its density.
+         */
+        // The WIDEST this instance can come out: `A.put` below scales it by up
+        // to 1.2, and the clearance has to hold for the piece that is placed,
+        // not for a nominal one. Same argument as `STACK_SMAX` in interiors.js.
+        const prad = A.footprintR(pid, 1.2);
+        if (prad > 0) {
+          const at = (t) => {
+            const qx = x + ax * t - near.nx * into;
+            const qz = z + az * t - near.nz * into;
+            return !inBuilding(qx, qz, 0.25) && isOpen(qx, qz, 0.1) && keepClear(qx, qz, prad);
+          };
+          if (!at(along)) {
+            let found = null;
+            for (let j = 1; j <= 12 && found === null; j++) {
+              const dd = j * 0.18;
+              if (at(along + dd)) found = along + dd;
+              else if (at(along - dd)) found = along - dd;
+            }
+            if (found === null) continue;
+            along = found;
+          }
+        }
+        const px = x + ax * along - near.nx * into;
+        const pz = z + az * along - near.nz * into;
+        if (inBuilding(px, pz, 0.25) || !isOpen(px, pz, 0.1)) continue;
         const y = groundY(px, pz);
         A.put(
           pid,
