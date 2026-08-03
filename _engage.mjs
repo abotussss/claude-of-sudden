@@ -79,9 +79,22 @@ for (const seed of SEEDS) {
     /* ---- constants of the reading ---------------------------------- */
     const LOST = 1.2;        // seconds without a contact that ends an engagement
     const MOVING = 1.2;      // m/s at which a man counts as firing on the move
-    const PLAYER_TOP = 6.45; // the player's own sprint. @see SPRINT_SPEED.
+    const PLAYER_TOP = 6.45; // the old edge, kept only for comparability
+    const FULL_SPRINT = 6.4; // 6.4492 is what a rifleman's flat-out run IS
     const NEAR_TOP = 5.8;    // "at or near" it
 
+    /**
+     * THE NEAR FIELD IS ITS OWN READING — 「プレイヤーの最高速度と同じスピードで
+     * 移動する時間がないとおかしい」 is a sentence about what the player CAN SEE.
+     *
+     * The whole-map histogram has been reported four times and it has never
+     * answered the complaint, because a man running 130 m away is a man the
+     * player never watched. `NEAR` is the radius inside which travel is his
+     * problem: 60 m is about the far edge of a readable silhouette on this map
+     * and it is wider than the 45 m the sprint-start census used, on purpose —
+     * a start at 50 m is still a run he watches unfold.
+     */
+    const NEAR = 60;
     const S = {
       eng: [],              // completed engagements
       sight: [],            // completed SIGHTINGS — eyes actually on him
@@ -97,6 +110,31 @@ for (const seed of SEEDS) {
       sprintSamples: 0, movingSamples: 0, aliveSamples: 0,
       sprintStarts: 0, sprintStartNearPlayer: 0, sprintStartDist: [],
       why: Object.create(null),
+      /* the same, for men the player could actually watch. @see NEAR. */
+      travelNear: 0, whyNear: Object.create(null),
+      nearAlive: 0, nearMoving: 0, nearSprint: 0,
+      /**
+       * THE GATE SAYS RUN AND THE LEGS DO SOMETHING ELSE. Charged only on
+       * travel samples where `_sprintGate` actually set `sprinting`, so this
+       * separates "he was refused" from "he was granted a run and then had it
+       * multiplied away". @see `Agent._brakeCut`.
+       */
+      sprintGranted: 0, sprintBraked: 0, sprintBrakeSum: 0,
+      sprintSlowUnbraked: 0, sprintSlowBraked: 0,
+      /**
+       * …AND THE SAME INSIDE `NEAR`, because the man the player can see is by
+       * construction the man furthest forward — he reached this side of the map
+       * first — which is exactly the man the fireteam brake is pointed at.
+       */
+      nearGranted: 0, nearBraked: 0,
+      /**
+       * WHAT WAS IN THE GUN WHEN HE SAW SOMEBODY. The refusal census says the
+       * dead time inside a short sighting is `reloading` and `dry`; this says
+       * whether that state was already true at the moment the contact opened,
+       * which is the difference between "the reload is slow" and "he walked
+       * into the fight with an empty gun".
+       */
+      openReloading: 0, openDry: 0, openLow: 0, openFull: 0, opens: 0,
       ticks: 0,
       maxSpeed: 0,
       /* was there anything to shoot at besides men, and was it ever a target */
@@ -104,9 +142,29 @@ for (const seed of SEEDS) {
       armourWorth: Object.create(null),
       armourInRange: 0,
     };
-    const BUCKETS = [0, 1, 2, 3, 4, 5, 5.5, 6, 6.45, 7, 99];
+    /**
+     * 6.4 IS A NEW EDGE AND IT IS THERE BECAUSE 6.45 WAS A TRAP.
+     *
+     * `SPRINT_SPEED` is `7.01 * 0.92 = 6.4492` and a carbine's `moveScale` is
+     * exactly 1, so a bot running flat out with the commonest gun on the map
+     * asymptotes to 6.4492 — EIGHT TEN-THOUSANDTHS BELOW the `>= 6.45` test.
+     * He can never enter the top bucket, and neither can the player, whose own
+     * `sprintSpeed` is the same 6.4492 (`src/player/tuning.js`). So the
+     * headline "9.5 % at or above the player's own 6.45" was counting only the
+     * SMG and machine-pistol men, whose `moveScale` is over 1, and reporting
+     * every rifleman at a dead run as if he were not running.
+     *
+     * The old edges are all kept so the number stays comparable with the four
+     * passes that came before it; 6.4 is inserted, and `atFullSprintPct` below
+     * is the honest form of the same question.
+     */
+    const BUCKETS = [0, 1, 2, 3, 4, 5, 5.5, 6, 6.4, 6.45, 7, 99];
     const hist = new Array(BUCKETS.length - 1).fill(0);
-    const bump = (k) => { S.why[k] = (S.why[k] ?? 0) + 1; };
+    const histNear = new Array(BUCKETS.length - 1).fill(0);
+    const bump = (k, near) => {
+      S.why[k] = (S.why[k] ?? 0) + 1;
+      if (near) S.whyNear[k] = (S.whyNear[k] ?? 0) + 1;
+    };
 
     /* per-agent engagement bookkeeping, keyed on the actor object */
     const live = new Map();
@@ -134,7 +192,8 @@ for (const seed of SEEDS) {
     const sight = new Map();
     const closeSight = (g) => {
       S.sight.push({ rounds: g.rounds, moving: g.moving,
-        dur: +(e.time.elapsed - g.t0).toFixed(2) });
+        dur: +(e.time.elapsed - g.t0).toFixed(2),
+        mag0: g.mag0, frac0: g.frac0, reloading0: g.reloading0, dry0: g.dry0 });
     };
 
     const fire0 = ai.onAgentFire.bind(ai);
@@ -199,7 +258,20 @@ for (const seed of SEEDS) {
         /* ---- sightings --------------------------------------------- */
         let sg = sight.get(a);
         if (a.targetVisible && a.hasTarget) {
-          if (!sg) { sg = { rounds: 0, moving: 0, t0: e.time.elapsed, lost: 0 }; sight.set(a, sg); }
+          if (!sg) {
+            /* WHAT WAS IN THE GUN AT THE INSTANT HIS EYES LANDED ON HIM. */
+            const reloading0 = a.animator?.reloading === true;
+            const dry0 = a.dry === true;
+            const frac0 = a.magSize > 0 ? a.ammo / a.magSize : 0;
+            sg = { rounds: 0, moving: 0, t0: e.time.elapsed, lost: 0,
+              mag0: a.ammo, frac0: +frac0.toFixed(3), reloading0, dry0 };
+            sight.set(a, sg);
+            S.opens++;
+            if (reloading0) S.openReloading++;
+            if (dry0) S.openDry++;
+            if (!reloading0 && !dry0 && frac0 < 0.34) S.openLow++;
+            if (!reloading0 && !dry0 && frac0 > 0.95) S.openFull++;
+          }
           sg.lost = 0;
         } else if (sg) {
           sg.lost += dt;
@@ -250,6 +322,15 @@ for (const seed of SEEDS) {
         if (a.speed > S.maxSpeed) S.maxSpeed = a.speed;
         if (a.speed > 0.4) S.movingSamples++;
         if (a.sprinting) S.sprintSamples++;
+        /* how far from the eye that is complaining. @see NEAR. */
+        const cam = e.ctx.camera;
+        const dPlayer = Math.hypot(a.position.x - cam.position.x, a.position.z - cam.position.z);
+        const near = dPlayer < NEAR;
+        if (near) {
+          S.nearAlive++;
+          if (a.speed > 0.4) S.nearMoving++;
+          if (a.sprinting) S.nearSprint++;
+        }
 
         /* ---- engagements ------------------------------------------- */
         let g = live.get(a);
@@ -286,15 +367,28 @@ for (const seed of SEEDS) {
         const dist = Math.hypot(o.position.x - a.position.x, o.position.z - a.position.z);
         if (dist < 16) continue;
         S.travelSamples++;
+        if (near) S.travelNear++;
         for (let b = 0; b < hist.length; b++) {
-          if (a.speed < BUCKETS[b + 1]) { hist[b]++; break; }
+          if (a.speed < BUCKETS[b + 1]) { hist[b]++; if (near) histNear[b]++; break; }
+        }
+        /* what happened to a man the gate DID pass. @see `_brakeCut`. */
+        if (a.sprinting === true) {
+          S.sprintGranted++;
+          const cut = a._brakeCut ?? 1;
+          const slow = a.speed < FULL_SPRINT;
+          if (near) { S.nearGranted++; if (cut < 0.999) S.nearBraked++; }
+          if (cut < 0.999) {
+            S.sprintBraked++;
+            S.sprintBrakeSum += cut;
+            if (slow) S.sprintSlowBraked++;
+          } else if (slow) S.sprintSlowUnbraked++;
         }
         /* the gate's own order, first refusal wins */
-        if (a.hasTarget || a.suppression > 0.15) { bump('contact'); continue; }
-        if (a.working || a.post || a.postClimbing || a.crouch) { bump('busy'); continue; }
+        if (a.hasTarget || a.suppression > 0.15) { bump('contact', near); continue; }
+        if (a.working || a.post || a.postClimbing || a.crouch) { bump('busy', near); continue; }
         if (!a.hasMoveTarget) {
-          if (a.pathPending) { bump('unstick:pending'); continue; }
-          bump('unstick:noPath');
+          if (a.pathPending) { bump('unstick:pending', near); continue; }
+          bump('unstick:noPath', near);
           /**
            * AND WHY HE HAS NO ROUTE, which is the question nobody has asked.
            * Charged against the first that is true, in the order `_advance`
@@ -309,27 +403,42 @@ for (const seed of SEEDS) {
           S.noPathWhy[w] = (S.noPathWhy[w] ?? 0) + 1;
           continue;
         }
-        if (a._detourTimer > 0) { bump('unstick:detour'); continue; }
-        if (a.stuckRung !== 0) { bump('unstick:rung'); continue; }
+        if (a._detourTimer > 0) { bump('unstick:detour', near); continue; }
+        if (a.stuckRung !== 0) { bump('unstick:rung', near); continue; }
+        /**
+         * The gate's OWN radius, read off the agent rather than retyped — the
+         * literal 26 here was stale by two passes (it is 10 in `agent.js`) and a
+         * probe that reports a refusal the gate does not make is worse than no
+         * probe. `_sprintThreatR` is exported for exactly this.
+         */
+        const thr = a._sprintThreatR ?? 10;
         if (a.lastKnownAge < 4
-          && a.position.distanceToSquared(a.lastKnown) < 26 * 26) { bump('threatcall'); continue; }
-        if (!a._sprintArmed) { bump('winded'); continue; }
-        if (a._ahead > 1) { bump('crowd'); continue; }
+          && a.position.distanceToSquared(a.lastKnown) < thr * thr) { bump('threatcall', near); continue; }
+        if (!a._sprintArmed) { bump('winded', near); continue; }
+        if (a._ahead > 1) { bump('crowd', near); continue; }
         if (Math.sin(a.yaw) * a._steer.x + Math.cos(a.yaw) * a._steer.z < 0.55) {
-          bump('turning'); continue;
+          bump('turning', near); continue;
         }
-        bump(a.sprinting ? 'RUNNING' : 'passed-but-not-running');
+        bump(a.sprinting ? 'RUNNING' : 'passed-but-not-running', near);
       }
     }
     for (const [, g] of live) { S.openAtEnd++; }
     S.speedHist = Object.fromEntries(hist.map((v, i) =>
       [`${BUCKETS[i]}-${BUCKETS[i + 1]}`, v]));
+    S.speedHistNear = Object.fromEntries(histNear.map((v, i) =>
+      [`${BUCKETS[i]}-${BUCKETS[i + 1]}`, v]));
     S.travelNearTop = 0;
     S.travelAtTop = 0;
+    S.travelAtFull = 0;
+    S.nearTravelNearTop = 0;
+    S.nearTravelAtTop = 0;
+    S.nearTravelAtFull = 0;
     for (let b = 0; b < hist.length; b++) {
-      if (BUCKETS[b] >= NEAR_TOP) S.travelNearTop += hist[b];
-      if (BUCKETS[b] >= PLAYER_TOP) S.travelAtTop += hist[b];
+      if (BUCKETS[b] >= NEAR_TOP) { S.travelNearTop += hist[b]; S.nearTravelNearTop += histNear[b]; }
+      if (BUCKETS[b] >= PLAYER_TOP) { S.travelAtTop += hist[b]; S.nearTravelAtTop += histNear[b]; }
+      if (BUCKETS[b] >= FULL_SPRINT) { S.travelAtFull += hist[b]; S.nearTravelAtFull += histNear[b]; }
     }
+    S.NEAR = NEAR;
     return S;
   }, { WARM, WINDOW });
 
@@ -415,7 +524,19 @@ for (const seed of SEEDS) {
       samples: out.travelSamples,
       speedHist: out.speedHist,
       atPlayerTopPct: pct(out.travelAtTop, out.travelSamples),
+      /* the honest one. @see the note on BUCKETS. */
+      atFullSprintPct: pct(out.travelAtFull, out.travelSamples),
       nearTopPct: pct(out.travelNearTop, out.travelSamples),
+      /**
+       * THE GATE'S VERDICT AGAINST THE LEGS'. `granted` is `_sprintGate` saying
+       * yes; `slowAnyway` is that man measured below a flat-out run.
+       */
+      sprintGrantedPct: pct(out.sprintGranted, out.travelSamples),
+      grantedButSlowPct: pct(out.sprintSlowBraked + out.sprintSlowUnbraked, out.sprintGranted),
+      grantedAndBrakedPct: pct(out.sprintBraked, out.sprintGranted),
+      meanBrakeCut: +(out.sprintBrakeSum / Math.max(1, out.sprintBraked)).toFixed(3),
+      slowBecauseBrakedPct: pct(out.sprintSlowBraked, out.sprintGranted),
+      slowWithoutBrakePct: pct(out.sprintSlowUnbraked, out.sprintGranted),
       sprintOfMovingPct: pct(out.sprintSamples, out.movingSamples),
       maxSpeed: +out.maxSpeed.toFixed(2),
       sprintStarts: out.sprintStarts,
@@ -425,6 +546,62 @@ for (const seed of SEEDS) {
     refusals: Object.fromEntries(Object.entries(out.why)
       .sort((a, b) => b[1] - a[1])
       .map(([k, v]) => [k, pct(v, out.travelSamples)])),
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * THE SAME QUESTION, ASKED ONLY OF THE MEN THE PLAYER CAN SEE
+     * ══════════════════════════════════════════════════════════════════════
+     * @see `NEAR` in the page. This is the deliverable reading: the whole-map
+     * histogram has never been the thing complained about.
+     */
+    nearField: {
+      radius: out.NEAR,
+      aliveSamples: out.nearAlive,
+      shareOfAllAlive: pct(out.nearAlive, out.aliveSamples),
+      travelSamples: out.travelNear,
+      speedHist: out.speedHistNear,
+      atPlayerTopPct: pct(out.nearTravelAtTop, out.travelNear),
+      atFullSprintPct: pct(out.nearTravelAtFull, out.travelNear),
+      nearTopPct: pct(out.nearTravelNearTop, out.travelNear),
+      sprintOfMovingPct: pct(out.nearSprint, out.nearMoving),
+      sprintGrantedPct: pct(out.nearGranted, out.travelNear),
+      /* of the men granted a run inside NEAR, how many the brake then took it off */
+      grantedAndBrakedPct: pct(out.nearBraked, out.nearGranted),
+      refusals: Object.fromEntries(Object.entries(out.whyNear)
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => [k, pct(v, out.travelNear)])),
+    },
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * WHAT WAS IN THE GUN WHEN THE CONTACT OPENED
+     * ══════════════════════════════════════════════════════════════════════
+     * The refusal census says the dead time inside a short sighting is
+     * `reloading` and `dry`. This says whether that was ALREADY TRUE when his
+     * eyes landed, which is the difference between a slow reload and a man who
+     * walked into the fight with an empty gun — and it splits the under-ten
+     * share by it, so the two can no longer be confused.
+     */
+    magazineAtContact: (() => {
+      const n = Math.max(1, out.opens);
+      const split = (f) => {
+        const r = out.sight.filter(f);
+        return {
+          n: r.length,
+          underTenPct: pct(r.filter((x) => x.rounds < 10).length, r.length),
+          medianRounds: q(r.map((x) => x.rounds), 0.5),
+        };
+      };
+      return {
+        opens: out.opens,
+        reloadingAtOpenPct: pct(out.openReloading, n),
+        dryAtOpenPct: pct(out.openDry, n),
+        underThirdOfAMagPct: pct(out.openLow, n),
+        fullMagPct: pct(out.openFull, n),
+        medianMagFracAtOpen: q(out.sight.map((x) => x.frac0 ?? 0), 0.5),
+        wasReloading: split((x) => x.reloading0),
+        wasDry: split((x) => x.dry0),
+        wasReady: split((x) => !x.reloading0 && !x.dry0),
+      };
+    })(),
   };
   all.push(row);
   console.log(JSON.stringify(row, null, 2));
@@ -436,6 +613,7 @@ if (all.length > 1) {
     console.log(`seed ${r.seed}: n=${r.engagements} median=${r.perEngagement.median} `
       + `p10=${r.perEngagement.p10} p90=${r.perEngagement.p90} `
       + `<10=${r.perEngagement.underTenPct}% moveFire=${r.fireOnMove.movingPct}% `
-      + `travel@top=${r.travel.atPlayerTopPct}% noPath=${r.refusals['unstick:noPath'] ?? 0}%`);
+      + `travel@full=${r.travel.atFullSprintPct}% near@full=${r.nearField.atFullSprintPct}% `
+      + `sight<10=${r.perSighting.underTenPct}% noPath=${r.refusals['unstick:noPath'] ?? 0}%`);
   }
 }
