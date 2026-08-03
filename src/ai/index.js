@@ -130,9 +130,12 @@ const CIVIL_ROLE = Object.freeze({ armed: 'civil', unarmed: 'civilUnarmed' });
  *   what holding a doorway looks like from the other side of it.
  *
  * `flank` stays at 0.04 and is inert either way — the manoeuvre is behind
- * `sq && sq.canFlank` and a civilian has no squad. `range` 9 -> 11 m is still a
- * room and a hallway rather than a street, and it is what carries `fragHi`
- * (24.4 m) far enough that the grenade has a window at all.
+ * `sq && sq.canFlank` and a civilian has no squad. `range` STAYS AT 9 m, and it
+ * was moved to 11 and moved back: the cover window is built around it, so a
+ * longer preferred range is a man whose best cover against a contact in the
+ * street is in the street, and the leash then spends the match walking him
+ * home. It buys nothing at the other end either — `fragHi` is 20 + range × 0.4,
+ * which is 24 m against 23 m. A room is the correct answer.
  *
  * WHERE HE DOES HIS INTERFERING IS NOT HERE. Standing in the doorway, and going
  * at somebody who is already inside his building, are placements and orders —
@@ -142,23 +145,41 @@ const CIVIL_ROLE = Object.freeze({ armed: 'civil', unarmed: 'civilUnarmed' });
  * and it is not sampled — `ARCHETYPE_ARMS` would hand out submachine guns and
  * belts, and the AK is the one the militiaman's mesh is holding.
  *
- * An unarmed one still gets a persona because `Agent` requires one, and it is
- * the same one: none of it is ever reached, because he never acquires a target.
+ * AND THE UNARMED ONE KEEPS THE OLD SET, WHICH IS NOT A TIDINESS DECISION.
+ * "None of it is ever reached" was true of the traits that decide a FIGHT and
+ * false of the ones that decide how a man stands about: `_think`'s ALERT branch
+ * is `desiredSpeed = 1.1 + aggression × 2.4` and it is entered by being SHOT AT,
+ * which happens to a pacifist constantly. Measured with one set for both kinds,
+ * an unarmed civilian who had never acquired anybody milled at 2.6 m/s in a
+ * 1-6 m circle round his room, walked out of his own door, and was leashed back
+ * — repeatedly, and 「逃走以外で屋外に逃げることはない」 is his rule too. He is
+ * 「攻撃してこない」 and 「逃走します」 and neither of those was the thing that was
+ * asked to change.
  */
 function drawCivilPersona(rng, unarmed) {
   const t = (v, sd) => Math.min(1, Math.max(0.02, v + rng.gauss() * sd));
   return {
     archetype: 'anchor',
     weapon: 'ak',
-    traits: {
-      aggression: t(0.55, 0.09),
-      patience: t(0.42, 0.09),
-      exposure: t(0.28, 0.07),
-      flank: t(0.04, 0.03),
-      trigger: t(0.34, 0.10),
-      /** METRES. A room and a hallway, not a street. */
-      range: 11 * rng.range(0.8, 1.5),
-    },
+    traits: unarmed
+      ? {
+        aggression: t(0.18, 0.08),
+        patience: t(0.88, 0.07),
+        exposure: t(0.14, 0.06),
+        flank: t(0.04, 0.03),
+        trigger: t(0.74, 0.10),
+        /** METRES, and never used: he acquires nobody. */
+        range: 9 * rng.range(0.8, 1.5),
+      }
+      : {
+        aggression: t(0.55, 0.09),
+        patience: t(0.42, 0.09),
+        exposure: t(0.28, 0.07),
+        flank: t(0.04, 0.03),
+        trigger: t(0.34, 0.10),
+        /** METRES. A room, not a street. */
+        range: 9 * rng.range(0.8, 1.5),
+      },
     elite: false,
     skill: unarmed ? 0.2 : Math.min(0.44, Math.max(0.20, 0.30 + rng.gauss() * 0.07)),
   };

@@ -300,6 +300,13 @@ const SPAWN_TRIES = 14;
 const DOOR_TRIES = 8;
 /** Metres a threshold cell's outside neighbour may differ in height. */
 const DOOR_STEP = 1;
+/**
+ * CELLS OF STRAIGHT, WALKABLE RUN between a threshold cell and the apron. Two
+ * is 1.6 m on the 0.8 m lattice — the same reach `_carveInteriors` probes past
+ * a wall with, and one cell of wall plus one of doorstep. @see `_thresholds`
+ * for what it measured at one.
+ */
+const DOOR_REACH = 2;
 /** Nobody appears inside this many metres of the player unless a wall is between. */
 const SPAWN_CLEAR_PLAYER = 26;
 /** …or of any soldier of either army, LOS or not. A man who pops in is a bug. */
@@ -350,8 +357,20 @@ const LEASH_HOME = 3.5;
  * leash never ran, and 「屋外に逃げることはない」 was false for him specifically.
  * Six seconds is the difference between stepping out to take a shot and having
  * moved house: past it he goes back inside whether or not he is being shot at.
+ *
+ * …AND SHORTENED AGAIN, BECAUSE THE MAN THE GRACE COVERS IS A DIFFERENT MAN
+ * NOW. The persona that answers 「もっと攻撃して」 (@see `drawCivilPersona`) holds
+ * a contact far longer than the ambusher did: he breaks off at 34 HP of his 50
+ * instead of 46, he searches a lost contact instead of settling, and his cover
+ * moves travel 13 m instead of 9. Measured on the 24-man build with the grace
+ * still at six seconds, one sample had SEVEN of nine live civilians standing
+ * OUTDOORS — 「基本屋内にのみ滞留」 read the wrong way round, and the opposite of
+ * 「もっと屋内に」.
+ *
+ * Two and a half seconds is still a man stepping into a doorway to take his
+ * shot. It is no longer a man fighting his way up the street.
  */
-const OUT_GRACE = 6;
+const OUT_GRACE = 2.5;
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -657,18 +676,30 @@ export class Civilians {
       const i = cells[k];
       const ix = i % nx, iz = (i / nx) | 0;
       const y = g.floor[i];
-      for (let d = 0; d < 4; d++) {
-        const jx = ix + (d === 0 ? 1 : d === 1 ? -1 : 0);
-        const jz = iz + (d === 2 ? 1 : d === 3 ? -1 : 0);
-        if (jx < 0 || jz < 0 || jx >= nx || jz >= nz) continue;
-        const j = g.index(jx, jz);
-        // Walkable, NOT a room, and at this cell's own height: the apron on
-        // the other side of a door, rather than a party wall or a balcony lip.
-        if (g.flags[j] === 0 || g.indoor[j] === 1) continue;
-        if (!(Math.abs(g.floor[j] - y) <= DOOR_STEP)) continue;
-        out.push(i);
-        break;
+      let door = false;
+      for (let d = 0; d < 4 && !door; d++) {
+        const sx = d === 0 ? 1 : d === 1 ? -1 : 0;
+        const sz = d === 2 ? 1 : d === 3 ? -1 : 0;
+        /**
+         * EVERY CELL ON THE WAY OUT HAS TO BE WALKABLE, AND THAT IS THE WHOLE
+         * TEST. It is what makes this a DOOR rather than "a cell near an
+         * outside wall": a wall is a cell the height field refuses, so a
+         * straight run from here to the apron can only exist where there is an
+         * opening. Measured with `DOOR_REACH` at 1 the whole district published
+         * FIVE threshold cells — a 0.8 m lattice against a wall thicker than
+         * one cell — which is a rule that never fires.
+         */
+        for (let step = 1; step <= DOOR_REACH; step++) {
+          const jx = ix + sx * step, jz = iz + sz * step;
+          if (jx < 0 || jz < 0 || jx >= nx || jz >= nz) break;
+          const j = g.index(jx, jz);
+          if (g.flags[j] === 0) break;
+          if (!(Math.abs(g.floor[j] - y) <= DOOR_STEP)) break;
+          // …and the run ends the moment it is standing outside a room.
+          if (g.indoor[j] !== 1) { door = true; break; }
+        }
       }
+      if (door) out.push(i);
     }
     return out.length;
   }
