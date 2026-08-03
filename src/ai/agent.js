@@ -2823,9 +2823,16 @@ export class Agent {
      * A man running with a heavy gun carries it slung and low; he is slower
      * than the man with the carbine and he is not slower than himself walking.
      * Halving the deviation keeps the whole ordering and lifts the floor:
-     * 5.83 for the LMG, 6.45 for the carbine, 6.94 for the machine pistol.
+     * 5.83 for the LMG and 6.45 for the carbine.
+     *
+     * IT IS ONE-SIDED, and that is the sentence 「最高速度で」 asks for: the
+     * PENALTY is halved and the BONUS is not. Halving both took the map's top
+     * observed speed from 6.97 to 6.71 m/s — the machine-pistol man was the
+     * fastest thing on it and this made him slower, which is the opposite of
+     * what was asked. So the floor comes up and the ceiling stays where it is.
      */
-    return SPRINT_SPEED * (0.5 + this.moveScale * 0.5);
+    const ms = this.moveScale;
+    return SPRINT_SPEED * (ms >= 1 ? ms : 0.5 + ms * 0.5);
   }
 
   /**
@@ -2933,25 +2940,28 @@ export class Agent {
       ? (this.ftSeat - (ft.members.length - 1) * 0.5) * SEAT_STEP : 0;
     /**
      * ══════════════════════════════════════════════════════════════════════
-     * …AND A MAN WITH NO FIRETEAM STILL HAS A TRACK — 「移動経路が一緒」
+     * MEASURED AND REVERTED: A PERSONAL LANE FOR THE MAN WITH NO FIRETEAM
      * ══════════════════════════════════════════════════════════════════════
-     * Read the line under this as it was: `ft ? … : 0`, and then an early-out
-     * on `!ft || lane === 0`. A man with no fireteam, or in a team of one, or
-     * whose team happens to draw lane 0 with an even seat count, got NO VIA AT
-     * ALL — and no via means the straight line from where he is to where he is
-     * going, which is the same straight line every other man with no via is
-     * walking. That is not a lane system with a fallback, it is a lane system
-     * with a hole in it, and the hole is where the identical routes come from.
+     * The hole is real — `ft ? … : 0` plus an early-out on `!ft || lane === 0`
+     * means a man with no fireteam gets NO VIA AT ALL, which is the straight
+     * line from here to there, the same straight line every other man without
+     * one is walking, and that is a genuine source of 「移動経路が一緒」.
      *
-     * `_spotSig` closes it: ±5 m of personal track, on the same axis and by the
-     * same mechanism, so no two men are ever on the same line even when the
-     * plan puts them on the same errand. It is deliberately smaller than
-     * `SEAT_STEP` — a fireteam is still a wider formation than one man's
-     * personal drift, so nothing about `Squad.regroup`'s frontage changes rank.
+     * Giving him ±5 m of his own track closed it and cost too much. MEASURED
+     * (`_fourprobe.mjs`, seed 7): `unstick:noPath` — a man in ADVANCE with a
+     * long leg and NO ROUTE — went from 11.3 % of every long leg to 24.2 %, and
+     * the roster's mean moving speed fell from 3.59 to 3.05 m/s. The reason is
+     * the A* budget and not the geometry: a via turns one solve per leg into
+     * two, and handing one to the two thirds of the roster that never had one
+     * doubles the demand on a per-frame ration that was already the thing
+     * `pathPending` exists to meter. More men on more tracks, standing still.
+     *
+     * The variety in `_pickHoldSpot` costs no A* at all and is kept. Routes
+     * stay the fireteam's until there is a cheaper way to spread them — the
+     * lane is not worth buying at the price of men who cannot move.
      */
-    const own = (this._spotSig - 0.5) * 10;
-    const lane = (ft ? ft.lane + seatOff : 0) + own;
-    if (dist < LANE_MIN) {
+    const lane = ft ? ft.lane + seatOff : 0;
+    if (!ft || lane === 0 || dist < LANE_MIN) {
       this._hasVia = false;
       this._hasAxis = false;
       return null;
