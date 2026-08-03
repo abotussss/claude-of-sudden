@@ -274,7 +274,24 @@ const SNIPER_MIN = 16;
  * WHAT A LIFE COSTS AT THE REQUESTED RATE. @see the reserve block in the
  * constructor for the arithmetic; this is the one number it turns on.
  */
-const RESERVE_MUL = 3.0;
+/**
+ * 3.0 -> 4.5, and it is the same correction being made for the third time by
+ * the same measurement. Deleting the two trigger-discipline coin flips moved
+ * the map's firing share of contact time by roughly half again, and the pouch
+ * followed it straight back onto the board: `_fourprobe.mjs` (seed 7) reports
+ * **4.2 % of all contact time is a man whose POUCH is empty** where the build
+ * before it reported none at all — and a dry man stays dry for the rest of his
+ * life, so an empty pouch is not a lull, it is a man removed from the volume of
+ * fire until he finds a crate. Every previous raise of this number was written
+ * against a map firing less than the one that came after it; this one is
+ * written against a map that fires on 40 % of contact.
+ *
+ * NOTHING ELSE CHANGES. `resupply` is still capped at `startReserve`, running
+ * dry is still real and still recoverable only at a cache, and the top of the
+ * fire-rate distribution still empties a pouch inside a life — which is the
+ * asymmetry the crate errand exists for.
+ */
+const RESERVE_MUL = 4.5;
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
