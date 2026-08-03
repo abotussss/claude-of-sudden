@@ -630,6 +630,48 @@ const DEG = Math.PI / 180;
 const STUCK_WINDOW = 2.0;
 const STUCK_CLEAR = 0.9;
 /**
+ * ────────────────────────────────────────────────────────────────────────────
+ * HOW LONG A MAN MAY STAND PERFECTLY STILL BEFORE HE IS ASKED WHERE HE IS
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「AIが屋内にスタックしているのも問題としてあるからなおせ 宙に浮いて動いていない」
+ *
+ * MEASURED FIRST (`_floatstuck.mjs`, seed 7, 300 s, 11 389 man-samples):
+ * NOBODY IS IN THE AIR. Not one man-sample has his feet more than 0.45 m over
+ * the nearest solid the physics world can find under him. What the player is
+ * looking at is a man standing on a FIRST-FLOOR SLAB — a surface `NavGrid`
+ * does not have, because `_carveInteriors` writes the ground storey over an
+ * enterable building's footprint. Measured on the same men: actual Y 3.46,
+ * `grid.floor` 0.14, error +3.32 m, every single one of them indoors, three
+ * quarters of them above 2.5 m. From a camera outside the shop he is a
+ * soldier standing on nothing, which is exactly the report.
+ *
+ * And he does not move because of a DEADLOCK that is one line long:
+ *
+ *   `_offGrid()` is true         -> `_goTo` refuses to plan (it says so itself)
+ *   -> `hasMoveTarget` is false  -> `_advance` leaves `desiredSpeed` at 0
+ *   -> `_trackProgress` returns early on `desiredSpeed <= 0.1`
+ *   -> `_unstick` is never called
+ *   -> RUNG ZERO (`_regainGrid`) AND `_descend` NEVER RUN.
+ *
+ * Those two are the recoveries written for precisely this man — their own
+ * headers say so, "a man off the height field cannot be helped by a planner"
+ * and "off the field entirely (a vantage nest, whose cells the interior pass
+ * owns)" — and they were sitting behind a test he cannot pass by definition,
+ * because his stillness IS the symptom rather than a reason to excuse him.
+ * Measured cost of the deadlock: 8 distinct men, 4.9 % of all man-samples,
+ * one of them frozen for 137 UNBROKEN SECONDS.
+ *
+ * So a man who is standing still is now asked ONE question after
+ * `STALL_WINDOW`, and only if he is standing still: is he on the height field?
+ * If he is, nothing happens and every deliberately motionless man in the game
+ * — a holder, a man in cover, a sniper at his angle, a man working a cache —
+ * is untouched, which is the whole reason the question is `_offGrid` and not
+ * a timer. The window is longer than `STUCK_WINDOW` because a man who wants to
+ * move and cannot is a live failure, while this one is a man who has not been
+ * given anywhere to go yet and deserves a beat to be given it.
+ */
+const STALL_WINDOW = 4.0;
+/**
  * A LANE IS FOR CROSSING GROUND, NOT FOR THE LAST TWENTY METRES. @see
  * `_laneVia`. Under `LANE_MIN` everybody converges on the point, which is what
  * taking a point is; `VIA_REACHED` is where a man stops steering at his lane
@@ -1264,6 +1306,11 @@ export class Agent {
     this._progFrom = new THREE.Vector3().copy(this.position);
     /** Seconds of WANTING to move accumulated in the current window. */
     this._progTime = 0;
+    /**
+     * Seconds of standing PERFECTLY STILL, which is a different question and
+     * has a different recovery. @see `STALL_WINDOW` and `_trackProgress`.
+     */
+    this._stallTime = 0;
     /** How far up the recovery ladder this man currently is, 0-5. */
     this.stuckRung = 0;
     /** Consecutive windows of real progress; two of them retire the ladder. */
@@ -3522,10 +3569,34 @@ export class Agent {
       return;
     }
     if (this.desiredSpeed <= 0.1 || this.working) {
+      /**
+       * ══════════════════════════════════════════════════════════════════════
+       * …EXCEPT THE MAN WHOSE STILLNESS IS THE SYMPTOM. @see `STALL_WINDOW`.
+       * ══════════════════════════════════════════════════════════════════════
+       * `working` still walks free — a man on a cache has a reason and a clock
+       * of his own — and so does a man on a post, whose hold phase is a
+       * motionless firing position by design and whose `postTimer` is the
+       * stricter recovery. Everybody else gets ONE ring search every
+       * `STALL_WINDOW` seconds of standing still, and only a man the height
+       * field cannot see is handed to the ladder. `_unstick`'s rung zero and
+       * `_descend` then do what they were written to do.
+       */
+      this._stallTime = this.working || this.post ? 0 : this._stallTime + dt;
+      if (this._stallTime < STALL_WINDOW || !this._offGrid()) {
+        this._progTime = 0;
+        this._progFrom.copy(this.position);
+        return;
+      }
+      this._stallTime = 0;
       this._progTime = 0;
       this._progFrom.copy(this.position);
+      this._progGood = 0;
+      const s = this.ai.stats;
+      if (s) s.unstickStalled = (s.unstickStalled ?? 0) + 1;
+      this._unstick();
       return;
     }
+    this._stallTime = 0;
     this._progTime += dt;
     if (this._progTime < STUCK_WINDOW) return;
     const dx = this.position.x - this._progFrom.x;
