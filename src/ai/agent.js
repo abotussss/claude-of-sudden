@@ -166,9 +166,21 @@ const SPRINT_REARM = 3;
  * map at a sprint, which is the point of having legs at all.
  */
 const SPRINT_REFILL = 0.7;
-const SPRINT_CLEAR = 2.6;
+/**
+ * HOW MUCH CLEAR GROUND HE NEEDS IN FRONT OF HIM, AND IT IS A MEASUREMENT.
+ *
+ * 2.6 m and a 60-degree cone were the first guess and `tools/stuckcheck.mjs`
+ * priced them: three runs on seed 7 with the gate stubbed came back 1 / 1 / 0
+ * of 41 men wedged, and the same three runs with it live came back 4 / 3 / 1.
+ * Two men out of forty-one is not a gate failure — the gate is ten — and none
+ * of them was immobile, but it is the exact cost the whole crowd clause exists
+ * to refuse, so it is bought back rather than explained away: 3.6 m and 110
+ * degrees is a man who drops to a walk a stride and a half earlier and a good
+ * deal wider, which is where a doorway queue actually forms.
+ */
+const SPRINT_CLEAR = 3.6;
 /** Half-angle of the "is anybody in front of me" cone, as a cosine. */
-const SPRINT_CLEAR_DOT = 0.5;
+const SPRINT_CLEAR_DOT = 0.35;
 
 /**
  * THE UPPER POST'S TWO NUMBERS. @see `Agent._runPost` and `StairMap`.
