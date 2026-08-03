@@ -1880,18 +1880,43 @@ export class MatchSystem {
     if (assigned < live.length) {
       const spare = this._spare;
       spare.length = 0;
-      if (ahead) {
-        /**
-         * The zones we own AND the focus, round-robined. MEASURED: with the
-         * spares going only onto owned zones, the leading side put eight and then
-         * eleven men inside two courtyards and one man on the third point, and
-         * the match froze at 2-1 for two hundred seconds. Including the focus
-         * keeps a third of the lead's spare strength pressing, which is what
-         * makes the third zone change hands and the match have a middle.
-         */
-        for (const e of plan) if (e.zone.owner === team) spare.push(e);
-        if (focus) for (const e of plan) if (e.zone === focus) spare.push(e);
-      }
+      /**
+       * ══════════════════════════════════════════════════════════════════════
+       * A ZONE YOU ALREADY HOLD IS NOT A DESTINATION — 「次の占領エリアへ行けよ」
+       * ══════════════════════════════════════════════════════════════════════
+       * 「占領がメインだから、占領したエリアがあったら次の占領エリアへ行けよ そうすれば
+       *  戦闘起きるし、撃ち合うやろ」 — and the second half of that sentence is the
+       * reason, not decoration. Men standing on paint their own side already owns
+       * meet nobody by construction; men rolling at a point they do NOT own run
+       * into the men holding it. The measured ceiling on volume of fire is not
+       * trigger discipline any more, it is that only a tenth of actor-time has
+       * anybody in front of it at all.
+       *
+       * SO THIS IS A STANDING ORDER AND NOT A TIE-BREAK. Every spare man goes at
+       * the focus — the nearest zone this side does not own — whether the side is
+       * ahead or behind. `ahead` used to round-robin the leader's spares over its
+       * OWN zones plus the focus, which parked roughly two thirds of a winning
+       * side's surplus on ground that was already theirs and quiet.
+       *
+       * WHAT STILL DEFENDS THE LEAD, and it is why this is safe rather than a
+       * reckless push:
+       *
+       *   THE GARRISON IS UNTOUCHED. Every owned zone still draws
+       *     `RULES.zoneGarrison` men through the plan above, before any of this
+       *     runs. "Keep what it needs to hold it" is that number, and it is not
+       *     what this changes.
+       *   A THREATENED ZONE OUTRANKS EVERYTHING. The moment one enemy steps into
+       *     a zone of ours it scores `prio` 140 and wants 4-7 men — higher than
+       *     the focus's 120 — so the spares are pulled straight back to it at the
+       *     next two-second re-task. The lead is defended by REACTING to a
+       *     contest rather than by standing about waiting for one.
+       *
+       * The regression this block used to guard against was the OPPOSITE
+       * arrangement — spares onto owned zones ONLY, which froze a match at 2-1
+       * for two hundred seconds — so removing the owned zones entirely moves in
+       * the direction that measurement already pointed, and further.
+       */
+      if (focus) for (const e of plan) if (e.zone === focus) spare.push(e);
       if (!spare.length) {
         let e = plan[0];
         // No `find`: a closure every two seconds is still a closure.
