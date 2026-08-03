@@ -25,36 +25,71 @@
  */
 
 import {
-  ad, biquad, clamp, gain, lerp, osc, saturationCurve, series, shaper,
+  ad, biquad, clamp, gain, lerp, osc, pulseCurve, saturationCurve, series, shaper,
   struckResonator, sweep,
 } from './dsp.js';
 
 /**
- * THE ENGINE, AS A CONTINUOUS VOICE.
+ * THE HULL, AS A CONTINUOUS VOICE — AND THE VOICE IS THE TRACKS.
  *
- * A multi-fuel V12 in a hull, heard from outside. Five layers, and the reason
- * for each is the same reason `weapons.js` gives for a gunshot's seven: take any
- * one away and it stops being a tank.
+ * 「また戦車の走行音はもう少し改善して、ぶーーーーーんではなくてキャタピラ音がなっている
+ * のが理想」. The version this replaces was a DRONE, and it was a drone for a
+ * structural reason rather than a tuning one: it was a saturated sawtooth at the
+ * cylinder-firing rate, plus noise amplitude-modulated by a sawtooth at the same
+ * rate, through a lowpass that opened with load — which is, layer for layer, the
+ * shape of `droneRotor` further down this file. Two of the three continuous
+ * machines in this game were built out of the same parts, so of course they both
+ * read as a hum; the only difference was which octave the hum sat in. The tank's
+ * grain-train "track" layer could not rescue that, because it was 0.5 against
+ * 0.62 + 0.7 + 0.46 of engine and its band CENTRE was swept with speed, so what
+ * speed did to the hull was raise the pitch of a buzz.
  *
- *   1. FIRING ORDER   a saturated saw at the cylinder-firing rate. A V12 at
- *                     1100 rpm fires 110 times a second; that rate IS the engine
- *                     note, and sweeping it is what makes the vehicle sound like
- *                     it is working rather than idling.
- *   2. CRANK LOPE     the same event at 1/6 of the rate — the slow uneven beat
- *                     you hear before you can hear anything else. This is the
- *                     layer that carries down a street.
- *   3. COMBUSTION     brown noise amplitude-modulated at the firing rate: the
- *                     chuff. Without it the saw reads as a synthesiser.
- *   4. TRACKS         a grain train (the `crackle` bank) whose PLAYBACK RATE
- *                     scales with road speed, so the link slap follows the
- *                     vehicle instead of being a loop underneath it. This is the
- *                     layer that says "it is moving" while the engine says "it
- *                     is running", and they are separately true: a tank halted
- *                     at a firing position still idles.
- *   5. ROAD RUMBLE    sub-120 Hz weight, also speed-scaled.
+ * WHAT A TRACK ACTUALLY IS. A chain of steel links passing over sprocket teeth
+ * and road wheels at a rate set by ROAD SPEED. That gives a LINK-PASSING RATE —
+ * a train of transients, `speed / link pitch` of them per second, and at 0.15 m
+ * a hull doing 4.6 m/s is throwing thirty slaps a second. It is not harmonically
+ * related to the engine, it does not exist at all when the hull is stopped, and
+ * SPEED CHANGES THE RATE AND NOT THE PITCH: the slap sounds the same at 1 m/s as
+ * at 4, there is simply four times as much of it. That last sentence is the
+ * whole difference between a caterpillar and a motor, and it is the reason none
+ * of the resonator centres below are touched by `drive()`.
  *
- * Everything loops or oscillates, so the per-frame cost is a handful of
- * `setTargetAtTime` calls and nothing is allocated after construction.
+ * Seven layers. The first three are the engine and they are now UNDERNEATH:
+ *
+ *   1. FIRING ORDER   a saturated saw at the cylinder-firing rate, darker and
+ *                     8 dB down on what it was. A V12 at 1100 rpm fires 110
+ *                     times a second and that rate is the engine note — but the
+ *                     engine note is no longer the vehicle.
+ *   2. CRANK LOPE     the same event at 1/6 of the rate: the slow uneven beat
+ *                     you hear before you can hear anything else.
+ *   3. COMBUSTION     brown noise gated at the firing rate into discrete puffs
+ *                     rather than modulated by a sawtooth into a buzz. This is
+ *                     the layer that used to be the "ぶーーーん" and it is now
+ *                     the chuff it was always described as.
+ *   4. LINK CLATTER   THE VOICE. Two pulse trains — one per track, deliberately
+ *                     not the same rate — gating white noise into a bank of
+ *                     fixed steel resonances. Percussive, rhythmic, unpitched,
+ *                     and silent below a walking pace. @see pulseCurve
+ *   5. PIN SQUEAL     a high-Q whine excited by the same slaps, opened and shut
+ *                     at the ROAD WHEEL rate, so it comes and goes as the hull
+ *                     rocks rather than sitting there as a tone.
+ *   6. GRIND          the old grain train, kept, but demoted to the grit under
+ *                     the pads and given a FIXED band.
+ *   7. ROAD RUMBLE    sub-120 Hz weight, with the wheel-rate gait on it: a
+ *                     50-tonne hull walks on its torsion bars, it does not
+ *                     glide.
+ *
+ * WHAT THE LISTENER SHOULD GET. Stopped: a low, chuffing diesel and nothing
+ * else — no clatter at all, which is what makes the clatter mean "it is coming".
+ * Rolling: a dense mechanical rattle over that diesel, in surges at about two a
+ * second as the road wheels load, and when the hull speeds up the rattle gets
+ * FASTER rather than higher.
+ *
+ * Everything loops or oscillates. The per-frame cost is a dozen
+ * `setTargetAtTime` calls and nothing is allocated after construction — which
+ * matters more here than anywhere else in this directory, because this voice is
+ * held for as long as a hull is alive and two of them can be running for minutes
+ * against a roster firing a hundred rounds a man-minute.
  *
  * @returns {{node: GainNode, drive: Function, stop: Function}}
  */
@@ -69,6 +104,28 @@ export function tankEngine(actx, bank, rng, o = {}) {
   const idleF = 74 * rng.range(0.94, 1.07);
   /** …and flat out. The ratio is a diesel's, not a car's: it does not rev. */
   const maxF = idleF * 2.05;
+
+  /**
+   * TRACK LINK PITCH, metres — the single number the clatter rate comes out of.
+   * Real ones run 0.14 m (T-72) to 0.19 m (M1); this sits between them and is
+   * jittered per hull so two tanks in the same street never rattle in step.
+   */
+  const LINK_PITCH = 0.152 * rng.range(0.93, 1.08);
+  /**
+   * The right track against the left. It is NOT 1, and that is the layer's other
+   * half: a single perfectly periodic train of thirty transients a second is a
+   * 30 Hz buzz — i.e. it would be a hum again, just a lower one. Two trains 3 %
+   * apart drift through each other with a beat under a second, so the slaps
+   * bunch and thin continuously and the ear never finds the period. The same
+   * argument `droneRotor` makes for detuning four props, made for two tracks.
+   */
+  const SKEW = 0.971 * rng.range(0.994, 1.006);
+  /** Road wheel rolling circumference, metres. Sets the hull's gait. */
+  const WHEEL_CIRC = 2.12 * rng.range(0.95, 1.05);
+  /** Links per second at `sp` m/s. Floored so a stopped osc cannot latch a gate open. */
+  const linkRate = (sp) => clamp(sp / LINK_PITCH, 1.2, 90);
+  /** Road wheel revolutions per second at `sp` m/s. */
+  const wheelRate = (sp) => clamp(sp / WHEEL_CIRC, 0.3, 12);
 
   /* ---- 1. firing order ------------------------------------------- */
   const fire = keep(osc(actx, 'sawtooth', idleF));
@@ -94,31 +151,188 @@ export function tankEngine(actx, bank, rng, o = {}) {
   const combG = keep(gain(actx, 0.5));
   // The AM is a MULTIPLIER stage, not an LFO summed into the envelope gain —
   // same trap `ambientOneShot`'s heli layer documents.
-  const combAM = keep(gain(actx, 0.55));
+  //
+  // The MODULATOR is a gated pulse and not a raw sawtooth, and that is the
+  // change that took the "vrrrr" out of the engine itself. A saw drives the
+  // multiplier smoothly through every value in its range, which is a tremolo;
+  // a wide pulse holds it near shut for most of the cycle and slams it open for
+  // the rest, which is a stroke. A diesel exhaust is strokes. It also stops
+  // this layer being byte-for-byte the drone's chop layer.
+  const combAM = keep(gain(actx, 0.12));
   series(comb, combHP, combLP, combG, combAM).connect(out);
   const am = keep(osc(actx, 'sawtooth', idleF));
-  const amG = keep(gain(actx, 0.45));
-  am.connect(amG); amG.connect(combAM.gain);
+  // 0.44 duty: wide, because at 74-152 Hz the puffs fuse into a note anyway and
+  // a narrow gate here would just be a bright buzz an octave up.
+  const amShape = keep(shaper(actx, pulseCurve(0.44, 0.3, 1.35), 'none'));
+  const amG = keep(gain(actx, 0.95));
+  series(am, amShape, amG).connect(combAM.gain);
   comb.start(t0, comb._offset);
   am.start(t0);
   sources.push(comb, am);
 
-  /* ---- 4. track links -------------------------------------------- */
+  /* ---- 4. LINK CLATTER: the thing he actually asked for ----------- */
+  /**
+   * The excitation. White noise held shut by `clatGate` (intrinsic 0 — it is
+   * closed, and the pulse trains are the only thing that opens it), so what
+   * leaves this stage is silence punctuated by one short burst per link per
+   * track. Band-limited before the gate rather than after, so the resonators
+   * below are fed the same material at every speed.
+   */
+  const clatN = keep(bank.source('white', rng, rng.range(0.9, 1.15), true));
+  const clatHP = keep(biquad(actx, 'highpass', 140, 0.7));
+  const clatLP = keep(biquad(actx, 'lowpass', 2400, 0.7));
+  const clatGate = keep(gain(actx, 0));
+  series(clatN, clatHP, clatLP).connect(clatGate);
+  clatN.start(t0, clatN._offset);
+  sources.push(clatN);
+
+  /**
+   * A SECOND, DARK EXCITER through the same gate. White noise is flat per Hz,
+   * which means four fifths of its energy is above 600 Hz and a bank of low
+   * resonances fed from it is being fed almost nothing — MEASURED: with white
+   * alone the whole clatter layer moved the 160-600 Hz band by 1 dB while
+   * moving 1.8-6 kHz by 37, i.e. it was a hiss and not a slap. Pink through a
+   * lowpass puts the weight back where a steel pad landing on a steel wheel
+   * actually has it. It is deliberately gated by the SAME pulse train rather
+   * than given its own — one slap, two colours, not two events.
+   */
+  const clatLowN = keep(bank.source('pink', rng, rng.range(0.85, 1.1), true));
+  const clatLowLP = keep(biquad(actx, 'lowpass', 780, 0.8));
+  const clatLowG = keep(gain(actx, 3.6));
+  series(clatLowN, clatLowLP, clatLowG).connect(clatGate);
+  clatLowN.start(t0, clatLowN._offset);
+  sources.push(clatLowN);
+
+  /**
+   * 14 % duty: at thirty links a second that is a 4.7 ms slap, and at six links
+   * a second it is 21 ms. Longer at a crawl is right — a link set down slowly is
+   * a scrape, one thrown down is a crack.
+   *
+   * IT IS NOT NARROWER THAN THIS, AND THE REASON IS CREST FACTOR. A 5 % gate was
+   * tried first and MEASURED: the whole clatter layer came out 30 dB under the
+   * engine (raw rms 0.235 at full speed against 0.226 standing still — i.e. the
+   * layer was doing nothing at all), because a burst train's rms falls with its
+   * duty and the only way back is a gain that puts the PEAKS through the roof.
+   * A tank is allowed a high crest factor — that is what percussive means — but
+   * not a crest factor of seventeen, which is what 5 % costs. At 14 % the layer
+   * can carry the voice at a peak the master limiter is not fighting.
+   */
+  const GATE = pulseCurve(0.14, 0.12, 1.4);
+  const linkL = keep(osc(actx, 'sawtooth', linkRate(0)));
+  const linkLS = keep(shaper(actx, GATE, 'none'));
+  const linkLG = keep(gain(actx, 1));
+  series(linkL, linkLS, linkLG).connect(clatGate.gain);
+  linkL.start(t0);
+  sources.push(linkL);
+
+  const linkR = keep(osc(actx, 'sawtooth', linkRate(0) * SKEW));
+  const linkRS = keep(shaper(actx, GATE, 'none'));
+  const linkRG = keep(gain(actx, 0.86));
+  series(linkR, linkRS, linkRG).connect(clatGate.gain);
+  // Started late ON PURPOSE: an OscillatorNode's phase cannot be set, and two
+  // saws started at the same instant would slap together for the first second
+  // before the skew pulled them apart. 13 ms is the far track being half a link
+  // behind the near one, which is where it lives.
+  linkR.start(t0 + 0.013);
+  sources.push(linkR);
+
+  /**
+   * The steel. Four fixed resonances struck by every slap — a track link landing
+   * on a road wheel is a struck object, so this is `struckResonator`'s bank made
+   * continuous, with its sqrt(Q) makeup for the same reason: a high-Q bandpass
+   * only passes f/Q of the excitation and would otherwise sit inaudibly low.
+   *
+   * NONE OF THESE MOVE WITH SPEED. That is the entire point of the layer. The
+   * hull is the same lump of steel at 1 m/s and at 4.6, so it rings at the same
+   * frequencies; what changes is how often it is hit.
+   */
+  const clatBus = keep(gain(actx, 1));
+  /**
+   * THE BODY OF THE SLAP, and it carries the layer. A high-Q bandpass only
+   * passes f/Q of what it is fed, so a bank made only of resonances throws away
+   * almost all of the burst — which is exactly how the first attempt ended up
+   * inaudible. This wide, low-Q path keeps the broadband thud of steel meeting
+   * steel and the resonances below sit on top of it as colour.
+   */
+  const clatBody = keep(biquad(actx, 'bandpass', 520, 0.5));
+  const clatBodyG = keep(gain(actx, 3.4));
+  clatGate.connect(clatBody);
+  clatBody.connect(clatBodyG);
+  clatBodyG.connect(clatBus);
+
+  const LINKS = [
+    { f: 196, q: 3.4, g: 0.86 },  // the pad arriving — the knock you feel
+    { f: 505, q: 7.0, g: 0.62 },  // the body of the clack
+    { f: 1180, q: 11, g: 0.30 },  // the link on the wheel rim
+    { f: 2380, q: 14, g: 0.13 },  // the pin: the edge that carries down a street
+  ];
+  for (const p of LINKS) {
+    const bp = keep(biquad(actx, 'bandpass', p.f * rng.range(0.97, 1.03), p.q));
+    const g = keep(gain(actx, p.g * Math.sqrt(p.q) * 1.3));
+    clatGate.connect(bp);
+    bp.connect(g);
+    g.connect(clatBus);
+  }
+
+  /* ---- 5. pin squeal --------------------------------------------- */
+  /**
+   * Dry steel pins in dry steel bushings. Q 26 at 3.2 kHz rings for ~50 ms, so
+   * at any speed worth the name consecutive slaps overlap into a whine — but the
+   * whine is GATED BY THE ROAD WHEEL RATE (see 7), because a squeal that never
+   * stops is a tone and a tone is what this whole rewrite is trying to get rid
+   * of. It appears, holds for half a wheel revolution, and goes.
+   */
+  const squeal = keep(biquad(actx, 'bandpass', 3240 * rng.range(0.93, 1.08), 26));
+  const squealAM = keep(gain(actx, 0.3));
+  const squealG = keep(gain(actx, 0.09));
+  clatGate.connect(squeal);
+  series(squeal, squealAM, squealG).connect(clatBus);
+
+  // The gait on the clatter, and the speed trim. `clatAM` is a multiplier stage
+  // fed by the wheel LFO below; `clatG` is the only thing `drive()` moves.
+  const clatAM = keep(gain(actx, 0.8));
+  const clatG = keep(gain(actx, 0));
+  series(clatBus, clatAM, clatG).connect(out);
+
+  /* ---- 6. grind: grit under the pads ------------------------------ */
+  // The grain train that used to be called TRACKS. It is a texture now, at a
+  // third of its old level, and its band no longer sweeps with speed — only its
+  // grain RATE does, which is the one thing about it that was ever a rate.
   const trk = keep(bank.source('crackle', rng, 0.35, true));
-  const trkBP = keep(biquad(actx, 'bandpass', 1500, 0.75));
-  const trkHP = keep(biquad(actx, 'highpass', 380, 0.7));
+  const trkBP = keep(biquad(actx, 'bandpass', 1650, 1.1));
+  const trkHP = keep(biquad(actx, 'highpass', 420, 0.7));
   const trkG = keep(gain(actx, 0));
   series(trk, trkHP, trkBP, trkG).connect(out);
   trk.start(t0, trk._offset);
   sources.push(trk);
 
-  /* ---- 5. road rumble -------------------------------------------- */
+  /* ---- 7. road rumble, and the wheel-rate gait -------------------- */
   const road = keep(bank.source('brown', rng, rng.range(0.7, 1.0), true));
   const roadLP = keep(biquad(actx, 'lowpass', 120, 0.9));
+  const roadAM = keep(gain(actx, 0.72));
   const roadG = keep(gain(actx, 0));
-  series(road, roadLP, roadG).connect(out);
+  series(road, roadLP, roadAM, roadG).connect(out);
   road.start(t0, road._offset);
   sources.push(road);
+
+  /**
+   * ONE LFO AT THE ROAD WHEEL RATE, driving three multiplier stages. About two
+   * revolutions a second at full advance, and slower than any of them the
+   * moment the hull slows — which is what makes a tank crawling out of cover
+   * read as heavy rather than as the same sound played quieter. It is summed
+   * into each stage's intrinsic gain (the trick `droneLock` documents), and
+   * every one of those intrinsic values is chosen so the sum never goes
+   * negative: an AudioParam that crosses zero inverts the signal.
+   */
+  const wheel = keep(osc(actx, 'sine', wheelRate(0)));
+  const wheelToClat = keep(gain(actx, 0.2));   // 0.60 .. 1.00 — surges
+  const wheelToSqueal = keep(gain(actx, 0.3)); // 0.00 .. 0.60 — comes and goes
+  const wheelToRoad = keep(gain(actx, 0.26));  // 0.46 .. 0.98 — the gait
+  wheel.connect(wheelToClat); wheelToClat.connect(clatAM.gain);
+  wheel.connect(wheelToSqueal); wheelToSqueal.connect(squealAM.gain);
+  wheel.connect(wheelToRoad); wheelToRoad.connect(roadAM.gain);
+  wheel.start(t0);
+  sources.push(wheel);
 
   // Fade in rather than switching on: a hull that becomes audible in one frame
   // reads as a bug, and `match` may hand us a tank that is already rolling.
@@ -144,7 +358,9 @@ export function tankEngine(actx, bank, rng, o = {}) {
       fire.frequency.setTargetAtTime(f, t, 0.25);
       lope.frequency.setTargetAtTime(f / 6, t, 0.25);
       am.frequency.setTargetAtTime(f, t, 0.25);
-      fireLP.frequency.setTargetAtTime(lerp(360, 700, th), t, 0.3);
+      // Top end pulled 700 -> 520: the firing order is support now, and the band
+      // it used to occupy is where the link slaps live.
+      fireLP.frequency.setTargetAtTime(lerp(330, 520, th), t, 0.3);
       /**
        * IDLE IS 8 dB UNDER LOAD, and it had to be measured to get there. With
        * the first set of numbers (0.40 -> 0.62 firing, 0.34 -> 0.70 combustion,
@@ -153,15 +369,44 @@ export function tankEngine(actx, bank, rng, o = {}) {
        * same whether it was parked in the square or driving at you. A diesel
        * under load is not 2 dB louder than one turning over; the whole point of
        * the sound is that you can hear it working.
+       *
+       * THE ENGINE'S SHARE OF THAT IS NOW SMALLER, because the gap is no longer
+       * the engine's job to carry: a moving hull has a whole layer that a parked
+       * one does not have at all. The firing order gives up its top end (0.62 ->
+       * 0.40) and the combustion layer is re-scaled for its much deeper gate,
+       * which together make room for the clatter without the hull getting
+       * louder — a tank at rms 0.0119 at 25 m already measured as the loudest
+       * thing on the street and must not grow.
        */
-      fireG.gain.setTargetAtTime(lerp(0.2, 0.62, th), t, 0.3);
-      combG.gain.setTargetAtTime(lerp(0.17, 0.7, th), t, 0.3);
+      fireG.gain.setTargetAtTime(lerp(0.16, 0.30, th), t, 0.3);
+      combG.gain.setTargetAtTime(lerp(0.20, 0.44, th), t, 0.3);
       lopeG.gain.setTargetAtTime(lerp(0.18, 0.46, th), t, 0.3);
-      // Track noise is about GROUND SPEED and nothing else — a tank revving on
-      // the spot rattles far less than one rolling at a walking pace.
+
+      /**
+       * THE TRACKS, AND SPEED MOVES THE RATE.
+       *
+       * `linkL`/`linkR` are the only place road speed becomes a frequency in
+       * this voice, and the frequency they become is a COUNT OF EVENTS PER
+       * SECOND — 6.6 at a metre a second, 30 at full advance — not a pitch.
+       * Nothing downstream of them is retuned, which is why a hull accelerating
+       * clatters faster instead of whining higher.
+       */
+      linkL.frequency.setTargetAtTime(linkRate(sp), t, 0.12);
+      linkR.frequency.setTargetAtTime(linkRate(sp) * SKEW, t, 0.12);
+      wheel.frequency.setTargetAtTime(wheelRate(sp), t, 0.18);
+      /**
+       * Presence. Dead below 0.15 m/s — a hull at a firing position idles and
+       * its tracks are SILENT, and that silence is what makes the clatter mean
+       * something when it starts. Concave above it so a tank creeping out of
+       * cover is already clearly clattering: what a driver does with the sticks
+       * changes how OFTEN you hear the track, and only gently how loud.
+       */
+      const roll = Math.pow(clamp((sp - 0.15) / 4.6, 0, 1), 0.55);
+      clatG.gain.setTargetAtTime(roll * 1.1, t, 0.18);
+      // Harder slaps are brighter — this is the excitation, not the resonances.
+      clatLP.frequency.setTargetAtTime(lerp(2100, 4200, roll), t, 0.25);
       trk.playbackRate.setTargetAtTime(clamp(0.28 + sp * 0.19, 0.28, 1.6), t, 0.2);
-      trkG.gain.setTargetAtTime(clamp(sp * 0.085, 0, 0.5), t, 0.2);
-      trkBP.frequency.setTargetAtTime(clamp(1150 + sp * 190, 1000, 2600), t, 0.25);
+      trkG.gain.setTargetAtTime(roll * 0.17, t, 0.2);
       roadG.gain.setTargetAtTime(clamp(sp * 0.055, 0, 0.34), t, 0.25);
     },
     /**
