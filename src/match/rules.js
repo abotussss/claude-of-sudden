@@ -246,11 +246,12 @@ export const RULES = {
    *   n                    0     1     2     3     4     5
    *   linear (old, min 1)  0   0.50  1.00  1.50  2.00  2.50
    *   cliff  (old, min 2)  0   0.00  1.00  1.50  2.00  2.50
-   *   THIS   [0,1,4,6,7,8] 0   0.25  1.00  1.50  1.75  2.00
+   *   [0,1,4,6,7,8]        0   0.25  1.00  1.50  1.75  2.00
+   *   THIS   [0,1,4,5,6,7] 0   0.25  1.00  1.25  1.50  1.75
    *
    * IT IS MONOTONIC AND IT HAS NO STEP. Every extra zone is worth strictly
    * more than the last total and the marginal value falls away smoothly —
-   * +1, +3, +2, +1, +1 per tick. Three properties come out of that shape and
+   * +1, +3, +1, +1, +1 per tick. Three properties come out of that shape and
    * each answers one of the three faults above:
    *
    *   - THE SECOND ZONE IS WHERE THE MONEY IS. Going from one to two QUADRUPLES
@@ -263,36 +264,49 @@ export const RULES = {
    *     also win the clock: the runaway match was the one case where the
    *     schedule ran out of room, and this is where the room comes from.
    *   - THE GAP OPENS MORE SLOWLY IN EXACTLY THE STATE THAT FELT UNFAIR. At a
-   *     4-1 split the leader gained 2.00 pt/s on the cliff and now gains 1.50.
+   *     4-1 split the leader gained 2.00 pt/s on the cliff and now gains 1.25.
+   *
+   * THE THIRD ZONE WAS THE ONE STILL PAYING TOO WELL. 「３つ占領していても加算の
+   * 掛け算は少し弱めにして つまり１試合の時間をもう少し長くする」 — under
+   * [0,1,4,6,7,8] the third zone was worth +0.50 pt/s, the same as the second,
+   * so taking three was where a match stopped being a contest and became a
+   * countdown. It is now +0.25, the same marginal step as the fourth and the
+   * fifth: the second zone is still where the money is, and everything after it
+   * is a steady, equal climb. Two zones is deliberately UNCHANGED at 1.00 pt/s
+   * — a close match is already 545 s and slowing it further would push the
+   * common case into `matchTime` 600, which would end matches on the clock
+   * rather than on the ground.
    *
    * WHAT IT DOES TO MATCH LENGTH, from the arithmetic and not from matches.
    * Seconds for a leader to reach `scoreTarget` 500 at a steady holding, with
    * the measured ~60 s of opening at one zone apiece folded in:
    *
-   *   holding   cliff (before)   this (after)
-   *   2 of 5        ~500 s          ~545 s
-   *   3 of 5        ~395 s          ~385 s
-   *   4 of 5        ~310 s          ~340 s
-   *   5 of 5        ~260 s          ~305 s
+   *   holding   cliff   [0,1,4,6,7,8]   THIS
+   *   2 of 5    ~500 s      ~545 s        ~545 s
+   *   3 of 5    ~395 s      ~385 s        ~448 s
+   *   4 of 5    ~310 s      ~340 s        ~383 s
+   *   5 of 5    ~260 s      ~305 s        ~337 s
    *
-   * So a CLOSE match is the same length it was, a one-sided one is 10-17 %
-   * longer, and nothing goes past `matchTime` 600 that was not already going
-   * there. That is "遅くてもいい" spent where it buys something: the shortest
-   * matches were the ones that ended before the tank, D and the final collapse
-   * had all landed, and 305 s is now the floor rather than 260.
+   * A CLOSE match is untouched; the one-sided ones are 10-16 % longer again on
+   * top of the last pass, and the floor rises 305 -> 337 s. Nothing goes past
+   * `matchTime` 600 that was not already going there. That is "遅くてもいい"
+   * spent where it buys something: the shortest matches were the ones that
+   * ended before the tank, D and the final collapse had all landed.
    *
    * THE EVENTS, PLACED AGAINST THIS CURVE. `cathedralScore` 300 arrives at
-   * roughly 0.6 of the numbers above — t ≈ 230 at three zones, t ≈ 330 at two
+   * roughly 0.6 of the numbers above — t ≈ 288 at three zones, t ≈ 330 at two
    * — and the whole cathedral act (barrage, collapse, D, both tanks) takes 25 s
-   * behind it, so it lands with 150-215 s of match still to play in every
-   * column. `districtSalvoProgress` [0.20, 0.28] is still ahead of it and
+   * behind it, so it lands with 160-215 s of match still to play in every
+   * column. The slower climb buys the elite reinforcement drop room it did not
+   * have: it was measured arriving at t = 463-505 s of 525-532 s matches, so
+   * the ten men existed for 20-70 s and could not do the job they are for. `districtSalvoProgress` [0.20, 0.28] is still ahead of it and
    * `finalCollapseProgress` 0.82 — 410 points — is still behind it.
    *
    * Five entries plus the zero. A sixth zone would need a sixth entry; the
    * lookup clamps to the last, so it degrades to a flat rate rather than to
    * `undefined`.
    */
-  zonePayout: [0, 1, 4, 6, 7, 8],
+  zonePayout: [0, 1, 4, 5, 6, 7],
   /**
    * ──────────────────────────────────────────────────────────────────────────
    * FIRST SIDE TO THIS WINS — AND IT IS THE KNOB THE WHOLE SCHEDULE HANGS OFF
