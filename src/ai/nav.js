@@ -1303,7 +1303,44 @@ export class NavGrid {
      * shape needs (the longest one measured expands well under a tenth of it),
      * and it still bounds a hopeless query to less than one full sweep.
      */
-    const maxNodes = opts.maxNodes ?? this.maxNodes;
+    /**
+     * ══════════════════════════════════════════════════════════════════════════
+     * …AND A QUERY THAT CANNOT SUCCEED MAY NOT COST THE WHOLE CEILING
+     * ══════════════════════════════════════════════════════════════════════════
+     * MEASURED (`_pathbudget.mjs`, seed 7, 2701 frames of live round): **35.7 %
+     * of every solve on the map returns 0** — no route at all — and a solve that
+     * finds nothing is the one that expands `maxNodes` before it can say so.
+     * `AiSystem._pathCostMs` is the MEAN over all solves, so those hopeless
+     * sweeps had dragged it to **4.59 ms against a `pathMsBudget` of 4.5**, and
+     * the ration is `round(budget / cost)`:
+     *
+     *   ONE A* SOLVE PER FRAME, FOR THE WHOLE ROSTER.
+     *
+     * 23.4 % of requests came back rationed, a quarter of all live men had no
+     * move target at any instant, and `Agent._advanceFallback` — whose whole job
+     * is to rescue exactly this man — could not get a solve either. It is a
+     * self-feeding collapse: hopeless queries raise the mean, the higher mean
+     * cuts the ration, the cut ration means more men asking again next frame.
+     * Every "AI が移動しない" census on this map has been reading its shadow.
+     *
+     * THE LABELS ALREADY KNOW. `comp[start] !== comp[goal]` after the island
+     * re-anchor means no walkable adjacency joins them — that is what `_label`
+     * IS, computed with exactly the rules this loop steps by. It is not a proof
+     * of failure, because the expansion below may also take a one-way DROP edge
+     * that `_label` deliberately excludes (a fall is not "and back"), which is
+     * what `descends` covers for a single hop and what a chain of two falls
+     * would not be covered by. So the query is not refused — refusing it would
+     * strand a man who can get down in two — it is BOUNDED: any route out of a
+     * component is over that component's own rim, so it is found in the first
+     * few thousand nodes or it is not there. An island on this map is 1-797
+     * cells and a roof is a few hundred; `CROSS_COMP_NODES` is an order of
+     * magnitude more than either and a tenth of a full sweep.
+     */
+    const crossComp = this.comp
+      && this.comp[start] >= 0 && this.comp[goal] >= 0
+      && this.comp[start] !== this.comp[goal];
+    const maxNodes = opts.maxNodes
+      ?? (crossComp ? Math.min(this.maxNodes, CROSS_COMP_NODES) : this.maxNodes);
 
     this.stamp++;
     const stamp = this.stamp;
@@ -1496,6 +1533,15 @@ const FWD = [0, 2, 4, 5];
  * @see `findPath`.
  */
 const ISLAND_RINGS = 14;
+/**
+ * The expansion ceiling for a solve whose two ends the LABELS say are not
+ * joined by walkable adjacency. It cannot be zero — a one-way drop edge is a
+ * route the labels deliberately do not contain — and it does not need to be
+ * `maxNodes`, because a route out of a component leaves over that component's
+ * own rim. @see the block in `findPath` for the measurement that made every
+ * such query cost a full sweep, and what that did to the per-frame ration.
+ */
+const CROSS_COMP_NODES = 6000;
 /**
  * THE THREE NUMBERS THE ROOFS COST. @see `_measureClimbs` / `_measureDrops`.
  *
