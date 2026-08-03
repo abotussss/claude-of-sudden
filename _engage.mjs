@@ -369,6 +369,21 @@ for (const seed of SEEDS) {
           out.sight.reduce((a, b) => a + b.rounds, 0)),
       };
     })(),
+    /**
+     * THE SAME, MINUS THE GLIMPSES. A sighting that lasted a third of a second
+     * is a man crossing a gap, and counting it as "he saw him and did not
+     * shoot" flatters the zero column in both directions. One second is longer
+     * than any reaction time in the file.
+     */
+    perSightingOverOneSecond: (() => {
+      const r = out.sight.filter((x) => x.dur >= 1).map((x) => x.rounds);
+      return {
+        n: r.length,
+        median: q(r, 0.5), p10: q(r, 0.1), p90: q(r, 0.9),
+        underTenPct: pct(r.filter((x) => x < 10).length, r.length),
+        zeroPct: pct(r.filter((x) => x === 0).length, r.length),
+      };
+    })(),
     medianEngagementDur: q(out.eng.map((x) => x.dur), 0.5),
     noPathWhy: out.noPathWhy,
     sightGate: Object.fromEntries(Object.entries(out.sightGate)
