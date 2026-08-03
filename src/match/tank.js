@@ -500,8 +500,14 @@ const BLOCK_PLAN = 5.0;
 const BLOCK_THIN = 2.0;
 /** How much of its own bounding box the island has to fill. */
 const BLOCK_FILL = 0.6;
-/** How far outside the measured box a triangle may still belong to the block. */
+/** How far outside the measured box a triangle may still belong to the block —
+ *  the coping lip and the capping band stand proud of the mass under them. */
 const BLOCK_PAD = 0.35;
+/** How far the box may open off its own mass. A 1 m lattice under-reports a
+ *  rotated footprint by up to half a cell each side; this is that, doubled. */
+const BLOCK_GROW = 1.2;
+/** A triangle wider than the widest box there can be is structure, not a block. */
+const BLOCK_SPAN = BLOCK_PLAN + 2 * BLOCK_GROW;
 /** Cell of the lookup grid the hull and the gun ask through. */
 const BLOCK_LOOKUP = 4;
 
@@ -2909,26 +2915,48 @@ export class Armour {
           if (Math.abs(u) < v.hw + 1.6 && Math.abs(t) < v.hd + 1.6) { inside = true; break; }
         }
         if (inside) continue;
-        const road = world.groundHeight(cx, cz);
+        const road = Number.isFinite(world.groundHeight(cx, cz)) ? world.groundHeight(cx, cz) : 0;
         list.push({
           ix: list.length,
-          x: cx, z: cz, y: Number.isFinite(road) ? road : 0, top: hi,
-          minX: cx - wpl / 2 - BLOCK_PAD, maxX: cx + wpl / 2 + BLOCK_PAD,
-          minZ: cz - dpl / 2 - BLOCK_PAD, maxZ: cz + dpl / 2 + BLOCK_PAD,
-          minY: (Number.isFinite(road) ? road : 0) - 0.8,
-          maxY: (Number.isFinite(road) ? road : 0) + hi + 0.7,
+          x: cx, z: cz, y: road, top: hi,
+          /**
+           * THE CORE BOX is the flood's own cells, and it is NOT the block.
+           * A cell only holds mass if its CENTRE does, and the map is authored
+           * in level space and placed at a 33.7° yaw — so the cathedral's
+           * 3.6 x 3.6 m pier is a rotated box 4.99 m across in world x, which
+           * a 1 m lattice reports as four cells. Binding against the core box
+           * took SIX of its twelve collision triangles and left the top face
+           * standing: a hole in an object is worse than an object.
+           *
+           * So the box is GROWN off the mass itself below (@see the growth
+           * pass), out of the core box by at most `BLOCK_GROW` — which is what
+           * makes the bound set the WHOLE object rather than the part of it a
+           * lattice happened to sample.
+           */
+          minX: cx - wpl / 2, maxX: cx + wpl / 2,
+          minZ: cz - dpl / 2, maxZ: cz + dpl / 2,
+          capX0: cx - wpl / 2 - BLOCK_GROW, capX1: cx + wpl / 2 + BLOCK_GROW,
+          capZ0: cz - dpl / 2 - BLOCK_GROW, capZ1: cz + dpl / 2 + BLOCK_GROW,
+          minY: road - 0.8,
+          maxY: road + hi + 0.7,
           tris: null, trisWas: null, draws: null, fired: false,
         });
       }
     }
     if (!list.length) return;
 
-    /* ---- 3a. the collision triangles --------------------------------- */
+    /**
+     * ---- 3a. the lookup grid -----------------------------------------
+     * Registered over the CAP box — the widest any box below can become —
+     * so a centroid lookup is a sound test for containment in every pass:
+     * a triangle that fits inside a block's box necessarily has its centroid
+     * inside it, and therefore inside a cell the block is registered in.
+     */
     const lookup = new Map();
     const keyOf = (cx, cz) => cx * 65536 + cz;
     for (const b of list) {
-      for (let cx = Math.floor(b.minX / BLOCK_LOOKUP); cx <= Math.floor(b.maxX / BLOCK_LOOKUP); cx++) {
-        for (let cz = Math.floor(b.minZ / BLOCK_LOOKUP); cz <= Math.floor(b.maxZ / BLOCK_LOOKUP); cz++) {
+      for (let cx = Math.floor((b.capX0 - BLOCK_PAD) / BLOCK_LOOKUP); cx <= Math.floor((b.capX1 + BLOCK_PAD) / BLOCK_LOOKUP); cx++) {
+        for (let cz = Math.floor((b.capZ0 - BLOCK_PAD) / BLOCK_LOOKUP); cz <= Math.floor((b.capZ1 + BLOCK_PAD) / BLOCK_LOOKUP); cz++) {
           const k = keyOf(cx, cz);
           let c = lookup.get(k);
           if (!c) lookup.set(k, (c = []));
@@ -2936,6 +2964,57 @@ export class Armour {
         }
       }
     }
+
+    /**
+     * ---- 3b. GROW EACH BOX OFF THE MASS ITSELF ------------------------
+     * Every piece of masonry that stands clear of the road and fits ENTIRELY
+     * inside the block's cap box is part of the block, and the box opens to
+     * hold it. Two properties make this safe rather than a creeping claim:
+     *
+     *   IT CANNOT REACH PAST `BLOCK_GROW`. The cap is fixed before any
+     *   triangle is looked at, so an object 2 m away cannot pull the box onto
+     *   itself — it does not fit inside the cap and is never considered.
+     *
+     *   IT IGNORES THE ROAD. `> y + 0.25` is what keeps the cathedral's 32.6 m
+     *   parvis strip and the ground sheet out of the union; without it the
+     *   first slab under a block would open the box to the whole square.
+     */
+    for (let t = 0; t < nTri; t++) {
+      const o = t * 9;
+      const ax = pos[o], ay = pos[o + 1], az = pos[o + 2];
+      const bx = pos[o + 3], by = pos[o + 4], bz = pos[o + 5];
+      const gx = pos[o + 6], gy = pos[o + 7], gz = pos[o + 8];
+      const xlo = Math.min(ax, bx, gx), xhi = Math.max(ax, bx, gx);
+      if (xhi - xlo > BLOCK_SPAN) continue;
+      const zlo = Math.min(az, bz, gz), zhi = Math.max(az, bz, gz);
+      if (zhi - zlo > BLOCK_SPAN) continue;
+      const bin = lookup.get(keyOf(
+        Math.floor(((xlo + xhi) * 0.5) / BLOCK_LOOKUP),
+        Math.floor(((zlo + zhi) * 0.5) / BLOCK_LOOKUP)
+      ));
+      if (!bin) continue;
+      const ylo = Math.min(ay, by, gy), yhi = Math.max(ay, by, gy);
+      for (let i = 0; i < bin.length; i++) {
+        const b = bin[i];
+        if (xlo < b.capX0 || xhi > b.capX1) continue;
+        if (zlo < b.capZ0 || zhi > b.capZ1) continue;
+        if (ylo < b.minY || yhi > b.maxY) continue;
+        if (yhi <= b.y + 0.25) continue;
+        if (xlo < b.minX) b.minX = xlo;
+        if (xhi > b.maxX) b.maxX = xhi;
+        if (zlo < b.minZ) b.minZ = zlo;
+        if (zhi > b.maxZ) b.maxZ = zhi;
+        break;
+      }
+    }
+    // The drawn skin — coping lips, capping bands, spall — stands a little
+    // proud of the collision box it was authored round.
+    for (const b of list) {
+      b.minX -= BLOCK_PAD; b.maxX += BLOCK_PAD;
+      b.minZ -= BLOCK_PAD; b.maxZ += BLOCK_PAD;
+    }
+
+    /* ---- 3c. the collision triangles ---------------------------------- */
     const mark = new Uint8Array(nTri);
     const cTris = list.map(() => []);
     for (let t = 0; t < nTri; t++) {
@@ -2956,13 +3035,16 @@ export class Armour {
         if (xlo < b.minX || xhi > b.maxX) continue;
         if (zlo < b.minZ || zhi > b.maxZ) continue;
         if (ylo < b.minY || yhi > b.maxY) continue;
+        // It lies flat on the carriageway: it IS the road, not the block, and
+        // a hole in the road is how men fall out of the level.
+        if (yhi <= b.y + 0.12) continue;
         cTris[b.ix].push(t);
         mark[t] = 1;
         break;
       }
     }
 
-    /* ---- 3b. the drawn triangles, out of the merged batches ---------- */
+    /* ---- 3d. the drawn triangles, out of the merged batches ---------- */
     let drawn = 0;
     for (const b of list) b.draws = [];
     for (const mesh of world.A.staticMeshes.values()) {
