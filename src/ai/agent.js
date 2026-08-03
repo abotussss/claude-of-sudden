@@ -154,8 +154,31 @@ const SPRINT_SPEED = 7.01 * 0.92;
 const SPRINT_START = 16;
 const SPRINT_STOP = 9;
 const SPRINT_DOT = 0.55;
-const SPRINT_THREAT_R = 26;
-const SPRINT_FUEL = 8;
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE CENSUS SAID WHICH REFUSAL, SO THE REFUSALS MOVE — 「またAIは全然走ってない
+ * もっと最高速度で走らせろ」
+ * ════════════════════════════════════════════════════════════════════════════
+ * MEASURED (`_fourprobe.mjs`, seed 7, 5564 long-leg samples): 36.8 % of every
+ * man who COULD have been running was running, and the board under it was
+ * winded 13.4 / crowd 13.3 / unstick 11.3 / busy 8.1 / threatcall 7.2. Three of
+ * those five are numbers rather than behaviours and all three move here.
+ *
+ *   THREAT     26 m was "a call-out that concerns him" on a map whose zones are
+ *              185 m apart. `Squad.update` refreshes every man's `lastKnown`
+ *              whenever anybody on a twenty-man side has eyes on anybody, so a
+ *              26 m bubble around a fresh call is most of a district. 18 m is
+ *              still "the fight is on this street" and it is not "the fight is
+ *              two streets over".
+ *   FUEL       8 s of run against eleven and a half of walk (0.7/s refill, and
+ *              he may not restart until 3 of it is back) is a man who spends
+ *              59 % of a long leg recovering from the first third of it. On a
+ *              185 m leg that is three runs and four walks. 14 s at 1.1/s is a
+ *              man who runs the leg with two breathers in it, which is what a
+ *              soldier crossing a city actually looks like.
+ */
+const SPRINT_THREAT_R = 18;
+const SPRINT_FUEL = 14;
 const SPRINT_REARM = 3;
 /**
  * 0.7 rather than 0.5, and it is a measurement rather than a taste: at 0.5 the
@@ -165,7 +188,7 @@ const SPRINT_REARM = 3;
  * run against four and a bit of walk is still a man who cannot cross the whole
  * map at a sprint, which is the point of having legs at all.
  */
-const SPRINT_REFILL = 0.7;
+const SPRINT_REFILL = 1.1;
 /**
  * HOW MUCH CLEAR GROUND HE NEEDS IN FRONT OF HIM, AND IT IS A MEASUREMENT.
  *
@@ -2504,8 +2527,25 @@ export class Agent {
        * tested inside because it is the same sentence the two lines above are:
        * crossing the map is a run, working a sector you already hold is not.
        */
+      /**
+       * MEASURED AND REJECTED: turning the fireteam brake into a REFUSAL in the
+       * gate (a man ahead of his team may not sprint at all) cost 16.8 % of
+       * every long leg and took the roster's mean moving speed from 3.75 to
+       * 3.28 m/s. The reason is arithmetic and it was not obvious: the brake
+       * below still applies to him, so refusing the sprint does not make him
+       * walk — it makes him walk BRAKED, at 0.55 of a walk instead of 0.55 of a
+       * run. Cohesion is cheaper as a scale than as a veto, so it stays one.
+       */
       const sprint = this._sprintGate(dist, !inSector);
       if (sprint > this.desiredSpeed) this.desiredSpeed = sprint;
+      /**
+       * HE IS RUNNING, SO THE WEAPON COMES DOWN — and this is half of why the
+       * player says he cannot see a sprint. @see `clips.js`'s `sprint`. Below
+       * 0.01 `Animator.update` skips the aim IK entirely, so the bore stops
+       * tracking the contact and the rifle rides the arm swing, which is the
+       * silhouette a sprint actually has.
+       */
+      if (this.sprinting) this.aimWeight = 0.05;
       /**
        * ══════════════════════════════════════════════════════════════════════
        * NOBODY ARRIVES ALONE — "占領しにチームでいけ"
@@ -2671,10 +2711,20 @@ export class Agent {
     // Has he the legs? @see the latch in `update`: he runs until the fuel is
     // gone and then walks until `SPRINT_REARM` of it is back.
     if (!this._sprintArmed) return 0;
-    // Is anybody in front of him? This is what keeps forty men arriving faster
-    // from becoming forty men in one doorway, and it costs nothing here — the
-    // count was taken on the avoidance pass `_move` already walks.
-    if (this._ahead > 0) return 0;
+    /**
+     * Is anybody in front of him? This is what keeps forty men arriving faster
+     * from becoming forty men in one doorway, and it costs nothing here — the
+     * count was taken on the avoidance pass `_move` already walks.
+     *
+     * ONE MAN IN FRONT IS NOT A QUEUE. Measured at 13.3 % of every long leg on
+     * the board, second only to the fuel — and `SPRINT_CLEAR` is 3.6 m over a
+     * 110 degree cone, which two soldiers walking a street abreast satisfy for
+     * each other permanently. What produced the doorway epidemic was a LUMP,
+     * and a lump is two or more. The clear distance and the cone are untouched,
+     * so the shape of the refusal is the same one `stuckcheck` priced; only its
+     * threshold moves, and `tools/stuckcheck.mjs` is run against it.
+     */
+    if (this._ahead > 1) return 0;
     // Is he pointed down the leg? The player's own `sprintForwardDot`, against
     // the direction he actually travelled last frame (avoidance included), so a
     // man squeezing round a corner or a hull walks it.
@@ -2682,7 +2732,21 @@ export class Agent {
       return 0;
     }
     this.sprinting = true;
-    return SPRINT_SPEED * this.moveScale;
+    /**
+     * AND THE WEAPON PENALTY IS HALVED ON THE SPRINT ONLY — 「最高速度で」.
+     *
+     * `moveScale` is `WEAPONS.move`, 0.78 for the belt gun to 1.08 for the
+     * machine pistol, and it is the right shape for a man WALKING with his
+     * weapon up: that is what the number was mirrored from and every other use
+     * of it is untouched. Applied to the sprint at full strength it says the
+     * gunner's flat-out run is 5.03 m/s — slower than a rusher's braced WALK
+     * (4.3 x 1.26 = 5.42), which is not a top speed, it is a contradiction.
+     * A man running with a heavy gun carries it slung and low; he is slower
+     * than the man with the carbine and he is not slower than himself walking.
+     * Halving the deviation keeps the whole ordering and lifts the floor:
+     * 5.83 for the LMG, 6.45 for the carbine, 6.94 for the machine pistol.
+     */
+    return SPRINT_SPEED * (0.5 + this.moveScale * 0.5);
   }
 
   /**
@@ -5174,6 +5238,10 @@ export class Agent {
     const moving = this.speed > 0.25;
     let clip;
     if (this.crouch) clip = moving ? 'crouchWalk' : 'crouchIdle';
+    // THE SPRINT HAS ITS OWN CLIP. @see `SPRINT` in clips.js for why it has to.
+    // Gated on the measured speed and not on the intent, so a man whose sprint
+    // was granted and then braked to a jog by traffic plays the jog.
+    else if (this.sprinting && this.speed > 4.4) clip = 'sprint';
     else if (this.speed > 2.6) clip = 'run';
     else if (moving) clip = 'walk';
     else clip = this.health < 35 ? 'hurtIdle' : 'idle';

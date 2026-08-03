@@ -275,11 +275,15 @@ export class Animator {
      * the low-speed clamp, where the cycle no longer covers the nominal stride.
      */
     const clip = st.clip;
+    // A sprinter's stride is LONGER than a runner's, so at the same ground speed
+    // his cadence is lower — which is what makes the two read differently at a
+    // distance. @see `SPRINT` in clips.js.
     const strideHz =
-      clip === 'run' ? Math.max(1.1, st.speed / 2.05)
-        : clip === 'walk' ? Math.max(0.55, st.speed / 1.42)
-          : clip === 'crouchWalk' ? Math.max(0.4, st.speed / 0.95)
-            : 0.19; // idle breathing rate
+      clip === 'sprint' ? Math.max(1.3, st.speed / 2.55)
+        : clip === 'run' ? Math.max(1.1, st.speed / 2.05)
+          : clip === 'walk' ? Math.max(0.55, st.speed / 1.42)
+            : clip === 'crouchWalk' ? Math.max(0.4, st.speed / 0.95)
+              : 0.19; // idle breathing rate
     this.phase = (this.phase + dt * strideHz) % 1;
     if (this.blend < 1) this.blend = Math.min(1, this.blend + dt / 0.18);
     const ctx = this._clipCtx;

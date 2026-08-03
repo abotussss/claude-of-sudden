@@ -255,6 +255,45 @@ const RUN = {
   lean: 13, spineYaw: 6, armSwing: 9, bounce: 1.6, headRoll: 1.2,
 };
 
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * A SPRINT IS A POSE, NOT A NUMBER — 「またAIは全然走ってない」
+ * ════════════════════════════════════════════════════════════════════════════
+ * The sprint has been measured twice as working (+13.3 % on isolated transit,
+ * up on a quarter of every moving sample) and the player still cannot see it,
+ * and this is most of why: there was no sprint clip. A sprinting bot played the
+ * SAME `run` at the SAME cadence with the weapon still braced at his shoulder,
+ * so the only difference between a jog and a flat-out run was that the scenery
+ * went past faster — which is precisely the thing a first-person player cannot
+ * judge and the thing an animation is for.
+ *
+ * Everything here is the run pushed past the point where the two read the same:
+ *
+ *   duty 0.26  a quarter of the cycle on each foot means a LONG float phase
+ *              with neither foot down. That is the definition of a sprint and
+ *              it is what makes the silhouette bound rather than shuffle.
+ *   lean 22    against the run's 13. He is falling forward and catching it.
+ *   armSwing   16 against 9, and the rifle is anchored to the right hand, so
+ *              the weapon swings with the arm — which, with `aimWeight` at
+ *              0.05 (`Agent._advance`) turning the aim IK off entirely, is the
+ *              weapon-down carry the pose was missing.
+ *   lift/tuck  a knee that comes up and a heel that folds under.
+ *
+ * The stride itself is `Animator.update`'s: 2.55 m per cycle against the run's
+ * 2.05, so at the same ground speed a sprinter takes LONGER, SLOWER strides.
+ * That contrast is readable at a distance in a way that speed alone is not.
+ * `gait` is stride-locked, so the feet stay planted at any of it by
+ * construction (@see the note over `gait`), and nothing else changes.
+ */
+const SPRINT = {
+  duty: 0.26, plantBias: 0.34, track: 0.060,
+  heelRoll: 0.12, heelPitch: 9, push: 0.32, pushPitch: 50,
+  lift: 0.42, tuck: 0.125,
+  sway: 0.024, bob: 0.055, bobBias: -0.095, bobSign: -1,
+  pelvisTilt: -5, pelvisYaw: 8, pelvisRoll: 5,
+  lean: 22, spineYaw: 8, armSwing: 16, bounce: 2.2, headRoll: 1.6,
+};
+
 const CROUCH = {
   duty: 0.66, plantBias: 0.45, track: 0.115,
   heelRoll: 0.18, heelPitch: 8, push: 0.24, pushPitch: 22,
@@ -273,6 +312,18 @@ export function run(P, ph, ctx) {
   // the head is the last thing that should move on a runner: counter the lean
   // so the eyes stay level and the helmet stops describing an arc
   P.d('Head', -4.5, 0, 0);
+}
+
+/**
+ * Flat out. @see `SPRINT`. The head counters more of the lean than the run's
+ * does — a sprinter still looks where he is going — and the elbows come in,
+ * which is what stops a big arm swing reading as a man flapping.
+ */
+export function sprint(P, ph, ctx) {
+  gait(P, ph, SPRINT, ctx);
+  P.d('Head', -8, 0, 0);
+  P.d('ForearmR', -34, 0, 0);
+  P.d('ForearmL', -34, 0, 0);
 }
 
 export function crouchWalk(P, ph, ctx) {
@@ -468,4 +519,4 @@ export function reloadAdd(P, t) {
   P.d('ForearmR', -6 * w, 0, 0);
 }
 
-export const CLIPS = { idle, walk, run, crouchWalk, crouchIdle, hurtIdle };
+export const CLIPS = { idle, walk, run, sprint, crouchWalk, crouchIdle, hurtIdle };
