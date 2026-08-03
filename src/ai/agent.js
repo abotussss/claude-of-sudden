@@ -94,6 +94,75 @@ const SITE_HOLD_R = 9;
 const LEAD_SLACK = 9;
 
 /**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE SPRINT — 「AIが走ってない ユーザーは左SHIFTで走れますが、AIは走ってない
+ * これにより到達時間がかかりすぎ 走れるようにして」
+ * ════════════════════════════════════════════════════════════════════════════
+ * MEASURED BEFORE THIS EXISTED (`_sprintprobe.mjs`, seeds 7 and 3, 41k samples):
+ * the roster's mean speed while it WANTED to move was 3.15-3.25 m/s and a leg
+ * of 28-31 m took 13.7-14.7 s, i.e. 2.05-2.13 m/s made good. The player's stand
+ * is 4.20 and his sprint is 6.45. Nobody on the map was running anywhere, and
+ * two separate audits say what that costs: 84 % of actor-time in transit with a
+ * median 57 m still to walk, and 79 % of it with nothing in sight. Crossing the
+ * map at a walk is most of why the battle feels thin, so this is a lever on
+ * encounter density and not only a speed knob.
+ *
+ * WHAT A SPRINT IS HERE. `SPRINT_SPEED` is the player's own number restated —
+ * `src/player/tuning.js` is `7.01 * FOOT_SPEED` with `FOOT_SPEED = 0.92`, and
+ * `ai` may not import another subsystem (@see ARCHITECTURE.md), so it is
+ * mirrored exactly as the `WEAPONS` rack mirrors `defs.js`. A bot gets the
+ * ORDINARY sprint and never the tactical one: 7.71 m/s is an affordance the
+ * player buys with a double tap and a stamina clock he can see.
+ *
+ * WHEN. A long open leg with nothing in sight — which is exactly the state the
+ * audits found the roster living in — and nothing else. Not inside a sector he
+ * already holds (a defender who sprints between two sandbags cannot shoot), not
+ * in COMBAT, ALERT, FLANK or RETREAT, all of which are short moves that end in
+ * a trigger pull.
+ *
+ * WHAT ENDS IT, and every one of these is a real answer rather than a timer:
+ *   CONTACT      `hasTarget`, or suppression at all (0.15 — a quarter of what
+ *                it takes to leave ADVANCE, because near misses should drop a
+ *                man to a walk long before they drop him into cover).
+ *   A CALL       a squadmate's last-known that is fresh AND within
+ *                `SPRINT_THREAT_R` of HIM. Deliberately distance-qualified:
+ *                `Squad.update` refreshes every man's `lastKnown` whenever
+ *                anybody on a twenty-man side has eyes on anybody, so a bare
+ *                freshness test would mean nobody ever runs (@see the same trap
+ *                written out at the top of `_advance`).
+ *   ARRIVAL      `SPRINT_STOP`, with `SPRINT_START` above it so the gate has
+ *                hysteresis and a man does not stutter on the threshold. He
+ *                covers the last nine metres at a walk, with his weapon up.
+ *   A TURN       he has to be pointed down the leg (`SPRINT_DOT`, the player's
+ *                own `sprintForwardDot`), so nobody sprints round a corner.
+ *   A CROWD      `SPRINT_CLEAR`: not with a man in front of him. Forty bots
+ *                arriving faster is forty bots at the same doorway at the same
+ *                moment, which is the exact condition that produced the stuck
+ *                epidemic, so the sprint switches itself off in the traffic it
+ *                would otherwise cause.
+ *   LEGS         `SPRINT_FUEL` seconds of it, refilling at `SPRINT_REFILL`, and
+ *                he may not start again until `SPRINT_REARM` is back. On a 57 m
+ *                leg that is a run, a walk and a run — which also staggers the
+ *                arrivals instead of delivering the whole roster in one lump.
+ *
+ * IT IS A `Math.max` OVER THE WALK HE ALREADY HAD, applied where `_advance`
+ * sets `desiredSpeed` and BEFORE the fireteam brake, so no man is ever slower
+ * than he was before this existed and 「占領しにチームでいけ」 still holds him to
+ * his team's clock.
+ */
+const SPRINT_SPEED = 7.01 * 0.92;
+const SPRINT_START = 16;
+const SPRINT_STOP = 9;
+const SPRINT_DOT = 0.55;
+const SPRINT_THREAT_R = 26;
+const SPRINT_FUEL = 8;
+const SPRINT_REARM = 3;
+const SPRINT_REFILL = 0.5;
+const SPRINT_CLEAR = 2.6;
+/** Half-angle of the "is anybody in front of me" cone, as a cosine. */
+const SPRINT_CLEAR_DOT = 0.5;
+
+/**
  * THE UPPER POST'S TWO NUMBERS. @see `Agent._runPost` and `StairMap`.
  *
  * `POST_PHASE_T` is the abandon clock on every phase of the climb and it is the
@@ -367,6 +436,18 @@ const ARCHETYPE_MIX = {
  *   hold      how long this weapon is held down, as a multiple of the burst
  *             the man's own `trigger` trait asks for. A belt is 2.4x; a revolver
  *             is 0.35x, i.e. aimed single shots.
+ *   move      WHAT IT COSTS TO CARRY, and it is `defs.js`'s own `moveScale`
+ *             restated to the digit: the belt is 0.78 — 「LMGなので重厚な球数の
+ *             多い、でも足がすごく遅くなるやつ」, a measured fifth off your speed —
+ *             the bolt gun 0.90, the machine pistol 1.08. The player has had
+ *             this term since the knife (`PlayerMovement.targetSpeed`) and a
+ *             bot never did, so the eight-kilo gun and the sidearm crossed the
+ *             map at the same pace. It multiplies THE SPRINT (@see
+ *             `SPRINT_SPEED` and `_sprintGate`) and not the walk, because
+ *             cutting a walk nobody complained about is not what
+ *             「走れるようにして」 asked for, and because the LMG's identity is a
+ *             man who cannot run away — he is now the slowest thing on the map
+ *             at 5.03 m/s against the machine pistol's 6.97.
  *
  * THE MESH IS NOT IN HERE AND CANNOT BE. A soldier is ONE skinned geometry per
  * VARIANT with the rifle baked into it (@see `soldier.js`, `buildWeapon`), which
@@ -377,18 +458,18 @@ const ARCHETYPE_MIX = {
  * firefight is actually read by.
  */
 const WEAPONS = {
-  carbine: { audio: 'rifle', rpm: 800, mag: 30, spares: 4, damage: 17, cone: 0.030, coneLow: 0.055, reload: 2.35, hold: 1.0 },
-  ak: { audio: 'ak', rpm: 600, mag: 30, spares: 3, damage: 21, cone: 0.034, coneLow: 0.062, reload: 2.75, hold: 0.85 },
-  smg: { audio: 'smg', rpm: 950, mag: 32, spares: 5, damage: 15, cone: 0.041, coneLow: 0.072, reload: 2.05, hold: 1.3 },
+  carbine: { audio: 'rifle', rpm: 800, mag: 30, spares: 4, damage: 17, cone: 0.030, coneLow: 0.055, reload: 2.35, hold: 1.0, move: 1.00 },
+  ak: { audio: 'ak', rpm: 600, mag: 30, spares: 3, damage: 21, cone: 0.034, coneLow: 0.062, reload: 2.75, hold: 0.85, move: 0.98 },
+  smg: { audio: 'smg', rpm: 950, mag: 32, spares: 5, damage: 15, cone: 0.041, coneLow: 0.072, reload: 2.05, hold: 1.3, move: 1.06 },
   /**
    * THE BELT. `magSize` 100 is the whole character of it: this is the man who
    * does not stop, and he is the direct answer to "マガジンを使い切るくらい撃たない
    * のか". Two belts behind it rather than four magazines, and a 5.6 s tray
    * change during which he is worth nothing — the cost of holding it down.
    */
-  lmg: { audio: 'lmg', rpm: 750, mag: 100, spares: 2, damage: 17, cone: 0.047, coneLow: 0.082, reload: 5.6, hold: 2.4 },
-  mpistol: { audio: 'machinepistol', rpm: 1050, mag: 20, spares: 7, damage: 14, cone: 0.055, coneLow: 0.092, reload: 1.85, hold: 1.15 },
-  magnum: { audio: 'magnum', rpm: 170, mag: 6, spares: 8, damage: 42, cone: 0.019, coneLow: 0.040, reload: 3.4, hold: 0.35 },
+  lmg: { audio: 'lmg', rpm: 750, mag: 100, spares: 2, damage: 17, cone: 0.047, coneLow: 0.082, reload: 5.6, hold: 2.4, move: 0.78 },
+  mpistol: { audio: 'machinepistol', rpm: 1050, mag: 20, spares: 7, damage: 14, cone: 0.055, coneLow: 0.092, reload: 1.85, hold: 1.15, move: 1.08 },
+  magnum: { audio: 'magnum', rpm: 170, mag: 6, spares: 8, damage: 42, cone: 0.019, coneLow: 0.040, reload: 3.4, hold: 0.35, move: 1.06 },
   /**
    * The bolt gun, and every dial on it is a trade rather than a tightening.
    * @see the block in the constructor that applies `extra` — the settle, the
@@ -396,7 +477,7 @@ const WEAPONS = {
    */
   sniper: {
     audio: 'sniper', rpm: 55, mag: 5, spares: 6, damage: 55, cone: 0.0072, coneLow: 0.0135,
-    reload: 3.1, hold: 0.3,
+    reload: 3.1, hold: 0.3, move: 0.90,
     extra: { settleTime: [2.05, -1.15], trackRate: [1.6, 2.2], aimWobble: [0.004, 0.012], weaponRange: [78, 30], viewRange: 96 },
   },
 };
@@ -1049,6 +1130,8 @@ export class Agent {
     this.weaponAudio = W.audio;
     /** How long he holds the trigger down, relative to his own discipline. */
     this.holdFactor = W.hold;
+    /** What the gun costs him on his feet. @see `WEAPONS.move` / `_sprintGate`. */
+    this.moveScale = W.move ?? 1;
     /** The irregular's 1.23x on a magazine change is kept: it was a variant cue. */
     this.reloadTime = W.reload * (this.variantName === 'irregular' ? 1.23 : 1);
 
@@ -1293,6 +1376,19 @@ export class Agent {
     this.hasMoveTarget = false;
     this.desiredSpeed = 0;
     this.speed = 0;
+    /**
+     * IS HE RUNNING, AND HAS HE THE LEGS LEFT TO. @see `SPRINT_SPEED` for the
+     * whole argument. `sprinting` is re-asserted from scratch every frame by
+     * `_sprintGate` — `update` clears it before `_think` runs — so no state can
+     * leave a man running after the reason has gone. `_ahead` is how many men
+     * are standing in the cone in front of him, counted for free inside the
+     * avoidance loop `_move` already walks and read one frame later.
+     */
+    this.sprinting = false;
+    this._wasSprinting = false;
+    this.sprintFuel = SPRINT_FUEL;
+    this._sprintArmed = true;
+    this._ahead = 0;
     this.crouch = false;
     this.cover = null;
     this.coverPos = new THREE.Vector3();
@@ -1446,6 +1542,26 @@ export class Agent {
     this.vaultCooldown -= dt;
     this._viaTimer -= dt;
     if (this.lastKnownAge < 1e6) this.lastKnownAge += dt;
+
+    /**
+     * THE LEGS, SPENT AND RECOVERED IN ONE PLACE. It is here rather than inside
+     * `_sprintGate` because the gate only runs while a man is crossing ground:
+     * a man in a firefight, on a ladder or working a charge has to get his wind
+     * back too, and this is the only line every one of them passes through.
+     * Clearing the flag here is what makes it re-asserted rather than remembered
+     * — @see the field block in the constructor.
+     */
+    if (this.sprinting) {
+      this.sprintFuel -= dt;
+      // Out of wind. `_sprintArmed` is a LATCH and not a threshold test: without
+      // it a man at exactly the re-arm mark alternates run/walk every frame.
+      if (this.sprintFuel <= 0) { this.sprintFuel = 0; this._sprintArmed = false; }
+    } else if (this.sprintFuel < SPRINT_FUEL) {
+      this.sprintFuel = Math.min(SPRINT_FUEL, this.sprintFuel + dt * SPRINT_REFILL);
+      if (this.sprintFuel >= SPRINT_REARM) this._sprintArmed = true;
+    }
+    this._wasSprinting = this.sprinting;
+    this.sprinting = false;
 
     // a path the frame budget deferred: ask again before anything else does
     if (this.pathPending) this._goTo(this._pendingDest);
@@ -2343,6 +2459,18 @@ export class Agent {
       this.desiredSpeed = inSector ? 2.4 + this.traits.aggression * 1.6
         : (obj.mode === 'hold' ? 3.4 : 4.3) * haste;
       /**
+       * …AND THE LONG ONES ARE A RUN — 「AIが走ってない」. @see `SPRINT_SPEED`.
+       *
+       * It is a floor over the walk he already had and it is applied HERE, one
+       * line above the fireteam brake, so that a man ahead of his own team is
+       * braked out of a sprint exactly as he was braked out of a jog and
+       * 「占領しにチームでいけ」 costs nothing. `inSector` is passed rather than
+       * tested inside because it is the same sentence the two lines above are:
+       * crossing the map is a run, working a sector you already hold is not.
+       */
+      const sprint = this._sprintGate(dist, !inSector);
+      if (sprint > this.desiredSpeed) this.desiredSpeed = sprint;
+      /**
        * ══════════════════════════════════════════════════════════════════════
        * NOBODY ARRIVES ALONE — "占領しにチームでいけ"
        * ══════════════════════════════════════════════════════════════════════
@@ -2462,6 +2590,63 @@ export class Agent {
      */
     this.crouch = holdish && this.traits.exposure < 0.42;
     this.aimWeight = 0.6;
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * SHOULD THIS MAN BE RUNNING? — 「走れるようにして」
+   * ══════════════════════════════════════════════════════════════════════════
+   * @see `SPRINT_SPEED` for the whole argument and for every threshold below.
+   * Returns the speed a sprint asks for, or 0, and sets `this.sprinting`, which
+   * `update` has already cleared this frame.
+   *
+   * Written as one refusal after another rather than as a score, because every
+   * clause is a different sentence about the same man and a player has to be
+   * able to read which one stopped him. Nothing here allocates and nothing here
+   * costs a ray: the crowd term was counted for free inside the avoidance loop
+   * `_move` walks anyway, and the alignment term is two trig calls on a state
+   * that already exists.
+   *
+   * `dist` is to the destination `_advance` has chosen — the hold spot, the
+   * diversion or the objective — so a man is measured against where he is
+   * actually walking rather than against the flag.
+   */
+  _sprintGate(dist, allow) {
+    if (!allow) return 0;
+    // The two the state machine already knows about. Suppression is a QUARTER
+    // of what it takes to leave ADVANCE (@see `_advance`): a man who is being
+    // shot at slows to a walk long before he goes to ground.
+    if (this.hasTarget || this.suppression > 0.15) return 0;
+    // Both hands busy, off the height field, or already in trouble on his feet:
+    // `_detourTimer` and `stuckRung` are `_unstick`'s, and a manoeuvre to get
+    // out of something is not a leg to run down.
+    if (this.working || this.post || this.postClimbing || this.crouch) return 0;
+    if (!this.hasMoveTarget || this._detourTimer > 0 || this.stuckRung !== 0) return 0;
+    // A call-out that concerns HIM. Distance-qualified on purpose — a contact
+    // sixty metres away on the other flank is not a reason to stop running.
+    if (this.lastKnownAge < 4
+      && this.position.distanceToSquared(this.lastKnown) < SPRINT_THREAT_R * SPRINT_THREAT_R) {
+      return 0;
+    }
+    // Is the leg long enough to be worth it? Hysteresis: he commits at
+    // `SPRINT_START` and gives it up at `SPRINT_STOP`, so the last nine metres
+    // are walked with the weapon up and nobody stutters on one threshold.
+    if (dist < (this._wasSprinting ? SPRINT_STOP : SPRINT_START)) return 0;
+    // Has he the legs? @see the latch in `update`: he runs until the fuel is
+    // gone and then walks until `SPRINT_REARM` of it is back.
+    if (!this._sprintArmed) return 0;
+    // Is anybody in front of him? Counted last because it is the one that
+    // changes most often, and it is what keeps forty men arriving faster from
+    // becoming forty men in one doorway. @see `_move`.
+    if (this._ahead > 0) return 0;
+    // Is he pointed down the leg? The player's own `sprintForwardDot`, against
+    // the direction he actually travelled last frame (avoidance included), so a
+    // man squeezing round a corner or a hull walks it.
+    if (Math.sin(this.yaw) * this._steer.x + Math.cos(this.yaw) * this._steer.z < SPRINT_DOT) {
+      return 0;
+    }
+    this.sprinting = true;
+    return SPRINT_SPEED * this.moveScale;
   }
 
   /**
@@ -4068,6 +4253,16 @@ export class Agent {
     }
 
     // local avoidance: push off squadmates and steer around them
+    /**
+     * …AND, ON THE SAME PASS, HOW MANY MEN ARE IN FRONT OF HIM. `_sprintGate`
+     * needs it and this is the only loop on the map that already visits every
+     * other actor, so it is counted here for two comparisons and no square root
+     * rather than costing a second sweep. Read one frame later, which is right:
+     * the traffic a man is about to run into is the traffic that was there.
+     */
+    const fwdX = Math.sin(this.yaw);
+    const fwdZ = Math.cos(this.yaw);
+    let ahead = 0;
     const others = this.ai.agents;
     for (let i = 0; i < others.length; i++) {
       const o = others[i];
@@ -4075,6 +4270,11 @@ export class Agent {
       const dx = this.position.x - o.position.x;
       const dz = this.position.z - o.position.z;
       const d2 = dx * dx + dz * dz;
+      if (d2 < SPRINT_CLEAR * SPRINT_CLEAR && d2 > 1e-6) {
+        // dot of the unit vector TO him with the facing, without the sqrt
+        const dot = -dx * fwdX - dz * fwdZ;
+        if (dot > 0 && dot * dot > SPRINT_CLEAR_DOT * SPRINT_CLEAR_DOT * d2) ahead++;
+      }
       const rr = (this.radius + o.radius + 0.42) ** 2;
       if (d2 > rr || d2 < 1e-6) continue;
       const d = Math.sqrt(d2);
@@ -4086,6 +4286,7 @@ export class Agent {
       this._steer.z += (dx / d) * push * 0.35 * (this.id % 2 ? 1 : -1);
       if (want === 0) want = this.desiredSpeed * 0.35;
     }
+    this._ahead = ahead;
 
     /**
      * …AND ROUND A HULL, which is the same term with a rectangle in place of a
