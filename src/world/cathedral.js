@@ -1412,7 +1412,7 @@ export function buildCathedral(A) {
      */
     const SPILL = 0.9;
     const tornWall = (axis, fixed, from, to, gaps, opts) => {
-      const { key, base, survivors = [], sign } = opts;
+      const { key, base, survivors = [], sign, lowTo = null } = opts;
       const step = 0.98;
       const t = T + SPILL;
       const off = -sign * (SPILL / 2);
@@ -1430,6 +1430,28 @@ export function buildCathedral(A) {
           h = Math.max(h, base + (sh - base) * Math.sqrt(f) * rng.range(0.86, 1.0));
         }
         h = Math.max(1.05, h);
+        /**
+         * ────────────────────────────────────────────────────────────────
+         * THE TRANSEPT FRONT, DOWN TO A HEAP YOU SEE OVER — 「瓦礫の高さを
+         * 下げろ 瓦礫を地面に埋めるなりして視認性確保しろ」
+         * ────────────────────────────────────────────────────────────────
+         * `_dceiling.mjs` re-casts every ray in D past everything inside a
+         * given radius, and it puts the whole argument in one column: with
+         * D's rim cleared, nothing inside 13 m of the crossing stops a ray
+         * at all (18.34 m either way) and clearing to 16 m is worth 3.3 m of
+         * mean reach. There is exactly one thing in that band — these two
+         * flank elevations, 14.6 m from the middle of D and the closest wall
+         * on the map to a capture point. 32 % of every ray D has died on
+         * them.
+         *
+         * So the bays either side of each transept portal come down UNDER
+         * `SIGHT_TOP` — the transept fronts are what a dome coming through
+         * the crossing pushes out — and the elevation is still a wall: it is
+         * a heap for fifteen metres and then it tears back up to its
+         * survivors. The portal and its jambs stand in it, which is what a
+         * torn elevation round a surviving doorway looks like.
+         */
+        if (lowTo && c > lowTo[0] && c < lowTo[1]) h = Math.min(h, lowTo[2] - SEC.floor);
         const u = axis === 'u' ? c : fixed + off;
         const v = axis === 'u' ? fixed + off : c;
         const su = axis === 'u' ? wid : t;
@@ -1582,13 +1604,22 @@ export function buildCathedral(A) {
      * well as for the skyline: a survivor here is a bearing D loses. The
      * transept gap at v = 0 is untouched and is one of D's four long shots.
      */
+    /**
+     * The two survivors that used to stand at v 5.4 and v -7.0 are gone from
+     * these lists rather than clipped flat by `lowTo`: a 2 m shoulder inside a
+     * levelled span is a survivor that is not there, drawn as though it were.
+     * The tear now runs from the transept front up to the survivors that are
+     * still outside it, which is one shoulder each way instead of two.
+     */
     tornWall('v', -WU, TOW.v1 - 0.6, HD, [[-3.6, 3.6]], {
       key: 'plaster_sand', base: 1.95, sign: -1,
-      survivors: [[-9.0, 2.6, 3.5], [5.4, 2.0, 2.9], [13.4, 3.0, 4.1]],
+      survivors: [[-9.0, 2.6, 3.5], [13.4, 3.0, 4.1]],
+      lowTo: [-7.6, 7.6, SIGHT_TOP],
     });
     tornWall('v', WU, -HD, HD, [[-3.6, 3.6]], {
       key: 'plaster_cream', base: 1.95, sign: 1,
-      survivors: [[-16.4, 3.0, 4.3], [-7.0, 2.2, 3.1], [8.4, 2.6, 3.8], [18.4, 2.6, 2.7]],
+      survivors: [[-16.4, 3.0, 4.3], [8.4, 2.6, 3.8], [18.4, 2.6, 2.7]],
+      lowTo: [-7.6, 7.6, SIGHT_TOP],
     });
     portal('v', -WU, 0, 3.4, 5.0, 1.5, 'plaster_sand', -1, 1);
     portal('v', WU, 0, 3.4, 5.0, 1.5, 'plaster_cream', 1, -1);
