@@ -244,6 +244,56 @@ export function saturationCurve(drive = 4, asym = 0) {
   return c;
 }
 
+/**
+ * A GATE CURVE: turns a sawtooth into a narrow, percussive, UNIPOLAR pulse.
+ *
+ * This is the primitive a rate-driven mechanical layer is built out of. Feed a
+ * band-limited `sawtooth` at frequency f through a WaveShaper carrying this
+ * curve and the output is one short bump per cycle and silence in between —
+ * a train of f transients per second, with f free to be automated. Multiply a
+ * noise source by it (connect the shaper to a GainNode's `gain`, whose intrinsic
+ * value is the floor the signal swings above — the trick `droneLock` documents)
+ * and you have f noise bursts per second, for two oscillators and a shaper,
+ * scheduling nothing and allocating nothing.
+ *
+ * WHY A CURVE AND NOT SCHEDULED ONE-SHOTS. A track running at walking pace
+ * passes thirty links a second for the whole minute a hull is on the map. Thirty
+ * `ad()` envelopes a second per hull, two hulls, is an event stream the size of
+ * the entire roster's gunfire, and every one of them would have to be scheduled
+ * ahead of a moving clock by a frame loop that also has to survive being late.
+ * As a curve it is one node and the rate is an AudioParam.
+ *
+ * WHAT IT IS NOT is a square wave. The bump rises over `attack` of its own
+ * width and falls over the rest, so what comes out of it is a SLAP and not a
+ * click — and the fall is concave (`shape` > 1), which is what a mass landing
+ * on another mass does and what a gate opening and closing does not.
+ *
+ * @param {number} duty  spike width as a fraction of one cycle, 0.002 .. 0.9
+ * @param {number} attack fraction of the spike spent rising
+ * @param {number} shape  concavity of the fall; 1 is linear, >1 is percussive
+ */
+export function pulseCurve(duty = 0.05, attack = 0.18, shape = 1.9) {
+  const key = `__pulse:${duty.toFixed(4)}:${attack.toFixed(3)}:${shape.toFixed(2)}`;
+  let c = CURVE_CACHE.get(key);
+  if (c) return c;
+  const n = 2048;
+  c = new Float32Array(n);
+  const d = clamp(duty, 0.002, 0.9);
+  const a = clamp(attack, 0.02, 0.9);
+  // One cycle of a sawtooth spans x = -1 .. 1, so a spike `d` of a cycle wide
+  // occupies the top `2d` of the curve's input range.
+  const thresh = 1 - d * 2;
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    if (x <= thresh) { c[i] = 0; continue; }
+    const u = (x - thresh) / (1 - thresh); // 0 .. 1 across the spike
+    const v = u < a ? u / a : 1 - (u - a) / (1 - a);
+    c[i] = Math.pow(v < 0 ? 0 : v, shape);
+  }
+  CURVE_CACHE.set(key, c);
+  return c;
+}
+
 /** Hard-knee-free soft clip for the very last stage of the master bus. */
 export function limiterCurve() {
   let c = CURVE_CACHE.get('__limit');
