@@ -1094,8 +1094,32 @@ export class Agent {
      */
     this.divert = null;
     this._divertTimer = this.rng.float() * DIVERT_EVERY;
+    /**
+     * The objective-shaped view of a DIVERSION, so `_pickHoldSpot` can be given
+     * the zone a man diverted to on exactly the terms it is given the zone he
+     * was ordered to. Preallocated and rewritten in place: `_advance` runs every
+     * frame and ARCHITECTURE.md's rule 5 is absolute. `mode` never changes.
+     */
+    this._divObj = { mode: 'hold', position: null, site: null };
     /** Seconds spent standing on the objective. @see `ARRIVE_ROAM`. */
     this._inPosT = 0;
+    /**
+     * ══════════════════════════════════════════════════════════════════════════
+     * HIS OWN CORNER OF EVERY PIECE OF GROUND HE IS EVER SENT TO.
+     * ══════════════════════════════════════════════════════════════════════════
+     * 「AIそれぞれが貯まる位置、止まる位置、移動経路が一緒なのは気に食わない」
+     *
+     * One number, rolled once, that this man keeps until he is deleted. Every
+     * placement decision that used to be re-rolled per pick — which side of a
+     * sector he holds (`_pickHoldSpot`), how deep in it he stands, which track
+     * he walks up (`_laneVia`) — reads it, so those decisions are STABLE PER MAN
+     * instead of uniform per side. A distribution that is re-rolled every few
+     * seconds is the same distribution for everybody, which is exactly how
+     * fifteen men with fifteen random bearings end up looking like one man: the
+     * variety is in the timeline rather than across the roster, and a player
+     * watching a single moment sees only the mean.
+     */
+    this._spotSig = this.rng.float();
     /** Has the "IN POSITION" for THIS objective gone out yet. @see `_advance`. */
     this._saidSet = false;
     /** `ctx.time.elapsed` of this man's last transmission. @see `radio.js`. */
@@ -2469,20 +2493,51 @@ export class Agent {
     this._divertTimer -= dt;
     if (this._divertTimer <= 0) {
       this._divertTimer = DIVERT_EVERY + this.rng.float() * DIVERT_EVERY;
+      const was = this.divert;
       this.divert = this.ai.divertZoneFor?.(this) ?? null;
+      // A different piece of ground is a different sector: the spot rolled
+      // around the old one is not a spot in the new one.
+      if (this.divert !== was) this._hasHoldSpot = false;
     }
     if (this.divert) {
       const z = this.divert;
-      const dz = this.position.distanceTo(z.position);
       const stillHot = z.contested === true
         || (z.capTeam >= 0 && z.capTeam !== this.team && z.progress > 0.05)
         || z.owner !== this.team;
-      if (!stillHot || dz < (z.radius ?? SITE_HOLD_R)) this.divert = null;
+      /**
+       * ══════════════════════════════════════════════════════════════════════
+       * ARRIVING IS NOT A REASON TO LEAVE — 「AI自体が占領しに行かないし、占領終わって
+       * るのに別のところに占領しに行かない」
+       * ══════════════════════════════════════════════════════════════════════
+       * `dz < radius` used to clear the diversion, and read plainly that is:
+       * "walk to the contested point, and the instant you set foot in the paint
+       * stop caring about it and walk back to wherever you were originally
+       * sent". A capture takes SECONDS OF STANDING STILL IN THE CIRCLE. The one
+       * condition under which the diversion was cancelled was the one condition
+       * under which it had started to work.
+       *
+       * The other two clears are untouched and they are the two that mean
+       * something: a new order from `match` (`setObjective`), and the zone
+       * dropping out of play — which INCLUDES `owner === this.team`, i.e. the
+       * bar finished and it is ours now. So the sequence is take it, hold it
+       * until it flips, then be released to the next one, which is the whole of
+       * 「占領終わってるのに別のところに占領しに行かない」 answered by deleting a clause.
+       */
+      if (!stillHot) this.divert = null;
     }
     const div = this.divert;
 
     const anchored = !div && (obj.mode === 'hold' || obj.mode === 'retake');
+    /**
+     * A MAN STANDING ON A POINT HE IS TAKING IS HOLDING IT. He works the circle
+     * the way a garrison works its sector — `_pickHoldSpot` bounded by the
+     * zone's own radius — rather than standing on the exact centre dot, which
+     * is one grenade and, with five men on the same errand, one dot.
+     */
+    const divHold = div
+      && this.position.distanceTo(div.position) < (div.radius ?? SITE_HOLD_R);
     const holdish = anchored
+      || divHold
       || (!div && obj.mode === 'push' && this.position.distanceTo(obj.position) < 9)
       // …AND EVERY OTHER VERB, ONCE HE HAS BEEN STANDING THERE LONG ENOUGH TO
       // have done whatever he was sent for. @see `ARRIVE_ROAM`.
@@ -2490,7 +2545,14 @@ export class Agent {
         && this.position.distanceTo(obj.position) < 9);
     let dest = div ? div.position : obj.position;
     if (holdish) {
-      if (!this._hasHoldSpot || this.holdTimer <= 0) this._pickHoldSpot(obj);
+      if (divHold) {
+        // Preallocated. @see `_divObj` — nothing here may build an object.
+        this._divObj.position = div.position;
+        this._divObj.site = div;
+      }
+      if (!this._hasHoldSpot || this.holdTimer <= 0) {
+        this._pickHoldSpot(divHold ? this._divObj : obj);
+      }
       if (this._hasHoldSpot) dest = this._holdSpot;
     } else {
       this._hasHoldSpot = false;
@@ -2852,8 +2914,27 @@ export class Agent {
      */
     const seatOff = ft && ft.members.length > 1
       ? (this.ftSeat - (ft.members.length - 1) * 0.5) * SEAT_STEP : 0;
-    const lane = ft ? ft.lane + seatOff : 0;
-    if (!ft || lane === 0 || dist < LANE_MIN) {
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * …AND A MAN WITH NO FIRETEAM STILL HAS A TRACK — 「移動経路が一緒」
+     * ══════════════════════════════════════════════════════════════════════
+     * Read the line under this as it was: `ft ? … : 0`, and then an early-out
+     * on `!ft || lane === 0`. A man with no fireteam, or in a team of one, or
+     * whose team happens to draw lane 0 with an even seat count, got NO VIA AT
+     * ALL — and no via means the straight line from where he is to where he is
+     * going, which is the same straight line every other man with no via is
+     * walking. That is not a lane system with a fallback, it is a lane system
+     * with a hole in it, and the hole is where the identical routes come from.
+     *
+     * `_spotSig` closes it: ±5 m of personal track, on the same axis and by the
+     * same mechanism, so no two men are ever on the same line even when the
+     * plan puts them on the same errand. It is deliberately smaller than
+     * `SEAT_STEP` — a fireteam is still a wider formation than one man's
+     * personal drift, so nothing about `Squad.regroup`'s frontage changes rank.
+     */
+    const own = (this._spotSig - 0.5) * 10;
+    const lane = (ft ? ft.lane + seatOff : 0) + own;
+    if (dist < LANE_MIN) {
       this._hasVia = false;
       this._hasAxis = false;
       return null;
@@ -2989,6 +3070,35 @@ export class Agent {
     this._hasHoldSpot = false;
     if (!grid) return;
     /**
+     * ══════════════════════════════════════════════════════════════════════
+     * THE SECTOR IS THE CIRCLE — 「占領しに行かないし、占領終わってるのに別のところに
+     * 占領しに行かない」
+     * ══════════════════════════════════════════════════════════════════════
+     * MEASURED (`_fourprobe.mjs`, seed 7): **1.0 % of all live actor-time** was
+     * a man standing inside a capture circle his side does not own, and 13.4 %
+     * inside one it does. `match` sends five men plus every spare at the focus
+     * every two seconds; they arrive; and then they are not in it.
+     *
+     * This is why. The roam was centred on `obj.position` — which for the
+     * DOMINATION verb is a point on the zone's STANDING RING, several metres
+     * out from the middle already — and it then took a radius of 5 to 13 m off
+     * THAT. A circle of radius 8 with a man rolled 13 m off a point 5 m from
+     * its centre is a man standing eighteen metres outside the paint, holding
+     * a sector he is not in, capturing nothing. He is not refusing the order:
+     * he is obeying it and then walking out of the objective.
+     *
+     * So when the order carries a SITE WITH A RADIUS, the sector is that site:
+     * the roam is centred on the zone and bounded INSIDE it. `RULES` is not
+     * readable from here (@see ARCHITECTURE.md), which is the point of taking
+     * the radius off the record `match` handed over rather than off a constant.
+     * A bomb site, or any objective without a radius, keeps the old geometry
+     * exactly — this cannot touch the demolition ruleset.
+     */
+    const site = obj.site;
+    const zoneR = site && typeof site.radius === 'number' && site.radius > 1
+      ? site.radius : 0;
+    const centre = zoneR > 0 && site.position ? site.position : obj.position;
+    /**
      * WHERE IN THE SECTOR, AND ON WHICH SIDE OF IT.
      *
      * The old ring was a uniform 4-11 m on a uniform random bearing, so every man
@@ -3003,17 +3113,38 @@ export class Agent {
      * (`match` passes the enemy's spawn centre), which is what makes "forward"
      * mean anything.
      */
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * …AND WHERE HE STANDS IS HIS, NOT HIS SIDE'S — 「AIそれぞれが貯まる位置、
+     * 止まる位置、移動経路が一緒なのは気に食わない」
+     * ══════════════════════════════════════════════════════════════════════
+     * Read what the preference above actually collapses to. `_objFacing` is
+     * `match`'s ONE bearing per side (the enemy's spawn centre), `forward` is a
+     * BINARY on aggression, and the slop is ±35 degrees re-rolled per pick. So
+     * every aggressive man on a side prefers the same 70 degree wedge of every
+     * sector, every careful man prefers the wedge opposite, the seat fan is the
+     * only thing separating anybody — and it is zero for the man whose fireteam
+     * has one member. Two men who took different lanes to the same sandbag
+     * arrive and stand in the same place, which is the complaint exactly.
+     *
+     * `_spotSig` is a number this man keeps for his whole life. It fans the
+     * preference over ±75 degrees of his half of the sector PERSISTENTLY, so
+     * the man who holds the north-west mouth is the same man every time you
+     * look and his neighbour is reliably somewhere else. That is what makes a
+     * defence read as several soldiers rather than as one soldier drawn ten
+     * times. The per-pick slop survives at half strength: he does not hold the
+     * identical square twice, he holds the same CORNER twice, which is what a
+     * position is.
+     */
     const forward = tr.aggression >= 0.5;
-    let pref = this.rng.range(0, Math.PI * 2);
+    let pref = this._spotSig * Math.PI * 2;
     if (this._hasFacing) {
       pref = Math.atan2(
-        this._objFacing.z - obj.position.z,
-        this._objFacing.x - obj.position.x
+        this._objFacing.z - centre.z,
+        this._objFacing.x - centre.x
       );
       if (!forward) pref += Math.PI;
-      // ±35° of slop, re-rolled every time, so a man who holds the same side of
-      // the site does not hold the same square of it twice.
-      pref += this.rng.signed() * 0.6;
+      pref += (this._spotSig - 0.5) * 2.6 + this.rng.signed() * 0.3;
     }
     /**
      * …AND FOUR MEN COVER FOUR ARCS. His seat in his own fireteam fans the
@@ -3028,16 +3159,27 @@ export class Agent {
     if (ft && ft.members.length > 1) {
       pref += (this.ftSeat - (ft.members.length - 1) * 0.5) * (Math.PI * 0.55);
     }
-    // Radius: forward men push out to the mouths, careful men sit deeper.
-    const rMin = forward ? 5 : 3;
-    const rMax = forward ? 13 : 9;
+    /**
+     * Radius: forward men push out to the mouths, careful men sit deeper — and
+     * inside a capture circle BOTH bands are the circle, because a metre
+     * outside the paint is worth nothing at all. `_spotSig` again: his depth is
+     * his as well as his bearing, so the anchor who sits in the middle of the
+     * point and the rusher who lives on its northern lip are two soldiers
+     * rather than one soldier at two radii. 0.94 keeps him off the exact rim,
+     * where a step of avoidance would put him out.
+     */
+    const rMin = zoneR > 0 ? zoneR * 0.16 : forward ? 5 : 3;
+    const rMax = zoneR > 0 ? zoneR * 0.94 : forward ? 13 : 9;
+    const depth = 0.25 + this._spotSig * 0.7;
     for (let i = 0; i < 12; i++) {
       // 0, +30°, -30°, +60°, -60° … so the search fans out from the preference
       const th = pref + (i % 2 ? 1 : -1) * Math.ceil(i / 2) * (Math.PI / 6);
-      const r = this.rng.range(rMin, rMax);
-      const x = obj.position.x + Math.cos(th) * r;
-      const z = obj.position.z + Math.sin(th) * r;
-      const ci = grid.nearest(x, z, obj.position.y, 2, 1.4);
+      const r = zoneR > 0
+        ? rMin + (rMax - rMin) * Math.min(1, depth * this.rng.range(0.72, 1.28))
+        : this.rng.range(rMin, rMax);
+      const x = centre.x + Math.cos(th) * r;
+      const z = centre.z + Math.sin(th) * r;
+      const ci = grid.nearest(x, z, centre.y, 2, 1.4);
       if (ci < 0) continue;
       this._holdSpot.set(
         grid.worldX(ci % grid.nx),
@@ -3446,8 +3588,25 @@ export class Agent {
          * a man doing anything else with a site attached is paid 3.5, which
          * buys off the range penalty over about six metres and no further.
          */
-        holdAt: this.objective?.site ? this.objective.position : null,
-        holdRadius: SITE_HOLD_R,
+        /**
+         * AND "THE SITE" IS THE CIRCLE, NOT THE RING POINT HE WAS SENT TO.
+         *
+         * Same correction as `_pickHoldSpot`'s and for the same measurement:
+         * `objective.position` under DOMINATION is a point on the zone's
+         * STANDING RING, so `holdAt` was paying a bonus for cover within 9 m of
+         * a point that is already several metres off centre — i.e. for cover up
+         * to seventeen metres outside a circle of radius eight. A man cannot
+         * capture from behind a wall he was PAID to prefer. Where the order
+         * carries a radius the bonus is centred on the zone and the leash is
+         * the zone's own radius; a bomb site, which has no radius, keeps
+         * `SITE_HOLD_R` exactly as before.
+         */
+        holdAt: this.objective?.site
+          ? (this.objective.site.radius > 1 && this.objective.site.position
+            ? this.objective.site.position : this.objective.position)
+          : null,
+        holdRadius: this.objective?.site?.radius > 1
+          ? this.objective.site.radius : SITE_HOLD_R,
         holdBonus: this.objective?.site
           ? (pushing || mode2 === 'hold' ? 6 : 3.5)
           : 0,
