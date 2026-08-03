@@ -1485,6 +1485,37 @@ function buildInterior(A, rng, spec, info, t, groundH, upperH, floors) {
             floor: f, x: hp[0], z: hp[2], y: fy, w: hole.w,
             nx: hn[0] - hp[0], nz: hn[2] - hp[2],
           });
+          /**
+           * …AND KEEP THEM CLEAR, WHICH IS THE WHOLE POINT OF NAMING THEM.
+           *
+           * An internal doorway is a way through in exactly the sense an
+           * exterior door is, and it was the ONE opening on this map with no
+           * keep-clear circle of any kind. On the ground floor the declared
+           * through-route covered whichever partitions it happened to cross;
+           * a partition it missed kept its authored `doorAt` and was fair game,
+           * and above the ground floor there is no route at all, so EVERY
+           * upstairs doorway was open to whatever the furnishing dice put in
+           * front of it. Measured with `_doorblock.mjs`: 2-5 of the map's 23
+           * internal doorways were impassable to the real capsule on every one
+           * of the pinned seeds — W1's ground doorway under a shop counter and
+           * a wooden drum on all fourteen, E1's second-floor doorway under a
+           * 2.9 m rubble mound on all fourteen, and a rotating cast of crate
+           * stacks, shelf units and skirting-row drums elsewhere.
+           *
+           * A chain rather than a circle, because a doorway is a THRESHOLD: the
+           * opening itself plus one stride on each side of it. 0.8 m of
+           * half-width is the 1.05 m opening's own half-width plus a capsule
+           * radius, and every predicate in `interiors.js` adds the prop's own
+           * `footprintR` on top of it — a prop is not a point, which is the
+           * lesson this file has already had to learn twice.
+           */
+          const un = Math.hypot(hn[0] - hp[0], hn[2] - hp[2]) || 1;
+          const dnx = (hn[0] - hp[0]) / un;
+          const dnz = (hn[2] - hp[2]) / un;
+          if (floorClear[f]) {
+            chain(floorClear[f], hp[0] - dnx * 0.85, hp[2] - dnz * 0.85,
+              hp[0] + dnx * 0.85, hp[2] + dnz * 0.85, 0.8);
+          }
         }
       }
     }
