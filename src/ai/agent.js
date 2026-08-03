@@ -177,7 +177,38 @@ const SPRINT_DOT = 0.55;
  *              man who runs the leg with two breathers in it, which is what a
  *              soldier crossing a city actually looks like.
  */
-const SPRINT_THREAT_R = 18;
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * AND NOW THE DEFAULT ITSELF IS WRONG — 「プレイヤーの最高速度と同じスピードで移動する
+ * 時間がないとおかしい つまり歩く時もあるが基本は走って移動するやろ 占領した場所から次の
+ * 占領エリアに行くときなど」
+ * ════════════════════════════════════════════════════════════════════════════
+ * The gate below is eight refusals with the sprint as the OPT-IN, so a walk is
+ * what a man does unless he can prove otherwise. The sentence above says the
+ * opposite: TRAVELLING IS RUNNING, and walking is the exception — a man leaving
+ * a point he has just taken for the next one runs, because that is what a person
+ * does. He explicitly allows the walk to exist (「歩く時もある」), so this is not
+ * "always sprint"; it is that the burden of proof has changed sides.
+ *
+ * MEASURED against that standard rather than against the old one (`_engage.mjs`,
+ * seed 7, 97.6k travel samples — men in ADVANCE with more than 16 m to go):
+ *
+ *   at or above the player's own 6.45 m/s      9.5 %
+ *   at or above 5.8 m/s ("running")           34.6 %
+ *   below 3 m/s (standing, or barely moving)  14.9 %
+ *   the board: threatcall 14.7 · noPath 7.3 · rung 5.3 · busy 5.6 · winded 3.8
+ *
+ * `threatcall` IS THE ONE THAT IS NOT A BEHAVIOUR. It is 18 m round a last-known
+ * fresher than four seconds — and `Squad.update` writes a fresh `lastKnown` onto
+ * EVERY man on a side whenever ANY of them has eyes on anybody, so on a
+ * thirty-man map that bubble follows the whole roster around. What it produced
+ * is the exact thing the sentence rejects: a man crossing 100 m of empty street
+ * to the next capture point, at a walk, because somebody two streets away called
+ * a contact in. Ten metres is "the fight is on top of me"; eighteen was "the
+ * fight is somewhere". His OWN contact and his OWN suppression are untouched and
+ * are still the first refusal in the gate.
+ */
+const SPRINT_THREAT_R = 10;
 const SPRINT_FUEL = 14;
 const SPRINT_REARM = 3;
 /**
@@ -859,6 +890,17 @@ const SEAT_STEP = 6;
  */
 const VIA_AHEAD = [30, 20, 44];
 const VIA_SCALE = [1, 0.7, 0.45];
+
+/**
+ * How far along the line to an unreachable objective `_advanceFallback` looks
+ * for ground he can actually stand on, nearest the objective first. A module
+ * constant for the same reason the two above are: a man losing his route may
+ * not allocate an array to find out where to walk instead.
+ */
+const FALLBACK_STEPS = [0.85, 0.7, 0.55, 0.4, 0.25];
+
+/** How long a man in ADVANCE with NO route at all waits before re-asking. */
+const REPATH_DRY = 0.5;
 
 /**
  * ──────────────────────────────────────────────────────────────────────────────
@@ -2265,11 +2307,53 @@ export class Agent {
         this._combat(dt);
         break;
 
-      case STATE.SUPPRESSED:
+      case STATE.SUPPRESSED: {
         this.crouch = true;
         this.desiredSpeed = 0;
-        this.wantFire = false;
         this.peeking = false;
+        /**
+         * ══════════════════════════════════════════════════════════════════
+         * A PINNED MAN RETURNS FIRE — 「敵を視認して数発だけ撃っているような状況を
+         * やめろって言ってる 撃ち続けろ」
+         * ══════════════════════════════════════════════════════════════════
+         * MEASURED, and it is the whole answer to the sentence above
+         * (`_engage.mjs`, seed 7, per-SIGHTING census — rounds sent between
+         * one man's eyes finding another and the line being broken):
+         *
+         *   median 18 rounds, p10 0, p90 67
+         *   34 % of sightings end under ten rounds
+         *   25.6 % of sightings end with the trigger never pulled at all
+         *
+         * and of every frame in which a man had EYES ON a live contact and
+         * sent nothing, **60.4 % were this state**. `wantFire = false` here is
+         * not a nuance of the suppression model, it is a man who can see the
+         * enemy, is being shot at by him, and has decided to be a spectator.
+         * It is also both halves of 「AIが移動しないし撃たない」 in one branch,
+         * because the line above it is `desiredSpeed = 0`.
+         *
+         * Going to ground is kept — that is what the state IS, and the crouch,
+         * the stop and the lost peek are all untouched. What is deleted is the
+         * refusal to shoot back from it. The terms are the ones every other
+         * firing branch uses, so nothing new is invented: a contact inside his
+         * own weapon range, seen now or fresh inside `SUPPRESS_WINDOW`, and
+         * the armour clause is the tank agent's exactly as in `_combat`.
+         *
+         * IT IS PAID FOR IN THE CONE AND NOT IN DAMAGE. `_fireRound` already
+         * multiplies the spread by `suppression`, and a man in this state has
+         * by definition the most of it on the map — so a pinned man's answer
+         * is loud and wild, which is what returning fire from behind a kerb
+         * looks like. `aimWeight` stays low: he is shooting from cover with
+         * his head down, not aiming.
+         */
+        const sArm = this.targetActor?.isVehicle === true;
+        // The same point `_combat` measures against — his last-known, which is
+        // the chest while he can see it.
+        const sDist = this.position.distanceTo(this.lastKnown);
+        this.wantFire = this.hasTarget
+          && sDist < this.weaponRange
+          && (this.targetVisible || this.lastKnownAge < SUPPRESS_WINDOW)
+          && (!sArm || this.armourWorth === 1 || this.armourWorth === 3);
+        this.aimWeight = this.wantFire ? 0.6 : 0.35;
         /**
          * A bold man is back up almost at once; a careful one stays down until the
          * rounds have genuinely stopped coming. NOTE THE DIRECTION: this is the
@@ -2309,6 +2393,7 @@ export class Agent {
           this._setState(STATE.COMBAT);
         }
         break;
+      }
 
       case STATE.FLANK: {
         this.crouch = false;
@@ -2405,17 +2490,53 @@ export class Agent {
    * up, and then it says so once rather than silently.
    */
   _advanceFallback(obj) {
-    for (const t of [0.7, 0.4]) {
+    /**
+     * ══════════════════════════════════════════════════════════════════════════
+     * …AND THE CLOSER POINT HAS TO BE ONE HE CAN ACTUALLY REACH
+     * ══════════════════════════════════════════════════════════════════════════
+     * MEASURED (`_engage.mjs`, seed 7, the travel census): `unstick:noPath` — a
+     * man in ADVANCE, a long leg in front of him, and NO MOVE TARGET — is the
+     * largest refusal on the board that is not a behaviour, and **57 % of it is
+     * `objectiveBlocked`**, i.e. men who came through here and out of the bottom.
+     * A man with `objectiveBlocked` has `desiredSpeed = 0` and no route: he is a
+     * statue until `match` re-tasks him, which is exactly 「今はとにかくAIが移動
+     * しない」 with a flag name on it.
+     *
+     * The reason both rungs missed is that `nearest` was asked for THE CLOSEST
+     * CELL and the closest cell to a point 70 % of the way to an unreachable
+     * objective is very often on the unreachable side of whatever is in the way —
+     * so `_goTo` fails again, for the same reason, and the fallback falls back
+     * onto nothing. Two `nearest` calls and two A* solves to learn what the
+     * component labels already knew.
+     *
+     * SO THE CANDIDATE IS TAKEN ON HIS OWN COMPONENT, which is the argument
+     * `_laneVia` already makes about its via point: a cell in the component he is
+     * standing in has a route from him BY CONSTRUCTION, so the solve cannot come
+     * back zero. The ladder is walked from the objective backwards, so what he
+     * gets is the reachable ground nearest to where he was sent — which is what
+     * the paragraph above this function has always promised and never delivered.
+     * `_goTo` is still the thing that decides, so the A* budget, the blacklist
+     * and `pathPending` all behave exactly as they did.
+     */
+    const g = this.ai.grid;
+    const here = g ? g.nearest(this.position.x, this.position.z, this.position.y, 3, OFFGRID_TOL) : -1;
+    const comp = here >= 0 ? g.comp[here] : -1;
+    for (const t of FALLBACK_STEPS) {
       this._v.copy(this.position).lerp(obj.position, t);
-      const ci = this.ai.grid?.nearest(this._v.x, this._v.z, this._v.y, 5, 2.5) ?? -1;
+      const ci = comp >= 0
+        ? g.nearest(this._v.x, this._v.z, null, 6, Infinity, comp)
+        : (g?.nearest(this._v.x, this._v.z, this._v.y, 5, 2.5) ?? -1);
       if (ci < 0) continue;
-      const g = this.ai.grid;
       this._v.set(g.worldX(ci % g.nx), g.floor[ci], g.worldZ((ci / g.nx) | 0));
       if (this.position.distanceToSquared(this._v) < 2 * 2) continue; // already there
       if (this._goTo(this._v)) {
         this.repathTimer = this.rng.range(1.5, 2.5);
         return;
       }
+      // The frame's ration is spent, not the geometry. He keeps the destination
+      // and `update` re-asks next frame — trying a nearer candidate now would
+      // only spend somebody else's solve on the same answer.
+      if (this.pathPending) return;
     }
     // Genuinely boxed in. Hold, face the objective, and let `match` re-task on
     // its two-second objective refresh.
@@ -2640,6 +2761,8 @@ export class Agent {
        * walk — it makes him walk BRAKED, at 0.55 of a walk instead of 0.55 of a
        * run. Cohesion is cheaper as a scale than as a veto, so it stays one.
        */
+      /** The pace he would have had with no sprint at all. @see the brake. */
+      const walkPace = this.desiredSpeed;
       const sprint = this._sprintGate(dist, !inSector);
       if (sprint > this.desiredSpeed) this.desiredSpeed = sprint;
       /**
@@ -2721,11 +2844,31 @@ export class Agent {
          * it is "they never arrived". A squad that cannot outpace the ground it
          * is sweeping is not a squad, it is a monument.
          */
+        /**
+         * ══════════════════════════════════════════════════════════════════
+         * …AND IT MAY TAKE HIS RUN AWAY, NOT HIS LEGS — 「基本は走って移動するやろ」
+         * ══════════════════════════════════════════════════════════════════
+         * The scale is applied to `desiredSpeed` AFTER the sprint floor, so a
+         * man in front of his team was multiplied down from 6.45 rather than
+         * from 4.3 — and 0.55 of a sprint is 3.5 m/s, which is SLOWER THAN THE
+         * WALK HE WOULD HAVE HAD IF THE SPRINT HAD NEVER EXISTED. Cohesion was
+         * costing him more than the run was worth, and it is a large part of
+         * why the travel histogram piles up at 3-5 m/s with only 9.5 % of it at
+         * the player's own top speed.
+         *
+         * So the brake keeps exactly what it is for — the man out in front
+         * loses his speed advantage and his team closes on him — and it stops
+         * where a walk starts. Nothing else moves: same `LEAD_SLACK`, same
+         * decay, same elite floor, still a scale and never a veto (@see the
+         * measurement above), and a man who is NOT ahead of his team is not
+         * touched by any of it and runs at his full sprint.
+         */
         const slack = LEAD_SLACK;
         const lead = ft.centre.distanceTo(dest) - dist;
         if (lead > slack) {
-          this.desiredSpeed *= Math.max(this.elite ? 0.72 : 0.55,
-            1 - (lead - slack) * 0.05);
+          const braked = this.desiredSpeed
+            * Math.max(this.elite ? 0.72 : 0.55, 1 - (lead - slack) * 0.05);
+          this.desiredSpeed = Math.max(braked, Math.min(walkPace, this.desiredSpeed));
         }
       }
       /**
@@ -2768,6 +2911,29 @@ export class Agent {
           else if (holdish && this._hasHoldSpot) this._hasHoldSpot = false; // try another spot
           else this._advanceFallback(obj);
         }
+      }
+      /**
+       * ══════════════════════════════════════════════════════════════════════
+       * AND A MAN WITH NO ROUTE MAY NOT WAIT TWO SECONDS TO ASK AGAIN
+       * ══════════════════════════════════════════════════════════════════════
+       * The timer above is set BEFORE the solve, which is right for the man who
+       * got a route — he has somewhere to walk for the next second and a half.
+       * For the man who did not it is a sentence: `hasMoveTarget` is false, so
+       * `_move` finds no waypoint, `want` stays 0 and he STANDS THERE for
+       * 1.1-2.2 s before the question is even re-asked. Measured, that is 23 %
+       * of every `unstick:noPath` sample — the second largest slice of it after
+       * `objectiveBlocked`, and it is pure dead time on a man who is trying to
+       * cross the map.
+       *
+       * The clamp is deliberately NOT "re-ask every frame": a failing solve is
+       * the expensive one (it sweeps the whole node ceiling), and the per-frame
+       * ration `pathMsBudget` meters is shared with every other man. Half a
+       * second is one retry per two hundred milliseconds of standing rather
+       * than one per two seconds, and `pathPending` is excluded because that
+       * man is already queued — re-asking him is what the queue is for.
+       */
+      if (!this.hasMoveTarget && !this.pathPending && this.repathTimer > REPATH_DRY) {
+        this.repathTimer = REPATH_DRY;
       }
       return;
     }
