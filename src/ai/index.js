@@ -99,13 +99,44 @@ const CIVIL_ROLE = Object.freeze({ armed: 'civil', unarmed: 'civilUnarmed' });
  * 0.20-0.44 with a mean near 0.30: worse than an ordinary man essentially
  * always, never so bad he cannot hit somebody who walks into the room.
  *
- * THE TRAITS ARE THE `anchor`'s, PUSHED FURTHER. He does not close (aggression
- * 0.18 against the anchor's 0.30), he waits (patience 0.88), he wants the fight
- * at 9 m rather than 28 — which is a ROOM — and he will not stand in the open
- * (exposure 0.14) or manoeuvre (flank 0.04). `trigger` stays high: he does not
- * spray, he shoots when somebody is actually there. Read against
- * `_pickHoldSpot` and `_combat` in agent.js, that set of numbers IS an ambush:
- * a man who holds one angle in a small room and fires first at short range.
+ * THE TRAITS ARE THE `anchor`'s, AND THEY USED TO BE PUSHED THE OTHER WAY.
+ * 「もっと攻撃して邪魔してきて」 moved three of them, and moved `skill` NOT AT ALL,
+ * because those are two different requests: 「AI性能としては中の下くらいに」 has
+ * not been withdrawn and 「AIMは悪くてもいい」 is the same sentence — a militiaman
+ * is meant to be a nuisance, not a marksman.
+ *
+ *   `aggression` 0.18 -> 0.55. It is read in eight places in agent.js and every
+ *   one of them is about WILLINGNESS rather than accuracy: he breaks contact at
+ *   34 HP of his 50 instead of 46 (`breakHealth`), so he fights his fight out
+ *   instead of dying in a retreat; his frag window opens at 8.3 m instead of
+ *   10.1 (`fragLo`), which on a 9-12 m fight is the difference between carrying
+ *   a grenade and throwing one; and he walks toward the noise at 2.4 m/s
+ *   instead of 1.5 (ALERT), which is the follow-up after a burst.
+ *
+ *   `patience` 0.88 -> 0.42. How long he sits on one angle (`holdTimer`,
+ *   `coverDwell`) and how long he searches before giving up on a contact. The
+ *   anchor who has not moved since the round started is precisely the man the
+ *   request is complaining about.
+ *
+ *   `trigger` 0.74 -> 0.34, and THIS is the volume of fire. Read `_fireRound`:
+ *   a low-discipline man opens with a longer pull (a floor of ~16 rounds
+ *   against ~11), leaves a shorter gap between pulls, and is likelier to shoot
+ *   while moving. IT COSTS HIM ACCURACY — the bloom opens with the pull, which
+ *   is exactly the trade 「AIMは悪くてもいい」 asks for. `skill` is untouched, so
+ *   his cone, tracking, shake, reaction and settle are the 中の下 they were.
+ *
+ *   `exposure` 0.14 -> 0.28. He still crouches (`crouch` needs < 0.42) and he
+ *   is still not a man who stands in the street; he peeks for longer, which is
+ *   what holding a doorway looks like from the other side of it.
+ *
+ * `flank` stays at 0.04 and is inert either way — the manoeuvre is behind
+ * `sq && sq.canFlank` and a civilian has no squad. `range` 9 -> 11 m is still a
+ * room and a hallway rather than a street, and it is what carries `fragHi`
+ * (24.4 m) far enough that the grenade has a window at all.
+ *
+ * WHERE HE DOES HIS INTERFERING IS NOT HERE. Standing in the doorway, and going
+ * at somebody who is already inside his building, are placements and orders —
+ * @see `DOOR_TRIES` and `HUNT_R` in src/match/civilians.js.
  *
  * THE GUN IS THE REQUEST'S: 「民間軍はAKとグレネードのみ装備」. AK for everyone,
  * and it is not sampled — `ARCHETYPE_ARMS` would hand out submachine guns and
@@ -120,13 +151,13 @@ function drawCivilPersona(rng, unarmed) {
     archetype: 'anchor',
     weapon: 'ak',
     traits: {
-      aggression: t(0.18, 0.08),
-      patience: t(0.88, 0.07),
-      exposure: t(0.14, 0.06),
+      aggression: t(0.55, 0.09),
+      patience: t(0.42, 0.09),
+      exposure: t(0.28, 0.07),
       flank: t(0.04, 0.03),
-      trigger: t(0.74, 0.10),
-      /** METRES. A room, not a street. */
-      range: 9 * rng.range(0.8, 1.5),
+      trigger: t(0.34, 0.10),
+      /** METRES. A room and a hallway, not a street. */
+      range: 11 * rng.range(0.8, 1.5),
     },
     elite: false,
     skill: unarmed ? 0.2 : Math.min(0.44, Math.max(0.20, 0.30 + rng.gauss() * 0.07)),
