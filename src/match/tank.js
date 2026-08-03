@@ -511,6 +511,14 @@ const BLOCK_SPAN = BLOCK_PLAN + 2 * BLOCK_GROW;
 /** Cell of the lookup grid the hull and the gun ask through. */
 const BLOCK_LOOKUP = 4;
 
+/**
+ * How far out of the cathedral its collapse changes the ground. The building is
+ * 30 x 45 m and `src/match/airstrike.js` settles its rubble mounds in the flank
+ * streets either side, so the half-diagonal plus the street is the honest
+ * radius. @see `_watchCathedral`.
+ */
+const RUIN_R = 42;
+
 /** Mass no taller than this over the road is not a wall to a side probe: the
  *  hull either erases it (@see `PLOUGH_TOP` for a prop pile, `BLOCK_TOP` for a
  *  free-standing block) or drives over it. It is the HIGHER of the two, so the
@@ -1549,6 +1557,95 @@ export class Armour {
     p.STEP = RISE;
     p.PILE = PILE;
     p.SOLID = SOLID;
+    // `Y0` — the standing-cathedral measurement — is taken at the END of
+    // `_bakeLegs`, after the hub join has written `Y[0]`. @see `_watchCathedral`.
+    if (p.hub0 !== undefined) p.ROAD[0] = Math.min(p.ROAD[0], p.hub0);
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE RIDE WAS BAKED AGAINST A CHURCH THAT IS NO LONGER THERE
+   * ────────────────────────────────────────────────────────────────────────
+   * `MatchSystem` calls `_setCathedralRazed(false)` in its own constructor and
+   * builds `Armour` two hundred lines later, so every leg on this map is
+   * measured with the cathedral STANDING — and the collapse then drops rubble
+   * mounds across the square the two approaches end in. `Y[i]`, and therefore
+   * `ROAD[i]` and `STEP[i]`, know nothing about any of it: a hull crossing the
+   * parvis after the strike rides the height of a road that is now under a
+   * metre of masonry, which is a tank up to its axles in rubble it was never
+   * told about. Raising `CLIMB_TOP` cannot help — the ride is not clamping,
+   * it is measuring the wrong world.
+   *
+   * ONE BOOLEAN A FRAME, AND A RE-MEASURE ON THE EDGE. `world.cathedral.razed`
+   * is the state both the raze and the round reset drive, so polling it costs a
+   * property read and couples this file to nothing. When it flips, the legs
+   * that pass within `RUIN_R` of the building are re-measured — one ground ray
+   * per sample inside the radius, then `_bakeRide` again over the whole leg
+   * because its road envelope is a +-20 m window. Coming back up is not a
+   * re-measure at all: `Y0` is the boot measurement and is restored verbatim,
+   * which is the same "store both states absolutely, never a delta" discipline
+   * the mask writes in `_firePlough` are written to.
+   *
+   * WHAT IT DOES NOT DO, HONESTLY: it does not re-run `_bakePath`, so a leg is
+   * neither re-trimmed nor re-slid. That is deliberate rather than unfinished —
+   * a hull is usually STANDING ON the leg when the church comes down, and
+   * shortening the road under a moving vehicle is worse than any rubble. The
+   * ruin measures 2.76 m at its crest, which is inside the (CLIMB_TOP,
+   * PASS_TOP] band the horizontal ray already settles, so the hull CLIMBS it —
+   * 「戦車はもっと瓦礫を乗り越えていい」 — rather than needing the route moved.
+   */
+  _watchCathedral() {
+    const world = this._world ?? (this._world = this.ctx.peek('world'));
+    const razed = !!world?.cathedral?.razed;
+    if (razed === this._cathRazed) return;
+    const first = this._cathRazed === undefined;
+    this._cathRazed = razed;
+    if (first) return;
+    const physics = this.physics;
+    if (!physics || !world?.cathedral) return;
+    const cx = world.cathedral.cx;
+    const cz = world.cathedral.cz;
+    let legs = 0;
+    let moved = 0;
+    let worst = 0;
+    for (const tank of this.tanks) {
+      for (const p of tank.legs) {
+        let touches = false;
+        for (let i = 0; i < p.n && !touches; i++) {
+          if (Math.hypot(p.X[i] - cx, p.Z[i] - cz) < RUIN_R) touches = true;
+        }
+        if (!touches) continue;
+        legs++;
+        if (razed) {
+          for (let i = 0; i < p.n; i++) {
+            if (Math.hypot(p.X[i] - cx, p.Z[i] - cz) > RUIN_R) continue;
+            const g = physics.groundHeight(p.X[i], p.Z[i], 40);
+            if (!Number.isFinite(g)) continue;
+            const d = Math.abs(g - p.Y[i]);
+            if (d > 0.05) { moved++; if (d > worst) worst = d; }
+            p.Y[i] = g;
+          }
+        } else {
+          p.Y.set(p.Y0);
+        }
+        this._bakeRide(p, physics);
+        // `_bakeRide` hands back a fresh `PILE`; the piles it belongs to have
+        // not moved. @see `_bakePlough`, which owns this mapping.
+        for (const pile of tank.plough ?? []) {
+          if (tank.legs[pile.leg] !== p) continue;
+          for (let i = 0; i < p.n; i++) {
+            if (Math.abs(p.S[i] - pile.s) <= PLOUGH_MERGE) p.PILE[i] = pile.ix;
+          }
+        }
+      }
+    }
+    if (legs) {
+      console.info(
+        `[tank] cathedral ${razed ? 'RAZED' : 'STANDING'} — re-measured the ride on ${legs} leg(s) ` +
+          `within ${RUIN_R} m of it` +
+          (razed ? `, ${moved} sample(s) moved, worst ${worst.toFixed(2)} m` : ' (restored from boot)')
+      );
+    }
   }
 
   /* ---------------------------------------------------------- one tank --- */
@@ -1617,6 +1714,9 @@ export class Armour {
       const why = path.stop;
       // Join it to the hub exactly: the slide may have moved sample 0 by metres.
       path.X[0] = hub.x; path.Z[0] = hub.z; path.Y[0] = hub.y;
+      // Remembered, not just applied: `_watchCathedral` re-runs `_bakeRide` and
+      // would otherwise recompute this sample off the polyline's own ground.
+      path.hub0 = hub.y;
       path.ROAD[0] = Math.min(path.ROAD[0], hub.y);
       this._trimToStandoff(path, zones, target);
       this._trimAtBlockers(path, physics, props);
@@ -1634,6 +1734,8 @@ export class Armour {
       path.zone = sp.zone;
       legs.push(path);
     }
+    /** The boot measurement, kept verbatim. @see `_watchCathedral`. */
+    for (const p of legs) p.Y0 = Float32Array.from(p.Y);
     return legs;
   }
 
@@ -3895,6 +3997,8 @@ export class Armour {
 
   update(dt, live) {
     if (!this.ready) return;
+
+    this._watchCathedral();
 
     if (this._pending >= 0) {
       this._pending -= dt;
