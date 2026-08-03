@@ -1912,9 +1912,25 @@ export class Agent {
 
     if (this.postPhase === 0) {
       this.crouch = false;
-      this.aimWeight = 0.45;
-      this.wantFire = false;
-      this.desiredSpeed = 4.0;
+      /**
+       * WALKING TO THE DOOR IS STILL CROSSING GROUND, AND HE STILL SHOOTS.
+       *
+       * MEASURED (`_fourprobe.mjs`, seed 7): 14.9 % of ALL contact time was a
+       * man with `post` set and the trigger up, and phase 0 is the ground-level
+       * half of it — a soldier jogging to the foot of a staircase, in the
+       * street, with a live contact and his weapon down for no reason but that
+       * the manoeuvre said so. It is the same sentence as advancing fire in
+       * `_combat` and it gets the same terms, right down to the sniper
+       * exception. Phases 1 and 3 are NOT given this: a man on a flight of
+       * stairs with one hand on a rail is a different picture.
+       */
+      const armour0 = this.targetActor?.isVehicle === true;
+      const d0 = t ? this.position.distanceTo(t) : Infinity;
+      this.wantFire = !this.sniper && !armour0 && this.hasTarget
+        && d0 < this.weaponRange
+        && (this.targetVisible || this.lastKnownAge < SUPPRESS_WINDOW);
+      this.aimWeight = this.wantFire ? 0.85 : 0.45;
+      this.desiredSpeed = this.wantFire ? 2.8 : 4.0;
       const dx = p.foot.x - this.position.x, dz = p.foot.z - this.position.z;
       if (dx * dx + dz * dz < 2.2 * 2.2) {
         this.postPhase = 1;
@@ -3472,13 +3488,31 @@ export class Agent {
        * m/s instead of 4.3 while he does it, and the armour clause is the tank
        * agent's and is not changed.
        */
+      /**
+       * ══════════════════════════════════════════════════════════════════════
+       * AND THE COIN FLIP IS GONE — 「今のAIの撃たなさはOUT」
+       * ══════════════════════════════════════════════════════════════════════
+       * MEASURED AGAIN (`_fourprobe.mjs`, seed 7, 1845 contact samples): with
+       * the visible case already firing, **18.4 % of ALL contact time** was a
+       * man walking between two walls, inside his own weapon range, who had
+       * seen somebody in the last three seconds and LOST THE ROLL. It is the
+       * single largest refusal left on the board and it is not a behaviour —
+       * it is trigger discipline spelt as a random number, and trigger
+       * discipline is the thing the request has now rejected four times.
+       *
+       * So the roll is deleted rather than tuned. A man who is not a sniper,
+       * whose contact is inside his weapon range, and who has either eyes on it
+       * or a last-known fresher than `SUPPRESS_WINDOW`, fires while he walks.
+       * Nothing that made it fair moves: he still walks at 2.6-3.8 m/s instead
+       * of 4.3, `_fireRound` still opens his cone with his own speed AND with
+       * every round of the pull, and the armour clause is still the tank
+       * agent's. 「AIMは悪くてもいい」 is what pays for it.
+       */
       const canFireMoving = !this.sniper
         && dist < this.weaponRange
         && (!armour || this.armourWorth === 1 || this.armourWorth === 3);
-      let shootMoving = canFireMoving && this.targetVisible && this.hasTarget;
-      if (!shootMoving && canFireMoving && !armour && this.hasTarget && this.lastKnownAge < 3) {
-        shootMoving = this.rng.float() < 0.4 + (1 - tr.trigger) * 0.55;
-      }
+      const shootMoving = canFireMoving && this.hasTarget
+        && (this.targetVisible || (!armour && this.lastKnownAge < SUPPRESS_WINDOW));
       this.desiredSpeed = shootMoving ? 2.6 + tr.aggression * 1.2 : 4.3;
       this.crouch = false;
       this.wantFire = shootMoving;
@@ -4749,9 +4783,37 @@ export class Agent {
       }
       return;
     }
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * A PULL THAT HAS STARTED IS FINISHED — 「一回でマガジンからにするまで撃つ」
+     * ══════════════════════════════════════════════════════════════════════
+     * The burst WINDOW has been raised three times and the burst LENGTH follows
+     * it (median 12 rounds, 42 % of pulls running the magazine dry) — and the
+     * player still watches men fire a few rounds at a time. Both are true,
+     * because `wantFire` is re-decided EVERY FRAME by a duty cycle: the peek
+     * timer flips, a target steps behind a doorframe for 200 ms, a man crosses
+     * a corner — and the pull stops dead, mid-magazine, with `burstLeft` still
+     * counting. What the player sees is not the pull, it is the CONTINUOUS
+     * FIRING EPISODE, and the episode was being chopped into thirds by state
+     * that has nothing to do with whether he means to shoot.
+     *
+     * So the trigger is a decision to START and not a decision to CONTINUE. A
+     * man who has sent at least one round of the current pull keeps sending it
+     * until the pull is spent or the magazine is, and the three things that
+     * still stop him are the three that are about him rather than about a
+     * timer: the contact has gone stale entirely, he has been driven into
+     * SUPPRESSED, or the round is not running (`combatEnabled`, handled above).
+     *
+     * This is the literal sentence in the request, and it is bounded by the
+     * same thing everything else here is: `_fireRound`'s bloom opens the cone
+     * with every round of the pull, so a committed pull is loud and wild.
+     */
+    const committed = this.burstLeft > 0 && this.burstFired > 0
+      && (this.hasTarget || this.lastKnownAge < SUPPRESS_WINDOW)
+      && this.state !== STATE.SUPPRESSED;
     // …and the trigger itself is still a decision. @see the block above for why
     // this test moved down two branches rather than away.
-    if (!this.wantFire) return;
+    if (!this.wantFire && !committed) return;
     if (this.burstLeft <= 0) {
       if (this.burstCooldown > 0) return;
       /**
