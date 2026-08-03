@@ -9,6 +9,17 @@
  *   meanMoveSpeed    the same over men who WANT to move (`desiredSpeed > 0.1`),
  *                    which is the honest walking pace — a man holding an angle
  *                    at 0 m/s is not slow, he is stationary on purpose
+ *   closingRate      METRES MADE GOOD PER SECOND IN TRANSIT, and it is the one
+ *                    to read. `legs` below only counts legs that FINISH, so it
+ *                    is survivorship-biased in exactly the direction that
+ *                    flatters a slow build — measured, a change that completed
+ *                    three times as many legs "got worse" on it, because the
+ *                    two-thirds it newly finished are the hard ones the old
+ *                    build simply never delivered. This is every man in transit,
+ *                    every sample, finished or not: ground closed on his own
+ *                    destination over time spent walking at it.
+ *   arrivalsPerMin   the other half of the same sentence — legs completed per
+ *                    man-minute of transit, which is throughput rather than pace
  *   legs             time from being handed an objective more than 18 m away to
  *                    standing within 2.5 m of it, per man per objective
  *   sprintShare      share of moving samples with the sprint flag up (0 before)
@@ -51,12 +62,14 @@ await page.evaluate(() => {
   const S = {
     n: 0, sumSpeed: 0, moveN: 0, moveSum: 0, sprintN: 0, noTarget: 0,
     legs: [], open: new Map(), t0: ctx.time.elapsed, t: 0, states: {},
-    byGun: {},
+    byGun: {}, closed: 0, transitT: 0, arrivals: 0, prev: new Map(), last: 0,
   };
   window.__S__ = S;
   window.__TICK__ = () => {
     const t = ctx.time.elapsed;
     S.t = t - S.t0;
+    const dtick = S.last ? t - S.last : 0;
+    S.last = t;
     for (const a of ai.agents) {
       if (!a.alive) continue;
       S.n++;
@@ -78,13 +91,29 @@ await page.evaluate(() => {
       const dz = o.position.z - a.position.z;
       const d = Math.hypot(dx, dz);
       const key = `${o.mode}|${o.position.x.toFixed(1)},${o.position.z.toFixed(1)}`;
+      /**
+       * GROUND MADE GOOD. Only counted while he is more than 5 m out and still
+       * walking at the SAME destination, so a re-tasking is a new leg rather
+       * than a teleport, and backwards movement counts as zero rather than as
+       * negative — a man taking cover has not un-arrived.
+       */
+      const pv = S.prev.get(k);
+      if (pv && pv.key === key && d > 5 && dtick > 0 && dtick < 2) {
+        S.transitT += dtick;
+        if (pv.d > d) S.closed += pv.d - d;
+      }
+      S.prev.set(k, { key, d });
       const leg = S.open.get(k);
       if (!leg || leg.key !== key) {
         if (d > 18) S.open.set(k, { key, t0: t, d0: d });
         else S.open.delete(k);
         continue;
       }
-      if (d < 2.5) { S.legs.push([+leg.d0.toFixed(1), +(t - leg.t0).toFixed(2)]); S.open.delete(k); }
+      if (d < 2.5) {
+        S.legs.push([+leg.d0.toFixed(1), +(t - leg.t0).toFixed(2)]);
+        S.arrivals++;
+        S.open.delete(k);
+      }
       else if (t - leg.t0 > 150) S.open.delete(k);
     }
   };
@@ -106,6 +135,11 @@ const r = await page.evaluate(() => {
     meanMoveSpeed: +(S.moveSum / Math.max(1, S.moveN)).toFixed(3),
     sprintShare: +(S.sprintN / Math.max(1, S.moveN)).toFixed(3),
     noTargetShare: +(S.noTarget / Math.max(1, S.n)).toFixed(3),
+    closingRate: +(S.closed / Math.max(1e-6, S.transitT)).toFixed(3),
+    transitManSeconds: +S.transitT.toFixed(0),
+    metresMadeGood: +S.closed.toFixed(0),
+    arrivals: S.arrivals,
+    arrivalsPerManMinute: +(S.arrivals / Math.max(1e-6, S.transitT / 60)).toFixed(3),
     legs: S.legs.length,
     legMeanSeconds: mean(secs) === null ? null : +mean(secs).toFixed(2),
     legMedianSeconds: med(secs),

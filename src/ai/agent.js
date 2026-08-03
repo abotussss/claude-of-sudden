@@ -157,7 +157,15 @@ const SPRINT_DOT = 0.55;
 const SPRINT_THREAT_R = 26;
 const SPRINT_FUEL = 8;
 const SPRINT_REARM = 3;
-const SPRINT_REFILL = 0.5;
+/**
+ * 0.7 rather than 0.5, and it is a measurement rather than a taste: at 0.5 the
+ * census (`_sprintwhy.mjs`, seed 7, 5605 long-leg samples) put **22 %** of every
+ * man who could otherwise have been running on the winded clause — the largest
+ * single refusal on the board and half again the crowd term. Eight seconds of
+ * run against four and a bit of walk is still a man who cannot cross the whole
+ * map at a sprint, which is the point of having legs at all.
+ */
+const SPRINT_REFILL = 0.7;
 const SPRINT_CLEAR = 2.6;
 /** Half-angle of the "is anybody in front of me" cone, as a cosine. */
 const SPRINT_CLEAR_DOT = 0.5;
