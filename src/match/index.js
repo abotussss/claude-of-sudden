@@ -692,6 +692,13 @@ export class MatchSystem {
     /** Men emerged this match, for the callsign index and the report. */
     this._hiddenOut = 0;
     /**
+     * THE GATE'S ANSWER, kept for the report. @see `RULES.hiddenSquadDeficit`:
+     * how far the human's side was behind when 450 was crossed (negative when
+     * ahead), and whether that stood the event down for the match.
+     */
+    this._hiddenDeficit = 0;
+    this._hiddenStoodDown = false;
+    /**
      * …AND HOW MANY OF THEM ARE STILL ON THEIR FEET. Kept as a COUNTER rather
      * than measured, because the alternative is a scan of a roster that has
      * grown past fifty on every frame of the endgame for a number that changes
@@ -1278,6 +1285,8 @@ export class MatchSystem {
     this._hiddenTrigger = -1;
     this._hiddenOut = 0;
     this._hiddenLive = 0;
+    this._hiddenDeficit = 0;
+    this._hiddenStoodDown = false;
     /**
      * ──────────────────────────────────────────────────────────────────────
      * AND THE CACHE HOUSES GET THEIR WALLS BACK
@@ -3856,15 +3865,29 @@ export class MatchSystem {
    *   team number has shipped the wrong result twice in this project. Flip
    *   `RULES.playerTeam` and the squad follows it.
    *
-   *   EITHER SIDE CAN CROSS 450 AND IT IS STILL THE PLAYER'S ENEMY WHO GETS
-   *   THEM. `_hiddenTrigger` records who crossed it, for the report only. When
-   *   the human's side is the one at 450 this is the deadlock the request asks
-   *   for; when the enemy is, it is the same five men arriving on ground he
-   *   already holds, and the honest thing to say about that case is that it
-   *   makes a losing match worse rather than tighter. That is the instruction
-   *   (「敵側のみ」) and it is deliberately not softened here — a rule that
-   *   quietly switched sides depending on who was winning would be a different
-   *   feature wearing this one's name.
+   *   EITHER SIDE CAN CROSS 450, IT IS STILL THE PLAYER'S ENEMY WHO GETS THEM,
+   *   AND THERE IS ONE CASE WHERE NOBODY DOES — 「４５０点達成したときに、自分
+   *   チームが負けてたら隠し部隊は出さない 自分チームが勝っていたら、競っていても
+   *   隠し部隊を出して」. The recipient rule did not move: the men are
+   *   `1 - playerTeam` whoever crossed the line. What moved is that the event
+   *   now ASKS ABOUT THE HUMAN'S OWN SIDE at the instant of the crossing, and
+   *   stands down for the rest of the match if he is more than
+   *   `RULES.hiddenSquadDeficit` behind.
+   *
+   *   THAT GATE IS THE MEASUREMENT, NOT A TASTE. Over eight matches the event
+   *   armed with the human 25 to 58 points down five times, and every one of
+   *   those five handed five men to a side that was already winning: the
+   *   leader's rate fell from 1.37 to 1.23 points a second and the 450 -> 500
+   *   climb went from 36 s to 40 s, which is one score tick bought at the price
+   *   of making a lost match shorter. The two runs where his side was level or
+   *   ahead are the ones the feature exists for — 48 s instead of 36 and a
+   *   502-491 finish, and one where the leader's rate collapsed 1.0 -> 0.47 and
+   *   he lost the match he was fifty points from winning.
+   *
+   *   IT IS LATCHED THE SAME WAY THE TRIGGER IS. Asked once, on the frame 450
+   *   is crossed, and never re-asked — a gate that re-tested every frame would
+   *   turn the event on and off as the scoreboard moved, which is a dice roll
+   *   wearing a condition's clothes.
    *
    * THE CENSUS IS DEFERRED TO THE FIRST LIVE FRAME for the reason
    * `civilians.place` is: what "indoors" means here is `ai.grid.indoor`, and the
@@ -3881,14 +3904,32 @@ export class MatchSystem {
       this._hiddenArmed = true;
       this._hiddenTrigger = this.score[0] > this.score[1] ? 0 : 1;
       const team = 1 - this.playerTeam;
-      const ok = h.call(team);
+      /**
+       * THE HUMAN'S OWN SCOREBOARD, READ THROUGH `playerTeam` AND NOT THROUGH
+       * AN INDEX. `_hiddenDeficit` is how far his side is behind at this
+       * instant — negative when he is ahead — and it is kept for the report,
+       * because "the event did not happen" and "the event happened and did
+       * nothing" are the same silence from the outside.
+       */
+      this._hiddenDeficit = this.score[team] - this.score[this.playerTeam];
+      const beaten = this._hiddenDeficit >= RULES.hiddenSquadDeficit;
+      const ok = !beaten && h.call(team);
+      this._hiddenStoodDown = beaten;
       console.info(
         `[match] ${TEAM_NAME[this._hiddenTrigger]} first past ${RULES.hiddenSquadScore} ` +
-          `(${this.score[0]}-${this.score[1]}, t-${Math.max(0, this.roundClock).toFixed(0)}s) — ` +
-          (ok
-            ? `hidden squad ARMED for ${TEAM_NAME[team]}: ` +
-              `${RULES.hiddenSquadWaves} x ${RULES.hiddenSquadSize} from held ground`
-            : 'hidden squad has no interiors to come out of and stands down')
+          `(${this.score[0]}-${this.score[1]}, t-${Math.max(0, this.roundClock).toFixed(0)}s) · ` +
+          `${TEAM_NAME[this.playerTeam]} (the human) ` +
+          (this._hiddenDeficit > 0
+            ? `${this._hiddenDeficit} behind`
+            : `${-this._hiddenDeficit} ahead`) +
+          ' — ' +
+          (beaten
+            ? `hidden squad STANDS DOWN: 「負けてたら隠し部隊は出さない」 ` +
+              `(>= ${RULES.hiddenSquadDeficit})`
+            : ok
+              ? `hidden squad ARMED for ${TEAM_NAME[team]}: ` +
+                `${RULES.hiddenSquadWaves} x ${RULES.hiddenSquadSize} from held ground`
+              : 'hidden squad has no interiors to come out of and stands down')
       );
     }
     /**
@@ -5606,7 +5647,14 @@ export class MatchSystem {
      * SCORE did afterwards and that is not knowable until there is an
      * afterwards. Silent when the event never armed.
      */
-    if (this._hiddenArmed && this.hidden) console.info(this.hidden.report());
+    if (this._hiddenArmed && this.hidden) {
+      console.info(
+        this._hiddenStoodDown
+          ? `[hidden] stood down at the crossing — ${TEAM_NAME[this.playerTeam]} (the human) was ` +
+            `${this._hiddenDeficit} behind, at or past the ${RULES.hiddenSquadDeficit} point gate`
+          : this.hidden.report()
+      );
+    }
     this._setPhase(PHASE.OVER, RULES.roundOverTime);
   }
 

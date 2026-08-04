@@ -1750,6 +1750,45 @@ export const RULES = {
    * never as a literal index.
    */
   hiddenSquadScore: 450,
+  /**
+   * ════════════════════════════════════════════════════════════════════════
+   * AND THE ONE CASE IT MUST NOT FIRE IN — 「自分チームが負けてたら隠し部隊は
+   * 出さない 自分チームが勝っていたら、競っていても隠し部隊を出して」
+   * ════════════════════════════════════════════════════════════════════════
+   * THE RECIPIENT RULE IS UNCHANGED. The men are still `1 - RULES.playerTeam`
+   * and still 「敵側のみ」. What this key adds is a GATE on whether the event
+   * happens at all, tested ONCE at the instant 450 is crossed and latched
+   * exactly as the trigger is — there is still no dice anywhere in the path.
+   *
+   *   the player's side AHEAD, or behind by less than this   ->  fire
+   *   the player's side behind by this or more               ->  never fires
+   *
+   * MEASURED, AND THIS IS THE NUMBER THE MEASUREMENT ASKED FOR. Across eight
+   * matches run to a natural end, the event armed with the human's side behind
+   * by 4, 13, 25, 25, 36, 36 and 58 points, and ahead by 15. In every one of
+   * the five where he was 25 or more behind, five men were handed to a side
+   * that was already winning and the whole event bought about four seconds —
+   * 「負けてたら隠し部隊は出さない」 is exactly that case, named.
+   *
+   * WHY TWENTY AND NOT A ROUND NUMBER PICKED OFF THE TARGET. Read against
+   * `zonePayout` rather than against `scoreTarget`: the differential a
+   * contested three-versus-two zone split actually produces is 5 - 4 = ONE
+   * POINT PER `scoreInterval`, so a gap of N points is 4N SECONDS of holding
+   * one more zone than the enemy. At the moment 450 is crossed the leader has
+   * 50 points left — measured at 36 s of match with the event off and 40-48 s
+   * with it on — so:
+   *
+   *     13 points  ->  52 s to close   reachable in an endgame the event extends
+   *     20 points  ->  80 s to close   twice the match that is left
+   *     25 points  -> 100 s to close   not a competitive match, an over one
+   *
+   * Twenty is the line beyond which the arithmetic says the human cannot get
+   * back even if the squad does its job perfectly, and it also falls inside the
+   * gap the measured deficits leave: they cluster at 4-13 and at 25-58, with
+   * nothing between. 「競っていても」 is honoured — a nineteen point deficit is
+   * still a match, and it still fires.
+   */
+  hiddenSquadDeficit: 20,
   /** 「５人ずつ」. */
   hiddenSquadSize: 5,
   /**
