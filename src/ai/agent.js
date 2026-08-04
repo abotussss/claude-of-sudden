@@ -323,7 +323,26 @@ const SNIPER_MIN = 16;
  * fire-rate distribution still empties a pouch inside a life — which is the
  * asymmetry the crate errand exists for.
  */
-const RESERVE_MUL = 4.5;
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 4.5 -> 6.5, AND IT IS THE SAME MEASUREMENT ARRIVING FOR THE FOURTH TIME
+ * ────────────────────────────────────────────────────────────────────────────
+ * Every raise of this number has followed a pass that made the map fire more,
+ * and this pass made it fire more than any of them: pulls now CHAIN while a man
+ * can see his target (@see the block in `_shoot`), the trigger answers on the
+ * frame of contact rather than at the end of a peek leg, and the reach of every
+ * weapon went up. Measured on the build with only the first of those three
+ * (`_engage.mjs`, seeds 7 / 11, two runs each): `dry` came back onto the refusal
+ * board at **1.5 / 9.2 / 4.6 / 3.5 %** of every frame with eyes on a target and
+ * no round sent, against 3.1 / 0.0 before it. A dry man is not a lull — he is
+ * removed from the volume of fire until somebody walks him to a crate.
+ *
+ * The asymmetry the crate errand exists for is untouched: the top of the fire
+ * rate distribution still empties a pouch inside a life, `resupply` is still
+ * capped at `startReserve`, and running dry is still real and still recoverable
+ * only at a cache.
+ */
+const RESERVE_MUL = 6.5;
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -5403,8 +5422,21 @@ export class Agent {
      * this man" stay the same sentence. An empty-magazine reload is NOT
      * abortable and must not be — there is nothing to bring back up.
      */
-    if (this._topUp > 0 && this.animator.reloading
-      && this.ammo > 0 && (this.hasTarget || this.suppression > 0.15)) {
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * AND IT ABORTS ON ANYTHING — 「リロードは全然どのタイミングでもしていい」
+     * ────────────────────────────────────────────────────────────────────────
+     * The abort used to need `hasTarget || suppression > 0.15`. Both are still
+     * here, and `targetVisible` and a FRESH last-known are added beside them,
+     * so the list is now every signal this class has for "something is
+     * happening": his own eyes, his own memory, his squad's call-out inside
+     * `SUPPRESS_WINDOW`, or rounds landing near him. A change begun in a lull
+     * costs him the time he has already spent and nothing else — the rounds
+     * move on completion, not on start (@see the block above).
+     */
+    if (this._topUp > 0 && this.animator.reloading && this.ammo > 0
+      && (this.hasTarget || this.targetVisible || this.suppression > 0.15
+        || this.lastKnownAge < SUPPRESS_WINDOW)) {
       this._topUp = 0;
       this.animator.cancelReload();
     }
@@ -5468,18 +5500,35 @@ export class Agent {
      * Placed AFTER the empty branch so it can never race it, and before the
      * trigger so a man who has just decided to reload does not also fire.
      *
-     * `working` and `post` are left out of it on purpose: a man on a cache
-     * errand or holding a window is doing something with a clock of its own and
-     * this is not urgent enough to interrupt either.
-     *
      * The radio is silent for this one. "RELOADING" is a call for somebody to
      * take over an angle, and a man topping up in an empty street has no angle
      * to hand over; `weapon:reload` still goes out, because the sound and the
      * animation are the same magazine change either way.
+     *
+     * ────────────────────────────────────────────────────────────────────────
+     * AND THE DISCIPLINE ABOUT *WHEN* IS GONE — 「リロードは全然どのタイミングでも
+     * していい」
+     * ────────────────────────────────────────────────────────────────────────
+     * Four refusals stood here and three of them are struck out. `working` and
+     * `post` were "he is busy with something on its own clock" — a man on a
+     * cache errand has both hands free the whole walk, and a man at a window
+     * with an empty street in front of him is the single best moment in the
+     * match to change a magazine. `hasTarget` was the strict one and it is a
+     * 6.5 s MEMORY, so a man who glimpsed somebody six seconds ago and has had
+     * an empty street ever since was refused; what replaces it is `targetVisible`
+     * plus a fresh last-known, i.e. he may not start one while he can SEE
+     * somebody or while his squad has just called one in. Suppression is kept
+     * as it was: rounds landing near him are not a lull by anybody's reading.
+     *
+     * The remaining refusals are the two that are not about discipline at all —
+     * he must have something to load, and the magazine must actually be down.
+     * Everything this lets through is abortable on the frame anything happens
+     * (@see the abort above) and costs nothing in rounds, because the transfer
+     * is `magSize - ammo` and the partial magazine is never discarded.
      */
     if (this._topUp === 0
-      && !this.hasTarget && this.suppression <= 0.15
-      && !this.working && !this.post
+      && !this.targetVisible && this.lastKnownAge >= SUPPRESS_WINDOW
+      && this.suppression <= 0.15
       && this.reserve > 0
       && this.ammo < this.magSize * TOPUP_FRAC) {
       this._topUp = Math.min(this.magSize - this.ammo, this.reserve);
