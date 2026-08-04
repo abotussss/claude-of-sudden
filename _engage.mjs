@@ -222,10 +222,29 @@ for (const seed of SEEDS) {
      * `targetVisible` rising, closed when the line has been broken for `LOST`.
      */
     const sight = new Map();
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * DID THE SIGHTING END BECAUSE HE WON IT?
+     * ══════════════════════════════════════════════════════════════════════
+     * "the share of sightings ending under ten rounds" has been the headline
+     * for five passes and it has never distinguished the two things that can
+     * make a sighting short: a man who REFUSED to shoot, and a man who saw
+     * somebody, opened up and KILLED him in eight rounds. The first is the
+     * complaint; the second is the request being granted. As the roster's
+     * marksmanship goes up the second one grows, and it grows the metric in
+     * the direction that reads as failure.
+     *
+     * `killed` is the target this sighting was opened on being dead when the
+     * line closes. It is not kill CREDIT — somebody else may have shot him —
+     * but as a share of the under-ten column it is the difference between
+     * "he did nothing" and "there was nothing left to shoot at".
+     */
     const closeSight = (g) => {
+      const t = g.tgt;
+      const killed = !!t && (t.alive === false || t.dead === true);
       S.sight.push({ rounds: g.rounds, moving: g.moving,
         dur: +(e.time.elapsed - g.t0).toFixed(2),
-        mag0: g.mag0, frac0: g.frac0, reloading0: g.reloading0, dry0: g.dry0 });
+        mag0: g.mag0, frac0: g.frac0, reloading0: g.reloading0, dry0: g.dry0, killed });
     };
 
     const fire0 = ai.onAgentFire.bind(ai);
@@ -302,7 +321,9 @@ for (const seed of SEEDS) {
             const dry0 = a.dry === true;
             const frac0 = a.magSize > 0 ? a.ammo / a.magSize : 0;
             sg = { rounds: 0, moving: 0, t0: e.time.elapsed, lost: 0,
-              mag0: a.ammo, frac0: +frac0.toFixed(3), reloading0, dry0 };
+              mag0: a.ammo, frac0: +frac0.toFixed(3), reloading0, dry0,
+              /* who he was looking at, for the `killed` column. @see closeSight. */
+              tgt: a.targetActor ?? null };
             sight.set(a, sg);
             S.opens++;
             if (reloading0) S.openReloading++;
@@ -545,6 +566,15 @@ for (const seed of SEEDS) {
         mean: +(r.reduce((a, b) => a + b, 0) / Math.max(1, r.length)).toFixed(1),
         underTenPct: pct(r.filter((x) => x < 10).length, r.length),
         zeroPct: pct(r.filter((x) => x === 0).length, r.length),
+        /**
+         * THE UNDER-TEN COLUMN, SPLIT BY WHETHER THERE WAS ANYTHING LEFT TO
+         * SHOOT AT. @see `closeSight`. `underTenKilledPct` is the share of the
+         * WHOLE population that is a short sighting ending on a dead man, and
+         * `underTenLivePct` is the honest form of the complaint.
+         */
+        underTenKilledPct: pct(out.sight.filter((x) => x.rounds < 10 && x.killed).length, r.length),
+        underTenLivePct: pct(out.sight.filter((x) => x.rounds < 10 && !x.killed).length, r.length),
+        killedPct: pct(out.sight.filter((x) => x.killed).length, r.length),
         medianDur: q(out.sight.map((x) => x.dur), 0.5),
         movingPct: pct(out.sight.reduce((a, b) => a + b.moving, 0),
           out.sight.reduce((a, b) => a + b.rounds, 0)),
