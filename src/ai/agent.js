@@ -714,6 +714,36 @@ const ELITE_TANK_R = 34;
 const ELITE_TANK_WIDE = 1.45;
 
 /**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE MEN ARE BAD AT THE JOB — 「AIそれぞれの上手さをもっと良くして もっと銃弾精度、
+ * 打つ判断を早くして 今接敵しても撃ってこない」
+ * ════════════════════════════════════════════════════════════════════════════
+ * THIS IS A CHANGE OF DIRECTION AND IT HAS TO BE READ CAREFULLY. 「AIMは悪くても
+ * いい」 has been said three times and every pass took it as licence to delete an
+ * accuracy gate: the two trigger-discipline coin flips, the ducked refusal, the
+ * pinned man's silence. All of those were about WHETHER HE SHOOTS AT ALL. This
+ * sentence is about something else — a man who meets somebody and does not
+ * answer, and who is not much good when he does. Volume over precision is not
+ * withdrawn; what is withdrawn is "and therefore he may be useless".
+ *
+ * `skill` is the one number the whole marksmanship model hangs off — cone,
+ * settle, tracking, weapon range, rate — and `match` sets its MEAN through
+ * `ai.skill` (`RULES.botSkill`, about 0.44 on this map). `ai` owns what a given
+ * difficulty MEANS in marksmanship terms, which is why `defenderSkill` already
+ * lives here and not in `RULES`, and this is the same kind of statement: the
+ * ordinary man is lifted `SKILL_LIFT` and the bottom of the distribution comes
+ * up to `SKILL_FLOOR`, so the conscript who could not hit a wall stops existing
+ * while the spread that makes a roster readable (sd 0.19) is untouched.
+ *
+ * At `RULES.botSkill` 0.44 that moves the ordinary attacker from a 0.44 mean
+ * over 0.12-0.95 to a 0.62 mean over 0.34-0.95. THE CIVILIAN MILITIA IS NOT
+ * TOUCHED — `drawCivilPersona` in `index.js` is its own draw at 0.20-0.44 and
+ * it is deliberate — and the elite band (0.88-0.98) already sits above this.
+ */
+const SKILL_LIFT = 0.18;
+const SKILL_FLOOR = 0.34;
+
+/**
  * Draw one soldier: an archetype, six traits jittered off it, and his marksmanship.
  *
  * Exported because `AiSystem` caches the result per callsign (`personaFor`) so a
@@ -791,10 +821,16 @@ export function drawPersona(rng, role, meanSkill, defenderBonus = 0, elite = fal
      * spread is kept — a stick of ten identical shooters is as unreadable as a
      * roster of them — it is simply a different, much narrower distribution.
      */
+    /**
+     * `SKILL_LIFT` / `SKILL_FLOOR` are the ordinary man being made competent —
+     * @see the block above them for why that is not a reversal of
+     * 「AIMは悪くてもいい」. The elite band is untouched: it is already at the top
+     * of the distribution and lifting it would put it through the ceiling.
+     */
     skill: elite
       ? Math.min(ELITE.skillCap, ELITE.skillFloor + Math.abs(rng.gauss()) * 0.06)
-      : Math.min(0.95, Math.max(0.12,
-        meanSkill + (role === 'defend' ? defenderBonus : 0) + rng.gauss() * 0.19)),
+      : Math.min(0.95, Math.max(SKILL_FLOOR,
+        meanSkill + SKILL_LIFT + (role === 'defend' ? defenderBonus : 0) + rng.gauss() * 0.19)),
   };
 }
 
@@ -2526,10 +2562,51 @@ export class Agent {
     }
   }
 
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * CONTACT — AND THE FIRST ROUND GOES NOW — 「打つ判断を早くして 今接敵しても
+   * 撃ってこない」
+   * ══════════════════════════════════════════════════════════════════════════
+   * `reactionTimer` is a field this class has carried since the first commit and
+   * NOTHING HAS EVER READ IT, so "how long before he answers" was never a number
+   * anybody set — it was the sum of two timers that happened to be mid-cycle:
+   *
+   *   `peekTimer`  the cover duty cycle. `wantFire` in `_combat` is
+   *                `this.peeking && …`, and `peeking` only flips when this
+   *                expires — so a man who walked into a contact 0.2 s after
+   *                ducking waited out the whole hide leg (up to ~1.4 s) before
+   *                he was allowed to want to shoot at all.
+   *   `burstCooldown` the gap between two pulls, still counting down from
+   *                whatever the last fight left on it, or from the 0.4-1.4 s it
+   *                is seeded with at spawn — which for a man's FIRST contact is
+   *                pure dead time before his first round.
+   *
+   * Both are cleared on the transition into COMBAT and he starts the fight
+   * PEEKING. Neither timer is weakened for the rest of the fight: the duty cycle
+   * still runs, the gap between pulls still exists (@see the chaining block in
+   * `_shoot` for what is left of it), and what changes is only that the beat a
+   * player reads as "he saw me and did nothing" is gone.
+   *
+   * `aimSettle` is deliberately NOT set: the cone still opens on a fresh target
+   * (@see `settle` in `_fireRound`), so the first rounds out of a corner are
+   * still a spray. He answers immediately and he answers badly, which is the
+   * whole of 「AIMは悪くてもいい」 plus 「打つ判断を早く」 in one behaviour.
+   */
   _enterCombat() {
     this._setState(STATE.COMBAT);
     this.cover = null;
     this.repathTimer = 0;
+    this.peeking = true;
+    /**
+     * A SHORT GUARANTEED WINDOW RATHER THAN A ZERO. At zero, `_combat` re-rolls
+     * the duty cycle on the very next frame and `peeking` becomes
+     * `allowed && …` — the SQUAD PEEK TOKEN, which exists so a whole firing line
+     * does not lean out at once and which would therefore silence the man on the
+     * exact frame he needs to answer. A third of a second is one reaction, and
+     * the token owns every leg of the cycle after it.
+     */
+    this.peekTimer = 0.35;
+    this.burstCooldown = 0;
   }
 
   /**
