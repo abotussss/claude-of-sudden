@@ -151,6 +151,21 @@ for (const seed of SEEDS) {
        * which is the difference between "the reload is slow" and "he walked
        * into the fight with an empty gun".
        */
+      /**
+       * ══════════════════════════════════════════════════════════════════════
+       * IS ANYBODY TAKING THE GROUND? — the guard on 「敵を倒すのをメインにしてもいい」
+       * ══════════════════════════════════════════════════════════════════════
+       * Several restraints came off at once — the fireteam brake, the burst gap
+       * with eyes on, the reload discipline, the range gate, and the dwell that
+       * pulled a man out of a firefight toward a circle. The failure mode of
+       * the last one is a roster that fights beautifully and never captures
+       * anything, and DOMINATION scores on the circles. So: the share of alive
+       * bot samples standing INSIDE a capture zone, and the share within 20 m
+       * of one, read off `match.capture.zones` — the same `position`/`radius`
+       * `CaptureZones._inside` uses.
+       */
+      inZone: 0, nearZone: 0, zoneSamples: 0,
+      score: null,
       openReloading: 0, openDry: 0, openLow: 0, openFull: 0, opens: 0,
       ticks: 0,
       maxSpeed: 0,
@@ -237,6 +252,12 @@ for (const seed of SEEDS) {
       return fire0(a, o, d);
     };
 
+    /**
+     * The capture circles, resolved once. `match.capture` only exists in
+     * DOMINATION; in the demolition ruleset the list is empty and every zone
+     * figure below reports zero samples rather than a wrong number.
+     */
+    const ZONES = (m.capture?.zones ?? []).filter((z) => z?.position && z.radius > 0);
     const wasSprinting = new Map();
     const tStart = t();
     while (t() - tStart < WINDOW && m.phase === 'live' && m.roundClock > 0) {
@@ -334,6 +355,17 @@ for (const seed of SEEDS) {
                             : a.burstCooldown > 0 ? 'burstGap'
                               : a.fireCooldown > 0 ? 'rateOfFire' : 'other';
           S.sightGate[k] = (S.sightGate[k] ?? 0) + 1;
+        }
+        /* IS HE TAKING THE GROUND. @see the `inZone` field block. */
+        if (ZONES.length) {
+          S.zoneSamples++;
+          let best = Infinity;
+          for (const z of ZONES) {
+            const d = Math.hypot(a.position.x - z.position.x, a.position.z - z.position.z);
+            if (d - z.radius < best) best = d - z.radius;
+          }
+          if (best <= 0) S.inZone++;
+          if (best <= 20) S.nearZone++;
         }
         S.aliveSamples++;
         if (a.speed > S.maxSpeed) S.maxSpeed = a.speed;
@@ -475,6 +507,10 @@ for (const seed of SEEDS) {
       if (BUCKETS[b] >= FULL_SPRINT) { S.travelAtFull += hist[b]; S.nearTravelAtFull += histNear[b]; }
     }
     S.NEAR = NEAR;
+    S.zoneCount = ZONES.length;
+    /* who is actually winning it, so "they fight and never capture" is visible */
+    S.score = Array.isArray(m.score) ? m.score.slice() : null;
+    S.zoneOwners = ZONES.map((z) => z.owner);
     return S;
   }, { WARM, WINDOW });
 
@@ -582,6 +618,19 @@ for (const seed of SEEDS) {
       sprintStartsWithin45mOfPlayerPct: pct(out.sprintStartNearPlayer, out.sprintStarts),
       medianSprintStartDist: q(out.sprintStartDist, 0.5),
     },
+    /**
+     * THE GUARD ON "KILLING MAY BE THE POINT". @see the field block in the page.
+     * If a pass that loosens the pull toward objectives has gone too far, this
+     * is where it shows: nobody standing in a circle, and a score that does not
+     * move.
+     */
+    objective: {
+      zones: out.zoneCount,
+      inZonePct: pct(out.inZone, out.zoneSamples),
+      within20mPct: pct(out.nearZone, out.zoneSamples),
+      zoneOwners: out.zoneOwners,
+      score: out.score,
+    },
     refusals: Object.fromEntries(Object.entries(out.why)
       .sort((a, b) => b[1] - a[1])
       .map(([k, v]) => [k, pct(v, out.travelSamples)])),
@@ -656,6 +705,8 @@ if (all.length > 1) {
       + `<10=${r.perEngagement.underTenPct}% moveFire=${r.fireOnMove.movingPct}% `
       + `travel@full=${r.travel.atFullSprintPct}% near@full=${r.nearField.atFullSprintPct}% `
       + `travel@ceil=${r.travel.atOwnCeilingPct}% near@ceil=${r.nearField.atOwnCeilingPct}% `
-      + `sight<10=${r.perSighting.underTenPct}% noPath=${r.refusals['unstick:noPath'] ?? 0}%`);
+      + `sight<10=${r.perSighting.underTenPct}% noPath=${r.refusals['unstick:noPath'] ?? 0}% `
+      + `inZone=${r.objective.inZonePct}% near20=${r.objective.within20mPct}% `
+      + `score=${JSON.stringify(r.objective.score)}`);
   }
 }

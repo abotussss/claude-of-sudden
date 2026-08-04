@@ -211,7 +211,35 @@ const SPRINT_DOT = 0.55;
  */
 const SPRINT_THREAT_R = 10;
 const SPRINT_FUEL = 14;
-const SPRINT_REARM = 3;
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE LEGS ARE THE LAST REFUSAL LEFT IN FRONT OF THE PLAYER — 「とにかく走れ」
+ * ════════════════════════════════════════════════════════════════════════════
+ * With the fireteam brake struck out, the census inside 60 m of the player has
+ * one refusal left that is not a nav failure: `winded` at **25.4 / 15.6 / 18.0 /
+ * 23.7 %** of travel samples there (`_engage.mjs`, seeds 7 / 11, two runs each)
+ * against 8-10 % across the whole map. That concentration is not a coincidence
+ * and it is the near-field dwell bias again — the man the player watches is the
+ * man who reached this side of the map first, i.e. the man who has just spent
+ * his legs getting here.
+ *
+ * AND THE STEADY STATE WAS A STUTTER RATHER THAN A BREATHER. `_sprintArmed` is
+ * a latch that re-arms the moment the tank passes `SPRINT_REARM`, so after the
+ * first full run a man runs `SPRINT_REARM` seconds, walks `SPRINT_REARM /
+ * SPRINT_REFILL` and runs again — at 3 and 1.1 that is a three second run and a
+ * 2.7 second walk, for ever, and a duty cycle of `REFILL / (1 + REFILL)` = 52 %.
+ * A man crossing a city does not alternate every three seconds.
+ *
+ * So the grain gets coarser and the tank fills faster: five seconds of run
+ * against 2.8 of walk, a duty cycle of 64 %. THE LEGS ARE KEPT — 「歩く時もある」
+ * is the player's own clause and this is still a man who cannot run the whole
+ * map flat out — but travel is now a run with breathers in it rather than a
+ * jog with sprints in it. The PLAYER, for reference, has no stamina clock at
+ * all (`src/player/tuning.js` has no such field), so the standard 「プレイヤーの
+ * 最高速度と同じスピードで移動する時間がないとおかしい」 is measured against a man who
+ * never tires.
+ */
+const SPRINT_REARM = 5;
 /**
  * 0.7 rather than 0.5, and it is a measurement rather than a taste: at 0.5 the
  * census (`_sprintwhy.mjs`, seed 7, 5605 long-leg samples) put **22 %** of every
@@ -219,8 +247,13 @@ const SPRINT_REARM = 3;
  * single refusal on the board and half again the crowd term. Eight seconds of
  * run against four and a bit of walk is still a man who cannot cross the whole
  * map at a sprint, which is the point of having legs at all.
+ *
+ * …and 1.1 -> 1.8 for the same reason a third time. @see `SPRINT_REARM`: this
+ * is the term that sets the DUTY CYCLE, `REFILL / (1 + REFILL)`, and 1.1 is
+ * 52 % — a man who spends nearly half of every journey walking it off. 1.8 is
+ * 64 %.
  */
-const SPRINT_REFILL = 1.1;
+const SPRINT_REFILL = 1.8;
 /**
  * HOW MUCH CLEAR GROUND HE NEEDS IN FRONT OF HIM, AND IT IS A MEASUREMENT.
  *
@@ -1464,6 +1497,14 @@ export class Agent {
     this.burstFired = 0;
     this.fireCooldown = 0;
     this.burstCooldown = this.rng.range(0.4, 1.4);
+    /**
+     * WHEN HE LAST SENT A ROUND, on `ctx.time.elapsed`. Stamped in `_fireRound`
+     * and read by the break-off in `_combat` — "is this man prosecuting a fight
+     * or standing in one" is not answerable from `hasTarget`, which is a 6.5 s
+     * memory that half the map satisfies at any moment. `-1e9` so a man who has
+     * never fired is never trading.
+     */
+    this._firedAt = -1e9;
     this.magSize = W.mag;
     this.ammo = this.magSize;
     /**
@@ -3783,7 +3824,29 @@ export class Agent {
      */
     const nearSite = this.objective?.site != null
       && this.position.distanceTo(this.objective.position) < SITE_HOLD_R + 5;
-    if (urgency && !nearSite && this.stateTime > breakOff * (1.4 + this.traits.patience * 3)) {
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * …AND A MAN WHO IS WINNING ONE IS NOT PULLED OUT OF IT — 「敵を倒すのを
+     * メインにしてもいい」
+     * ══════════════════════════════════════════════════════════════════════
+     * The exemption above is GEOGRAPHY: standing on the ground you were sent to
+     * means winning the firefight is arriving. This one is the other half the
+     * sentence asks for and it is BEHAVIOUR: a man with his eyes on somebody
+     * who has sent rounds in the last two and a half seconds is in a fight he
+     * is prosecuting, and walking him away from it to a circle is exactly the
+     * thing being complained about.
+     *
+     * IT IS A MULTIPLIER AND NOT A VETO, AND THAT IS THE WHOLE SAFETY
+     * ARGUMENT. The stalemate break exists because two lines of men can trade
+     * shots for ever and nobody's beat with nothing in sight ever arrives — a
+     * veto keyed on "somebody is visible" would hand that failure straight
+     * back and the map would stop being taken. Doubling the dwell cannot: it
+     * is 14.5 s -> 29 s for the median man, and he still goes.
+     */
+    const trading = this.targetVisible
+      && this.ctx.time.elapsed - this._firedAt < 2.5;
+    if (urgency && !nearSite
+      && this.stateTime > breakOff * (1.4 + this.traits.patience * 3) * (trading ? 2 : 1)) {
       this.cover = null;
       this.ai.cover?.release(this.id);
       this._setState(STATE.ADVANCE);
@@ -5849,6 +5912,8 @@ export class Agent {
     dir.z += this.rng.gauss() * spread;
     dir.normalize();
     an.fire(1);
+    // @see `_firedAt` — the break-off asks whether he is prosecuting a fight.
+    this._firedAt = this.ctx.time.elapsed;
     this.ai.onAgentFire(this, origin, dir);
   }
 
