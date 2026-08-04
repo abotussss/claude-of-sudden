@@ -84,14 +84,12 @@ export const ARMOUR_FRAG_MAX = 28;
  */
 const SITE_HOLD_R = 9;
 
-/**
- * METRES OF LEAD A MAN MAY HAVE ON HIS OWN FIRETEAM BEFORE HE IS BRAKED.
- * `Squad.LANE_STEP` is 15 and a lane is a legitimate reason to be a long way
- * from the centre of your team, so this is deliberately above it: what it
- * catches is the man who is a whole street ahead, not the man on the far lane.
- * @see the brake in `_advance`.
+/*
+ * `LEAD_SLACK` STOOD HERE — the metres of lead a man was allowed on his own
+ * fireteam before he was braked. The brake it served has been struck out on the
+ * player's own instruction (「隊列から離れない制約は外して」); the tombstone with
+ * the measurement is in `_advance`, one line under the sprint floor.
  */
-const LEAD_SLACK = 9;
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -146,9 +144,12 @@ const LEAD_SLACK = 9;
  *                arrivals instead of delivering the whole roster in one lump.
  *
  * IT IS A `Math.max` OVER THE WALK HE ALREADY HAD, applied where `_advance`
- * sets `desiredSpeed` and BEFORE the fireteam brake, so no man is ever slower
- * than he was before this existed and 「占領しにチームでいけ」 still holds him to
- * his team's clock.
+ * sets `desiredSpeed`, so no man is ever slower than he was before this
+ * existed. It used to be applied one line ABOVE the fireteam brake, which then
+ * multiplied most of it back off again; that brake is gone on the player's own
+ * instruction and this is now the last word on a travelling man's pace.
+ * 「占領しにチームでいけ」 is kept by the lane and the seat fan — a route, never a
+ * speed limit. @see the tombstone in `_advance`.
  */
 const SPRINT_SPEED = 7.01 * 0.92;
 const SPRINT_START = 16;
@@ -1567,21 +1568,6 @@ export class Agent {
     this.sprintFuel = SPRINT_FUEL;
     this._sprintArmed = true;
     this._ahead = 0;
-    /**
-     * WHAT THE FIRETEAM BRAKE TOOK OFF HIM THIS FRAME, as a multiplier on
-     * `desiredSpeed`; 1 is untouched. @see the brake in `_advance`.
-     *
-     * It exists because the gate and the legs disagree and nothing could say by
-     * how much: `_sprintGate` passes a man (`sprinting` true) and then the brake
-     * multiplies the sprint it just granted him back down, so a census of the
-     * GATE reports a running man and the speed histogram reports a walking one.
-     * Measured (`_engage.mjs`, seed 7): the gate grants a run on **61 %** of
-     * travel samples and **70.7 %** of the men it grants one to are below a
-     * flat-out run when the tape measure comes out.
-     *
-     * Cleared in `update` beside `sprinting`, for the same reason.
-     */
-    this._brakeCut = 1;
     this.crouch = false;
     this.cover = null;
     this.coverPos = new THREE.Vector3();
@@ -1746,29 +1732,16 @@ export class Agent {
      */
     if (this.sprinting) {
       /**
-       * ══════════════════════════════════════════════════════════════════════
-       * HE PAYS FOR THE RUN HE GOT, NOT THE ONE HE WAS GRANTED
-       * ══════════════════════════════════════════════════════════════════════
-       * `sprinting` is the GATE's verdict and it is set before the fireteam
-       * brake runs, so a man out in front of his own team was charged a full
-       * second of a 6.45 m/s tank for a second spent walking at 4.3 — the brake
-       * takes his speed and the clock took his wind for it anyway.
+       * HE PAYS FOR THE RUN HE GOT, AND NOW THAT IS THE ONE HE WAS GRANTED.
        *
-       * IT IS THE NEAR-FIELD BUG WEARING A DIFFERENT HAT, and that is why it is
-       * fixed here rather than filed as tidiness. The man the player can see is
-       * by construction the man furthest forward — he is the one who reached the
-       * far side of the map first — which is exactly the man the brake is
-       * pointed at. Measured (`_engage.mjs`, seed 7, inside 60 m of the player):
-       * `winded` is **17.2 %** of travel samples there against **4.6 %** across
-       * the whole map, and half of what is left sits in the 4-5 m/s band, which
-       * is `walkPace`. So the men he watches are men who spent a tank they never
-       * got to use and are now walking it off in front of him.
-       *
-       * `_brakeCut` is last frame's, which is the frame the fuel was actually
-       * spent on. No new state, no clause in the gate, and a man who is NOT
-       * braked is charged exactly what he was charged before.
+       * This used to be charged at `_brakeCut` — the fireteam brake could take
+       * most of a man's speed away and the clock would otherwise have billed
+       * him for a 6.45 m/s tank he spent walking at 4.3. With the brake struck
+       * out (@see `_advance`) the gate's verdict and the legs agree again, so
+       * the discount has nothing left to discount and a second of granted run
+       * is a second of fuel.
        */
-      this.sprintFuel -= dt * (this._brakeCut > 0 ? this._brakeCut : 1);
+      this.sprintFuel -= dt;
       // Out of wind. `_sprintArmed` is a LATCH and not a threshold test: without
       // it a man at exactly the re-arm mark alternates run/walk every frame.
       if (this.sprintFuel <= 0) { this.sprintFuel = 0; this._sprintArmed = false; }
@@ -1778,7 +1751,6 @@ export class Agent {
     }
     this._wasSprinting = this.sprinting;
     this.sprinting = false;
-    this._brakeCut = 1;
 
     // a path the frame budget deferred: ask again before anything else does
     if (this.pathPending) this._goTo(this._pendingDest);
@@ -2836,24 +2808,13 @@ export class Agent {
       /**
        * …AND THE LONG ONES ARE A RUN — 「AIが走ってない」. @see `SPRINT_SPEED`.
        *
-       * It is a floor over the walk he already had and it is applied HERE, one
-       * line above the fireteam brake, so that a man ahead of his own team is
-       * braked out of a sprint exactly as he was braked out of a jog and
-       * 「占領しにチームでいけ」 costs nothing. `inSector` is passed rather than
-       * tested inside because it is the same sentence the two lines above are:
-       * crossing the map is a run, working a sector you already hold is not.
+       * It is a floor over the walk he already had, and since the fireteam brake
+       * was struck out (@see the block below) it is also the LAST thing that
+       * touches `desiredSpeed` on a travelling man: what the gate grants is what
+       * his legs are asked for. `inSector` is passed rather than tested inside
+       * because it is the same sentence the two lines above are: crossing the
+       * map is a run, working a sector you already hold is not.
        */
-      /**
-       * MEASURED AND REJECTED: turning the fireteam brake into a REFUSAL in the
-       * gate (a man ahead of his team may not sprint at all) cost 16.8 % of
-       * every long leg and took the roster's mean moving speed from 3.75 to
-       * 3.28 m/s. The reason is arithmetic and it was not obvious: the brake
-       * below still applies to him, so refusing the sprint does not make him
-       * walk — it makes him walk BRAKED, at 0.55 of a walk instead of 0.55 of a
-       * run. Cohesion is cheaper as a scale than as a veto, so it stays one.
-       */
-      /** The pace he would have had with no sprint at all. @see the brake. */
-      const walkPace = this.desiredSpeed;
       const sprint = this._sprintGate(dist, !inSector);
       if (sprint > this.desiredSpeed) this.desiredSpeed = sprint;
       /**
@@ -2866,105 +2827,38 @@ export class Agent {
       if (this.sprinting) this.aimWeight = 0.05;
       /**
        * ══════════════════════════════════════════════════════════════════════
-       * NOBODY ARRIVES ALONE — "占領しにチームでいけ"
+       * THE FIRETEAM BRAKE IS GONE — 「隊列から離れない制約は外して」
        * ══════════════════════════════════════════════════════════════════════
-       * `Squad.regroup` cuts four men onto one job and `_laneVia` gives each
-       * team its own way in, so the ROUTES were already a fireteam's. What was
-       * never a fireteam's is the CLOCK: four men with `haste` between 0.92 and
-       * 1.26, four different distances to walk and four different amounts of
-       * cover on the way arrive up to fifteen seconds apart, so a four-man
-       * assault on a capture point is in practice four one-man assaults, each
-       * of which is killed by the men holding it before the next one lands.
-       * Measured: the mean fireteam had 0.35 of its four men inside the circle.
+       * A scale on `desiredSpeed` used to stand here: a man more than
+       * `LEAD_SLACK` metres closer to the destination than his own fireteam's
+       * centroid was multiplied down, 0.05 a metre, floored at 0.55 (0.72 for
+       * the elite). It was written for 「占領しにチームでいけ」 — four men with
+       * different `haste`, different distances and different cover arrive up to
+       * fifteen seconds apart, so a four-man assault is four one-man assaults.
        *
-       * THE FIX IS A BRAKE AND NEVER A STOP, which is the whole safety argument.
-       * A man ahead of his own team's centre walks at up to 0.55x — he keeps
-       * moving, keeps a route, keeps a desired speed, so nothing `stuckcheck`
-       * or `_unstick` reads changes sign — and a man behind it is not sped up,
-       * because pace is `haste`'s job. It only applies while the team is still
-       * more than a lane apart (`LEAD_SLACK`), so two men walking side by side
-       * are not braked for being 3 m apart, and it is off entirely inside the
-       * sector, where spreading out IS the order.
+       * IT WAS ALSO A THIRD OF WHY A GRANTED SPRINT WAS NOT A RUN. Measured
+       * (`_engage.mjs`, seeds 7 / 11): the gate granted a sprint on 57.9 / 69.3 %
+       * of travel samples and 75.4 / 73.4 % of the men it granted one to
+       * measured below a flat-out run — of which **25.6 / 23.8 points were this
+       * brake** (mean cut 0.78), the rest the weapon's own `moveScale`. In the
+       * near field it was worse by construction: the man the player can see is
+       * the man furthest forward, which is precisely the man it was pointed at,
+       * and it took the run off 32.1 / 19.1 % of the men granted one there.
+       *
+       * THE PLAYER HAS OVERRULED IT, and the ruling is narrow and explicit —
+       * 「武器減速は大丈夫 隊列から離れない制約は外して 走るのと銃弾を打ち切るのは必ず
+       * 達成せよ」. The weapon penalty stays; cohesion-by-braking goes.
+       *
+       * WHAT STILL MAKES A FIRETEAM LOOK LIKE ONE, none of which is a brake:
+       *   `Squad.regroup` cuts the side into four-man teams on the ORDER, so
+       *     four men are sent to one place to begin with;
+       *   the LANE (`LANE_STEP`, 15 m) gives each team its own way in;
+       *   the SEAT fan (`SEAT_STEP`, 6 m) gives each man inside a team his own
+       *     track, so a team is a frontage rather than a file;
+       *   `_pickHoldSpot` spreads them round the circle when they arrive.
+       * All four are LATERAL — they shape the route, never the pace — so a
+       * fireteam still moves as a team and simply arrives at its own speed.
        */
-      const ft = this.fireteam;
-      if (ft && !inSector && ft.members.length > 1) {
-        // How many metres closer to the destination he is than his team's own
-        // centre of mass. `ft.centre` counts HIM, so a four-man team damps this
-        // by a quarter on its own — which is the right direction: one man in
-        // front of three is braked harder than two abreast of two.
-        /**
-         * ══════════════════════════════════════════════════════════════════
-         * THE ELITE SQUAD WAS HELD TIGHTER AND IT IS WHY THEY DO NOT MOVE
-         * ══════════════════════════════════════════════════════════════════
-         * 「精鋭は動いてないのなんで？？なんでもっと活発的に動いて占領いかないの？？？
-         *  固まってるだけ？？？…固まってしゃがんでるだけなのやめろ」
-         *
-         * "Half the slack and a harder brake" was written for cohesion and it
-         * is a cage. MEASURED (`_elitestate.mjs`, seed 7, the real drop called
-         * early and watched for 150 game-seconds, against the ORDINARY men of
-         * the same side at the same instant):
-         *
-         *                              elite      ordinary
-         *   metres per man-minute      101.4        239.9
-         *   share of samples moving     71.7 %       81.7 %
-         *   mean speed while moving     2.36 m/s     4.89 m/s
-         *   crouching                   12.7 %       12.8 %
-         *   a live hull within 34 m      0.0 %        0.0 %
-         *   mean distance to own
-         *     fireteam centroid         23.2 m       16.5 m
-         *
-         * Read those together. They INTEND to move nearly as often as anybody
-         * and they cover 42 % of the ground, which is the brake's elite floor
-         * to two significant figures — 0.42 — and not a coincidence. They are
-         * not crouching more than anybody else, and no tank is anywhere near
-         * them, so neither the crouch nor `_tankDodge` is the mechanism.
-         *
-         * WHY IT PINS THEM. The elite slack is 4.5 m and the elite decay 0.08
-         * a metre, so the floor is reached at 11.75 m of lead — and their real
-         * dispersion is 23 m. Every elite on the leading side of his own team
-         * is therefore at the floor PERMANENTLY, and it is self-feeding:
-         * `ft.centre` counts the braked men, so the centroid does not advance
-         * either, so nobody is ever released. Ten men crawling at a third of
-         * walking pace, in a lump, is exactly 固まってる.
-         *
-         * SO THE SLACK GOES TO PARITY AND THE FLOOR GOES UP. Cohesion is kept
-         * — it is still the same brake, still `LEAD_SLACK`, still applied to
-         * the man in front — but the elite floor is 0.72 rather than 0.42,
-         * i.e. a brisk walk rather than a shuffle, because the failure mode for
-         * TEN men who never respawn is not "they arrived three seconds apart",
-         * it is "they never arrived". A squad that cannot outpace the ground it
-         * is sweeping is not a squad, it is a monument.
-         */
-        /**
-         * ══════════════════════════════════════════════════════════════════
-         * …AND IT MAY TAKE HIS RUN AWAY, NOT HIS LEGS — 「基本は走って移動するやろ」
-         * ══════════════════════════════════════════════════════════════════
-         * The scale is applied to `desiredSpeed` AFTER the sprint floor, so a
-         * man in front of his team was multiplied down from 6.45 rather than
-         * from 4.3 — and 0.55 of a sprint is 3.5 m/s, which is SLOWER THAN THE
-         * WALK HE WOULD HAVE HAD IF THE SPRINT HAD NEVER EXISTED. Cohesion was
-         * costing him more than the run was worth, and it is a large part of
-         * why the travel histogram piles up at 3-5 m/s with only 9.5 % of it at
-         * the player's own top speed.
-         *
-         * So the brake keeps exactly what it is for — the man out in front
-         * loses his speed advantage and his team closes on him — and it stops
-         * where a walk starts. Nothing else moves: same `LEAD_SLACK`, same
-         * decay, same elite floor, still a scale and never a veto (@see the
-         * measurement above), and a man who is NOT ahead of his team is not
-         * touched by any of it and runs at his full sprint.
-         */
-        const slack = LEAD_SLACK;
-        const lead = ft.centre.distanceTo(dest) - dist;
-        if (lead > slack) {
-          const before = this.desiredSpeed;
-          const braked = this.desiredSpeed
-            * Math.max(this.elite ? 0.72 : 0.55, 1 - (lead - slack) * 0.05);
-          this.desiredSpeed = Math.max(braked, Math.min(walkPace, this.desiredSpeed));
-          // What it cost him, for the fuel clock and for the census. @see `_brakeCut`.
-          this._brakeCut = this.desiredSpeed / before;
-        }
-      }
       /**
        * WHEN TO ASK A* AGAIN. `stuckTimer` used to be true for everybody on
        * almost every frame (see `_move`), so in practice this gate was "the
@@ -3094,6 +2988,29 @@ export class Agent {
 
   get _sprintStartD() { return SPRINT_START; }
 
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * WHAT A DEAD RUN IS *FOR THIS MAN* — and it is a measurement trap, not a dial
+   * ══════════════════════════════════════════════════════════════════════════
+   * "Is he running" has been asked five times against a fixed edge and the edge
+   * has been wrong twice for the same reason. `SPRINT_SPEED` is 6.4492, so a
+   * `>= 6.45` test excluded the CARBINE man at a flat-out run by eight
+   * ten-thousandths; 6.4 fixed that and excludes the AK man, whose `moveScale`
+   * is 0.98 and whose ceiling is therefore 6.3847 — six thousandths under it,
+   * and the AK is the irregulars' standard rifle, i.e. half the roster. A
+   * histogram bucketed on one number will keep answering "not running" for men
+   * who are physically incapable of going any faster.
+   *
+   * So the ceiling is published per man and a probe can ask each soldier
+   * against his own. It is the same expression `_sprintGate` returns and it is
+   * written once here so the two cannot drift. A getter on the prototype: no
+   * per-agent storage, nothing allocated, exactly as `_sprintThreatR` is.
+   */
+  get _sprintCeiling() {
+    const ms = this.moveScale;
+    return SPRINT_SPEED * (ms >= 1 ? ms : 0.5 + ms * 0.5);
+  }
+
   _sprintGate(dist, allow) {
     if (!allow) return 0;
     // The two the state machine already knows about. Suppression is a QUARTER
@@ -3184,9 +3101,14 @@ export class Agent {
      * observed speed from 6.97 to 6.71 m/s — the machine-pistol man was the
      * fastest thing on it and this made him slower, which is the opposite of
      * what was asked. So the floor comes up and the ceiling stays where it is.
+     *
+     * 「武器減速は大丈夫」 — the player has looked at this and kept it. It is the
+     * ONE thing left that separates a granted sprint from a flat-out run, now
+     * that the fireteam brake is gone, and it is meant to. @see `_sprintCeiling`
+     * for the arithmetic, which lives there so a probe can ask each man what
+     * HIS dead run is instead of measuring everybody against the carbine's.
      */
-    const ms = this.moveScale;
-    return SPRINT_SPEED * (ms >= 1 ? ms : 0.5 + ms * 0.5);
+    return this._sprintCeiling;
   }
 
   /**

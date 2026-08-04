@@ -128,6 +128,23 @@ for (const seed of SEEDS) {
        */
       nearGranted: 0, nearBraked: 0,
       /**
+       * ══════════════════════════════════════════════════════════════════════
+       * AND THE HONEST FORM OF THE QUESTION: IS HE AT *HIS OWN* TOP SPEED?
+       * ══════════════════════════════════════════════════════════════════════
+       * A fixed edge has now been wrong twice for the same reason. 6.45 excluded
+       * the carbine man at a dead run (`SPRINT_SPEED` is 6.4492); 6.4 excludes
+       * the AK man, whose ceiling is 6.3847 — and the AK is the irregulars'
+       * standard rifle. `Agent._sprintCeiling` publishes what a flat-out run IS
+       * for the weapon a given man is carrying, so this counts a man against
+       * himself: at 98 % of his own ceiling he is running as hard as the weapon
+       * lets him, and 「武器減速は大丈夫」 means that is the correct answer.
+       *
+       * Both readings are kept. The fixed-edge one stays comparable with five
+       * previous passes; this one is the one that answers 「基本は走って移動するやろ」.
+       */
+      travelAtOwnCeiling: 0, nearAtOwnCeiling: 0,
+      grantedAtOwnCeiling: 0, nearGrantedAtOwnCeiling: 0,
+      /**
        * WHAT WAS IN THE GUN WHEN HE SAW SOMEBODY. The refusal census says the
        * dead time inside a short sighting is `reloading` and `dry`; this says
        * whether that state was already true at the moment the contact opened,
@@ -371,8 +388,27 @@ for (const seed of SEEDS) {
         for (let b = 0; b < hist.length; b++) {
           if (a.speed < BUCKETS[b + 1]) { hist[b]++; if (near) histNear[b]++; break; }
         }
+        /**
+         * IS HE AT HIS OWN CEILING. @see the field block. `_sprintCeiling` is
+         * the agent's own expression, read off the prototype rather than
+         * retyped — the two fixed edges above are the reason that matters. The
+         * fallback is the same expression off `moveScale`, so this reading also
+         * works against a build from before the getter existed.
+         */
+        const ms = a.moveScale ?? 1;
+        const ceil = a._sprintCeiling
+          ?? (6.4492 * (ms >= 1 ? ms : 0.5 + ms * 0.5));
+        const atCeiling = a.speed >= ceil * 0.98;
+        if (atCeiling) {
+          S.travelAtOwnCeiling++;
+          if (near) S.nearAtOwnCeiling++;
+        }
         /* what happened to a man the gate DID pass. @see `_brakeCut`. */
         if (a.sprinting === true) {
+          if (atCeiling) {
+            S.grantedAtOwnCeiling++;
+            if (near) S.nearGrantedAtOwnCeiling++;
+          }
           S.sprintGranted++;
           const cut = a._brakeCut ?? 1;
           const slow = a.speed < FULL_SPRINT;
@@ -526,6 +562,9 @@ for (const seed of SEEDS) {
       atPlayerTopPct: pct(out.travelAtTop, out.travelSamples),
       /* the honest one. @see the note on BUCKETS. */
       atFullSprintPct: pct(out.travelAtFull, out.travelSamples),
+      /* …and the honest one against a fixed edge is still a fixed edge. */
+      atOwnCeilingPct: pct(out.travelAtOwnCeiling, out.travelSamples),
+      grantedAtOwnCeilingPct: pct(out.grantedAtOwnCeiling, out.sprintGranted),
       nearTopPct: pct(out.travelNearTop, out.travelSamples),
       /**
        * THE GATE'S VERDICT AGAINST THE LEGS'. `granted` is `_sprintGate` saying
@@ -561,6 +600,8 @@ for (const seed of SEEDS) {
       speedHist: out.speedHistNear,
       atPlayerTopPct: pct(out.nearTravelAtTop, out.travelNear),
       atFullSprintPct: pct(out.nearTravelAtFull, out.travelNear),
+      atOwnCeilingPct: pct(out.nearAtOwnCeiling, out.travelNear),
+      grantedAtOwnCeilingPct: pct(out.nearGrantedAtOwnCeiling, out.nearGranted),
       nearTopPct: pct(out.nearTravelNearTop, out.travelNear),
       sprintOfMovingPct: pct(out.nearSprint, out.nearMoving),
       sprintGrantedPct: pct(out.nearGranted, out.travelNear),
@@ -614,6 +655,7 @@ if (all.length > 1) {
       + `p10=${r.perEngagement.p10} p90=${r.perEngagement.p90} `
       + `<10=${r.perEngagement.underTenPct}% moveFire=${r.fireOnMove.movingPct}% `
       + `travel@full=${r.travel.atFullSprintPct}% near@full=${r.nearField.atFullSprintPct}% `
+      + `travel@ceil=${r.travel.atOwnCeilingPct}% near@ceil=${r.nearField.atOwnCeilingPct}% `
       + `sight<10=${r.perSighting.underTenPct}% noPath=${r.refusals['unstick:noPath'] ?? 0}%`);
   }
 }
