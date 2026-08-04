@@ -363,8 +363,32 @@ const RESERVE_MUL = 4.5;
  *   he was on under a third of a mag   14.2 / 8.3  ->   5.8 /  6.0 %
  *   he was on a full magazine          39.2 / 29.6 ->  55.1 / 40.4 %
  *   `dry` share of the refusal board    3.8 / 5.7  ->   0.2 /  0.0 %
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * 0.67 -> 0.9, BECAUSE TWO THIRDS OF A MAGAZINE IS STILL A RELOAD IN THE FIGHT
+ * ────────────────────────────────────────────────────────────────────────────
+ * The number above bought most of what it could and the refusal census says the
+ * rest sits in the same place it always did: with a man's eyes ON a target and
+ * no round leaving the barrel, `reloading` is **53.1 / 59.1 %** of those frames,
+ * and a sighting that OPENED during a change ends under ten rounds 39.1 / 30.2 %
+ * of the time against 22.8 / 22.7 % for a man who was ready. He walked into the
+ * fight mid-magazine 44.9 / 59.6 % of the time (`fullMagPct` 55.1 / 40.4).
+ *
+ * Two thirds is a whole ten-round pull's worth of head-room in which a man is
+ * allowed to carry a part-used magazine into the next street. There is no
+ * reason for it: the transfer is `magSize - ammo` and the partial is never
+ * thrown away, so topping up at 0.9 costs EXACTLY THE SAME NUMBER OF ROUNDS as
+ * topping up at 0.67 — it is the same reserve moved to the other side of the
+ * lull. What it buys is that the man who spent four rounds on a glimpse and
+ * walked on is at 30 rather than 26 when the real contact opens, and does not
+ * run the gun dry in the middle of it.
+ *
+ * The floor is not 1.0 on purpose. At 1.0 a man who fires a single round starts
+ * a 2.35 s change for it, over and over, every time a lull lasts long enough —
+ * which is a reload animation as an idle. A tenth of a magazine is three rounds
+ * on a carbine and ten on the belt, i.e. "he actually used it".
  */
-const TOPUP_FRAC = 0.67;
+const TOPUP_FRAC = 0.9;
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -5349,6 +5373,9 @@ export class Agent {
       this.ai.emitReload(this);
       this.reserve -= take;
       this.ammo = take;
+      // A FRESH MAGAZINE IS A FRESH GRIP, and it is what bounds the bloom now
+      // that pulls chain. @see the chaining block below.
+      this.burstFired = 0;
       // "RELOADING" is the oldest callout in the genre and it is information:
       // it is the beat in which a squadmate is meant to take over the angle.
       this.ai.radio?.say(this, 'reload', 'reloading', null, true);
@@ -5381,6 +5408,8 @@ export class Agent {
       this._topUp = Math.min(this.magSize - this.ammo, this.reserve);
       this.animator.reload(this.reloadTime);
       this.ai.emitReload(this);
+      // …and so is this one. @see the chaining block below.
+      this.burstFired = 0;
       return;
     }
     /**
@@ -5415,7 +5444,40 @@ export class Agent {
     // this test moved down two branches rather than away.
     if (!this.wantFire && !committed) return;
     if (this.burstLeft <= 0) {
-      if (this.burstCooldown > 0) return;
+      /**
+       * ══════════════════════════════════════════════════════════════════════
+       * A BURST MAY NOT END WHILE HE CAN STILL SEE THE MAN — 「撃ち続けろ」
+       * ══════════════════════════════════════════════════════════════════════
+       * 「敵を視認して数発だけ撃っている状況をやめろ、撃ち続けろ」. The pull itself
+       * has been lengthened four times and the block above keeps a started pull
+       * alive through a duck and a doorframe — but between two pulls there was
+       * still a hard `burstCooldown`, and the refusal census charges it: with a
+       * man's eyes ON a target and no round leaving the barrel, `burstGap` is
+       * **18.7 / 20.2 %** of those frames (`_engage.mjs`, seeds 7 / 11), second
+       * only to the reload.
+       *
+       * A gap between two bursts is a real thing a soldier does — he looks, he
+       * listens, he re-acquires. NONE OF THOSE IS TRUE OF A MAN WHO CAN SEE HIS
+       * TARGET RIGHT NOW. So the gap keeps exactly the job it can defend — the
+       * beat between two contacts, and the pause of a man hosing a doorway he
+       * only BELIEVES somebody is behind (the `SUPPRESS_WINDOW` branch in
+       * `_combat`, which is not eyes-on and is not chained) — and it no longer
+       * stands between a man and somebody he is looking at.
+       *
+       * IT IS PAID FOR IN THE CONE, and that is the whole of why it is safe.
+       * `burstFired` is NOT reset on a chained pull, so the bloom in
+       * `_fireRound` carries straight across: a man who chains four pulls into
+       * one continuous burst is at the 24-round cap — up to 2.9x his own group
+       * at the bottom of the skill range — for all of it. He is emptying the
+       * magazine at a man he can see and he is missing while he does it, which
+       * is the trade 「AIMは悪くてもいい」 asks for by name, three times.
+       *
+       * The magazine change is what resets the bloom: a fresh magazine is a
+       * fresh grip. @see the two `burstFired = 0` lines above.
+       */
+      const eyesOn = this.hasTarget && this.targetVisible;
+      if (this.burstCooldown > 0 && !eyesOn) return;
+      const chained = this.burstCooldown > 0;
       /**
        * ══════════════════════════════════════════════════════════════════════
        * THE TRIGGER PULL — "なぜマガジンを使い切るくらい撃たないのか もっと撃ち合って
@@ -5474,8 +5536,13 @@ export class Agent {
       const lo = Math.round((8 + (1 - t) * 12) * hold);
       const hi = lo + Math.round((5 + (1 - this.skill) * 10 + (1 - t) * 12) * hold);
       this.burstLeft = Math.max(1, Math.min(this.ammo, this.rng.int(lo, Math.max(lo, hi))));
-      /** Rounds sent in THIS pull. Drives the bloom. @see `_fireRound`. */
-      this.burstFired = 0;
+      /**
+       * Rounds sent since the last magazine change. Drives the bloom. @see
+       * `_fireRound`, and the chaining block above for why a pull that follows
+       * another one with the same man in sight inherits it instead of zeroing
+       * it: without that, chaining would make a long burst FREE.
+       */
+      if (!chained) this.burstFired = 0;
       /**
        * AND THE GAP BETWEEN TWO PULLS IS HALVED. It was 0.55-1.8 s for the
        * disciplined man who is most of this roster, on top of a two-round
@@ -5562,6 +5629,13 @@ export class Agent {
      * bought: a full-magazine pull opens the group to ~2.9x at the bottom of
      * the skill range, so the map gets three times the noise and not three
      * times the damage. This is where 「AIMは悪くてもいい」 is actually paid.
+     *
+     * AND IT IS NOW ROUNDS SINCE THE MAGAZINE CHANGE, not rounds since the
+     * trigger was last released — because a pull that chains onto another one
+     * with the same man still in sight inherits `burstFired` rather than
+     * zeroing it. @see the chaining block in `_shoot`: without that, "the gap
+     * disappears while he can see you" would have handed every sprayer a free
+     * re-zero every twenty rounds.
      */
     const bloom = 1 + Math.min(24, this.burstFired ?? 0) * 0.075 * (1.4 - this.skill);
     /**
