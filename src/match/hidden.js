@@ -271,6 +271,8 @@ export class HiddenSquad {
     this._queued = 0;
     this._emerged = 0;
     this._emergeIn = 0;
+    /** Which zone(s) the wave being emitted came out beside. Report only. */
+    this._waveZone = '';
 
     /* ---- measurement ---------------------------------------------------- */
     this.stats = {
