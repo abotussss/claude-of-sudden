@@ -633,19 +633,41 @@ const ARCHETYPE_MIX = {
  * rate, the rhythm, the depth of the magazine and the SOUND, which is what a
  * firefight is actually read by.
  */
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * `reach` AND `want` — THE GUN'S OWN OPINION ABOUT DISTANCE
+ * ════════════════════════════════════════════════════════════════════════════
+ * 「遠くにいても撃つようにして」 and 「AIによっては近距離で打ちたい、中距離でも撃てると
+ * いう個性があってもいい 銃がそれぞれ違うから銃ごとの個性で撃つ距離変えてもいい」 are
+ * one change, because both are about a number that did not exist per weapon.
+ *
+ *   `reach`  HOW FAR HE WILL PULL A TRIGGER. It replaces the literal 44 in
+ *            `weaponRange = 44 + k * 18` — one figure for the belt gun, the
+ *            machine pistol and the battle rifle alike, which is why every man
+ *            on the map held his fire at the same distance. Shaded by `skill`
+ *            exactly as before, so the man still matters; what it stops being
+ *            is the ONLY thing that matters.
+ *   `want`   WHERE HE WANTS THE FIGHT, in metres, blended with his archetype's
+ *            own `range` in `drawPersona`. A machine pistol wants a doorway and
+ *            a belt gun wants a street, and neither of them should want what
+ *            the archetype table alone says.
+ *
+ * The bolt gun sets neither: it already carries `extra.weaponRange` [78, 30]
+ * and its archetype IS its distance, so both would be overwritten a line later.
+ */
 const WEAPONS = {
-  carbine: { audio: 'rifle', rpm: 800, mag: 30, spares: 4, damage: 17, cone: 0.030, coneLow: 0.055, reload: 2.35, hold: 1.0, move: 1.00 },
-  ak: { audio: 'ak', rpm: 600, mag: 30, spares: 3, damage: 21, cone: 0.034, coneLow: 0.062, reload: 2.75, hold: 0.85, move: 0.98 },
-  smg: { audio: 'smg', rpm: 950, mag: 32, spares: 5, damage: 15, cone: 0.041, coneLow: 0.072, reload: 2.05, hold: 1.3, move: 1.06 },
+  carbine: { audio: 'rifle', rpm: 800, mag: 30, spares: 4, damage: 17, cone: 0.030, coneLow: 0.055, reload: 2.35, hold: 1.0, move: 1.00, reach: 62, want: 22 },
+  ak: { audio: 'ak', rpm: 600, mag: 30, spares: 3, damage: 21, cone: 0.034, coneLow: 0.062, reload: 2.75, hold: 0.85, move: 0.98, reach: 66, want: 26 },
+  smg: { audio: 'smg', rpm: 950, mag: 32, spares: 5, damage: 15, cone: 0.041, coneLow: 0.072, reload: 2.05, hold: 1.3, move: 1.06, reach: 40, want: 12 },
   /**
    * THE BELT. `magSize` 100 is the whole character of it: this is the man who
    * does not stop, and he is the direct answer to "マガジンを使い切るくらい撃たない
    * のか". Two belts behind it rather than four magazines, and a 5.6 s tray
    * change during which he is worth nothing — the cost of holding it down.
    */
-  lmg: { audio: 'lmg', rpm: 750, mag: 100, spares: 2, damage: 17, cone: 0.047, coneLow: 0.082, reload: 5.6, hold: 2.4, move: 0.78 },
-  mpistol: { audio: 'machinepistol', rpm: 1050, mag: 20, spares: 7, damage: 14, cone: 0.055, coneLow: 0.092, reload: 1.85, hold: 1.15, move: 1.08 },
-  magnum: { audio: 'magnum', rpm: 170, mag: 6, spares: 8, damage: 42, cone: 0.019, coneLow: 0.040, reload: 3.4, hold: 0.35, move: 1.06 },
+  lmg: { audio: 'lmg', rpm: 750, mag: 100, spares: 2, damage: 17, cone: 0.047, coneLow: 0.082, reload: 5.6, hold: 2.4, move: 0.78, reach: 74, want: 30 },
+  mpistol: { audio: 'machinepistol', rpm: 1050, mag: 20, spares: 7, damage: 14, cone: 0.055, coneLow: 0.092, reload: 1.85, hold: 1.15, move: 1.08, reach: 32, want: 9 },
+  magnum: { audio: 'magnum', rpm: 170, mag: 6, spares: 8, damage: 42, cone: 0.019, coneLow: 0.040, reload: 3.4, hold: 0.35, move: 1.06, reach: 46, want: 16 },
   /**
    * The bolt gun, and every dial on it is a trade rather than a tightening.
    * @see the block in the constructor that applies `extra` — the settle, the
@@ -818,20 +840,47 @@ export function drawPersona(rng, role, meanSkill, defenderBonus = 0, elite = fal
    * `AiSystem.personaFor` caches this whole record per callsign. @see `WEAPONS`.
    */
   const arms = ARCHETYPE_ARMS[name] ?? ARCHETYPE_ARMS.hunter;
+  const weapon = (armSlot && WEAPONS[armSlot]) ? armSlot : arms[rng.int(0, arms.length - 1)];
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * WHERE THIS MAN WANTS THE FIGHT — 「AIによっては近距離で打ちたい、中距離でも撃てる
+   * という個性があってもいい 銃がそれぞれ違うから銃ごとの個性で撃つ距離変えてもいい」
+   * ══════════════════════════════════════════════════════════════════════════
+   * `traits.range` was the ARCHETYPE's number and nothing else, so the six
+   * archetypes were six distances and the gun in a man's hands had no opinion
+   * at all — a hunter with a machine pistol and a hunter with a belt both wanted
+   * the fight at 21 m. The blend is 0.6 archetype / 0.4 weapon: who he is still
+   * leads, and what he is carrying is now audible in where he stands.
+   *
+   * AND THE JITTER WIDENS, 0.82-1.24 -> 0.74-1.34, because the second half of
+   * the sentence is that this should be a SPREAD across the roster rather than
+   * one number per role. Combined with the weapon term, two support men on the
+   * same side now want the fight anywhere from about 15 m to about 34.
+   *
+   * It is read by cover scoring (`_pickCover`'s `want`, which builds the window
+   * a man's cover is scored in and is why a rusher walks into a fight and a
+   * marksman backs out of one) and by the grenade's upper bound. Both are
+   * windows rather than thresholds, so a wider spread cannot make anybody
+   * refuse anything — it moves where he prefers to stand.
+   */
+  const wantD = ((WEAPONS[weapon]?.want) ?? a.range);
   return {
     archetype: name,
     // `armSlot` is the DEALT gun and it is only ever non-null for the elite
     // squad. @see `eliteArms`. Everybody else samples, which is right: a roster
     // of fifteen hunters is a distribution, not a composition.
-    weapon: (armSlot && WEAPONS[armSlot]) ? armSlot : arms[rng.int(0, arms.length - 1)],
+    weapon,
     traits: {
       aggression: t(a.aggression, 0.11),
       patience: t(a.patience, 0.11),
       exposure: t(a.exposure, 0.12),
       flank: t(a.flank, 0.14),
       trigger: t(a.trigger, 0.11),
-      /** METRES, not 0..1 — the distance this man wants the fight at. */
-      range: a.range * rng.range(0.82, 1.24),
+      /**
+       * METRES, not 0..1 — the distance this man wants the fight at, and now
+       * partly his GUN's opinion of it. @see `wantD` above.
+       */
+      range: (a.range * 0.6 + wantD * 0.4) * rng.range(0.74, 1.34),
     },
     elite,
     /**
@@ -1382,7 +1431,30 @@ export class Agent {
     /** The irregular's 1.23x on a magazine change is kept: it was a variant cue. */
     this.reloadTime = W.reload * (this.variantName === 'irregular' ? 1.23 : 1);
 
-    this.weaponRange = 44 + k * 18;
+    /**
+     * HOW FAR HE WILL PULL A TRIGGER — 「遠くにいても撃つようにして」.
+     *
+     * `44 + k * 18` was one figure for every gun on the map: a machine pistol
+     * and a belt gun held their fire at the same distance, and the whole roster
+     * stopped shooting at the same line. `W.reach` is the weapon's own
+     * (@see the block over `WEAPONS`), still shaded by the man exactly as it
+     * was — a 0.34 conscript reaches 0.88 of his gun's figure and a 0.95 shot
+     * 1.11 of it — so this is a spread where there was a constant, and it is
+     * longer everywhere: the carbine goes from 55 m at the old mean skill to 68
+     * at the new one. `viewRange` follows it below, because a range he may
+     * shoot at is worth nothing if he cannot acquire that far.
+     */
+    this.weaponRange = (W.reach ?? 44) * (0.8 + k * 0.33);
+    /**
+     * …AND HE HAS TO BE ABLE TO SEE THAT FAR. `viewRange` was a flat 58 set in
+     * the perception block above, and `_sightTo` will not acquire past it — so
+     * with the belt gun now reaching 74 m the extra reach would have been
+     * unusable, and at the old 44 the two numbers only agreed by accident.
+     * A tenth over the trigger range, so a man acquires slightly before he may
+     * fire rather than the other way round. The bolt gun's own 96 overwrites
+     * this a few lines down, as it always did.
+     */
+    this.viewRange = Math.max(this.viewRange, this.weaponRange * 1.1);
     // Rate of fire is the WEAPON's now, still shaded by the man: a 600 rpm rifle
     // and a 950 rpm submachine gun are two different rhythms in the same street,
     // and that is half of what "全員異なる武器" buys the player.
