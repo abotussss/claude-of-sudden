@@ -77,7 +77,7 @@
  */
 
 import * as THREE from 'three';
-import { RULES, MODE, TEAM, TEAM_NAME, TEAM_COLOR, ROLE, attackingTeam, roleOf, BOT_NAMES, REINFORCE_NAMES, TEAM_VARIANTS } from './rules.js';
+import { RULES, MODE, TEAM, TEAM_NAME, TEAM_COLOR, ROLE, attackingTeam, roleOf, BOT_NAMES, REINFORCE_NAMES, HIDDEN_NAMES, TEAM_VARIANTS } from './rules.js';
 import { resolveLayout } from './sites.js';
 import { CaptureZones } from './capture.js';
 import { Bomb, BOMB } from './bomb.js';
@@ -92,6 +92,7 @@ import { AmmoDrops } from './ammo.js';
 import { Caches } from './caches.js';
 import { Reinforcements } from './reinforce.js';
 import { Civilians } from './civilians.js';
+import { HiddenSquad } from './hidden.js';
 
 const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', MATCH_OVER: 'matchover' };
 
@@ -660,6 +661,48 @@ export class MatchSystem {
 
     /**
      * ──────────────────────────────────────────────────────────────────────
+     * THE HIDDEN SQUAD — 「先に４５０達成したら強制イベントで…最後に膠着した試合に
+     * したい」
+     * ──────────────────────────────────────────────────────────────────────
+     * The SEVENTH arrival in the match and the only one triggered by the
+     * SCOREBOARD. @see src/match/hidden.js for the rooms, the proof and the
+     * wave clock; `_updateHiddenSquad` for the 450 and for the side;
+     * `_emergeHidden` for the man.
+     *
+     * DOMINATION ONLY, exactly as the civilians and the drones are: the trigger
+     * is a fraction of `RULES.scoreTarget` and demolition has no such number.
+     */
+    this.hidden = this.domination
+      ? new HiddenSquad(ctx, {
+          rng: this.rng.fork(),
+          size: RULES.hiddenSquadSize,
+          waves: RULES.hiddenSquadWaves,
+          gap: RULES.hiddenSquadWaveGap,
+          liveCap: RULES.hiddenSquadLive,
+        })
+      : null;
+    if (this.hidden) {
+      this.hidden.onEmerge = (i, p, yaw, wave) => this._emergeHidden(i, p, yaw, wave);
+      this.hidden.onWave = (wave, n, zone) => this._announceHidden(wave, n, zone);
+    }
+    /** The event has been armed this match. Latched: 「先に」 happens once. */
+    this._hiddenArmed = false;
+    /** Which side crossed the trigger — reported, never used to pick a team. */
+    this._hiddenTrigger = -1;
+    /** Men emerged this match, for the callsign index and the report. */
+    this._hiddenOut = 0;
+    /**
+     * …AND HOW MANY OF THEM ARE STILL ON THEIR FEET. Kept as a COUNTER rather
+     * than measured, because the alternative is a scan of a roster that has
+     * grown past fifty on every frame of the endgame for a number that changes
+     * twice a second. It is written in exactly two places — `_emergeHidden` when
+     * a man arrives and `_queueRespawn` when one is refused a respawn — which is
+     * the same single gate every death in the game already passes through.
+     */
+    this._hiddenLive = 0;
+
+    /**
+     * ──────────────────────────────────────────────────────────────────────
      * THE SUICIDE DRONES — 「ドローンは自爆系のドローン…敵味方合わせて３０機」
      * ──────────────────────────────────────────────────────────────────────
      * The sixth thing in the sky and the only one that is not an EVENT: there
@@ -1225,6 +1268,17 @@ export class MatchSystem {
      */
     this.civilians?.reset();
     /**
+     * AND THE HIDDEN SQUAD GOES BACK IN THE HOUSES. `ai.clearAgents()` has
+     * already deleted the men; this only disarms the programme and forgets the
+     * waves, exactly as `reinforce` is put back in its box below. The ROOMS are
+     * the level's and survive a restart, like the civilians' census.
+     */
+    this.hidden?.reset();
+    this._hiddenArmed = false;
+    this._hiddenTrigger = -1;
+    this._hiddenOut = 0;
+    this._hiddenLive = 0;
+    /**
      * ──────────────────────────────────────────────────────────────────────
      * AND THE CACHE HOUSES GET THEIR WALLS BACK
      * ──────────────────────────────────────────────────────────────────────
@@ -1458,7 +1512,15 @@ export class MatchSystem {
      * "形勢逆転要素なだけで、リスポーンなし" describes.
      */
     if (rec.noRespawn) {
-      this.reinforceStats.lost[rec.team]++;
+      /**
+       * TWO KINDS OF MAN CARRY THIS FLAG NOW and they are counted apart: the
+       * ten out of the helicopter (`reinforcement`) and the squad out of the
+       * buildings (`hidden`). `_hiddenLive` is what paces the next wave — @see
+       * `RULES.hiddenSquadLive` — so a hidden man's death must not be filed as
+       * a lost paratrooper and vice versa.
+       */
+      if (rec.hidden) this._hiddenLive--;
+      else this.reinforceStats.lost[rec.team]++;
       return;
     }
     if (!this._respawnsOpen()) return;
@@ -2920,6 +2982,16 @@ export class MatchSystem {
            * @see `_updateReinforcements`.
            */
           this._updateReinforcements(dt);
+          /**
+           * FIVE MEN OUT OF A BUILDING WHEN SOMEBODY REACHES 450. Polled here,
+           * after the score tick that `capture.update` wrote at the top of this
+           * branch, so the trigger is tested against THIS frame's score rather
+           * than last frame's — the difference between arming on the tick that
+           * crossed 450 and arming four seconds later, which at 6 points a tick
+           * is an eighth of the match that is left.
+           * @see `_updateHiddenSquad`.
+           */
+          this._updateHiddenSquad(dt);
         }
         this._updatePlayerInteraction(dt);
         this._updateAmmoDrops(dt, audio);
@@ -3755,6 +3827,199 @@ export class MatchSystem {
       h.title,
       `${RULES.reinforceCount} ${mine ? 'FRIENDLIES' : 'HOSTILES'} · ${info.name}`,
       2.6
+    );
+  }
+
+  /* ------------------------------------------------- the hidden squad -- */
+
+  /**
+   * ════════════════════════════════════════════════════════════════════════
+   * WHEN FIVE MEN COME OUT OF A BUILDING, AND WHOSE THEY ARE
+   * ════════════════════════════════════════════════════════════════════════
+   * 「先に４５０達成したら強制イベントで隠し部隊の登場で毎回敵側の隠し部隊が…」
+   * 「敵側のみ出現させて隠し部隊は リスポーンなし」
+   *
+   * THREE FACTS, AND EACH IS ONE LINE BELOW BECAUSE EACH IS A PLACE THIS COULD
+   * SHIP WRONG:
+   *
+   *   THE TRIGGER IS THE LEADER'S SCORE AND IT IS NOT A ROLL. 「毎回」 — every
+   *   time. `RULES.reinforceChance` used to exist and the note on it says what
+   *   it cost: an event that fires on a die is an event the player reports as
+   *   never happening. There is no probability anywhere in this path; the only
+   *   thing that can defer a wave is having nowhere to put it, and that is
+   *   retried rather than spent (@see `RETRY` in hidden.js).
+   *
+   *   THE SIDE IS `1 - this.playerTeam`, RESOLVED HERE AND NOWHERE ELSE.
+   *   「敵側のみ」. The player is `RULES.playerTeam` (RED), so on this build the
+   *   men are BLUE — which is what 「青が占領しているエリア」 describes — but the
+   *   literal index is never written down, because painting or spawning by raw
+   *   team number has shipped the wrong result twice in this project. Flip
+   *   `RULES.playerTeam` and the squad follows it.
+   *
+   *   EITHER SIDE CAN CROSS 450 AND IT IS STILL THE PLAYER'S ENEMY WHO GETS
+   *   THEM. `_hiddenTrigger` records who crossed it, for the report only. When
+   *   the human's side is the one at 450 this is the deadlock the request asks
+   *   for; when the enemy is, it is the same five men arriving on ground he
+   *   already holds, and the honest thing to say about that case is that it
+   *   makes a losing match worse rather than tighter. That is the instruction
+   *   (「敵側のみ」) and it is deliberately not softened here — a rule that
+   *   quietly switched sides depending on who was winning would be a different
+   *   feature wearing this one's name.
+   *
+   * THE CENSUS IS DEFERRED TO THE FIRST LIVE FRAME for the reason
+   * `civilians.place` is: what "indoors" means here is `ai.grid.indoor`, and the
+   * nav grid is built on a frame of `ai`'s choosing after both systems have
+   * initialised. It is idempotent and does its sweep once.
+   */
+  _updateHiddenSquad(dt) {
+    const h = this.hidden;
+    if (!h) return;
+    if (!h.placed && this.ai.grid) h.place(this.ai, this.ctx.peek('world'));
+    if (!this._hiddenArmed) {
+      const lead = this.score[0] > this.score[1] ? this.score[0] : this.score[1];
+      if (lead < RULES.hiddenSquadScore) return;
+      this._hiddenArmed = true;
+      this._hiddenTrigger = this.score[0] > this.score[1] ? 0 : 1;
+      const team = 1 - this.playerTeam;
+      const ok = h.call(team);
+      console.info(
+        `[match] ${TEAM_NAME[this._hiddenTrigger]} first past ${RULES.hiddenSquadScore} ` +
+          `(${this.score[0]}-${this.score[1]}, t-${Math.max(0, this.roundClock).toFixed(0)}s) — ` +
+          (ok
+            ? `hidden squad ARMED for ${TEAM_NAME[team]}: ` +
+              `${RULES.hiddenSquadWaves} x ${RULES.hiddenSquadSize} from held ground`
+            : 'hidden squad has no interiors to come out of and stands down')
+      );
+    }
+    /**
+     * `this.sites` IS THE LIVE ZONE LIST AND THAT INCLUDES D. A zone joins it
+     * mid-match when the cathedral comes down (@see `_setZoneLive`), so a side
+     * holding the ruin gets the buildings round the church as its emergence
+     * ground with no second rule. `hidden` filters the list by `owner` itself —
+     * 「占領しているエリアからのみ」 is enforced in the file that implements it.
+     */
+    h.update(
+      dt,
+      this.phase === PHASE.LIVE,
+      this.sites,
+      this.player?.dead ? null : this.player,
+      this._hiddenLive
+    );
+  }
+
+  /**
+   * ONE MAN STEPS OUT OF A DOORWAY. Called by `HiddenSquad` once per man, on the
+   * frame he appears.
+   *
+   * THIS IS `_landReinforcement`'S CODE PATH WITH ONE THING TAKEN OUT AND
+   * NOTHING ADDED, and the shared parts are shared on purpose: `ai.spawn` with
+   * the side's own variant, into the side's `Squad`, `_stampSpawn` so
+   * `_assignCacheLegs` has a clock for him, into `_botsByTeam`, on to the
+   * roster, and `ai.protect` for `RULES.spawnProtect` — a man who materialises
+   * in a room somebody is clearing is otherwise a free kill, and protection is
+   * "not a valid target" rather than immunity so it cannot make him invincible
+   * either.
+   *
+   *   `noRespawn: true`   「リスポーンなし」, and it is A PROPERTY OF THE MAN
+   *     rather than a branch in the spawn path, for the reason `_queueRespawn`'s
+   *     own note gives: that method is the single gate BOTH death paths pass
+   *     through, so `_safeSpawn`'s three tiers can never quietly resurrect him.
+   *     The same field the ten paratroopers carry, read by the same line.
+   *
+   *   `hidden: true`      reporting only, so a probe can tell these fifteen from
+   *     the ten who came by helicopter and the twenty who started.
+   *
+   * WHAT IS TAKEN OUT IS `elite`. The paratroopers carry it because the player
+   * asked for it in as many words (「増援部隊は…強さはマックスにして」); nothing
+   * comparable was said here, and fifteen men at the reinforcement's skill draw
+   * would not tighten an endgame, it would reverse it.
+   *
+   * HE IS TASKED IMMEDIATELY. `_assignObjectives` on every man rather than on
+   * the last of the wave, because the men are 0.55 s apart rather than 0.62 s
+   * apart on a 6 s drop: waiting for the fifth would leave the first standing in
+   * a room for two seconds, and 「そして占領をさせて戦闘に参加させて」 is the whole
+   * point of the event. The pass is the same one the 2 s objective timer already
+   * runs.
+   */
+  _emergeHidden(index, position, yaw, wave) {
+    if (this.phase !== PHASE.LIVE) return;
+    const team = this.hidden?.team ?? -1;
+    if (team < 0) return;
+    const names = HIDDEN_NAMES[team] ?? HIDDEN_NAMES[0];
+    const name = names[this._hiddenOut % names.length];
+    this._hiddenOut++;
+    const variants = TEAM_VARIANTS[team];
+    const variant = variants[index % variants.length];
+    const agent = this.ai.spawn(variant, position, yaw, {
+      team,
+      name,
+      // Must match `_spawnTeam`, or the persona cache draws a different man.
+      role: this.domination ? AI_ROLE_FIELD : roleOf(team, this.round),
+    });
+    this._squads[team]?.add(agent);
+    this._stampSpawn(agent);
+    this._botsByTeam[team].push(agent);
+    this.roster.push({
+      name,
+      team,
+      kills: 0,
+      deaths: 0,
+      alive: true,
+      isPlayer: false,
+      actor: agent,
+      role: roleOf(team, this.round),
+      variant,
+      slot: this.roster.length,
+      /** THE WHOLE RULE. @see `_queueRespawn`. */
+      noRespawn: true,
+      hidden: true,
+      wave,
+    });
+    this._hiddenLive++;
+    this.ai.protect(agent, RULES.spawnProtect);
+    this.ctx.events.emit('match:respawn', { name, team, isPlayer: false });
+    this._assignObjectives();
+  }
+
+  /**
+   * THE ANNOUNCEMENT, AND IT IS ONE LINE OF BANNER RATHER THAN THE AIR STRIP.
+   *
+   * `ui.airAlert` is for INCOMING AIR — it points an arrow at a place something
+   * is about to land, on a lead clock, and there is no lead here: the men are
+   * already in the building and the first of them is out 0.55 s after this call.
+   * Pointing a countdown reticle at a door would be a telegraph for an event
+   * whose whole shape is that it does not have one.
+   *
+   * IT IS ANNOUNCED AT ALL for the reason `ui.airAlert` exists in the first
+   * place: the three air weapons "fired correctly for weeks while the player
+   * reported that they never happened". Five men appearing 40 m away behind a
+   * wall is exactly that failure mode. The banner says which side and where, and
+   * nothing about what to do next.
+   *
+   * `mine` is derived from `playerTeam` and not from a constant even though the
+   * squad is `1 - playerTeam` by construction — that is the assertion, and it
+   * costs one compare.
+   */
+  _announceHidden(wave, n, zone) {
+    const team = this.hidden?.team ?? -1;
+    const mine = team === this.playerTeam;
+    const where = zone ? `ZONE ${zone}` : 'HELD GROUND';
+    this.ui.banner.show(
+      mine ? 'HIDDEN SQUAD' : 'ENEMY HIDDEN SQUAD',
+      `${n} ${mine ? 'FRIENDLIES' : 'HOSTILES'} · INSIDE ${where}`,
+      2.4
+    );
+    this.hidden.stats.log.push({
+      t: +(RULES.matchTime - this.roundClock).toFixed(1),
+      wave,
+      zone: where,
+      n,
+      score: `${this.score[0]}-${this.score[1]}`,
+    });
+    console.info(
+      `[match] hidden squad wave ${wave}: ${n} ${TEAM_NAME[team]} out of the buildings ` +
+        `by ${where} · score ${this.score[0]}-${this.score[1]} · ` +
+        `t-${Math.max(0, this.roundClock).toFixed(0)}s`
     );
   }
 
@@ -5335,6 +5600,13 @@ export class MatchSystem {
         `${this._forwardSpawns[0] + this._baseSpawns[0]}/` +
         `${this._forwardSpawns[1] + this._baseSpawns[1]}`
     );
+    /**
+     * AND WHAT THE 450 EVENT ACTUALLY DID. Printed at the end rather than
+     * sampled, because the only question worth asking about it is what the
+     * SCORE did afterwards and that is not knowable until there is an
+     * afterwards. Silent when the event never armed.
+     */
+    if (this._hiddenArmed && this.hidden) console.info(this.hidden.report());
     this._setPhase(PHASE.OVER, RULES.roundOverTime);
   }
 
@@ -5683,6 +5955,7 @@ export class MatchSystem {
     // would be a list of things nobody may shoot at and nothing may move.
     if (this.ai && this.ai.vehicles === this.tank?.tanks) this.ai.vehicles = null;
     this.bomb?.dispose();
+    this.hidden?.dispose();
     this.ammoDrops?.dispose();
     this.marks?.dispose();
     this.caches?.dispose();

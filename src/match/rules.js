@@ -1727,6 +1727,82 @@ export const RULES = {
   reinforceDescent: 6.4,
 
   /* ══════════════════════════════════════════════════════════════════════ */
+  /* THE HIDDEN SQUAD — 「最後に膠着した試合にしたい」                            */
+  /* ══════════════════════════════════════════════════════════════════════ */
+  /**
+   * 「先に４５０達成したら強制イベントで隠し部隊の登場で毎回敵側の隠し部隊が青が占領して
+   *  いるエリア近くの屋内から５人ずつ登場させて 占領しているエリアからのみ そして占領を
+   *  させて戦闘に参加させて そうすることで最後に膠着した試合にしたい」
+   *  「敵側のみ出現させて隠し部隊は リスポーンなし」
+   *
+   * See `src/match/hidden.js` for the ground and the clock and
+   * `MatchSystem._updateHiddenSquad` for the trigger and the side. The four
+   * numbers here are the ones that decide whether the event lands with enough
+   * match left to matter, so they are read against `zonePayout` rather than
+   * chosen — @see `hiddenSquadWaveGap` for the arithmetic.
+   */
+  /**
+   * THE TRIGGER, IN POINTS. 450 of `scoreTarget` 500, and it is written as an
+   * absolute rather than as `scoreTarget - 50` because the player named the
+   * number: 「先に４５０達成したら」. Either side reaching it first arms the event;
+   * WHO GETS THE MEN is not this key's business and is 「敵側のみ」 —
+   * `1 - RULES.playerTeam`, resolved at call time in `_updateHiddenSquad` and
+   * never as a literal index.
+   */
+  hiddenSquadScore: 450,
+  /** 「５人ずつ」. */
+  hiddenSquadSize: 5,
+  /**
+   * THE CEILING ON WAVES — and it is a ceiling, not a programme length.
+   *
+   * MEASURED: three waves fired ten seconds apart put fifteen men out by t+28,
+   * thirteen of them were still alive at the whistle, and the leader went
+   * 451 -> 501 at his unopposed rate with zone ownership unmoved. A spike that
+   * is over before it lands is not a deadlock. @see the standing-fifteen note in
+   * `hidden.js:update` for what replaced it: a wave whenever the squad is under
+   * `hiddenSquadLive`, which turns fifteen men into a LEVEL held for the rest of
+   * the match rather than a delivery.
+   *
+   * SIX IS THE ACTOR BUDGET SPEAKING. Thirty arrivals over a match against a
+   * roster that peaks at 20 v 20 plus up to 10 reinforcements plus 24 militia
+   * plus two hulls and two drones — but the number that matters is the
+   * CONCURRENT one, and that is `hiddenSquadLive`, not this.
+   */
+  hiddenSquadWaves: 6,
+  /**
+   * HOW MANY OF THEM STAND ON THE MAP AT ONCE. Fifteen: the peak the fixed
+   * three-wave programme already had, and about a sixth more AI on a worst case
+   * of ~78. It is what keeps 「リスポーンなし」 affordable AND meaningful — no man
+   * ever comes back, and the squad is topped up by NEW men out of a building, so
+   * the ceiling on live actors is this number however long the endgame runs.
+   */
+  hiddenSquadLive: 15,
+  /**
+   * SECONDS BETWEEN WAVES, AND THIS IS THE NUMBER THE EVENT LIVES OR DIES ON.
+   *
+   * READ AGAINST THE ACCRUAL THAT IS ACTUALLY IN THIS FILE: `zonePayout` is
+   * `[0, 1, 4, 5, 6, 7]` points per `scoreInterval` (4 s) indexed by zones held,
+   * and the trigger is 50 points short of `scoreTarget`. So the match left at
+   * 450, for a leader who keeps holding what he holds, is
+   *
+   *     2 zones   4 pts / 4 s  ->  12.5 ticks  ->  50 s
+   *     3 zones   5 pts / 4 s  ->  10.0 ticks  ->  40 s
+   *     4 zones   6 pts / 4 s  ->   8.3 ticks  ->  34 s     (D is live)
+   *
+   * THIRTY-FOUR SECONDS IS THE BUDGET, not fifty. At 10 s the three waves are
+   * complete by t+20 with the last five men on the ground with a third of the
+   * remaining match still to run; at 14 s the third wave lands with six seconds
+   * to play in the fastest case, which is 「２０秒で終わるイベント」 — the exact
+   * failure this project has shipped before with events paced on `matchTime`
+   * while every match ended on points.
+   *
+   * It is only a floor on the pacing, never a ceiling on the event: a wave that
+   * cannot be placed is retried rather than spent (@see `RETRY` in hidden.js),
+   * so the programme stretches when the ground is not there.
+   */
+  hiddenSquadWaveGap: 10,
+
+  /* ══════════════════════════════════════════════════════════════════════ */
   /* THE SUICIDE DRONES                                                     */
   /* ══════════════════════════════════════════════════════════════════════ */
   /**
@@ -1921,6 +1997,29 @@ export const REINFORCE_NAMES = [
    'ROTOR-6', 'ROTOR-7', 'ROTOR-8', 'ROTOR-9', 'ROTOR-10'],
   ['CHALK-1', 'CHALK-2', 'CHALK-3', 'CHALK-4', 'CHALK-5',
    'CHALK-6', 'CHALK-7', 'CHALK-8', 'CHALK-9', 'CHALK-10'],
+];
+
+/**
+ * CALLSIGNS FOR THE MEN WHO WERE ALREADY IN THE BUILDING — 「隠し部隊」.
+ *
+ * A THIRD LIST FOR THE SAME REASON THERE IS A SECOND. `_spawnTeam` indexes
+ * `BOT_NAMES` modulo its length and its own note says what happens when the
+ * roster outgrows the list: "two men share a name and the killfeed stops being
+ * readable". A match can now carry twenty starters, ten from the helicopter and
+ * fifteen out of the houses on ONE side, and three lists of distinct names is
+ * the only way the feed stays readable through it.
+ *
+ * They are named for the ground rather than for a flight, because that is what
+ * they are: the drop is `ROTOR-3` arriving from somewhere else, and this is
+ * somebody who was in the cellar the whole time.
+ */
+export const HIDDEN_NAMES = [
+  ['CELLAR-1', 'CELLAR-2', 'CELLAR-3', 'CELLAR-4', 'CELLAR-5',
+   'CELLAR-6', 'CELLAR-7', 'CELLAR-8', 'CELLAR-9', 'CELLAR-10',
+   'CELLAR-11', 'CELLAR-12', 'CELLAR-13', 'CELLAR-14', 'CELLAR-15'],
+  ['ATTIC-1', 'ATTIC-2', 'ATTIC-3', 'ATTIC-4', 'ATTIC-5',
+   'ATTIC-6', 'ATTIC-7', 'ATTIC-8', 'ATTIC-9', 'ATTIC-10',
+   'ATTIC-11', 'ATTIC-12', 'ATTIC-13', 'ATTIC-14', 'ATTIC-15'],
 ];
 
 /**
