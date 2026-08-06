@@ -174,12 +174,111 @@ const L = townScaled;
  *   ALANE  down the west lane, the last open stretch before site A.
  *   BLANE  down the east lane, the same for site B.
  */
-const RUNS = [
+const TOWN_RUNS = [
   { id: 'MAIN', name: 'MAIN STREET', from: L(-4.0, 26.67), to: L(-4.0, 12.0), bombs: 5 },
   { id: 'CROSS', name: 'CROSS STREET', from: L(-22.67, 12.0), to: L(22.67, 12.0), bombs: 8 },
   { id: 'ALANE', name: 'A LANE', from: L(-24.0, 20.0), to: L(-24.0, 2.67), bombs: 5 },
   { id: 'BLANE', name: 'B LANE', from: L(27.33, 18.67), to: L(27.33, 2.67), bombs: 5 },
 ];
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * NACHTFELD — SIX LINES ON A MAP THAT IS ALL CORRIDOR
+ * ════════════════════════════════════════════════════════════════════════════
+ * The town's four lines were baked against the plain until this table existed,
+ * and unlike the tank routes they at least SAID something was wrong — 3 of
+ * MAIN's 5 and 6 of CROSS's 8 came back over "a permanent rooftop". They were
+ * wrong about that too (it was the plain's own swell — @see `ROOF_Y`), and the
+ * two that did not complain were 40 m lines dropped across empty grass 300 m
+ * from anybody. The plain had almost no air war.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT DECIDES WHERE A LINE GOES HERE, AND IT IS A DIFFERENT ARGUMENT
+ * ────────────────────────────────────────────────────────────────────────────
+ * On the town the constraint is that A BOMBER FLIES STRAIGHT and the map is a
+ * street grid, so a line has to lie along one open corridor or four of seven
+ * bombs land on roofs. Here every bearing is open, so the constraint is
+ * WHERE THE PEOPLE ARE, and that is a different measurement.
+ *
+ * The town's other rule — every impact on the ATTACK's half of every route —
+ * does not transfer either. NACHTFELD is the 1000-point domination map: nobody
+ * attacks, each side keeps ONE base for the whole match (`RULES.swapAfterRound`
+ * never comes round), and both sides push. A line biased at one base is a line
+ * that permanently taxes one team. So the six below are SYMMETRIC IN PAIRS
+ * about the origin — the plain's own symmetry, the same one the zone table and
+ * the two bases have — and the fire-line pair is the exception that proves it,
+ * being the flank both sides use.
+ *
+ * MEASURED CLEARANCES, all of them:
+ *
+ *   SPAWNS. The blast is `RULES.bombRadius` 9 m. North ranks stand at x -22..-6,
+ *   z -158..-143; south at x 6..22, z 143..158. The nearest impact on any line
+ *   below is 31 m from the nearer rank — more than three blast radii — so no
+ *   stick can ever land in a spawn. A stick in a spawn is not a hazard, it is a
+ *   coin flip.
+ *
+ *   THE WORKS. The control tower stands on the D pad at (0, -32) with a 25.4 m
+ *   radius, and the fortress and the trenches are still landing. Nothing here
+ *   crosses the tower's footprint: the closest line passes 26 m from its
+ *   centre. A bomb that lands on a structure is a bomb that did nothing to
+ *   anybody in the field, and `_reportGround` is the gate that says so.
+ *
+ *   THE MOUNTAIN. The walkable disc ends at r 176 and the face past it is 50-64°
+ *   of rock nobody stands on. Every impact below is inside r 169.
+ *
+ * THREE PAIRS, and what each of them prices:
+ *
+ *   NORTHFAN / SOUTHFAN   across the fan of ground each base's three columns
+ *                         spread into, 31 m clear of the ranks. The one line
+ *                         that prices a push before it has gone anywhere.
+ *   WESTFLANK / EASTFLANK the long side corridors, the A-C and E-B runs. These
+ *                         are the rotations: 190 m between the zones at each end
+ *                         and no cover on the way.
+ *   CENTREWEST /          the two lanes either side of the works. The tower and
+ *   CENTREEAST            the fortress between them occupy |x| < 36 from z -58
+ *                         to z +84, which is most of the middle of the map, so
+ *                         the ground everything crossing it has to use is the
+ *                         two 20 m gaps beside them.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND THE PAIR THAT IS NOT HERE: A RUN ON THE BURNING RIDGE
+ * ────────────────────────────────────────────────────────────────────────────
+ * `PLAINS.fires` publishes five burning sites and the obvious thing to do with
+ * them is to bomb one. MEASURED, IT IS NOT WORTH A LINE. Every fire sits on the
+ * mountain FACE — `plains.js` puts each at `RIDGE_R0 + (RIDGE_R1 - RIDGE_R0) *
+ * h`, i.e. r 188 to 203, and the walkable disc ends at r 176 with a 50-64° slope
+ * past it that `NavGrid` refuses. So the five sites in world space are
+ *
+ *     FIRE-NW (-150,-132)  FIRE-N (79,-177)  FIRE-E (197,48)
+ *     FIRE-SE (41,191)     FIRE-S (-172,99)
+ *
+ * and a stick of bombs on any of them is seven craters on a cliff nobody can
+ * stand on. There is no room to put one at the FOOT of a fire either: the two
+ * fires nearest the play are FIRE-NW and FIRE-S, and A (-118,-104) and
+ * C (-128,86) already stand 19 and 25 m off the foot under them — the line
+ * would be a line through a capture circle.
+ *
+ * WHAT THE FIRES ACTUALLY DO FOR THIS TABLE is decide which of these lines can
+ * be seen at night, and that is not nothing: FIRE-NW lights NORTHFAN's west end
+ * and WESTFLANK's north half, FIRE-S the rest of WESTFLANK, FIRE-E the whole of
+ * EASTFLANK, and FIRE-N and FIRE-SE stand behind the two fans, so an aircraft
+ * running either of them crosses a lit horizon and is a silhouette rather than a
+ * noise. That is what a 600 cd point light at 240 m range is for.
+ */
+const PLAINS_RUNS = [
+  { id: 'NORTHFAN', name: 'THE NORTH FAN', from: [-80, -112], to: [10, -112], bombs: 7 },
+  { id: 'SOUTHFAN', name: 'THE SOUTH FAN', from: [80, 112], to: [-10, 112], bombs: 7 },
+  { id: 'WESTFLANK', name: 'THE WEST FLANK', from: [-124, -40], to: [-124, 40], bombs: 6 },
+  { id: 'EASTFLANK', name: 'THE EAST FLANK', from: [124, 40], to: [124, -40], bombs: 6 },
+  { id: 'CENTREWEST', name: 'WEST OF THE WORKS', from: [-58, -50], to: [-58, 40], bombs: 7 },
+  { id: 'CENTREEAST', name: 'EAST OF THE WORKS', from: [58, 40], to: [58, -50], bombs: 7 },
+];
+
+/**
+ * THE RUNS, PER MAP. @see `forMap` in `src/match/geography.js` —
+ * `world.level.id`, never a second parse of `?map=`.
+ */
+const MAP_RUNS = { town: TOWN_RUNS, plains: PLAINS_RUNS };
 
 /** Release altitude above the highest ground on the run, metres. */
 const ALT = 42;
@@ -204,7 +303,29 @@ const DEBRIS_SETTLE = 4.5;
 const HOST_REACH = 6.0;
 /** Metres a probe must move before a host is judged to have moved the ground. */
 const HOST_EPS = 0.05;
-/** A bomb above this is on a roof rather than in the street it was authored for. */
+/**
+ * A bomb this far ABOVE THE OUTDOOR DECK is on a roof rather than in the street
+ * the line was authored for.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * IT IS MEASURED AGAINST `world.groundHeight`, NOT AGAINST ZERO
+ * ────────────────────────────────────────────────────────────────────────────
+ * This was an absolute 3 m, and on the town that is the same thing: `groundY`
+ * there is the street, the street is at 0.05 m, and the lowest eaves in the kit
+ * are 6.5 m up, so "above 3" and "on a building" agree everywhere.
+ *
+ * NACHTFELD'S GROUND IS NOT AT ZERO. Its swell runs -5.6 to +3.8 m and crosses
+ * 3 m over a good part of the north half, so the absolute test called the PLAIN
+ * ITSELF a rooftop: booting the town's lines against it printed "6/8 bombs land
+ * above 3 m (3.2, 3.2, …) — the run is over a permanent rooftop", about eight
+ * craters in open grass. A gate that cries wolf on flat ground is a gate nobody
+ * reads on the day a line really does go over a roof.
+ *
+ * `world.groundHeight` is the level's own analytic outdoor floor — `reliefY` on
+ * the town, `plainsY` on the plain — so the difference is exactly "how much
+ * building is standing under this impact", on any map, with no per-map number.
+ * @see `_reportGround`.
+ */
 const ROOF_Y = 3;
 /** Metres above a crater a settle/burial ray starts from. @see `_crown`. */
 const SETTLE_PROBE = 6;
@@ -295,6 +416,8 @@ export class Bomber {
     this.rng = opts.rng ?? ctx.rng.fork();
     this.enabled = true;
     this.runs = [];
+    /** How many lines THIS MAP authored, so the boot fraction is honest. */
+    this._runN = 0;
     this.ready = false;
     this.buildMs = 0;
 
@@ -406,12 +529,20 @@ export class Bomber {
     this.physics = physics;
     this._lib = ctx.peek('materials');
 
+    /**
+     * WHICH MAP'S LINES, and it is resolved BEFORE the hardware because
+     * `_buildBombs` sizes its InstancedMesh off the longest stick in the table.
+     * @see `MAP_RUNS`.
+     */
+    const specs = forMap(MAP_RUNS, world, 'bomber runs');
+    this._runN = specs.length;
+
     this._buildAircraft();
-    this._buildBombs();
+    this._buildBombs(specs);
     // Both parked under the map from the first frame — see PARKED_Y.
     this._park();
-    for (let i = 0; i < RUNS.length; i++) {
-      const run = this._buildRun(RUNS[i], i, world, physics);
+    for (let i = 0; i < specs.length; i++) {
+      const run = this._buildRun(specs[i], i, world, physics);
       if (run) this.runs.push(run);
     }
     // The second pose per run, and only then the report — what "over a rooftop"
@@ -426,7 +557,7 @@ export class Bomber {
     let chunks = 0;
     for (const r of this.runs) chunks += r.chunkCount;
     console.info(
-      `[bomber] ${this.runs.length}/${RUNS.length} runs baked in ${this.buildMs.toFixed(0)}ms — ` +
+      `[bomber] ${this.runs.length}/${this._runN} runs baked in ${this.buildMs.toFixed(0)}ms — ` +
         `${chunks} debris chunks, ` +
         this.runs
           .map((r) => `${r.id}:${r.bombs.length}x${r.spacing.toFixed(1)}m/${r.duration.toFixed(1)}s`)
@@ -482,9 +613,9 @@ export class Bomber {
    * in flight are always a contiguous run — so the live ones can be packed into
    * slots 0..k-1 and the draw call shrinks to nothing between runs.
    */
-  _buildBombs() {
+  _buildBombs(specs) {
     let most = 0;
-    for (const r of RUNS) most = Math.max(most, r.bombs);
+    for (const r of specs) most = Math.max(most, r.bombs);
     const body = new THREE.CylinderGeometry(0.19, 0.15, 1.35, 8, 1);
     const nose = new THREE.ConeGeometry(0.19, 0.5, 8);
     nose.translate(0, 0.92, 0);
@@ -557,10 +688,13 @@ export class Bomber {
     for (let i = 0; i < n; i++) {
       const p = new THREE.Vector3().copy(a).addScaledVector(dir, spacing * i);
       const h = physics.groundHeight(p.x, p.z, 60);
-      p.y = Number.isFinite(h) ? h : world.groundHeight(p.x, p.z);
+      /** The outdoor deck under this impact, for the rooftop gate. @see `ROOF_Y`. */
+      const deck = world.groundHeight(p.x, p.z);
+      p.y = Number.isFinite(h) ? h : deck;
       topY = Math.max(topY, p.y);
       bombs.push({
         impact: p,
+        deck,
         tRelease: 0,
         tImpact: 0,
         /** The aircraft's own life, implied by THIS bomb's release. @see `_retime`. */
@@ -1155,13 +1289,14 @@ export class Bomber {
         // the ruin's own crest is still ground the run has. Only a bomb NO
         // state of the map ever lowers is an authored line over a rooftop.
         if (hi - lo > HOST_EPS) perishable.push(`${hi.toFixed(1)}→${lo.toFixed(1)}`);
-        else if (hi > ROOF_Y) permanent.push(hi);
+        else if (hi - run.bombs[i].deck > ROOF_Y) permanent.push(hi - run.bombs[i].deck);
       }
       const host = run.hostVariants.map((v) => v.host.id).join('+');
       if (permanent.length) {
         console.warn(
-          `[bomber] ${run.id}: ${permanent.length}/${n} bombs land above ${ROOF_Y} m ` +
-            `(${permanent.map((y) => y.toFixed(1)).join(', ')} m) on ground that is there in ` +
+          `[bomber] ${run.id}: ${permanent.length}/${n} bombs land more than ${ROOF_Y} m ` +
+            `over the outdoor deck (${permanent.map((y) => y.toFixed(1)).join(', ')} m up) ` +
+            'on ground that is there in ' +
             'EVERY state of this map — the run is over a permanent rooftop, not over a ' +
             'street. Re-author the line.'
         );

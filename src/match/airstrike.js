@@ -175,7 +175,7 @@ const CATH_PROBE = { insets: [2.0, 3.0, 4.0], alongs: [0, 2.5, -2.5, 4, -4] };
  * That is the entire balance argument and it is a geometric fact rather than a
  * tuning opinion — see the exposure table in the commit message.
  */
-const STRIKE_SITES = [
+const TOWN_STRIKE_SITES = [
   /* ---- the three map changers ------------------------------------------ */
   // east row, west face, on the mid street where both branches still share it
   { id: 'MID', name: 'MID STREET', level: L(7.7, 18.7), face: [-1, 0], reach: 5.2, kind: 'block' },
@@ -322,7 +322,7 @@ const STRIKE_SITES = [
  * collapses to the eye. It also keeps the three `_bakeSettled` memcpys (and the
  * three nav patches) on three different frames six and a half seconds later.
  */
-const SALVOS = [
+const TOWN_SALVOS = [
   { id: 'EASTBLOCK', name: 'EAST BLOCK', members: ['MID', 'R4', 'EAST'], stagger: [0, 0.21, 0.44] },
   { id: 'WESTBLOCK', name: 'WEST BLOCK', members: ['WEST', 'R2', 'R1'], stagger: [0, 0.25, 0.47] },
   /**
@@ -364,6 +364,72 @@ const SALVOS = [
     dust: { count: 7, duration: 16, life: 12, radius: 6.4, rate: 10, rise: 1.7, growth: 7.8, dark: 0.26 },
   },
 ];
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * NACHTFELD — AND WHY ITS AUTHORED TABLE IS EMPTY ON PURPOSE
+ * ════════════════════════════════════════════════════════════════════════════
+ * A STRIKE SITE IS AN ADDED STOREY ON A BUILDING. `_buildSite` opens by asking
+ * `_findRoof` for the plane the mass stands on and REFUSES TO BUILD without
+ * one, because "the anchor is not on a building" is the exact defect that
+ * shipped this feature broken once already (three of eight anchors probed at
+ * 0.05 m and built a storey of masonry in the middle of a road).
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND ON A PLAIN THE ROOF TEST DOES NOT FAIL SAFE — IT FAILS SILENTLY
+ * ────────────────────────────────────────────────────────────────────────────
+ * `_findRoof` accepts any plane it finds at `h >= 3`, which is a fine floor on
+ * a map whose ground is at 0.05 m and whose lowest eaves are at 6.5. NACHTFELD's
+ * swell crosses 3 m over most of its northern half. Measured, booting the town's
+ * table against the plain:
+ *
+ *     MID roof 3.12 m · R2 roof 3.13 m · CATH-W/X/E roof 3.20 m
+ *     5 of 11 sites BUILT. Six dropped loudly; five built on open grass.
+ *
+ * Five masses of masonry, their fireballs, their 2 682 chunks and five settled
+ * rubble mounds with real collision, hanging in a field. The six that dropped
+ * were the honest half of that report.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * SO THE PLAIN'S SITES ARE DERIVED, NOT AUTHORED
+ * ────────────────────────────────────────────────────────────────────────────
+ * `_buildDemoSites` already builds one site per `world.demolitions` record —
+ * the whole building, its collapsed form, its debris field and its nav patch,
+ * all published by `world` — and the boot log counts those separately from the
+ * authored ones precisely BECAUSE they are derived and cannot drift when the
+ * map moves. That is the right mechanism here and it needs nothing from this
+ * table: the control tower already comes through it (`NF-TOWER@43.7m` at boot),
+ * and the fortress and the trench works will as they land.
+ *
+ * AUTHORING A COORDINATE NOW WOULD BE AUTHORING ONE THAT IS WRONG TOMORROW.
+ * The works are being built as this is written; a `level:` pair aimed at where
+ * a fortress bastion is going to be is a number nobody will re-measure, and
+ * this file's entire history is what that costs. An empty table prints
+ * `0/0 authored sites + N whole buildings`, which is true, instead of
+ * `5/11`, which was not.
+ *
+ * WHAT TO ADD HERE WHEN THERE IS SOMETHING TO ADD: a site is worth authoring
+ * on this map only where a mass should come off a structure WITHOUT the
+ * structure itself going — a tower gallery, a fortress parapet, a revetment
+ * crown. Anything that takes the whole building is already a demolition and is
+ * already handled.
+ */
+const PLAINS_STRIKE_SITES = [];
+
+/**
+ * …AND THE PLAIN'S SALVOS WITH THEM. A group needs two authored members that
+ * survive their bake (`_buildSalvos` drops one that loses two of three), and
+ * with no authored sites there are none. `_buildDemoSalvos` groups the DERIVED
+ * ones on its own — that is where a NACHTFELD block event will come from.
+ */
+const PLAINS_SALVOS = [];
+
+/**
+ * THE SITES AND THE GROUPS, PER MAP. @see `forMap` in `src/match/geography.js`
+ * — `world.level.id`, never a second parse of `?map=`.
+ */
+const MAP_STRIKE_SITES = { town: TOWN_STRIKE_SITES, plains: PLAINS_STRIKE_SITES };
+const MAP_SALVOS = { town: TOWN_SALVOS, plains: PLAINS_SALVOS };
 
 /**
  * THE DUST WALL a salvo leaves behind, and the reason it is authored separately
@@ -673,6 +739,9 @@ export class Airstrike {
     this.sites = [];
     /** The block events, resolved from `SALVOS` at boot. */
     this.salvos = [];
+    /** How many anchors THIS MAP authored, so the boot fraction is honest on a
+     *  map whose sites are all derived from `world.demolitions`. */
+    this._siteN = 0;
     this.ready = false;
     this.buildMs = 0;
     /** Boot-only: what swapping a `host` building for its ruin cost. @see `_host`. */
@@ -819,8 +888,17 @@ export class Airstrike {
     // base bake asks them whether the plane the mound rests on is doomed.
     this._perishables(world, physics);
 
-    for (let i = 0; i < STRIKE_SITES.length; i++) {
-      const site = this._buildSite(STRIKE_SITES[i], i, world, physics);
+    /**
+     * WHICH MAP'S ANCHORS. @see `MAP_STRIKE_SITES`, and the note above
+     * `PLAINS_STRIKE_SITES` for why NACHTFELD's is empty rather than relocated:
+     * `_findRoof` accepts any plane at 3 m and the plain's own swell crosses
+     * that, so the town's table did not drop clean on it — it built five
+     * storeys of masonry in a field.
+     */
+    const specs = forMap(MAP_STRIKE_SITES, world, 'strike sites');
+    this._siteN = specs.length;
+    for (let i = 0; i < specs.length; i++) {
+      const site = this._buildSite(specs[i], i, world, physics);
       if (site) this.sites.push(site);
     }
     this._buildDemoSites(world, physics);
@@ -846,7 +924,7 @@ export class Airstrike {
      */
     this._bakeHostVariants(world, physics);
 
-    this._buildSalvos();
+    this._buildSalvos(world);
     this._buildDemoSalvos();
     this._bootFlag();
     /**
@@ -875,17 +953,18 @@ export class Airstrike {
     const authored = this.sites.filter((s) => !s.demo).length;
     const demos = this.sites.length - authored;
     console.info(
-      `[airstrike] ${authored}/${STRIKE_SITES.length} authored sites + ${demos} whole buildings ` +
+      `[airstrike] ${authored}/${this._siteN} authored sites + ${demos} whole buildings ` +
         `baked in ${this.buildMs.toFixed(0)}ms ` +
         `(${this._hostSwaps} host swaps ${this._hostMs.toFixed(0)}ms, ` +
         `${this._variants.length} host variant(s) ${this._hostBakeMs.toFixed(0)}ms) — ` +
         `${chunks} chunks, ${cells} nav cells patched, ` +
         this.sites.map((s) => `${s.id}@${s.roofY.toFixed(1)}m`).join(' ')
     );
-    if (authored < STRIKE_SITES.length) {
+    if (authored < this._siteN) {
       console.error(
-        `[airstrike] ${STRIKE_SITES.length - authored} SITE(S) DROPPED — ` +
-          'the level coordinates in src/match/airstrike.js no longer match the map.'
+        `[airstrike] ${this._siteN - authored} SITE(S) DROPPED — ` +
+          "this map's entry in `MAP_STRIKE_SITES` in src/match/airstrike.js no " +
+          'longer matches the map.'
       );
     }
     return this;
@@ -898,8 +977,8 @@ export class Airstrike {
    * Two members is still a block event; one is a single strike wearing a bigger
    * name, so a group that loses two of its three is dropped.
    */
-  _buildSalvos() {
-    for (const spec of SALVOS) {
+  _buildSalvos(world) {
+    for (const spec of forMap(MAP_SALVOS, world, 'strike salvos')) {
       const members = [];
       const stagger = [];
       for (let i = 0; i < spec.members.length; i++) {

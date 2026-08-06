@@ -152,7 +152,7 @@ const L = townScaled;
  * -5.8, defence routes -67.1 up to -5.0), and clear of the attack's nearest
  * spawn at z = +51.2. Support fire is paid for by the side that is pushing.
  */
-const LINES = [
+const TOWN_LINES = [
   // mid street, south to north — the trunk both branches walk out of spawn
   { id: 'MAIN', name: 'MAIN STREET', from: L(-4.0, 11.0), to: L(-4.0, 27.5) },
   // the full width of the cross street, east to west. The long one.
@@ -162,6 +162,42 @@ const LINES = [
   // east lane, the same for site B
   { id: 'BLANE', name: 'B LANE', from: L(27.33, 2.67), to: L(27.33, 18.67) },
 ];
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * NACHTFELD — THE SAME SIX CORRIDORS, TRAVERSED THE OTHER WAY
+ * ════════════════════════════════════════════════════════════════════════════
+ * The rule this table keeps from the town's is the one that is about the
+ * WEAPON rather than about the map: each line is a bomber run's corridor flown
+ * in the opposite direction, so the two aircraft are never the same silhouette
+ * on the same heading twice. A fighter that always comes from the north is a
+ * fighter you only have to watch one horizon for — and on a night map with a
+ * burning skyline, which horizon you are watching is most of what you can see.
+ *
+ * The clearances, the symmetry argument and what each corridor prices are all
+ * `src/match/bomber.js`'s `PLAINS_RUNS`, measured once and shared; every line
+ * below is that line's two endpoints swapped. `_buildRun` re-probes anyway and
+ * `_reportGround` prints every impact more than `ROOF_Y` over the outdoor deck.
+ *
+ * THE ONE DIFFERENCE IS LENGTH. `SPACING` is 2.2 m against the bomber's 6-16 m,
+ * clamped to `MAX_IMPACTS` 34, so an 80-95 m line here is 34 impacts and about
+ * 1.1 s of walking cannon — the whole width of a capture approach, closed for
+ * as long as it takes to take two steps.
+ */
+const PLAINS_LINES = [
+  { id: 'NORTHFAN', name: 'THE NORTH FAN', from: [10, -112], to: [-80, -112] },
+  { id: 'SOUTHFAN', name: 'THE SOUTH FAN', from: [-10, 112], to: [80, 112] },
+  { id: 'WESTFLANK', name: 'THE WEST FLANK', from: [-124, 40], to: [-124, -40] },
+  { id: 'EASTFLANK', name: 'THE EAST FLANK', from: [124, -40], to: [124, 40] },
+  { id: 'CENTREWEST', name: 'WEST OF THE WORKS', from: [-58, 40], to: [-58, -50] },
+  { id: 'CENTREEAST', name: 'EAST OF THE WORKS', from: [58, -50], to: [58, 40] },
+];
+
+/**
+ * THE LINES, PER MAP. @see `forMap` in `src/match/geography.js` —
+ * `world.level.id`, never a second parse of `?map=`.
+ */
+const MAP_LINES = { town: TOWN_LINES, plains: PLAINS_LINES };
 
 /** Metres between cannon impacts along the line. */
 const SPACING = 2.2;
@@ -180,7 +216,14 @@ const CHUNKS_PER_IMPACT = 8;
 const GRIT_SETTLE = 3.2;
 /** Metres a probe must move before a host is judged to have moved the ground. */
 const HOST_EPS = 0.05;
-/** An impact above this is on a roof rather than in the lane it was authored for. */
+/**
+ * An impact this far ABOVE THE OUTDOOR DECK is on a roof rather than in the lane
+ * the line was authored for. Measured against `world.groundHeight` — the
+ * level's own analytic floor — and not against zero, for the reason the
+ * identical constant in `bomber.js` documents at length: NACHTFELD's ground runs
+ * -5.6 to +3.8 m, so an absolute 3 m called the plain itself a rooftop and this
+ * gate reported 27 of 31 impacts "over a permanent rooftop" in open grass.
+ */
 const ROOF_Y = 3;
 /** Metres above an impact a settle/burial ray starts from. @see `_crown`. */
 const SETTLE_PROBE = 5;
@@ -221,6 +264,8 @@ export class Strafe {
     this.rng = opts.rng ?? ctx.rng.fork();
     this.enabled = true;
     this.runs = [];
+    /** How many lines THIS MAP authored, so the boot fraction is honest. */
+    this._lineN = 0;
     this.ready = false;
     this.buildMs = 0;
 
@@ -307,8 +352,11 @@ export class Strafe {
 
     this._buildAircraft();
     this._park();
-    for (let i = 0; i < LINES.length; i++) {
-      const run = this._buildRun(LINES[i], i, world, physics);
+    /** WHICH MAP'S LINES. @see `MAP_LINES`. */
+    const specs = forMap(MAP_LINES, world, 'strafe lines');
+    this._lineN = specs.length;
+    for (let i = 0; i < specs.length; i++) {
+      const run = this._buildRun(specs[i], i, world, physics);
       if (run) this.runs.push(run);
     }
     // The second pose per line, and only then the report — "over a rooftop"
@@ -322,7 +370,7 @@ export class Strafe {
     let chunks = 0;
     for (const r of this.runs) chunks += r.chunkCount;
     console.info(
-      `[strafe] ${this.runs.length}/${LINES.length} runs baked in ${this.buildMs.toFixed(0)}ms — ` +
+      `[strafe] ${this.runs.length}/${this._lineN} runs baked in ${this.buildMs.toFixed(0)}ms — ` +
         `${chunks} grit chunks, ` +
         this.runs
           .map((r) => `${r.id}:${r.impacts.length}x${SPACING}m/${(r.lastImpact - r.firstImpact).toFixed(2)}s`)
@@ -420,9 +468,11 @@ export class Strafe {
     for (let i = 0; i < n; i++) {
       const p = new THREE.Vector3().copy(a).addScaledVector(dir, step * i);
       const h = physics.groundHeight(p.x, p.z, 60);
-      p.y = Number.isFinite(h) ? h : world.groundHeight(p.x, p.z);
+      /** The outdoor deck under this impact, for the rooftop gate. @see `ROOF_Y`. */
+      const deck = world.groundHeight(p.x, p.z);
+      p.y = Number.isFinite(h) ? h : deck;
       topY = Math.max(topY, p.y);
-      impacts.push({ at: p, from: new THREE.Vector3(), tFire: 0, tImpact: 0, damage: i % DAMAGE_EVERY === 0 });
+      impacts.push({ at: p, deck, from: new THREE.Vector3(), tFire: 0, tImpact: 0, damage: i % DAMAGE_EVERY === 0 });
     }
 
     /* ---- the timeline, closed form ----------------------------------- */
@@ -852,20 +902,22 @@ export class Strafe {
           hi = Math.max(hi, v.up.impactY[i], v.down.impactY[i]);
         }
         if (hi - lo > HOST_EPS) perishable.push(`${hi.toFixed(1)}→${lo.toFixed(1)}`);
-        else if (hi > ROOF_Y) permanent.push(hi);
+        else if (hi - run.impacts[i].deck > ROOF_Y) permanent.push(hi - run.impacts[i].deck);
       }
       const host = run.hostVariants.map((v) => v.host.id).join('+');
       if (permanent.length / n > 0.3) {
         console.warn(
-          `[strafe] ${run.id}: ${permanent.length}/${n} impacts land above ${ROOF_Y} m ` +
-            `(${permanent.map((y) => y.toFixed(1)).join(', ')} m) on ground that is there in ` +
+          `[strafe] ${run.id}: ${permanent.length}/${n} impacts land more than ${ROOF_Y} m ` +
+            `over the outdoor deck (${permanent.map((y) => y.toFixed(1)).join(', ')} m up) ` +
+            'on ground that is there in ' +
             'EVERY state of this map — the line is over a permanent rooftop, not over a lane. ' +
             'Re-author it.'
         );
       } else if (permanent.length) {
         console.info(
           `[strafe] ${run.id}: ${permanent.length}/${n} impacts are sheltered by permanent ` +
-            `structure at ${permanent.map((y) => y.toFixed(1)).join('/')} m — overhead cover, ` +
+            `structure ${permanent.map((y) => y.toFixed(1)).join('/')} m over the deck — ` +
+            'overhead cover, ' +
             'not a roof.'
         );
       }
