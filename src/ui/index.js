@@ -98,6 +98,11 @@ const MAX_BLIPS = 48;
  *                                       'domination' + state.zones), the C4 fuse
  *                                       in the other mode, scoreboard. See
  *                                       src/match.
+ *                                       `state.killCam` is THE CAMERA, not the
+ *                                       strip: true only while spectate.js is
+ *                                       standing behind your killer, and the one
+ *                                       thing that takes the viewmodel off the
+ *                                       screen apart from a scope.
  *   ui.matchDriven                      true ⇒ `match` owns the killfeed and the
  *                                       score; stop inferring them from damage
  *   ui.setHudVisible(bool)              hide everything (cinematics)
@@ -769,7 +774,22 @@ export class UiSystem {
     const wp = this.ctx.peek('weapons');
     const scoped = !!wp?.scoped;
     this.scope.update(dt, scoped);
-    if (wp?.viewmodel?.rig) wp.viewmodel.rig.visible = !scoped;
+    /**
+     * …AND SO DOES THE KILL CAM — 「キルカメラのときに武器を表示しないで」. The
+     * viewmodel is drawn into `viewScene` and composited over whatever the world
+     * camera is looking at, so while `match/spectate.js` is standing behind the
+     * man who killed you your own rifle is still filling the lower third of the
+     * frame, muzzle-first, in front of him. It is not in anybody's hands during
+     * those three seconds: you are dead and the camera is not yours.
+     *
+     * ONE LINE AND ONE FLAG, deliberately: `rig.visible` is the mechanism the
+     * scope already uses, so there is exactly one writer of it and the two
+     * cannot undo each other. The AND with `dead` is the safety — a stuck
+     * `killCam` still cannot take a living player's weapon off the screen —
+     * and both fields are `match`'s, republished every frame.
+     */
+    const camKill = !!(this.round?.killCam && this.round?.dead);
+    if (wp?.viewmodel?.rig) wp.viewmodel.rig.visible = !scoped && !camKill;
     this.crosshair.update(dt, s);
     /**
      * AFTER `crosshair.update`, not before. It writes its own display/opacity
