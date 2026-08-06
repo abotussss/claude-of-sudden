@@ -21,6 +21,12 @@ import { buildLinks } from '../links.js';
 import { buildSiteWorks } from '../sitework.js';
 import { planDemolitions, buildRuins, publishDemolitions } from '../demolition.js';
 import { planBreaches, buildBreaches, publishBreaches, claimRect } from '../breach.js';
+import {
+  planRoofBreaks,
+  buildRoofBreaks,
+  publishRoofBreaks,
+  claimRect as roofClaimRect,
+} from '../roofbreak.js';
 import { registerProps } from '../props.js';
 import {
   registerDressingProps,
@@ -260,6 +266,33 @@ export const TOWN = {
       else breachOf.set(b.building, [b]);
     }
 
+    /**
+     * …AND THE BUILDINGS THAT LOSE THE DECK OVER THEIR HEADS — 「屋上破壊」.
+     *
+     * ARMED HERE, BEFORE A SINGLE WALL GOES UP, AND THAT IS THE WHOLE REASON
+     * THIS BLOCK IS NOT DOWN WITH THE OTHER TWO CLAIMS. A demolition claims its
+     * dressing and a breach claims one storey of one elevation, and both of
+     * those are things the DRESSING pass writes — so both can be armed after
+     * the buildings are up. A roof scope has to catch the DECK ITSELF, the
+     * parapet and the stair hut, all of which `buildBuilding` authors, so the
+     * claim must be standing before the loop below runs. It is a spatial claim
+     * rather than a lexical scope for the reason `A._scope` is a single slot:
+     * the roof is written in three different places inside one `buildBuilding`
+     * call, with the facade scopes of a breach house opening and closing in
+     * between. @see src/world/roofbreak.js and `Assembler.claim`.
+     *
+     * It stays armed through `dressBuildings`, so the water tanks, dishes,
+     * vents and aerials go with the deck they stand on, and is dropped by the
+     * same `A.disarmClaims()` the other two use.
+     */
+    const roofPlan = planRoofBreaks(BUILDINGS);
+    for (const r of roofPlan) {
+      r.roof = A.beginScope(`roof:${r.id}`);
+      A.endScope();
+      const c = roofClaimRect(r);
+      A.claim(r.roof, c.x0, c.z0, c.x1, c.z1, c.y0);
+    }
+
     const infos = [];
     for (const spec of BUILDINGS) {
       const demo = demoOf.get(spec.id);
@@ -366,6 +399,14 @@ export const TOWN = {
      * draws from its own fixed-seed stream. @see src/world/breach.js.
      */
     buildBreaches(A, breachPlan);
+    /**
+     * …and the caved-in decks, in the same place in the order and for the same
+     * three reasons. It runs after `buildFeatures` would be too late and before
+     * it is exactly right: `planHole` reads the rooftop cache's own spot and
+     * pulls the hole back off it, because that cache is placed AFTER
+     * `A.disarmClaims()` and so is not ours to take down with the roof.
+     */
+    buildRoofBreaks(A, roofPlan, infos);
 
     /**
      * WHY YOU WOULD EVER GO IN, AND WHY YOU WOULD EVER GO UP.
@@ -394,6 +435,7 @@ export const TOWN = {
       interiorVolumes: interiorVolumes(A, cathedral, infos),
       demoPlan,
       breachPlan,
+      roofPlan,
       /**
        * The authored layout, exposed for TOOLS only — nothing in the engine reads
        * it back through here. `tools/indoorcheck.mjs` needs the footprints of the
@@ -426,6 +468,7 @@ export const TOWN = {
     return {
       demolitions: publishDemolitions(A, rec.demoPlan, physics, root),
       breaches: publishBreaches(A, rec.breachPlan, physics),
+      roofs: publishRoofBreaks(A, rec.roofPlan, physics),
     };
   },
 

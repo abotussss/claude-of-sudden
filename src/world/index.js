@@ -155,6 +155,13 @@ export class WorldSystem {
     const pub = level.publish?.(A, rec, physics, this.root) ?? null;
     this.demolitions = pub?.demolitions ?? [];
     this.breaches = pub?.breaches ?? [];
+    /**
+     * 「屋上破壊」 — the buildings that can lose the deck over their heads. Same
+     * record shape as `breaches` down to the field, so `damageAt` walks the two
+     * lists with one loop and a caller that already knows what to do with a
+     * blown wall needs no third code path. @see src/world/roofbreak.js.
+     */
+    this.roofs = pub?.roofs ?? [];
     this._demoDown = false;
     /**
      * `?breach=down` — boot with every cache house's wall already blown open.
@@ -164,9 +171,14 @@ export class WorldSystem {
      * `_floatcheck.mjs` all boot a URL and measure what they find.
      */
     try {
-      const flag = new URLSearchParams(globalThis.location?.search ?? '').get('breach');
+      const q = new URLSearchParams(globalThis.location?.search ?? '');
+      const flag = q.get('breach');
       if (flag === 'down' || flag === '1') {
         console.info(`[world] ?breach=down — ${this.breachAll(true)} walls booted OPEN`);
+      }
+      const rflag = q.get('roof');
+      if (rflag === 'down' || rflag === '1') {
+        console.info(`[world] ?roof=down — ${this.roofAll(true)} decks booted IN`);
       }
     } catch {
       /* no location (a node import of this module): nothing to read */
@@ -562,25 +574,67 @@ export class WorldSystem {
    * @returns {object|null} the `world.breaches` record that opened, or null
    */
   damageAt(position, strength = 1) {
-    if (!position || !this.breaches?.length) return null;
+    if (!position) return null;
     let best = null;
     let bestD = Infinity;
-    for (const b of this.breaches) {
-      if (b.down) continue;
-      // point -> the opening's centre line, clamped to its own half-length
-      this._bv.copy(position).sub(b.position);
-      const along = Math.max(-b.halfLen, Math.min(b.halfLen, this._bv.dot(b.along)));
-      this._bw.copy(b.position).addScaledVector(b.along, along);
-      const d = position.distanceTo(this._bw);
-      if (d < b.reach && d < bestD) {
-        bestD = d;
-        best = b;
+    /**
+     * WALLS AND ROOFS ARE ONE LOOP AND TWO GATES.
+     *
+     * `world.roofs` publishes the identical record shape — position, along,
+     * halfLen, reach, strength, down, setDown — so the geometry of "did this
+     * shell land on it" is the same question for a deck as for an elevation and
+     * is asked once. What separates them is what a record ASKS OF THE HIT:
+     *
+     *   `minY`     a roof carries one and a wall does not. 「屋上破壊」 is an
+     *              event that comes from above; without the floor a hit on the
+     *              ground-storey wall is "within reach" of a deck 9.5 m over it
+     *              and a rifle grenade in the doorway would take the roof off.
+     *   `strength` a roof's bar is over a tank round on purpose, so the walls
+     *              direct fire opens and the roofs only air opens stay two
+     *              different events. @see ROOF_STRENGTH in roofbreak.js.
+     *
+     * Nearest wins across BOTH lists, which is the honest answer for a bomb
+     * through a parapet: the deck is nearer than the wall under it and the deck
+     * is what goes.
+     */
+    for (const list of [this.breaches, this.roofs]) {
+      for (const b of list ?? []) {
+        if (b.down) continue;
+        if (b.minY !== undefined && position.y < b.minY) continue;
+        // point -> the opening's centre line, clamped to its own half-length
+        this._bv.copy(position).sub(b.position);
+        const along = Math.max(-b.halfLen, Math.min(b.halfLen, this._bv.dot(b.along)));
+        this._bw.copy(b.position).addScaledVector(b.along, along);
+        const d = position.distanceTo(this._bw);
+        if (d < b.reach && d < bestD) {
+          bestD = d;
+          best = b;
+        }
       }
     }
     if (!best) return null;
     if (strength < best.strength) return null;
     best.setDown(true);
     return best;
+  }
+
+  /** Bring one roof in, or put it back, by `world.roofs[i].id` or its building. */
+  roof(id, down = true) {
+    const rec = this.roofs?.find((r) => r.id === id || r.building === id);
+    if (!rec || rec.down === !!down) return false;
+    rec.setDown(!!down);
+    return true;
+  }
+
+  /** Every deck at once — the round reset, and `?roof=down`. */
+  roofAll(down = true) {
+    let n = 0;
+    for (const rec of this.roofs ?? []) {
+      if (rec.down === !!down) continue;
+      rec.setDown(!!down);
+      n++;
+    }
+    return n;
   }
 
   /**
