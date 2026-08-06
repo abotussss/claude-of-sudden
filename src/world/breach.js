@@ -171,8 +171,17 @@ export function planBreaches(buildings) {
      * (@see `chooseSides`), and each one is its own record, its own scope and
      * its own `damageAt` target — a shell into the north wall does not open
      * the west one.
+     *
+     * UP TO THREE NOW — 「もっと街を空爆で破壊して … 壁破壊」. The rule that
+     * picks them has not moved a line: the first may fall back to a door's side
+     * because one breach is better than none, every further one must be
+     * door-less outright and must have somewhere to stand outside it, and most
+     * houses on this map cannot find a third that passes. NEVER FOUR, and that
+     * is the one number this file may not spend: a house with all four
+     * elevations blown open is a DEMOLITION, and `breach.js` exists because a
+     * cache house may not be levelled. @see `chooseSides`.
      */
-    const sides = chooseSides(spec, 2);
+    const sides = chooseSides(spec, 3);
     if (!sides.length) {
       console.warn(`[world] breach ${spec.id}: no elevation with open ground outside it — skipped`);
       continue;
@@ -241,8 +250,10 @@ export function chooseSides(spec, max = 2) {
   if (first < 0) return [];
   const picked = [first];
   const skip = new Set(spec.skipSides ?? []);
+  /** THREE OF THE FOUR, EVER. A house with no walls left is a ruin. */
+  const cap = Math.min(max, 3);
   for (const s of [0, 1, 2, 3]) {
-    if (picked.length >= max) break;
+    if (picked.length >= cap) break;
     if (s === first || skip.has(s) || doors.has(s)) continue;
     if (openOutside(spec, s)) picked.push(s);
   }
