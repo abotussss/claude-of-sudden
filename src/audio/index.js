@@ -55,7 +55,7 @@ import {
 import {
   strikeJet, strikeIncoming, strikeRubble, strikeTail, strafeCannon, rubbleCollapse,
 } from './airstrike.js';
-import { bark as voxBark, barkFor } from './vox.js';
+import { bark as voxBark, barkFor, isRadioKind, RADIO_MUTED } from './vox.js';
 import { classifySpace } from './ir.js';
 
 const PROBE_RAYS = 9;
@@ -613,7 +613,15 @@ export class AudioSystem {
           distantVolley: () => this._distantVolley(),
           distantBoom: () => this._distantBoom(),
           oneShot: () => this._ambientOneShot(),
-          distantChatter: () => this._distantChatter(),
+          /**
+           * RADIO_MUTED — DROPPED EMITTER. `distantChatter` used to be here,
+           * putting a transmission 25-75 m away every 20-60 s as colour.
+           * `ambience.js` calls it as `api?.distantChatter?.()`, so leaving the
+           * key off is the whole switch-off and its timer just fires into
+           * nothing. Restore with:
+           *   distantChatter: () => this._distantChatter(),
+           * The method itself is untouched. @see src/audio/vox.js RADIO_MUTED
+           */
         };
       }
       this.ambience.update(dt, this._ambienceApi);
@@ -1211,6 +1219,20 @@ export class AudioSystem {
   /** Enemy vocalisation. `kind` is semantic — see barkFor() in vox.js. */
   bark(kind, position, opts = {}) {
     if (!this.running) return false;
+    /**
+     * THE NET IS MUTED — 「今無線通信音があると思うけど消して 耳障り」.
+     *
+     * This is the ONE choke point every transmission passes through, from
+     * `src/ai/radio.js`, from the `ai:bark` event and from this file's own
+     * callers, so it is the only place the refusal has to live. Grunts —
+     * hit / pain / death — are a body rather than a handset and go through.
+     *
+     * It sits ABOVE the 0.42 s mush guard on purpose: a refused transmission
+     * must not spend the window a death grunt is about to need.
+     *
+     * Reversing this is `RADIO_MUTED = false` in vox.js. @see src/audio/vox.js
+     */
+    if (RADIO_MUTED && isRadioKind(kind)) return false;
     const now = this.actx.currentTime;
     if (now - this._lastBarkTime < 0.42 && !opts.force) return false; // no mush
     this._lastBarkTime = now;
@@ -1488,13 +1510,21 @@ export class AudioSystem {
         gain: gunRangeGain(dist),
       }, 'weapons', shotPriority);
       this.mixer.duck(clamp(0.5 - dist * 0.004, 0.12, 0.5), 0.08);
-      // Enemies opening fire get occasional chatter, so firefights feel alive
-      // even before `ai` grows its own bark logic.
-      const now = this.actx.currentTime;
-      if (now - this._lastEnemyFire > 4.5 && this.rng.float() < 0.45) {
-        this._lastEnemyFire = now;
-        this.bark(this.rng.float() < 0.6 ? 'spot' : 'suppress', p.origin, { level: 0.9 });
-      }
+      /**
+       * RADIO_MUTED — DROPPED EMITTER. This block gave enemies opening fire
+       * occasional chatter ("so firefights feel alive even before `ai` grows
+       * its own bark logic"), which `ai` since did. `bark()` would refuse it
+       * now anyway; it is gone rather than gated so a shot does not pay for a
+       * timer and two rng draws that can only ever produce silence.
+       *
+       *   const now = this.actx.currentTime;
+       *   if (now - this._lastEnemyFire > 4.5 && this.rng.float() < 0.45) {
+       *     this._lastEnemyFire = now;
+       *     this.bark(this.rng.float() < 0.6 ? 'spot' : 'suppress', p.origin, { level: 0.9 });
+       *   }
+       *
+       * `_lastEnemyFire` is kept and still reset, so restoring is a paste.
+       */
     }
   }
 

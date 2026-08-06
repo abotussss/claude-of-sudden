@@ -345,3 +345,44 @@ export function barkFor(kind, rng) {
     default: return 'contact';
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* THE NET IS MUTED                                                    */
+/* ------------------------------------------------------------------ */
+/**
+ * 「今無線通信音があると思うけど消して 耳障り」 — the squelch/tone net is off.
+ *
+ * WHAT IS OFF AND WHAT IS NOT. Everything with a `signal` — every SIGNALS class,
+ * i.e. contact / threat / status / stores / confirm / objective / lost and the
+ * click-ack. What stays is EFFORTS: `hit`, `pain`, `death`. Those are a man's
+ * own body, not a handset, they were never part of the complaint, and the header
+ * of this file already argues they are a different sound entirely.
+ *
+ * NOTHING WAS DELETED TO DO THIS. The synthesis below, `BARKS`, `bark()`,
+ * `barkFor()` and every caller in `src/ai/radio.js` are exactly as they were —
+ * `radio.js` still composes, rate-limits and logs its traffic, and its `played`
+ * flag simply reads false, which it already had to handle (`audio.bark` has
+ * always been able to refuse on the mush guard). `src/audio/selftest.js` still
+ * renders every key in `BARKS` because it calls the synth directly.
+ *
+ * TO PUT THE NET BACK: set this to `false`. That alone restores every
+ * transmission `src/ai/radio.js` sends. Two ambient emitters in
+ * `src/audio/index.js` were also dropped and are commented at their sites —
+ * search `RADIO_MUTED` there — but they are colour, not the net.
+ */
+export const RADIO_MUTED = true;
+
+/**
+ * Is `kind` — as handed to `audio.bark()` — radio traffic rather than a body?
+ *
+ * Deliberately RNG-FREE, and that is not a detail: `barkFor()` draws from the
+ * shared sequence, so resolving a name we are about to throw away would move
+ * every later draw in the match and cost capture reproducibility for a sound
+ * nobody hears. The semantic aliases that resolve to an effort are listed by
+ * hand for the same reason.
+ */
+export function isRadioKind(kind) {
+  if (kind === 'hurt') return false;              // -> 'hit' | 'pain'
+  const b = BARKS[kind];
+  return b ? b.cls !== 'effort' : true;           // unknown names default to 'contact'
+}
