@@ -2051,14 +2051,28 @@ export const REINFORCE_NAMES = [
  * They are named for the ground rather than for a flight, because that is what
  * they are: the drop is `ROTOR-3` arriving from somewhere else, and this is
  * somebody who was in the cellar the whole time.
+ *
+ * THIRTY EACH, WHICH IS `hiddenSquadWaves` x `hiddenSquadSize` AND NOT
+ * `hiddenSquadLive`. The list was fifteen — the CONCURRENT ceiling — and that is
+ * the wrong number by exactly the mistake this comment block was written to
+ * prevent: the squad is topped up as men die, so ARRIVALS over a match run to
+ * six waves of five while only fifteen are ever standing. Caught in review after
+ * a measured match put EIGHTEEN men out and wrapped three callsigns onto a
+ * second man each.
  */
 export const HIDDEN_NAMES = [
   ['CELLAR-1', 'CELLAR-2', 'CELLAR-3', 'CELLAR-4', 'CELLAR-5',
    'CELLAR-6', 'CELLAR-7', 'CELLAR-8', 'CELLAR-9', 'CELLAR-10',
-   'CELLAR-11', 'CELLAR-12', 'CELLAR-13', 'CELLAR-14', 'CELLAR-15'],
+   'CELLAR-11', 'CELLAR-12', 'CELLAR-13', 'CELLAR-14', 'CELLAR-15',
+   'CELLAR-16', 'CELLAR-17', 'CELLAR-18', 'CELLAR-19', 'CELLAR-20',
+   'CELLAR-21', 'CELLAR-22', 'CELLAR-23', 'CELLAR-24', 'CELLAR-25',
+   'CELLAR-26', 'CELLAR-27', 'CELLAR-28', 'CELLAR-29', 'CELLAR-30'],
   ['ATTIC-1', 'ATTIC-2', 'ATTIC-3', 'ATTIC-4', 'ATTIC-5',
    'ATTIC-6', 'ATTIC-7', 'ATTIC-8', 'ATTIC-9', 'ATTIC-10',
-   'ATTIC-11', 'ATTIC-12', 'ATTIC-13', 'ATTIC-14', 'ATTIC-15'],
+   'ATTIC-11', 'ATTIC-12', 'ATTIC-13', 'ATTIC-14', 'ATTIC-15',
+   'ATTIC-16', 'ATTIC-17', 'ATTIC-18', 'ATTIC-19', 'ATTIC-20',
+   'ATTIC-21', 'ATTIC-22', 'ATTIC-23', 'ATTIC-24', 'ATTIC-25',
+   'ATTIC-26', 'ATTIC-27', 'ATTIC-28', 'ATTIC-29', 'ATTIC-30'],
 ];
 
 /**

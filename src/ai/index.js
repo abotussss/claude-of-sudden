@@ -51,7 +51,9 @@
 
 import * as THREE from 'three';
 import { SoldierMaterials, TEAM_RIM, TEAM_DRESS } from './textures.js';
-import { buildSoldier, resolveMaterials, MATERIAL_SLOTS, VARIANTS } from './soldier.js';
+import {
+  buildSoldier, resolveMaterials, MATERIAL_SLOTS, VARIANTS, isSpearheadDress,
+} from './soldier.js';
 import { RIG } from './rig.js';
 import { NavGrid, CoverMap, StairMap } from './nav.js';
 import {
@@ -2396,8 +2398,27 @@ export class AiSystem {
     this._rimTeam = this.playerTeam;
     for (const [variant, team] of this._variantTeam) {
       const friendly = team === this.playerTeam;
-      this.materials.setTeamRim(variant, friendly ? TEAM_RIM.friendly : TEAM_RIM.hostile);
-      this.materials.setTeamDress(variant, friendly ? TEAM_DRESS.friendly : TEAM_DRESS.hostile);
+      const spear = isSpearheadDress(variant);
+      this.materials.setTeamRim(variant, friendly
+        ? TEAM_RIM.friendly
+        : (spear ? TEAM_RIM.spearhead : TEAM_RIM.hostile));
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * AND THE PARADROP WEARS A DARKER ONE — 「増援の精鋭はもっと赤色を赤黒くして」
+       * ────────────────────────────────────────────────────────────────────
+       * The elite dress is chosen HERE and not in `resolveMaterials`, for the
+       * one reason every colour decision in this subsystem is: which of the
+       * three tints a variant takes is a question about `playerTeam`, and this
+       * is the only pass that knows the answer. `isSpearheadDress` is a
+       * property of the VARIANT, so a spearhead of the player's own side falls
+       * down the friendly branch and keeps the slate — his elite-ness is
+       * carried by his kit and his silhouette, and never by wearing the colour
+       * that means "shoot this one". @see `TEAM_DRESS.spearhead`.
+       */
+      const dress = friendly
+        ? TEAM_DRESS.friendly
+        : (spear ? TEAM_DRESS.spearhead : TEAM_DRESS.hostile);
+      this.materials.setTeamDress(variant, dress);
     }
   }
 

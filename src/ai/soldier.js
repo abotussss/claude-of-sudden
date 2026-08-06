@@ -168,6 +168,103 @@ export const VARIANTS = {
 };
 
 /**
+ * ════════════════════════════════════════════════════════════════════════════
+ * AND THE TEN WHO FALL OUT OF THE HELICOPTER — 「増援の精鋭はもっと赤色を赤黒くして
+ * 強そうにして」
+ * ════════════════════════════════════════════════════════════════════════════
+ * DERIVED, exactly as `<dress>Dmr` and the two civilians are, and off EVERY
+ * dress rather than off the enemy's one. That is not generality for its own
+ * sake: `TEAM_VARIANTS` is `match`'s table and the drop's recipient is
+ * `1 - RULES.playerTeam`, so hard-coding `irregular` here would be the same
+ * PAINT-BY-INDEX mistake the header over `TEAM_DRESS` records shipping twice.
+ * A spearhead of MY side wearing MY dress is what deriving guarantees, and it
+ * costs one extra key per dress that no match on this map ever builds
+ * (`AiSystem.variant` is lazy — only the geometry actually spawned is baked).
+ *
+ * IT IS THE CIVILIAN GATE RUN BACKWARDS. `civil: true` DELETES the carrier, the
+ * pouches, the pads and the gloves, because a man in his own clothes is defined
+ * by what he is not carrying; the spearhead is defined by what he is, so every
+ * line below ADDS:
+ *
+ *   THE THIRD MAGAZINE POUCH   `fullCarrier`, which is the widest thing on the
+ *                              chest and the one that survives 27 px.
+ *   THE KNEE PADS              `kneePads`, hard cups on the shins.
+ *   A HARD BALLISTIC MASK      `maskHard`. The wrap becomes moulded polymer at
+ *                              `GEAR.mask` — near-black with a sheen — so the
+ *                              lower face reads as equipment instead of cloth.
+ *   MASS                       `bulk` +14 % and `scale` +4 %. He is a bigger
+ *                              man in more kit, which is the read at any range.
+ *
+ * WHAT IT DELIBERATELY DOES NOT ADD IS A HELMET, and that is the one piece of
+ * kit the tempting version of this puts on him. @see `TEAM_VARIANTS` in
+ * `src/match/rules.js`: the two armies are split HELMET vs HEAD WRAP on purpose,
+ * so a helmeted enemy elite would carry the FRIENDLY silhouette at the range
+ * where silhouette is all that is left. The head keeps his own army's outline
+ * and gains a black face inside it.
+ *
+ * AND HE IS DARKER — 「赤黒く」. Two multipliers, in two different places, and
+ * they compose:
+ *
+ *   HERE, the garment tints are scaled by `SPEAR_VALUE`, which multiplies the
+ *   camo bake's albedo and therefore takes the whole per-part value hierarchy
+ *   (cloth over pouches over carrier over boots) down together rather than
+ *   flattening it.
+ *   IN `textures.js`, `TEAM_DRESS.spearhead` rotates that darkened albedo to a
+ *   crimson of about HALF the ordinary hostile's luminance at a higher mix
+ *   strength. @see the note there for the measurement and for why the hue has
+ *   to be carried by the tint rather than left to the light.
+ *
+ * `spear: true` is the flag `AiSystem._applyTeamRims` reads to choose that
+ * dress, keyed off the VARIANT rather than off a team index for the same reason
+ * as everything else in this block.
+ */
+export const SPEAR_SUFFIX = 'Spearhead';
+
+/**
+ * What the garment tints are multiplied by — a value split of a stop and a
+ * quarter before the dress is applied at all.
+ *
+ * IT IS SET BY PHOTOGRAPH AND IT IS NOT A LINEAR DIAL. The first cut ran 0.55,
+ * which is a 3:1 albedo split against the ordinary hostile once the two dresses
+ * are applied, and it photographed at an sRGB LUMINANCE RATIO OF 0.79-0.95:
+ * more than half of what lands on a man's torso at these ranges does not scale
+ * with his albedo at all (sky fill, the sheen, and the team rim's own added
+ * light), so halving the cloth does nowhere near half the pixel. @see
+ * `TEAM_DRESS.spearhead` and `TEAM_RIM.spearhead`, which is where the rest of
+ * the separation had to come from, and `_eliteread.mjs` for the frames.
+ */
+const SPEAR_VALUE = 0.36;
+
+/** True for a dress derived above. Read by `AiSystem._applyTeamRims`. */
+export function isSpearheadDress(name) {
+  return VARIANTS[name]?.spear === true;
+}
+
+for (const key of Object.keys(VARIANTS)) {
+  const base = VARIANTS[key];
+  const dim = (c, k = SPEAR_VALUE) => [c[0] * k, c[1] * k, c[2] * k];
+  VARIANTS[`${key}${SPEAR_SUFFIX}`] = {
+    ...base,
+    spear: true,
+    clothTint: dim(base.clothTint),
+    gearTint: dim(base.gearTint),
+    plateTint: dim(base.plateTint),
+    // The shell, if this dress has one at all. A spearhead of the player's own
+    // side keeps his helmet — it is his army's silhouette, not the elite's cue.
+    helmetTint: base.helmetTint ? dim(base.helmetTint) : undefined,
+    // NOT dimmed: skin is not a garment, it takes no team dress, and a grey
+    // face under a black mask is a corpse rather than a soldier.
+    skinTint: base.skinTint,
+    faceWrap: true,
+    maskHard: true,
+    kneePads: true,
+    fullCarrier: true,
+    bulk: (base.bulk ?? 1) * 1.14,
+    scale: (base.scale ?? 1) * 1.04,
+  };
+}
+
+/**
  * ────────────────────────────────────────────────────────────────────────────
  * AND A TWIN OF EACH ONE HOLDING A LONG GUN — 「あとスナイパー持ってるAIはちゃんと
  * いる？」

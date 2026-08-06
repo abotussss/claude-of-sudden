@@ -627,6 +627,27 @@ export const TEAM_RIM = {
   /** Linear-space rim colour × strength, hostile and friendly. */
   hostile: [0.95, 0.175, 0.085],
   friendly: [0.10, 0.26, 0.58],
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * AND THE PARADROP'S IS BLOOD RATHER THAN EMBER — 「増援の精鋭はもっと赤色を
+   * 赤黒くして」
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE RIM IS WHY THE UNIFORM ALONE COULD NOT DO IT. Everything above adds
+   * light to the figure — `outgoingLight += owCharTeam * …` — and it is
+   * proportional to the surface's own radiance, so an elite whose ALBEDO had
+   * been halved was still being handed the same warm orange back on top of it.
+   * Measured on the first cut (`_eliteread.mjs`, 5-35 m, sun and shade): the
+   * two men separated by 6-23 in 255 and by a luminance ratio no better than
+   * 0.79, i.e. the darkening was largely being paid back by his own outline.
+   *
+   * Two thirds of the strength, and what is left is red rather than orange:
+   * 6:1 over green here against the hostile's 5.4:1, with the green and blue
+   * lifts cut to a third. He is still unmistakably WARM — the whole friend/foe
+   * convention is warm-shoot / cool-hold and an elite may not become ambiguous
+   * about which side he is on — he is simply the darkest, reddest thing on the
+   * map instead of the brightest.
+   */
+  spearhead: [0.62, 0.058, 0.030],
   /** |N.V| threshold at close range (outer sliver) and at long range (open). */
   edgeNear: 0.52,
   edgeFar: 0.10,
@@ -729,6 +750,39 @@ export const TEAM_DRESS = {
    * is what survives 10 px) and buys back value separation from the sand.
    */
   hostile: [2.10, 0.52, 0.50, 0.72],
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * AND THE TEN OUT OF THE HELICOPTER ARE A DARKER, BLACKER RED —
+   * 「増援の精鋭はもっと赤色を赤黒くして強そうにして」
+   * ══════════════════════════════════════════════════════════════════════════
+   * Luminance 0.39 against the ordinary hostile's 0.85, at a mix strength of
+   * 0.95 against 0.72 — so the crimson covers nearly the whole pixel AND is
+   * less than half as bright, which is what "赤黒い" is: not a different hue,
+   * the same hue with the value taken out of it. It is also FURTHER from
+   * neutral than the hostile's, 7:1 red over green against 4:1, because the
+   * one thing a dark tint must not lose is which colour it is.
+   *
+   * It compounds with `SPEAR_VALUE` in `soldier.js`, which has already taken
+   * the garment albedo down before this is applied, and with
+   * `TEAM_RIM.spearhead`, which is the third of the three and the one that
+   * mattered most — @see the note there for what the first cut measured.
+   *
+   * IT IS RESOLVED AGAINST `playerTeam` LIKE EVERYTHING ELSE HERE.
+   * `AiSystem._applyTeamRims` reads `isSpearheadDress(variant)` and uses this
+   * ONLY on the hostile branch; a spearhead of the player's OWN side keeps the
+   * friendly slate, because the first thing the dress has to answer is which
+   * side he is on and only the second is what kind of man he is.
+   *
+   * WHY IT IS NOT NEAR-NEUTRAL, WHICH IS THE OBVIOUS WAY TO WRITE "DARKER".
+   * @see `CIVIL_CLOTH` in soldier.js: the first cut of the militia was a pure
+   * value split, and photographed it came back BLUE — a low-chroma albedo
+   * standing in its own shadow is lit by sky fill and the sky fill on this map
+   * is blue. Halving the luminance of a tint while KEEPING it 6:1 red-over-green
+   * is what stops the same thing happening in the shade here, and it was
+   * photographed rather than argued: @see `_eliteread.mjs`, an elite beside an
+   * ordinary hostile in one frame at 5/6/12/20/35 m, sun and shade.
+   */
+  spearhead: [1.22, 0.17, 0.14, 0.95],
 };
 
 /* ------------------------------------------------------------------ */

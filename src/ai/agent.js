@@ -34,7 +34,7 @@
 
 import * as THREE from 'three';
 import { RIG } from './rig.js';
-import { VARIANTS, DMR_SUFFIX } from './soldier.js';
+import { VARIANTS, DMR_SUFFIX, SPEAR_SUFFIX } from './soldier.js';
 import { Animator } from './animator.js';
 
 const STATE = {
@@ -1230,15 +1230,34 @@ export class Agent {
       : (persona.archetype === 'sniper' ? 'sniper' : 'carbine');
     const asked = opts.variant ?? 'vanguard';
     /**
+     * ──────────────────────────────────────────────────────────────────────
+     * AND THE PARADROP LOOKS LIKE THE PARADROP — 「増援の精鋭はもっと赤色を赤黒く
+     * して強そうにして」
+     * ──────────────────────────────────────────────────────────────────────
+     * Exactly the same move as the bolt gun below it, one step earlier: the
+     * dress `match` asked for is swapped for that dress's OWN spearhead twin,
+     * so the ten men wear their side's uniform in a darker crimson with heavier
+     * kit on it. `match` passes `elite` and knows nothing about any of this,
+     * which is the split the civilian faction already established — @see
+     * `SPEAR_SUFFIX` in soldier.js and `TEAM_DRESS.spearhead`.
+     *
+     * It runs BEFORE the `Dmr` test so the elite with the bolt gun off the rack
+     * lands on `<dress>SpearheadDmr`, which exists because the Dmr loop twins
+     * every key in the table including these.
+     */
+    const dress = this._elite && VARIANTS[`${asked}${SPEAR_SUFFIX}`]
+      ? `${asked}${SPEAR_SUFFIX}`
+      : asked;
+    /**
      * A MAN WITH A BOLT GUN HOLDS A BOLT GUN. `<dress>Dmr` is the same soldier
      * in the same dress carrying a long gun on a scope, so the side still reads
      * as one side and the silhouette stops lying about the weapon. Falls back to
      * the dress `match` asked for if no twin exists, so an unknown variant name
      * behaves exactly as it always did.
      */
-    this.variantName = this.weaponId === 'sniper' && VARIANTS[`${asked}${DMR_SUFFIX}`]
-      ? `${asked}${DMR_SUFFIX}`
-      : asked;
+    this.variantName = this.weaponId === 'sniper' && VARIANTS[`${dress}${DMR_SUFFIX}`]
+      ? `${dress}${DMR_SUFFIX}`
+      : dress;
     const def = ai.variant(this.variantName);
     this.def = def;
     this.scale = def.variant.scale ?? 1;
@@ -1461,7 +1480,14 @@ export class Agent {
     this.holdFactor = W.hold;
     /** What the gun costs him on his feet. @see `WEAPONS.move` / `_sprintGate`. */
     this.moveScale = W.move ?? 1;
-    /** The irregular's 1.23x on a magazine change is kept: it was a variant cue. */
+    /**
+     * The irregular's 1.23x on a magazine change is kept: it was a variant cue.
+     * IT IS AN EXACT MATCH AND ALWAYS HAS BEEN — `irregularDmr` never carried
+     * it either — so a spearhead of that dress changes his magazine at the
+     * rack's own rate. That is the right answer for the one man on the map
+     * whose whole brief is 「AIとしての強さはマックス」, and it is written down
+     * here rather than left to be discovered. @see `SPEAR_SUFFIX`.
+     */
     this.reloadTime = W.reload * (this.variantName === 'irregular' ? 1.23 : 1);
 
     /**
