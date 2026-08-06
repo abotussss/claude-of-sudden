@@ -39,6 +39,11 @@ if (params.has('seed')) {
   const s = Number(params.get('seed'));
   if (Number.isFinite(s)) configOpts.seed = s >>> 0;
 }
+// `?map=town|plains` picks the LEVEL. Absent, `DEFAULTS.map` applies and the
+// map this repo shipped with boots exactly as it always did. The registry and
+// the level contract are in src/world/levels/index.js; `match` reads the choice
+// back off `world.level.id` rather than re-parsing the query string.
+if (params.has('map')) configOpts.map = params.get('map');
 const config = createConfig(configOpts);
 
 const canvas = document.getElementById('game');

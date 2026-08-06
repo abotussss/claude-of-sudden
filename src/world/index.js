@@ -1,40 +1,26 @@
 import * as THREE from 'three';
 import { Assembler } from './builder.js';
-import { BUILDINGS, STREET, SET_PIECES, GATE, SCALE, RELIEF, ALLEYS, SITEWORKS, FLAT, CATHEDRAL } from './layout.js';
-import { buildCathedral } from './cathedral.js';
-import { buildGround } from './ground.js';
-import { buildBuilding, collapseRoof } from './buildings.js';
-import { buildRelief } from './relief.js';
-import { buildCordon } from './cordon.js';
-import { buildFeatures } from './features.js';
-import { buildLinks } from './links.js';
-import { buildSiteWorks } from './sitework.js';
-import { planDemolitions, buildRuins, publishDemolitions } from './demolition.js';
-import { planBreaches, buildBreaches, publishBreaches, claimRect } from './breach.js';
-import { registerProps } from './props.js';
-import {
-  registerDressingProps,
-  dressStreet,
-  dressBuildings,
-  scatterDebris,
-  buildGate,
-  buildPerimeter,
-  groundY,
-  isOpen,
-  setDoorways,
-} from './dressing.js';
+import { getLevel } from './levels/index.js';
+import { BUILDINGS, STREET, SET_PIECES, GATE } from './layout.js';
 
 /**
  * WORLD — level geometry, the modular building kit, props, set dressing and
  * static collision.
  *
- * A ~120 x 120 m Middle-Eastern market street: one main street with a plaza,
- * flanking alleys, eighteen buildings (three of them enterable and furnished
- * across multiple floors), an arched gate closing the vista, and several
- * thousand props. Nothing is loaded from disk — every vertex is generated here.
+ * THERE IS MORE THAN ONE MAP NOW. This file used to BE the map: it imported
+ * `layout.js` at module scope and `init()` unconditionally assembled one
+ * Middle-Eastern market town, with that town's yaw, scale, spawn table, play box
+ * and ground queries written into it as constants. It is now the HOST — the
+ * prologue (root, Assembler, transform), the epilogue (lights, `finalize`,
+ * publish, bounds, queries) and the public API — and the map itself is a level
+ * module under `src/world/levels/`, selected by `config.map` / `?map=`.
  *
- * HOW IT FITS TOGETHER
- *   layout.js     the map: footprints, facade programmes, set-piece positions
+ *   levels/index.js   the registry and the level contract (READ THIS FIRST)
+ *   levels/town.js    AL-MARIYA — the ~190 x 190 m market town, unchanged
+ *   levels/plains.js  NACHTFELD — the night plain
+ *
+ * HOW THE REST FITS TOGETHER (all of it generic, shared by every level)
+ *   layout.js     the TOWN's map: footprints, facade programmes, set pieces
  *   util.js       geometry toolkit (chamfered boxes, wall panels with real
  *                 holes, cloth grids, catenary tubes, rocks) + vertex masks
  *   kit.js        the modular building kit (facades, windows, doors, balconies,
@@ -49,6 +35,7 @@ import {
  *
  * PUBLIC API — `const world = ctx.get('world')`
  *   world.root                THREE.Group holding everything
+ *   world.level               the active level record (id, name, …)
  *   world.bounds              THREE.Box3 of the playable area, world space
  *   world.spawnPoints         [{ position:Vector3, yaw:number, tag:string }]
  *   world.levelYaw            the level->world yaw, for gameplay-authored facings
@@ -62,8 +49,13 @@ import {
  *                                botReachable, position:Vector3, level, yaw }].
  *                             `world` gives nothing away — `match` binds the
  *                             pickup, `ai` binds the interest. See features.js.
+ *                             MAY BE EMPTY: a level with no enterable buildings
+ *                             publishes `[]`, and every consumer already handles
+ *                             that (`src/match/caches.js` proves each one
+ *                             against the real nav grid and drops the rest).
  *   world.links               the rooftop gangways: [{ id, from, to, a, b,
  *                             width, span, fall }] in world space. See links.js.
+ *                             MAY BE EMPTY.
  *   world.demolitions         the buildings that carry a CACHED DESTROYED STATE:
  *                             [{ id, name, zone, opens, position, radius, top,
  *                                halfW, halfD, level, navRect, mass, surfaces,
@@ -72,17 +64,11 @@ import {
  *                             live in the merged batches; bringing one down is
  *                             two index-range fills and two mask fills. See
  *                             `world.demolish` and src/world/demolition.js.
+ *                             MAY BE EMPTY.
  *   world.demolish(id, down)  swap one building for its ruin, or back
  *   world.demolishAll(down)   …all of them. The round reset, and `?demo=down`.
  *   world.breaches            the CACHE HOUSES, which lose a WALL rather than
- *                             the building: [{ id, building, side, name,
- *                                position, normal, along, halfLen, holeW, holeH,
- *                                reach, strength, level, navRect, mass,
- *                                surfaces, tint, down, setVisual(d),
- *                                setCollision(d), setDown(d) }]. Both forms are
- *                             built at boot and live in the merged batches; the
- *                             wall coming off is two index-range fills and two
- *                             mask fills. See src/world/breach.js.
+ *                             the building. MAY BE EMPTY. See breach.js.
  *   world.damageAt(p, s)      A HIT, at a world position, carrying a strength.
  *                             Returns the `world.breaches` record that opened,
  *                             or null (nothing there / already open / too weak).
@@ -92,21 +78,12 @@ import {
  *   world.interiorVolumes     the GROUND FLOOR of every enterable building, as
  *                             an oriented box the bot height field can re-sample
  *                             itself against: [{ building, cx, cz, c, s, hw, hd,
- *                             floorY, probeY }]. See `_interiorVolumes()`.
+ *                             floorY, probeY }]. MAY BE EMPTY.
  *   world.prewarmMaterials()  compile every shader permutation the world can
  *                             produce, before the frame loop starts. Awaitable.
  *                             Call it from src/core/prewarm.js — see the method.
  *   world.levelToWorld(x,y,z,out) / world.worldToLevel(x,y,z,out)
  */
-
-/**
- * LEVEL -> WORLD. The street is authored down -Z; this yaw puts it on the axis
- * the canonical hero/sunset cameras look along, with the market in the near
- * third of the frame and the gate closing the far end.
- */
-const LEVEL_YAW = 0.5877;
-const LEVEL_TX = 0.9;
-const LEVEL_TZ = 1.34;
 
 /**
  * How many zero-intensity "ballast" point lights the world parks in the scene to
@@ -116,58 +93,6 @@ const LEVEL_TZ = 1.34;
  * puts that at 10 for the world's own lights, plus whatever `fx` keeps live.
  */
 const LIGHT_SLOTS = 20;
-
-/**
- * Spawn points in LEVEL space: [x, z, yaw, tag].
- *
- * These are the DEV/free-roam spawns, not the match's — but they are also the
- * only seeds `tools/boundcheck.mjs` floods from, so every reachable pocket of
- * the map has to be connected to one of them or that gate simply never looks at
- * it. Both base districts, the cathedral and the two new plazas are on the list
- * for that reason as much as for the camera's.
- *
- * Authored in WIDENED level space — the mid street's kerb is at x ∓15.5 now, so
- * a point at x ∓26 is in a lane rather than against a shopfront. @see `widenX`.
- */
-/**
- * THE TWO NEW CORNER DISTRICTS ARE ON THIS LIST, AND THEY HAVE TO BE.
- *
- * `boundcheck` floods from these points and nothing else, so a district that is
- * not connected to one of them is ground the boundary gate never looks at — the
- * exact blind spot that let 5 645 m² of bare sand survive until `cordon.js` was
- * written. Zone A's and zone B's yards are 2 300 m² of brand new authored ground
- * each; they get a seed apiece, and the two flank beacon squares are covered by
- * the courtyard/lane seeds that were already here.
- */
-const SPAWNS = [
-  [0.4, 28.5, Math.PI, 'north cross'],
-  [-2.4, 60.0, Math.PI, 'attack pocket'],
-  [0.0, 47.0, Math.PI, 'north plaza'],
-  [-38.0, 51.0, -Math.PI / 2, 'the north-west yard'],
-  [-46.0, 34.0, Math.PI, 'north-west throat'],
-  /**
-   * THE TWO NEW CITIES, and they are on this list for the same reason the corner
-   * districts are: `boundcheck` floods from these seeds and nothing else, so an
-   * avenue that is not connected to one of them is 1 500 m² of brand new ground
-   * the boundary gate never looks at. One seed at each capture point and one at
-   * each avenue's far end, so the flood has to cross both cross-street mouths.
-   * @see `THE MAP GROWS — PART 6` in layout.js.
-   */
-  [-76.5, 46.0, Math.PI, 'zone A — the west city'],
-  [-76.5, 18.0, 0, 'the west avenue, south end'],
-  [76.5, -48.0, 0, 'zone B — the east city'],
-  [76.5, -20.0, Math.PI, 'the east avenue, north end'],
-  [3.6, 18.0, Math.PI, 'mid street'],
-  [0.0, -1.0, Math.PI, 'the cathedral crossing'],
-  [-3.4, -12.5, 0, 'mid south'],
-  [2.6, -30.0, 0, 'south cross'],
-  [0.0, -49.0, 0, 'south plaza'],
-  [38.0, -53.0, Math.PI / 2, 'zone B — south-east district'],
-  [46.0, -36.0, 0, 'south-east throat'],
-  [-1.0, -62.0, 0, 'defend pocket'],
-  [35.0, -4.0, -Math.PI / 2, 'east courtyard'],
-  [-35.0, -4.0, Math.PI / 2, 'zone C — west courtyard'],
-];
 
 export class WorldSystem {
   static id = 'world';
@@ -181,6 +106,14 @@ export class WorldSystem {
     const physics = ctx.peek('physics');
     const render = ctx.peek('render');
 
+    /**
+     * WHICH MAP. `config.map` is set from `?map=` in src/main.js and defaults to
+     * `'town'`, so every existing tool, gate and capture path that knows nothing
+     * about levels boots the map it always booted.
+     */
+    const level = getLevel(ctx.config?.map);
+    this.level = level;
+
     this.root = new THREE.Group();
     this.root.name = 'world';
     this.root.matrixAutoUpdate = false;
@@ -192,173 +125,20 @@ export class WorldSystem {
     const t0 = performance.now();
     const A = new Assembler({ materials, rng, render });
     this.A = A;
-    A.setTransform(LEVEL_YAW, LEVEL_TX, LEVEL_TZ);
-
-    // 1. prototypes first: the level references them by id while it builds
-    registerProps(A, rng);
-    registerDressingProps(A, rng);
-
-    // 2. ground, then the shells, then what people put in and on them
-    buildGround(A, rng);
+    A.setTransform(level.yaw, level.tx, level.tz);
 
     /**
-     * THE BUILDINGS THAT CAN COME DOWN, decided before the first wall goes up.
-     * @see src/world/demolition.js. Opening a scope round `buildBuilding` costs
-     * nothing and changes nothing — it only records WHERE in the merged batches
-     * this building's triangles, instances and collision ended up, so that they
-     * can all stop existing together later. No rng is drawn here, so the set
-     * dressing of the whole map is bit-identical with the feature off.
+     * THE MAP ITSELF. Everything from the prototype registration to the last
+     * scattered stone, in the level's own order — and the order IS the map,
+     * because `rng` is one stream and every pass draws from it in sequence.
      */
-    const demoPlan = planDemolitions(BUILDINGS);
-    const demoOf = new Map(demoPlan.map((d) => [d.id, d]));
-
-    /**
-     * …AND THE HOUSES THAT ONLY LOSE A WALL, decided in the same breath and for
-     * the same reason. A cache house may not be levelled — that deletes the
-     * reason to walk into it — so what it carries is ONE ELEVATION's worth of
-     * damaged state, and the scope has to be opened round that elevation as the
-     * facade goes up. @see src/world/breach.js. No rng is drawn to plan it.
-     */
-    const breachPlan = planBreaches(BUILDINGS);
-    /**
-     * A LIST PER BUILDING, NOT ONE RECORD PER BUILDING. A cache house carries
-     * up to two breachable elevations now — 「今は屋内が安全すぎる」 — and this
-     * was a `Map(id -> record)`, which silently keeps the LAST of the pair and
-     * leaves the other with no wall scope at all.
-     */
-    const breachOf = new Map();
-    for (const b of breachPlan) {
-      const list = breachOf.get(b.building);
-      if (list) list.push(b);
-      else breachOf.set(b.building, [b]);
-    }
-
-    const infos = [];
-    for (const spec of BUILDINGS) {
-      const demo = demoOf.get(spec.id);
-      const brs = breachOf.get(spec.id);
-      if (demo) demo.shell = A.beginScope(`shell:${spec.id}`);
-      const info = buildBuilding(
-        A,
-        rng,
-        spec,
-        brs
-          ? { scopeGroundSides: Object.fromEntries(brs.map((b) => [b.side, `wall:${b.id}`])) }
-          : null
-      );
-      if (demo) {
-        A.endScope();
-        demo.info = info;
-      }
-      for (const br of brs ?? []) {
-        br.info = info;
-        br.wall = info.facadeScopes?.[br.side] ?? null;
-      }
-      infos.push(info);
-      if (spec.collapse) {
-        collapseRoof(A, rng, spec, info, {
-          x: spec.x + rng.range(-2, 2),
-          z: spec.z + rng.range(-2, 2),
-        });
-      }
-    }
-    this.buildings = infos;
-    // The doors are cut; keep every prop with a collision proxy off their
-    // approaches before a single one is placed. See `setDoorways`.
-    setDoorways(infos, BUILDINGS);
-
-    buildGate(A, rng);
-    buildPerimeter(A, rng);
-    /**
-     * THE CORDON — the six holes the play area leaked out of, closed. It runs
-     * after `buildPerimeter` and draws from its OWN rng stream, so it cannot
-     * shift a single prop, stain or pock the dressing pass places below. See
-     * `src/world/cordon.js`; `tools/boundcheck.mjs` is the gate.
-     */
-    this.cordon = buildCordon(A);
-    // Height goes in BEFORE the dressing, because `groundY` reads it and every
-    // scattered prop, stain and skirt is placed off `groundY`.
-    buildRelief(A, rng);
-    // …and the site works with it, for the same reason: `isOpen` consults
-    // `inSitework` before the dressing pass drops anything, so a crate cannot be
-    // scattered inside a pier.
-    buildSiteWorks(A, rng);
-    /**
-     * THE CATHEDRAL, and it is built here for two ordering reasons rather than
-     * one. It has to be up before the dressing pass, because `dressing.isOpen`
-     * consults `inCathedral` and a stall pitched in the chancel is the same bug
-     * as one pitched inside a pier; and it has to be up before `A.finalize`,
-     * because its floor, its walls and its dome are collision the nav grid is
-     * built from. It draws from its OWN fixed-seed rng stream — see the note at
-     * the top of the module — so it cannot move a single prop placed below.
-     */
-    this.cathedral = buildCathedral(A);
-    dressStreet(A, rng);
-    /**
-     * THE DRESSING GOES DOWN WITH THE BUILDING IT IS BOLTED TO.
-     *
-     * `dressBuildings` is one loop over every building, so there is no lexical
-     * bracket to put round one of them — and without this a demolished block
-     * leaves its satellite dishes, water tanks, AC units, conduit and washing
-     * lines hanging in the air ten metres up. `A.claim` arms a SPATIAL claim
-     * instead: anything the dressing pass writes inside one of these footprints
-     * and above its plinth is filed under that building's shell scope. Disarmed
-     * immediately after, so `scatterDebris` — which scatters onto the STREET —
-     * is untouched. @see `claimZones` in builder.js.
-     */
-    for (const d of demoPlan) {
-      if (!d.shell) continue;
-      A.claim(d.shell, d.spec.x - d.spec.w / 2 - 1.2, d.spec.z - d.spec.d / 2 - 1.2,
-        d.spec.x + d.spec.w / 2 + 1.2, d.spec.z + d.spec.d / 2 + 1.2, 0.45);
-    }
-    /**
-     * …AND THE SAME CLAIM OVER THE ONE STOREY OF ONE ELEVATION A BREACH TAKES.
-     * An AC unit or a run of conduit bracketed to the piece of wall that is
-     * about to stop existing would otherwise be left hanging in the hole, which
-     * is the demolition claim's own bug at 1/60th the size. Bounded ABOVE at the
-     * ground storey's ceiling — see `Assembler.claim`'s `y1` — so the dressing
-     * two floors up over the opening is untouched.
-     */
-    for (const b of breachPlan) {
-      if (!b.wall) continue;
-      const r = claimRect(b);
-      A.claim(b.wall, r.x0, r.z0, r.x1, r.z1, 0.45, b.groundH);
-    }
-    dressBuildings(A, rng, infos);
-    A.disarmClaims();
-    scatterDebris(A, rng);
-    /**
-     * …and the destroyed state itself, built into the same merged batches and
-     * switched off at the end of `init`. It draws from its own fixed-seed stream
-     * per building, so it cannot move a prop the dressing has already placed.
-     */
-    buildRuins(A, demoPlan, infos);
-    /**
-     * …and the cache houses' damaged walls, in the same place in the order and
-     * for the same three reasons: the triangles land in the merged batches, the
-     * dressing has already been placed so nothing here can move it, and each one
-     * draws from its own fixed-seed stream. @see src/world/breach.js.
-     */
-    buildBreaches(A, breachPlan);
-
-    /**
-     * WHY YOU WOULD EVER GO IN, AND WHY YOU WOULD EVER GO UP.
-     *
-     * Both of these run LAST and on their own rng streams, so neither can move a
-     * prop the dressing has already placed:
-     *
-     *   `features` — 22 caches, one per level of every enterable building and one
-     *     on every reachable roof. Published as `world.features` for `match`/`ai`
-     *     to bind pickups to; the world only guarantees the place exists, is
-     *     reachable, is marked and looks deliberate. See src/world/features.js.
-     *   `links` — the four rooftop gangways that turn six separate roofs into two
-     *     continuous upper routes. Their decks are `LAYER.CLIP`, so the four
-     *     connectors they cross are still open ground to the bot height field.
-     *     See src/world/links.js.
-     */
-    this.features = buildFeatures(A, infos);
-    this.links = buildLinks(A, infos);
-    this.interiorVolumes = this._interiorVolumes(infos);
+    const rec = level.build(A, rng, ctx);
+    this.buildings = rec.buildings ?? [];
+    this.cathedral = rec.cathedral ?? null;
+    this.cordon = rec.cordon ?? null;
+    this.features = rec.features ?? [];
+    this.links = rec.links ?? [];
+    this.interiorVolumes = rec.interiorVolumes ?? [];
 
     this._addLights(A);
 
@@ -366,18 +146,16 @@ export class WorldSystem {
     A.releaseCache();
 
     /**
-     * THE DESTROYED STATES, PUBLISHED. Every ruin is hidden and intangible from
-     * here; `src/match/airstrike.js` re-probes the nav cells each one covers at
-     * boot and owns the event that brings them down. @see `world.demolitions`.
+     * THE DESTROYED STATES, PUBLISHED — and this can only happen after
+     * `finalize`, because a destroyed state is a cached TRIANGLE RANGE in a
+     * merged batch that does not exist until then. A level with nothing
+     * destructible returns neither list and publishes two empty arrays; every
+     * consumer is already written against that.
      */
-    this.demolitions = publishDemolitions(A, demoPlan, physics, this.root);
+    const pub = level.publish?.(A, rec, physics, this.root) ?? null;
+    this.demolitions = pub?.demolitions ?? [];
+    this.breaches = pub?.breaches ?? [];
     this._demoDown = false;
-    /**
-     * THE DAMAGED WALLS, PUBLISHED. Every breach is hidden and intangible from
-     * here. `match` owns the event that opens one — see `world.damageAt` at the
-     * foot of this file, which is the entry point a shell lands through.
-     */
-    this.breaches = publishBreaches(A, breachPlan, physics);
     /**
      * `?breach=down` — boot with every cache house's wall already blown open.
      * The gates need the damaged state as a STATE rather than as an event, the
@@ -401,10 +179,10 @@ export class WorldSystem {
     this._bw = new THREE.Vector3();
     this._inv = new THREE.Matrix4().copy(A.xform).invert();
     /** The level->world yaw, so gameplay can author facings in level space. */
-    this.levelYaw = LEVEL_YAW;
-    this.spawnPoints = SPAWNS.map(([x, z, yaw, tag]) => ({
-      position: A.toWorld(x * SCALE, 0, z * SCALE),
-      yaw: yaw + LEVEL_YAW,
+    this.levelYaw = level.yaw;
+    this.spawnPoints = level.spawns.map(([x, z, yaw, tag]) => ({
+      position: A.toWorld(x * level.scale, 0, z * level.scale),
+      yaw: yaw + level.yaw,
       tag,
     }));
     /**
@@ -414,7 +192,7 @@ export class WorldSystem {
      */
     for (const f of this.features) {
       f.position = A.toWorld(f.level.x, f.level.y, f.level.z);
-      f.yaw += LEVEL_YAW;
+      f.yaw += this.levelYaw;
     }
     for (const l of this.links) {
       l.a = A.toWorld(l.x, l.y0, l.z0);
@@ -423,142 +201,40 @@ export class WorldSystem {
     /**
      * The playable box. `src/ai/index.js` builds its nav grid straight off
      * this, so it is also the nav grid's extent and therefore its memory and
-     * its boot cost: 1.5x here is 2.25x the cells. Left at ±62 while the map
-     * went to 1.5x, everything outside 62 m would simply have no nav in it and
-     * both spawns would sit off the edge of the grid.
+     * its boot cost: cells go as the SQUARE of the half-extent. Each level
+     * declares its own — see `boundsHalf` in `levels/index.js`.
      */
-    /**
-     * 62 -> 86 AUTHORED UNITS, and this is the single most expensive line in
-     * the growth pass. The street now runs level z -80..70 and `buildCordon`
-     * closes it at ∓83.7, so a box at ±62 would leave both base districts —
-     * both SPAWNS — off the edge of the nav grid entirely. Sized to the
-     * cordon, plus a metre: 86 * 1.5 = 129 m.
-     *
-     * WHAT IT COSTS, measured: the grid goes 328x329 (108k cells, 518 ms) to
-     * 448x448 (~200k cells), i.e. 1.86x the cells, the rays and the memory.
-     * `NavGrid`'s open list is `Math.min(n, 1 << 18)` and therefore sized to the
-     * grid on its own, but A*'s `maxNodes` default of 24000 is NOT — it is a
-     * fixed cap, and an overflowing search reports "no route" silently rather
-     * than loudly. `navcheck` is the gate that would see it.
-     */
-    const HB = 86 * SCALE;
+    const HB = level.boundsHalf;
+    const [y0, y1] = level.boundsY;
     this.bounds = new THREE.Box3(
-      new THREE.Vector3(-HB, -2, -HB),
-      new THREE.Vector3(HB, 26, HB)
+      new THREE.Vector3(-HB, y0, -HB),
+      new THREE.Vector3(HB, y1, HB)
     ).applyMatrix4(A.xform);
     this.stats = A.stats;
+    /** The authored layout, exposed for TOOLS only. @see `levels/town.js`. */
+    this.layout = rec.layout ?? {};
+
     /**
-     * The authored layout, exposed for TOOLS only — nothing in the engine reads
-     * it back through here. `tools/indoorcheck.mjs` needs the footprints of the
-     * `enterable` buildings so it can walk the real player capsule at each one
-     * and prove you can actually get inside; `navcheck` cannot tell, because it
-     * tests the BOT height field and that has no opinion about whether a doorway
-     * fits the player or whether a prop was dressed across it.
+     * THE LEVEL'S OWN TIME OF DAY, and this is the one thing `world` reaches
+     * outside itself to do. `sky.setTimeOfDay` is already `sky`'s published API
+     * (see the header of src/sky/index.js) and it is fetched at RUNTIME rather
+     * than imported, which is what ARCHITECTURE.md's rule 2 asks for. A level
+     * whose `hour` is null does not touch the sky at all, so the town is lit
+     * exactly as it always was.
      *
-     * `RELIEF` and `ALLEYS` are here for `tools/sitecheck.mjs`: it has to know
-     * where the authored overwatch decks are in order to say whether they see
-     * the plant spot, and where each courtyard's rect is in order to find that
-     * courtyard's entry mouths by walking its boundary.
-     *
-     * `SITEWORKS` and `FLAT` are here for `tools/boundcheck.mjs`, which has to
-     * know what the level ACTUALLY AUTHORED in order to say whether a piece of
-     * ground the player can walk to has anything on it — the site works are
-     * most of the mass in both courtyards, and `FLAT` is the flattened play box
-     * itself.
+     * ORDERING: `sky.deps` is `['render','materials']` and `world.deps` is
+     * `['materials','physics']`, and the registry's topological order already
+     * puts sky before world — but this is guarded anyway, because a headless
+     * harness may register no sky at all.
      */
-    this.layout = { BUILDINGS, STREET, SET_PIECES, GATE, SCALE, RELIEF, ALLEYS, SITEWORKS, FLAT, CATHEDRAL };
+    if (level.hour != null) ctx.peek('sky')?.setTimeOfDay?.(level.hour);
 
     const ms = performance.now() - t0;
     console.info(
-      `[world] built in ${ms.toFixed(0)}ms — ${(A.stats.staticTris / 1000).toFixed(0)}k static tris, ` +
+      `[world] "${level.id}" built in ${ms.toFixed(0)}ms — ${(A.stats.staticTris / 1000).toFixed(0)}k static tris, ` +
         `${(A.stats.instTris / 1000).toFixed(0)}k instanced tris in ${A.stats.instances} instances, ` +
         `${A.stats.drawCalls} draw calls, ${(A.stats.collideTris / 1000).toFixed(1)}k collision tris`
     );
-  }
-
-  /**
-   * ────────────────────────────────────────────────────────────────────────────
-   * THE GROUND FLOORS, PUBLISHED AS SOMETHING THE BOT GRID CAN SAMPLE
-   * ────────────────────────────────────────────────────────────────────────────
-   * "もっと屋内戦闘をさせたいので屋内のエリアを作ってそこにもAIがいく利点やメリットを与えて
-   *  でないとAIが屋内戦闘しない"
-   *
-   * `src/ai/nav.js` is a 2.5D height field: ONE floor per (x, z) cell, found by
-   * dropping a single ray from above the level. Inside a footprint that ray can
-   * only ever hit the ROOF, so — measured, `_navin.mjs` — every one of the 3353
-   * walkable cells inside the eight enterable buildings was at 3.2 / 6.5 / 9.6 m
-   * and ZERO were at ground level. No bot on this map could be indoors, every
-   * "give the AI a reason to go in" feature was dead on arrival, and the one that
-   * was built measured bot-time-indoors at 0.00 %.
-   *
-   * This is `world`'s half of the fix. It publishes each enterable building's
-   * GROUND STOREY as an oriented box with the height to re-probe from, and `ai`
-   * re-samples those cells from INSIDE the building — under the roof, under every
-   * upper slab — so the storey the player has always been able to walk into
-   * appears in the height field too. `world` changes NO geometry and NO collision
-   * to do it: the roof is still a roof, an upper floor still stops a bullet, and
-   * nothing here is on `LAYER.CLIP`. It is a statement about where the map's
-   * interiors are, which is exactly the kind of thing `world` is allowed to know
-   * and `ai` is not.
-   *
-   *   cx, cz    the footprint centre in WORLD space
-   *   c, s      cos/sin of the level yaw, so a consumer can put a world point
-   *             back on the building's own axes without knowing the transform
-   *   hw, hd    half extents along those axes — the OUTER footprint, walls
-   *             included, because the doorway a bot enters through is in the wall
-   *   floorY    the walking surface of the ground storey
-   *   probeY    where a downward ray must START to find that floor: above the
-   *             tallest thing worth standing on, BELOW the head of a 2.16 m
-   *             doorway (or the threshold cells sample the lintel and the storey
-   *             is an island), and far below the ceiling.
-   */
-  _interiorVolumes(infos) {
-    const c = Math.cos(LEVEL_YAW);
-    const s = Math.sin(LEVEL_YAW);
-    const out = [];
-    /**
-     * THE CATHEDRAL GOES ON THIS LIST FIRST, AND IF IT DID NOT THE WHOLE MIDDLE
-     * OF THE MAP WOULD BE A ROOM NO BOT COULD ENTER.
-     *
-     * It is not in `BUILDINGS` (see `CATHEDRAL` in layout.js for why), so the
-     * loop below cannot find it — but it is the biggest interior on the map by
-     * a factor of four and it has a CAPTURE POINT in the middle of it. Same
-     * shape of record as every other one: an oriented box on the level's own
-     * axes, the outer footprint (walls included, because the doorway a bot walks
-     * through is in the wall), and the height a downward ray must start at to
-     * find the floor rather than the vault.
-     */
-    if (this.cathedral) {
-      const k = this.cathedral;
-      const p = this.A.toWorld(k.cx, 0, k.cz, new THREE.Vector3());
-      out.push({
-        building: k.id,
-        cx: p.x, cz: p.z, c, s,
-        hw: k.hw, hd: k.hd,
-        floorY: k.floorY,
-        probeY: k.probeY,
-      });
-    }
-    for (const info of infos) {
-      const spec = info.spec;
-      if (!spec.enterable) continue;
-      const p = this.A.toWorld(spec.x, 0, spec.z, new THREE.Vector3());
-      /** The interior slab tops out 0.14 above the storey's own datum. */
-      const floorY = (info.floorY?.[0] ?? 0) + 0.14;
-      /**
-       * The underside of whatever is over the ground storey — the first floor's
-       * slab and its exposed joists, or the roof slab in a single-storey block.
-       */
-      const ceil = (info.floorY?.[1] ?? info.roofY) - 0.44;
-      out.push({
-        building: spec.id,
-        cx: p.x, cz: p.z, c, s,
-        hw: spec.w / 2, hd: spec.d / 2,
-        floorY,
-        probeY: Math.min(floorY + 1.56, ceil),
-      });
-    }
-    return out;
   }
 
   // ----------------------------------------------------------------- lights --
@@ -566,6 +242,13 @@ export class WorldSystem {
    * Punctual lights the world owns: the bare bulbs inside the enterable
    * buildings (what makes an interior read as lived-in against cool skylight)
    * and the street lamps, which only draw power after dusk.
+   *
+   * BOTH LISTS ARE FILLED BY THE LEVEL, through the Assembler: `interiors.js`
+   * pushes to `A.interiorLights` and `dressing.js` to `A.lampAnchors`. A level
+   * that has neither gets ballast and nothing else, which is correct — and a
+   * level that wants a light that is neither (a burning ridge line) registers it
+   * itself with `A.light` during `build`, where it is under the same distance
+   * cull and the same fixed permutation budget.
    */
   _addLights(A) {
     this.bulbs = [];
@@ -729,6 +412,7 @@ export class WorldSystem {
       // altitude: a weak practical by day, the room's only light after dark.
       for (let i = 0; i < this.bulbs.length; i++) this.bulbs[i].intensity = 5 + 17 * mix;
     }
+    this.level?.update?.(dt, ctx, this);
   }
 
   lateUpdate(dt, ctx) {
@@ -929,16 +613,17 @@ export class WorldSystem {
   /** Analytic floor height. Physics owns the exact answer; this is a hint. */
   groundHeight(x, z) {
     const p = this.worldToLevel(x, 0, z, this._v);
-    return groundY(p.x, p.z);
+    return this.level.groundY(p.x, p.z);
   }
 
   /** True where a character can stand outdoors (street, pavement, alley). */
   isOpen(x, z, margin = 0.4) {
     const p = this.worldToLevel(x, 0, z, this._v);
-    return isOpen(p.x, p.z, margin);
+    return this.level.isOpen(p.x, p.z, margin);
   }
 
   dispose() {
+    this.level?.dispose?.();
     this.A?.dispose();
     this.root?.parent?.remove(this.root);
     for (const l of this._ballast ?? []) l.parent?.remove(l);

@@ -387,4 +387,95 @@ export const PALETTE = {
       three: { emissive: 0xffc47a, emissiveIntensity: 0, opacity: 0.5 },
     },
   },
+
+  // ------------------------------------------------------------- the plain --
+  /**
+   * NACHTFELD's surfaces. @see `src/world/levels/plains.js`.
+   *
+   * ADDITIVE ONLY — not one key above this line is touched, so the town's draw
+   * batches, merge order and appearance are bit-identical. A key nobody uses
+   * costs nothing: `Assembler.mat` builds a material lazily, on the first `add`
+   * that names it, so a town boot never generates any of these.
+   *
+   * There is no grass generator in `src/materials` and this pass may not add
+   * one (that library belongs to another subsystem). What a night steppe
+   * actually needs is not a lawn anyway: it is dry, grazed-off ground with the
+   * green in the standing tufts rather than in the soil. So the SOIL is the
+   * `dirt` generator pushed cold and olive, the worn ground is `sand` pushed
+   * grey, and the green is carried by `foliage` — real alpha-masked cards, the
+   * same prototypes the town's shrubs and weeds are built from.
+   */
+  steppe: {
+    name: 'dirt',
+    surface: 'dirt',
+    opts: {
+      vertexMasks: true,
+      tint: 0x5c6047,
+      scale: 3.4,
+      detile: 0.8,
+      normalStrength: 1.15,
+      weather: [0.25, 0.0, 0.0, 0.28],
+      wear: [0, 0.5, 0.45, 0],
+    },
+  },
+  /** Grazed-off and trodden: the ground colour where boots and wheels have been. */
+  steppe_bare: {
+    name: 'dirt',
+    surface: 'dirt',
+    opts: { vertexMasks: true, tint: 0x6e6a53, scale: 2.2, detile: 0.75, wear: [0, 0.55, 0.5, 0] },
+  },
+  /** Dust and grit blown into the hollows and up against the ridge foot. */
+  steppe_dust: {
+    name: 'sand',
+    surface: 'sand',
+    opts: { vertexMasks: true, tint: 0x8a8168, scale: 2.8, detile: 0.7, wear: [0, 0.45, 0.45, 0] },
+  },
+  /** Scree and shattered stone on the ridge faces. */
+  scree: {
+    name: 'gravel',
+    surface: 'dirt',
+    opts: { vertexMasks: true, tint: 0x77736b, scale: 2.0, wear: [0, 0.5, 0.45, 0] },
+  },
+  /** The mountain itself: cold, coarse rock with real macro relief. */
+  mountain_rock: {
+    name: 'concrete',
+    surface: 'concrete',
+    opts: {
+      vertexMasks: true,
+      tint: 0x6b6a67,
+      scale: 6.5,
+      detile: 0.55,
+      normalStrength: 1.45,
+      weather: [0.5, 0.55, 1.1, 0.6],
+    },
+  },
+  /**
+   * Rock with a fire on the far side of it. Same generator, same tiling — it is
+   * the SAME MOUNTAIN — lifted into the warm end and given just enough emission
+   * to read as lit from within at night. The light itself is a real point light
+   * (see `plains.js:_fires`); this is the surface that light is coming off.
+   */
+  mountain_lit: {
+    name: 'concrete',
+    surface: 'concrete',
+    opts: {
+      vertexMasks: true,
+      tint: 0x7a5f49,
+      scale: 6.5,
+      detile: 0.55,
+      normalStrength: 1.45,
+      weather: [0.5, 0.55, 1.1, 0.6],
+      three: { emissive: 0xff5a1c, emissiveIntensity: 0.55, toneMapped: true },
+    },
+  },
+  /** The burning seam itself. Small surface, so it needs real radiance. */
+  ember: {
+    name: 'concrete',
+    surface: 'concrete',
+    opts: {
+      scale: 0.7,
+      tint: 0x3a2418,
+      three: { emissive: 0xff7a22, emissiveIntensity: 9, toneMapped: true },
+    },
+  },
 };

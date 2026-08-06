@@ -126,6 +126,15 @@ export const DEFAULTS = {
    * `?q=ultra` still selects it.
    */
   quality: 'medium',
+  /**
+   * WHICH MAP. `'town'` is AL-MARIYA, the market town this repo shipped with;
+   * `'plains'` is NACHTFELD, the night plain. Set from `?map=` in src/main.js.
+   * The registry and the level contract live in `src/world/levels/index.js`;
+   * an unknown id falls back to this default with a warning rather than
+   * throwing, so a typo in a tool's query string cannot turn every gate in
+   * `tools/` into a silent 240 s boot timeout.
+   */
+  map: 'town',
   fov: 80, // horizontal-ish vertical FOV, CoD default feel
   adsFovScale: 0.72,
   sensitivity: 0.0022,
