@@ -1828,19 +1828,52 @@ export class AudioSystem {
       surface: p?.surface ?? 'concrete', gait: 'land',
       level: clamp(v / 7, 0.35, 1.7) * OWN_STEP_LEVEL, gear: 1, occlusion: 0,
     }, 'foley', 0.9);
+    /**
+     * THE ONE `cloth()` THAT SURVIVED THE SWISH CULL. @see _onPlayerState.
+     *
+     * It is kept because it is not a movement trigger at all — it is an IMPACT,
+     * and it cannot fire from walking, crouching, sliding or aiming. 8.5 m/s is
+     * a ~3.7 m drop, so it answers a real fall and nothing else, and what it
+     * adds there is the kit catching up with a body that has just stopped
+     * hard — the weight 「重厚な音にしてもいい」 asked for, on the one event that
+     * should have it.
+     */
     if (v > 8.5) this._playDry('cloth', { level: 0.8 }, 'foley', 0.15);
   }
 
+  /**
+   * `player:state`. THE SWISH ON EVERY MOVEMENT WAS BOTH OF THESE.
+   *
+   * 「あといちいち動くたびにしゅっっという音もなる ちゃんと適切な音のみ残して、
+   *   プレイヤーが動くときの」
+   *
+   * `cloth()` is a band-passed white burst swept 1.0 -> 2.8 kHz over 0.13-0.26 s
+   * at a peak of 0.3 — that IS the しゅっ, and it had three triggers. Two of them
+   * were here, and neither is a sound a player should be paying for:
+   *
+   *   STANCE, at 0.9, the loudest of the three. It did not fire on crouching
+   *   only: `src/player/movement.js` sets `stance = 'crouch'` when a SLIDE
+   *   starts (_startSlide) and back to 'stand' when it ends (_endSlide), and
+   *   again on a mantle. So a sprint-slide-stand, the most ordinary thing a
+   *   player does, was two full swishes, on top of the boots.
+   *
+   *   ADS, at 0.45, the highest-RATE voice in this file by a distance. Every
+   *   aim-in and every aim-out, all match, head-locked and never occluded.
+   *
+   * WHAT IS KEPT INSTEAD is in `_onFootstep` and `_onLand` and is untouched: the
+   * boots themselves (tuned twice — 「足音もなんかまだ軽い、重厚な音にしてもいい」,
+   * 「敵味方の足音は今の音響くらいで良いです」), the webbing and sling that ride
+   * inside `footstep()`'s own `gear` term, and the landing thump. Those are the
+   * 適切な音 for a moving man; a swish for changing posture is not.
+   *
+   * THE STATE IS STILL TRACKED so restoring is a paste of the two calls:
+   *   if (stance changed) this._playDry('cloth', { level: 0.9 }, 'foley', 0.12);
+   *   if (ads changed)    this._playDry('cloth', { level: 0.45 }, 'foley', 0.1);
+   */
   _onPlayerState(p) {
     if (!this.running || !p) return;
-    if (p.stance !== undefined && p.stance !== this._stance) {
-      this._stance = p.stance;
-      this._playDry('cloth', { level: 0.9 }, 'foley', 0.12);
-    }
-    if (p.ads !== undefined && p.ads !== this._ads) {
-      this._ads = p.ads;
-      this._playDry('cloth', { level: 0.45 }, 'foley', 0.1);
-    }
+    if (p.stance !== undefined) this._stance = p.stance;
+    if (p.ads !== undefined) this._ads = p.ads;
   }
 
   _onDamageDealt(p) {
