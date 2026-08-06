@@ -3,6 +3,8 @@ import { BOX, BOX_SOFT, IDENT, LL } from '../kit.js';
 import { fbm3, patchGeometry, paintMasks, rockGeometry, disposeAll } from '../util.js';
 import { registerProps } from '../props.js';
 import { Rng } from '../../core/rng.js';
+import { buildTower, TOWER, TOWER_R } from './plains-tower.js';
+import { publishWorks } from './plains-works.js';
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -145,6 +147,24 @@ const PADS = [
   // the two bases
   { id: 'BASE-N', x: -14, z: -150, r0: 20, r1: 40 },
   { id: 'BASE-S', x: 14, z: 150, r0: 20, r1: 40 },
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * …AND THE GROUND THE WORKS STAND ON. APPENDED, and the position in this
+   * array is load-bearing twice over.
+   * ────────────────────────────────────────────────────────────────────────
+   * `dressGround` and `markPads` both walk `PADS` in order off their own
+   * fixed-seed streams, so a pad inserted in the MIDDLE would re-roll every
+   * patch and every stone on every pad after it. Appended, the five zones and
+   * the two bases draw exactly what they always drew.
+   *
+   * `y` IS FORCED TO ZONE D'S rather than taken from the swell under each
+   * centre, which is what the loop below would otherwise do. Two overlapping
+   * pads at different heights blend into a ramp between them; the tower, the
+   * fortress and zone D are one continuous piece of made ground and every
+   * course, sill and gate threshold in `plains-tower.js` and `plains-fort.js`
+   * is authored off a single datum. @see `PAD_DATUM`.
+   */
+  { id: 'TOWER', x: 0, z: -32, r0: 28, r1: 46, datum: true },
 ];
 
 /**
@@ -256,6 +276,13 @@ function farH(x, z) {
 
 /** The pad heights, resolved once off the raw swell. */
 for (const p of PADS) p.y = swell(p.x, p.z);
+/**
+ * THE ONE DATUM THE CENTRE OF THE MAP IS BUILT ON. Zone D's own swell height;
+ * every pad marked `datum` is pulled onto it so the works and the capture point
+ * they stand either side of are one level plane. @see the note in `PADS`.
+ */
+export const PAD_DATUM = PADS.find((p) => p.id === 'D').y;
+for (const p of PADS) if (p.datum) p.y = PAD_DATUM;
 
 /**
  * THE GROUND, ANALYTIC — the single statement of where the plain is.
@@ -285,10 +312,38 @@ export function plainsY(x, z) {
  */
 const CLAIMS = [];
 
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE WORKS — what the built structures have taken off the plain
+ * ────────────────────────────────────────────────────────────────────────────
+ * A circle per structure, consulted by BOTH `plainsOpen` (so no later pass may
+ * claim ground the tower is standing on) and by the two scatter passes below
+ * (so no boulder is instanced inside the control room and no tuft of grass grows
+ * through 3 m of concrete). It is one table rather than a test written twice:
+ * a stone poking out of a podium is the same bug as a stall pitched in the
+ * cathedral, and `dressing.isOpen` exists on the town for exactly that reason.
+ *
+ * `r` is the FULL footprint including ramps and apron, plus a metre of margin —
+ * `TOWER_R` and the fortress's own radius are published by their modules so the
+ * number cannot drift from the geometry.
+ */
+const WORKS = [
+  { id: 'NF-TOWER', x: TOWER.x, z: TOWER.z, r: TOWER_R + 1.2 },
+];
+
+/** Is this point inside something that has been built on the plain? */
+export function inWorks(x, z, margin = 0) {
+  for (const w of WORKS) {
+    if ((x - w.x) ** 2 + (z - w.z) ** 2 < (w.r + margin) ** 2) return true;
+  }
+  return false;
+}
+
 export function plainsOpen(x, z, margin = 0.4) {
   const r = Math.hypot(x, z);
   // Past the foot the face pitches over; nothing stands there.
   if (r > RIDGE_R0 - margin) return false;
+  if (inWorks(x, z, margin)) return false;
   for (const c of CLAIMS) {
     if (x > c.x0 - margin && x < c.x1 + margin && z > c.z0 - margin && z < c.z1 + margin) return false;
   }
@@ -373,6 +428,7 @@ function dressGround(A) {
     const d = Math.sqrt(r.float()) * R;
     const x = Math.cos(a) * d;
     const z = Math.sin(a) * d;
+    if (inWorks(x, z)) continue;
     const g = patchGeometry(r, r.range(0.9, 3.4), { lobes: 11, wobble: 0.6 });
     A.addOnce(
       r.float() < 0.55 ? 'steppe_dust' : 'steppe_bare',
@@ -401,6 +457,7 @@ function dressGround(A) {
       const d = Math.sqrt(r.float()) * p.r0 * 1.15;
       const x = p.x + Math.cos(a) * d;
       const z = p.z + Math.sin(a) * d;
+      if (inWorks(x, z)) continue;
       const g = patchGeometry(r, r.range(0.6, 2.2), { lobes: 11, wobble: 0.5 });
       A.addOnce('steppe_bare', g, LL(IDENT, x, plainsY(x, z) + 0.025, z, r.float() * 6.28, 1, 1, r.range(0.6, 1.3)), {
         masks: [0.5, r.range(0.35, 0.8), 0.15],
@@ -433,6 +490,7 @@ function scatterVegetation(A) {
     const x = Math.cos(a) * d;
     const z = Math.sin(a) * d;
     if (r.float() > 0.25 + density(x, z) * 1.15) continue;
+    if (inWorks(x, z)) continue;
     A.put('weeds', x, plainsY(x, z) - 0.03, z, r.float() * 6.28, r.range(0.7, 1.7), null, r.range(-0.08, 0.08), r.range(-0.08, 0.08));
   }
   for (let i = 0; i < 2600; i++) {
@@ -441,6 +499,7 @@ function scatterVegetation(A) {
     const x = Math.cos(a) * d;
     const z = Math.sin(a) * d;
     if (r.float() > 0.12 + density(x, z) * 0.9) continue;
+    if (inWorks(x, z)) continue;
     A.put('shrub', x, plainsY(x, z) - 0.06, z, r.float() * 6.28, r.range(0.55, 1.25));
   }
   // stone, thickening towards the mountain
@@ -451,6 +510,7 @@ function scatterVegetation(A) {
     const z = Math.sin(a) * d;
     const near = smoothstep(RIDGE_R0 - 70, RIDGE_R0 + 10, d);
     if (r.float() > 0.1 + near * 0.85) continue;
+    if (inWorks(x, z)) continue;
     A.put(
       r.float() < 0.62 ? 'rock_b' : 'rock_a',
       x,
@@ -565,6 +625,16 @@ function markPads(A) {
   const r = new Rng(0x2b7c41);
   for (const p of PADS) {
     if (p.id.startsWith('BASE')) continue;
+    /**
+     * …EXCEPT THE ONES SOMETHING IS NOW STANDING ON, and a pad whose ring only
+     * CLIPS a structure loses the stones that clip it rather than the whole
+     * ring. Zone D's ring is at r 30 and the control tower's podium starts at
+     * z -11: three quarters of that ring is still open plain and still wants
+     * marking. A stone dropped inside the podium is a `rock_a` collider in the
+     * middle of a wall — the same class of bug as a stall pitched in the
+     * cathedral, which is what `dressing.isOpen` exists for.
+     */
+    if (inWorks(p.x, p.z)) continue;
     // a low ring of stone, laid rather than built: something to see at 150 m
     const n = Math.round(p.r0 * 2.6);
     for (let i = 0; i < n; i++) {
@@ -572,6 +642,7 @@ function markPads(A) {
       const rr = p.r0 * r.range(0.94, 1.06);
       const x = p.x + Math.cos(a) * rr;
       const z = p.z + Math.sin(a) * rr;
+      if (inWorks(x, z, 1.5)) continue;
       A.putS(
         'rock_a',
         x,
@@ -598,6 +669,7 @@ function markPads(A) {
     const mx = p.x + p.r0 * 0.55;
     const mz = p.z - p.r0 * 0.35;
     const my = plainsY(mx, mz);
+    if (inWorks(mx, mz, 2)) continue;
     A.add('metal_dark', BOX(A), LL(IDENT, mx, my + 3.4, mz, 0, 0.22, 6.8, 0.22), { masks: [0.9, 0.6, 0.2] });
     A.box('metal', mx, my + 3.4, mz, 0.3, 6.8, 0.3);
     A.add('ember', BOX_SOFT(A), LL(IDENT, mx, my + 7.0, mz, 0, 0.34, 0.34, 0.34));
@@ -650,6 +722,7 @@ export const PLAINS = {
   pads: PADS,
   ridge: { r0: RIDGE_R0, r1: RIDGE_R1, height: RIDGE_H },
   fires: [],
+  works: WORKS,
   plainsY,
 
   build(A, rng) {
@@ -663,21 +736,57 @@ export const PLAINS = {
     buildFires(A, this.fires);
     scatterVegetation(A);
 
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * THE WORKS, LAST — 「管制塔があり、要塞がある平原 … 塹壕を用意して」
+     * ────────────────────────────────────────────────────────────────────────
+     * At the END of `build` on purpose. `rng` is one stream and every pass above
+     * draws from it in sequence, so a draw inserted anywhere earlier moves
+     * several thousand stones and tufts sideways. Each structure below also
+     * carries its OWN fixed-seed stream, so the plain's scatter is independent
+     * of every rivet in them — the same rule `cathedral.js` and `demolition.js`
+     * follow on the town.
+     *
+     * Each returns its own interior volumes (the ground storeys the bot height
+     * field has to be told about — @see `plains-works.interiorVolume`) and its
+     * own destroyed state, which `publish` below turns into `world.demolitions`.
+     */
+    const works = [];
+    const volumes = [];
+    const tower = buildTower(A, plainsY);
+    works.push(tower.demolition);
+    volumes.push(...tower.interiorVolumes);
+    this._works = works;
+
     return {
       buildings: [],
       cathedral: null,
       features: [],
       links: [],
-      interiorVolumes: [],
+      interiorVolumes: volumes,
+      works,
       /** Exposed for tools, the same way the town exposes its authored tables. */
       layout: {
         SCALE: 1,
         PADS,
         FIRES,
+        WORKS,
         RIDGE: { r0: RIDGE_R0, r1: RIDGE_R1, height: RIDGE_H },
         BOUNDS_HALF,
       },
     };
+  },
+
+  /**
+   * AFTER `A.finalize`, which is the first moment a scope has meshes and
+   * collision handles to switch. The tower and the fortress publish exactly the
+   * `world.demolitions` record shape the town's buildings do — id, name,
+   * position, radius, top, navRect, mass, `setVisual`, `setCollision`, `setDown`
+   * — so whoever writes the satellite-strike event has one code path for both
+   * maps. @see `plains-works.publishWorks`.
+   */
+  publish(A, rec, physics) {
+    return { demolitions: publishWorks(A, rec.works ?? [], physics) };
   },
 
   groundY: plainsY,
