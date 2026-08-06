@@ -83,6 +83,7 @@
 
 import * as THREE from 'three';
 import { RULES } from './rules.js';
+import { forMap, townScaled, townWidened } from './geography.js';
 
 /**
  * THE MAP IS 1.5x AND THESE ARE IN THE MAP'S OWN PLAN UNITS.
@@ -107,8 +108,10 @@ import { RULES } from './rules.js';
  *
  *     MID   roof 9.55 m     WEST roof 7.38 m     EAST roof 12.35 m
  *
- * `L()` and `SCALE` are duplicated from sites.js deliberately, the same way
- * sites.js duplicates them from layout.js. IF ONE MOVES, MOVE THE OTHERS.
+ * `L()` and `SCALE` are the town's transform, and it is stated ONCE now — in
+ * `src/match/geography.js`, which every table-carrying file in `match` aliases
+ * back to the name its own tables already use. @see that file's header for the
+ * five hand-kept copies this replaced.
  */
 /**
  * ────────────────────────────────────────────────────────────────────────────
@@ -122,22 +125,17 @@ import { RULES } from './rules.js';
  * drop it with the error it prints two hundred lines below. Exactly the failure
  * the SCALE note above describes, for exactly the same reason.
  *
- * It is duplicated here rather than imported because `match` may not import
- * `world`, the same way `SCALE` is and the same way `src/match/sites.js` now
- * carries its own copy. IF ONE MOVES, MOVE THE OTHERS.
+ * It is stated on this side of the subsystem line rather than imported from
+ * `world`, because `match` may not import `world` — but it is stated once, in
+ * `src/match/geography.js`, and aliased here.
  */
-const SCALE = 1.5;
-const SPREAD = 9.0;
-const WB = 6.2;
-const WK = 1 + SPREAD / WB;
-const widenX = (x) => (Math.abs(x) <= WB ? x * WK : x + Math.sign(x) * SPREAD);
-const L = (x, z) => [widenX(x) * SCALE, z * SCALE];
+const L = townWidened;
 /**
  * The cathedral's own anchors are authored in the WIDENED plan (it is a new
  * building and stands in the street the transform created), so they take the
  * scale and not the widen. @see `CATHEDRAL` in src/world/layout.js.
  */
-const LC = (x, z) => [x * SCALE, z * SCALE];
+const LC = townScaled;
 /**
  * Keep the cathedral's roof search inside the AISLE the anchor stands on: the
  * aisle is 4.85 m of clear span and the campanile, the nave roof and the dome

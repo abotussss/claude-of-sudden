@@ -15,6 +15,7 @@
 
 import * as THREE from 'three';
 import { RULES, MODE } from './rules.js';
+import { TOWN_SCALE, townScaled, townWidened } from './geography.js';
 
 /**
  * ONE SITE AT THE END OF EACH OUTER LANE, 56 m apart.
@@ -51,13 +52,16 @@ import { RULES, MODE } from './rules.js';
  * geometry on the new map's ground: sites inside a building, spawns outside the
  * perimeter wall.
  *
- * `match` may not import `world`, so the factor is repeated here rather than
- * shared, exactly as `KEEPOUT` in layout.js repeats these site centres. IF ONE
- * MOVES, MOVE THE OTHER. `tools/navcheck.mjs` is the gate — it fails loudly the
- * moment a spawn cannot reach a site.
+ * `match` may not import `world`, so the factor is repeated on this side of the
+ * subsystem line rather than shared with it — but it is repeated ONCE, in
+ * `src/match/geography.js`, instead of once per file. It used to live at module
+ * scope here and in four other files under a comment begging whoever moved one
+ * to move the others. @see the header of `geography.js` for what that cost.
+ * `tools/navcheck.mjs` is the gate — it fails loudly the moment a spawn cannot
+ * reach a site.
  */
-const SCALE = 1.5;
-const L = (x, z) => [x * SCALE, z * SCALE];
+const SCALE = TOWN_SCALE;
+const L = townScaled;
 const spawnRow = (r) => r.map(([x, z, y]) => [x * SCALE, z * SCALE, y]);
 
 /**
@@ -66,9 +70,9 @@ const spawnRow = (r) => r.map(([x, z, y]) => [x * SCALE, z * SCALE, y]);
  * `widenX` in src/world/layout.js stretches everything inside the old kerb line
  * and TRANSLATES everything outside it by 9 authored units, so the mid street
  * went from 13 to 31 units across and the two building rows, both lanes and both
- * courtyards moved out with their walls. It is repeated here — like `SCALE`, and
- * for the same reason: `match` may not import `world`. IF ONE MOVES, MOVE THE
- * OTHER; `tools/navcheck.mjs` fails loudly the moment a point lands in a wall.
+ * courtyards moved out with their walls. It lives beside `SCALE` in
+ * `geography.js` and for the same reason: `match` may not import `world`.
+ * `tools/navcheck.mjs` fails loudly the moment a point lands in a wall.
  *
  * `ZONES` and `SPAWNS` do NOT use it. Every one of them is on the street
  * centreline, where this transform is the identity — which is the whole reason
@@ -76,11 +80,7 @@ const spawnRow = (r) => r.map(([x, z, y]) => [x * SCALE, z * SCALE, y]);
  * `SITES`, the DEMOLITION plant circles, is authored on the two courtyards and
  * every one of its points would otherwise be nine units inside a building.
  */
-const SPREAD = 9.0;
-const WB = 6.2;
-const WK = 1 + SPREAD / WB;
-const widenX = (x) => (Math.abs(x) <= WB ? x * WK : x + Math.sign(x) * SPREAD);
-const LW = (x, z) => [widenX(x) * SCALE, z * SCALE];
+const LW = townWidened;
 
 /**
  * ────────────────────────────────────────────────────────────────────────────

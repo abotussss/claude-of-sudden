@@ -132,18 +132,20 @@ import { fracture, chunkGeometry, makeChunkMaterial, mergeGeometries, clamp } fr
  * costs one import and moves nobody else's dice.
  */
 import { Rng } from '../core/rng.js';
+import { forMap, townScaled } from './geography.js';
 
 /**
- * THE MAP IS 1.5x. Same note as `src/match/sites.js` and `src/match/airstrike.js`
- * — `match` may not import `world`, so the factor is repeated. IF ONE MOVES,
- * MOVE THE OTHERS.
+ * THE TOWN IS 1.5x, and it is stated once — in `src/match/geography.js`, which
+ * every table-carrying file in `match` aliases back to its own table's name.
+ * `match` may not import `world`, so it lives on this side of the line; it no
+ * longer lives on this side of the line FIVE TIMES.
  *
- * These are authored in the WIDENED plan (the space `SPAWNS` and `ZONES` use in
- * sites.js), because the mid street is the one place on this map wide enough to
- * drive a tank down and `widenX` is the identity on its centreline.
+ * The town's routes are authored in its WIDENED plan (the space `SPAWNS` and
+ * `ZONES` use in sites.js), because the mid street is the one place on that map
+ * wide enough to drive a tank down and `widenX` is the identity on its
+ * centreline. The plain's are authored in metres and take no transform at all.
  */
-const SCALE = 1.5;
-const L = (x, z) => [x * SCALE, z * SCALE];
+const L = townScaled;
 
 /**
  * ────────────────────────────────────────────────────────────────────────────

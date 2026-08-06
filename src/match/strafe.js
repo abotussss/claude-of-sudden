@@ -118,10 +118,11 @@ import * as THREE from 'three';
 import { RULES } from './rules.js';
 import { chunkGeometry, clamp, makeChunkMaterial, mergeGeometries } from './airstrike.js';
 import { perishableHosts } from './bomber.js';
+import { forMap, townScaled } from './geography.js';
 
-/** Same 1.5x as sites.js, airstrike.js and bomber.js. IF ONE MOVES, MOVE THE OTHERS. */
-const SCALE = 1.5;
-const L = (x, z) => [x * SCALE, z * SCALE];
+/** The town's 1.5x, stated once in `geography.js` and aliased to the name the
+ *  table below already uses. The plain's tables need no transform at all. */
+const L = townScaled;
 
 /**
  * THE LINES, authored as the line the SHELLS land on.
