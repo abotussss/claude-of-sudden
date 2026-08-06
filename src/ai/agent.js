@@ -252,8 +252,28 @@ const SPRINT_REARM = 5;
  * is the term that sets the DUTY CYCLE, `REFILL / (1 + REFILL)`, and 1.1 is
  * 52 % — a man who spends nearly half of every journey walking it off. 1.8 is
  * 64 %.
+ *
+ * ════════════════════════════════════════════════════════════════════════════
+ * …AND 1.8 -> 3.4, A FOURTH TIME, BECAUSE THE LEGS ARE STILL THE REFUSAL IN
+ * FRONT OF THE PLAYER — 「またAIはもっと走れるようにしてください」
+ * ════════════════════════════════════════════════════════════════════════════
+ * MEASURED after the 1.1 -> 1.8 pass (`_engage.mjs`, seeds 7 / 11): `winded` is
+ * 5.9 / 7.0 % of travel refusals ACROSS THE WHOLE MAP and **30.3 / 14.0 %
+ * inside 60 m of the player**, where it is the largest refusal on the board
+ * that is not a nav failure. The concentration is the near-field dwell bias
+ * written down at `SPRINT_REARM` and it has not moved: the man the player
+ * watches is the man who got to this side of the map first, i.e. the man who
+ * has just spent his legs doing it, so the whole cost of the stamina clock is
+ * paid where it is most visible.
+ *
+ * 3.4 is a duty cycle of 77 %: five seconds of run against a second and a half
+ * of walk. THE CLOCK IS DELIBERATELY KEPT — 「歩く時もある」 is the player's own
+ * clause and a man who can run the entire map flat out has no legs at all — but
+ * the breather is now a breath rather than half the journey. `SPRINT_FUEL` and
+ * `SPRINT_REARM` are untouched, so the SHAPE of a long leg (a run, a breather,
+ * a run) is the shape it already had; only the length of the breather moves.
  */
-const SPRINT_REFILL = 1.8;
+const SPRINT_REFILL = 3.4;
 /**
  * HOW MUCH CLEAR GROUND HE NEEDS IN FRONT OF HIM, AND IT IS A MEASUREMENT.
  *
@@ -269,6 +289,23 @@ const SPRINT_REFILL = 1.8;
 const SPRINT_CLEAR = 3.6;
 /** Half-angle of the "is anybody in front of me" cone, as a cosine. */
 const SPRINT_CLEAR_DOT = 0.35;
+
+/**
+ * How fast `speed` chases `desiredSpeed`, per second, and it is TWO numbers.
+ * @see the block at the ease itself in `_move`, which has the measurement:
+ * 7 both ways left a fifth of all travel on men who had been GRANTED a run and
+ * were still climbing toward it. Rising is 0.16 s to 98 % of the request —
+ * still slower than the player's own `groundAccel` of 92 — and falling is the
+ * 7 it always was, so nothing about a stop, an arrival or a duck changes.
+ *
+ * MEASURED AFTER, with `SPRINT_REFILL` in the same pass (`_aimed.mjs`, seeds
+ * 7 / 11): travel at 98 % of a man's OWN weapon ceiling went **47.3 % ->
+ * 59.0-67.8 %** and travel under 5 m/s **32.4 % -> 22.5-33.5 %**, across five
+ * runs of three different builds that share this line. It is the largest
+ * single move the travel histogram has made since the sprint was added.
+ */
+const SPEED_RISE = 24;
+const SPEED_FALL = 7;
 
 /**
  * THE UPPER POST'S TWO NUMBERS. @see `Agent._runPost` and `StairMap`.
@@ -441,6 +478,59 @@ const RESERVE_MUL = 6.5;
  * on a carbine and ten on the belt, i.e. "he actually used it".
  */
 const TOPUP_FRAC = 0.9;
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHAT A MAN WILL SPEND ON A PLACE — 「弾を消費すればいいわけではない」
+ * ════════════════════════════════════════════════════════════════════════════
+ * The two terms of the covering-fire ration. @see the block at the burst
+ * decision in `_shoot` for the measurement and the whole argument; the short
+ * version is that a pull opened with NO LINE OF SIGHT — at a `lastKnown` inside
+ * `SUPPRESS_WINDOW` — was drawing on the same eight-to-thirty-two round window
+ * as a man aiming at somebody, and the magazine it emptied is the magazine that
+ * was being changed when the next real contact opened (56.7 / 58.2 % of every
+ * eyes-on frame that sends no round).
+ *
+ * `BLIND_BURST` is the length: four rounds for a rifleman, times `holdFactor`,
+ * so the belt gun answers with ten and nobody's weapon character changes.
+ * `BLIND_KEEP` is the floor he will not open one below — a quarter magazine
+ * held back for somebody he can actually see. Neither touches a man with eyes
+ * on a target.
+ *
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE FLOOR IS THE WHOLE MECHANISM AND THE CAP ON ITS OWN DOES NOTHING
+ * ════════════════════════════════════════════════════════════════════════════
+ * Measured as three builds against the same two seeds (`_aimed.mjs`, seeds
+ * 7 / 11, ~200 man-minutes each), because the obvious reading — "shorten the
+ * covering burst" — is the one that fails:
+ *
+ *                          rounds/mm   AIMED share   AIMED/mm   kills
+ *   before                    137.8       51.1 %       70.4      121
+ *   cap only, no floor        131.4       44.2 %       58.0      119
+ *   cap + a quarter magazine  114.9       70.3 %       80.8      100
+ *
+ * WITH NO FLOOR THE SHARE GOES THE WRONG WAY. A shorter blind pull blooms less
+ * and runs the magazine down more slowly, so the man simply opens more of them
+ * — total blind rounds went UP — and nothing is held back for the contact. It
+ * is the magazine, not the burst, that is the currency of 「弾を消費すれば
+ * いいわけではない」.
+ *
+ * AND THE FLOOR IS 0.25 RATHER THAN 0.45, WHICH IS WHERE IT WAS FIRST SET. At
+ * 0.45 the aimed share is the same 71.8 % and everything else is worse:
+ * 73.1 aimed rounds per man-minute against 80.8, 96 kills against 100 and
+ * 18.1 % contact time against 20.1 %. Half a magazine held back is a man
+ * refusing to answer a window he genuinely believes somebody is behind.
+ *
+ * WHAT IT COSTS, WRITTEN DOWN BECAUSE IT IS REAL: rounds that land on men fall
+ * from 13.6 to 10.7 per man-minute and kills from 121 to 100 over the two
+ * seeds. Covering fire at a fresh last-known does hit people — the man behind
+ * the doorframe is often exactly where he was believed to be. That is the
+ * price of the sentence, and it is paid in the direction it asks for: 15 % MORE
+ * rounds at a man the shooter can see, 17 % fewer rounds fired in total, and
+ * a fifth more of every man's time spent with a live enemy in his sights.
+ */
+const BLIND_BURST = 4;
+const BLIND_KEEP = 0.25;
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -5234,9 +5324,49 @@ export class Agent {
 
     if (this._steer.lengthSq() > 1e-6) this._steer.normalize();
 
-    // speed: ease toward the request so starts and stops have weight
+    /**
+     * ══════════════════════════════════════════════════════════════════════════
+     * THE RAMP WAS THE LAST THING BETWEEN A GRANTED SPRINT AND A RUN — 「またAIは
+     * もっと走れるようにしてください もっとAIが動き回れ」
+     * ══════════════════════════════════════════════════════════════════════════
+     * Every gate above this line has now been argued about four times, the
+     * fireteam brake is struck out, and the census says the gate GRANTS a sprint
+     * on 65.7 / 67.1 % of travel samples (`_engage.mjs`, seeds 7 / 11). Yet only
+     * 70.4 / 75.3 % of the men it grants one to are at 98 % of their own
+     * ceiling — so **19.4 / 16.6 % of ALL travel is a man who was told to run
+     * and is not running**, which is the largest single block left on the board
+     * and the only one that is not a refusal at all.
+     *
+     * IT IS THIS LINE. One coefficient, `dt * 7`, is an exponential ease with a
+     * 143 ms time constant: from a standing start it needs 0.43 s to reach 95 %
+     * of the target and 0.56 s to reach the 98 % the ceiling test asks for. The
+     * gate is re-asked EVERY FRAME and is a boolean — one frame of `_ahead > 1`
+     * in a doorway, one frame under `SPRINT_DOT` rounding a corner, one
+     * waypoint consumed (`want` is 0 on the frame the index advances) — and each
+     * flicker costs a tenth of his speed and better than half a second to buy
+     * back. A man crossing a city therefore spends most of a granted sprint
+     * CLIMBING toward it.
+     *
+     * THE PLAYER, WHO IS THE STANDARD 「プレイヤーの最高速度と同じスピードで移動する時間が
+     * ないとおかしい」, HAS NO SUCH RAMP: `src/player/tuning.js` is
+     * `groundAccel: 92`, i.e. 0 to his own 6.4492 in 0.07 s, essentially
+     * instant. Mirrored exactly this would delete the weight from every start
+     * on the map, and the weight is real — it is what makes a bot look like a
+     * man leaning into a run rather than a cursor.
+     *
+     * So the ease is SPLIT rather than raised. Speeding up is 0.16 s to 98 %,
+     * which is still twice the player's climb and reads as a man accelerating;
+     * slowing down keeps 7 exactly as it was, so arrivals, stops, the crowd
+     * clause and every duck into cover have precisely the weight they had. It is
+     * one-sided for the same reason the weapon penalty's halving was (@see
+     * `_sprintGate`): the floor comes up and nothing else moves.
+     *
+     * Nothing else in this method changes, no gate is relaxed, and a man who was
+     * refused a run is still walking at exactly the speed he walked at before.
+     */
     const targetSpeed = want * (this.crouch ? 0.42 : 1) * (1 - this.suppression * 0.25);
-    this.speed += (targetSpeed - this.speed) * Math.min(1, dt * 7);
+    this.speed += (targetSpeed - this.speed)
+      * Math.min(1, dt * (targetSpeed > this.speed ? SPEED_RISE : SPEED_FALL));
     if (this.speed < 0.05) this.speed = 0;
 
     // facing: look where we are going, or at the threat when engaged
@@ -5818,11 +5948,59 @@ export class Agent {
        * to 2.9x at the bottom of the skill range, so the volume of fire triples
        * and the damage per minute does not follow it. 「AIMは悪くてもいい」.
        */
+      /**
+       * ══════════════════════════════════════════════════════════════════════
+       * A MAN DOES NOT EMPTY HIS MAGAZINE AT A PLACE — 「もっと敵に対して撃つこと、
+       * 弾を消費すればいいわけではない」
+       * ══════════════════════════════════════════════════════════════════════
+       * THE SENTENCE IS A CORRECTION AND THIS IS THE LINE IT CORRECTS. The pull
+       * window above has been raised four times and the last pass took the map
+       * from 9.7k rounds to 14.1k per 150 s — and the answer to it was that
+       * SPENDING AMMUNITION IS NOT THE POINT. It is the same window for a man
+       * looking down a rifle at somebody and for a man hosing a doorway he
+       * believes somebody is behind, and the second of those is where the extra
+       * rounds went.
+       *
+       * MEASURED, and it is not an aesthetic objection (`_engage.mjs`, seeds
+       * 7 / 11, the refusal census taken on frames where a man's EYES ARE ON a
+       * target and no round leaves the barrel): **`reloading` is 56.7 / 58.2 %
+       * of them** — nearly six times the next term — and **38.6 / 36.0 % of all
+       * sightings OPEN with the man already changing a magazine**. The volume of
+       * fire is not being converted into shooting at people; it is being spent
+       * before the people arrive, and then the man is standing there with his
+       * rifle apart when one does. 「敵に対して撃つ」 and 「弾を消費する」 are in
+       * direct competition and the magazine is the currency.
+       *
+       * So a pull opened WITHOUT EYES ON — the two covering-fire branches in
+       * `_combat`, which fire at `lastKnown` inside `SUPPRESS_WINDOW` — is
+       * rationed in the only two ways that matter:
+       *
+       *   IT IS SHORT.   `BLIND_BURST` rounds rather than eight to thirty-two,
+       *                  times `holdFactor` so a belt gun still answers like a
+       *                  belt gun. Covering fire is a burst into a window; it
+       *                  was never the thing 「マガジンを空にするくらい撃つ」 asked
+       *                  for, and that sentence names 「敵を補足したら」 — having
+       *                  ACQUIRED somebody — in its own text.
+       *   IT KEEPS THE   he will not open one below `BLIND_KEEP` of a magazine.
+       *   MAGAZINE.      This is the whole mechanism: the rounds a man holds
+       *                  back from a doorway are the rounds that are in the gun
+       *                  when somebody actually steps into it, which is the
+       *                  38.6 % above turned round.
+       *
+       * NOTHING ABOUT A MAN WHO CAN SEE HIS TARGET MOVES. `eyesOn` is the same
+       * flag the chaining rule two blocks up is built on, the window, the floor,
+       * the ceiling at `this.ammo` and the bloom are all exactly as they were,
+       * and a pull that STARTED with eyes on and lost them still runs to the end
+       * (@see `committed`) — 「撃ち続けろ」 is untouched.
+       */
       const t = this.traits.trigger;
       const hold = this.holdFactor;
+      if (!eyesOn && this.ammo < this.magSize * BLIND_KEEP) return;
       const lo = Math.round((8 + (1 - t) * 12) * hold);
       const hi = lo + Math.round((5 + (1 - this.skill) * 10 + (1 - t) * 12) * hold);
-      this.burstLeft = Math.max(1, Math.min(this.ammo, this.rng.int(lo, Math.max(lo, hi))));
+      const cap = eyesOn ? this.ammo
+        : Math.min(this.ammo, Math.max(2, Math.round(BLIND_BURST * hold)));
+      this.burstLeft = Math.max(1, Math.min(cap, this.rng.int(lo, Math.max(lo, hi))));
       /**
        * Rounds sent since the last magazine change. Drives the bloom. @see
        * `_fireRound`, and the chaining block above for why a pull that follows
