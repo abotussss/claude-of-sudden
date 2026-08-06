@@ -227,7 +227,16 @@ export class WorldSystem {
      * puts sky before world — but this is guarded anyway, because a headless
      * harness may register no sky at all.
      */
-    if (level.hour != null) ctx.peek('sky')?.setTimeOfDay?.(level.hour);
+    const sky = ctx.peek('sky');
+    if (level.hour != null) sky?.setTimeOfDay?.(level.hour);
+    /**
+     * …AND ITS WEATHER, for the same reason and through the same published API
+     * (`sky.setWeather`). On a 400 m map this is not decoration: without haze
+     * the range beyond the crest sits at full lit value while the plain in front
+     * of it is moonlit, the auto-exposure meter has to serve both, and whichever
+     * it picks the other one is wrong. A level with no `weather` touches nothing.
+     */
+    if (level.weather) sky?.setWeather?.(level.weather);
 
     const ms = performance.now() - t0;
     console.info(

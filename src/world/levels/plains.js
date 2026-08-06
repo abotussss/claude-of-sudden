@@ -95,9 +95,21 @@ const BOUNDS_HALF = 200;
 const FIELD = 470;
 const FIELD_SEG = 148; // 3.18 m quads
 
-/** The view past the crest. Visual only, no collision, no nav. */
-const FAR = 2200;
-const FAR_SEG = 44;
+/**
+  * The view past the crest. Visual only, no collision, no nav.
+  *
+  * IT IS SMALL AND IT IS DARK, AND BOTH ARE MEASURED RATHER THAN CHOSEN. At
+  * 2 200 m across with 300 m peaks this range filled the upper half of every
+  * frame, stood entirely past `q.shadowDistance` (so it was never in a cascade
+  * and never in shadow), and poked clean out of the height fog — which made it
+  * the brightest thing on a moonlit map. The auto-exposure metered on it and the
+  * plain the player is standing on went to black; hiding this one mesh and
+  * changing nothing else took the ground from unreadable to fully readable.
+  * 1 500 m and 110 m peaks sit inside the fog and under the crest of the walked
+  * ridge, which is where a night horizon belongs.
+  */
+const FAR = 1500;
+const FAR_SEG = 40;
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
@@ -239,7 +251,7 @@ function farH(x, z) {
   if (r <= RIDGE_R1) return 0;
   const f = smoothstep(RIDGE_R1, RIDGE_R1 + 260, r);
   const m = Math.max(0, fbm3(x * 0.0035, 5.7, z * 0.0035, 4) - 0.34);
-  return f * m * 300;
+  return f * m * 110;
 }
 
 /** The pad heights, resolved once off the raw swell. */
@@ -356,7 +368,7 @@ function dressGround(A) {
   const R = RIDGE_R0 - 4;
 
   // dust and silt, gathered where water would run
-  for (let i = 0; i < 900; i++) {
+  for (let i = 0; i < 520; i++) {
     const a = r.float() * Math.PI * 2;
     const d = Math.sqrt(r.float()) * R;
     const x = Math.cos(a) * d;
@@ -522,10 +534,21 @@ function buildFires(A, out) {
     const lx = Math.cos(a0) * (RIDGE_R0 - 26);
     const lz = Math.sin(a0) * (RIDGE_R0 - 26);
     const ly = plainsY(lx, lz) + 26;
-    const light = new THREE.PointLight(0xff6a24, 9, 180, 2);
+    /**
+     * 600 cd, NOT 9. This is the number that decides whether the map is
+     * playable, and it is arrived at by comparison rather than by taste: the
+     * moon's own directional intensity at this hour is 0.129 (measured — see
+     * `hour` below), and a point light with `decay: 2` delivers
+     * `intensity / d²`, so 9 cd is 0.0025 at 60 m — three per cent of the
+     * moonlight, i.e. invisible. 600 cd is 0.17 at 60 m and 0.06 at 100 m:
+     * brighter than the moon out to ~68 m of the fire and still readable at
+     * half the map's width, which is exactly the "bright quarters and dark
+     * quarters" this is for.
+     */
+    const light = new THREE.PointLight(0xff6a24, 600, 240, 2);
     light.position.set(lx, ly, lz);
     light.castShadow = false;
-    A.light(light, { range: 180, priority: 1 });
+    A.light(light, { range: 240, priority: 1 });
 
     out.push({ id: f.id, position: new THREE.Vector3(cx, cy, cz), radius: (RIDGE_R1 - RIDGE_R0) * f.spread * 3, light });
   }
@@ -602,6 +625,15 @@ export const PLAINS = {
    * 明るさのある」 is a lighting spec, and this is the half of it that is not fire.
    */
   hour: 21.65,
+  /**
+   * NIGHT HAZE. `fogDensity` scales `sky`'s own scatter/extinction pair, and on
+   * a map whose far range stands 300 m past the crest it is what stops the
+   * horizon out-metering the ground the player is standing on. `fogHeight` is
+   * deep enough to hold the whole 46 m rim, and `coverage` puts enough cloud in
+   * the sky for the moon to have something to light — a clear night sky is a
+   * flat blue-black gradient and reads as a missing skybox.
+   */
+  weather: { fogDensity: 5.2, fogHeight: 150, coverage: 0.34, shaftGain: 0.7 },
   spawns: SPAWNS,
 
   /** Published for the features still to come. @see the header. */

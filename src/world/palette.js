@@ -410,11 +410,19 @@ export const PALETTE = {
     surface: 'dirt',
     opts: {
       vertexMasks: true,
-      tint: 0x5c6047,
+      tint: 0x74a05e,
       scale: 3.4,
       detile: 0.8,
       normalStrength: 1.15,
-      weather: [0.25, 0.0, 0.0, 0.28],
+      /**
+       * The dust the `dirt` generator splashes on an up-facing surface is
+       * `0x94805c` — desert tan, and correct for the town. Overridden here,
+       * because the thing that makes a steppe a steppe rather than a desert is
+       * that its dust is the colour of dead grass.
+       */
+      dustColor: 0x74784e,
+      grimeColor: 0x2a3123,
+      weather: [0.14, 0.0, 0.0, 0.3],
       wear: [0, 0.5, 0.45, 0],
     },
   },
@@ -422,19 +430,19 @@ export const PALETTE = {
   steppe_bare: {
     name: 'dirt',
     surface: 'dirt',
-    opts: { vertexMasks: true, tint: 0x6e6a53, scale: 2.2, detile: 0.75, wear: [0, 0.55, 0.5, 0] },
+    opts: { vertexMasks: true, tint: 0x9c9268, scale: 2.2, detile: 0.75, dustColor: 0x8a8460, wear: [0, 0.55, 0.5, 0] },
   },
   /** Dust and grit blown into the hollows and up against the ridge foot. */
   steppe_dust: {
     name: 'sand',
     surface: 'sand',
-    opts: { vertexMasks: true, tint: 0x8a8168, scale: 2.8, detile: 0.7, wear: [0, 0.45, 0.45, 0] },
+    opts: { vertexMasks: true, tint: 0x8c8871, scale: 2.8, detile: 0.7, wear: [0, 0.45, 0.45, 0] },
   },
   /** Scree and shattered stone on the ridge faces. */
   scree: {
     name: 'gravel',
     surface: 'dirt',
-    opts: { vertexMasks: true, tint: 0x77736b, scale: 2.0, wear: [0, 0.5, 0.45, 0] },
+    opts: { vertexMasks: true, tint: 0x93908a, scale: 2.0, wear: [0, 0.5, 0.45, 0] },
   },
   /** The mountain itself: cold, coarse rock with real macro relief. */
   mountain_rock: {
@@ -442,7 +450,15 @@ export const PALETTE = {
     surface: 'concrete',
     opts: {
       vertexMasks: true,
-      tint: 0x6b6a67,
+      /**
+       * 0x33322f, and it is a LIGHTING decision rather than a colour one. The
+       * range beyond the crest sits past `q.shadowDistance`, so it is never in
+       * a cascade and never in shadow: at the town's rock value it was the
+       * brightest thing in every frame, the auto-exposure metered on it, and the
+       * plain the player is standing on went to black. A night mountain at
+       * 300 m is a silhouette with a moonlit edge, not a lit surface.
+       */
+      tint: 0x33322f,
       scale: 6.5,
       detile: 0.55,
       normalStrength: 1.45,
@@ -460,7 +476,7 @@ export const PALETTE = {
     surface: 'concrete',
     opts: {
       vertexMasks: true,
-      tint: 0x7a5f49,
+      tint: 0x53402f,
       scale: 6.5,
       detile: 0.55,
       normalStrength: 1.45,
