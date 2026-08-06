@@ -2183,9 +2183,26 @@ export class Agent {
     }
     this.objective = { mode, position: this._objPos, site };
     if (changed) this.objectiveBlocked = false;
-    // A different place to go is a different question, so the spell of having no
-    // route to the OLD one ends with it. @see `NOROUTE_LADDER`.
-    if (changed) this._noRouteSince = -1;
+    /**
+     * `_noRouteSince` IS NOT CLEARED HERE, AND THAT IS THE WHOLE POINT OF IT.
+     *
+     * It was, in the first version, on the reasoning that a different place to go
+     * is a different question. MEASURED (`_noroute.mjs`, town seed 7): that put
+     * the new clock straight back into the trap it exists to escape. A man who
+     * cannot reach his objective sets `objectiveBlocked`; `match._orderZone`
+     * reads it and walks him round the standing ring on its two-second refresh;
+     * the order that arrives is a genuinely DIFFERENT one, so this line fired —
+     * every two seconds, against a two-second window. 353 give-ups on one run,
+     * every one of them a man off the height field, and `_unstick` still never
+     * called once. The recovery was being reset by the recovery.
+     *
+     * The spell is a fact about the MAN — he has nowhere to walk — and it can
+     * only be ended by him having somewhere: `_advance` clears it on a route to
+     * the objective, `_advanceFallback` on a route to the nearest ground it can
+     * find. Carrying it across a re-task costs nothing, because the only code
+     * that reads it is the fallback, and reaching the fallback at all means the
+     * new objective has no route either.
+     */
     // Force a fresh path next time ADVANCE runs rather than finishing the old one.
     if (changed) {
       /**
