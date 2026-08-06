@@ -131,10 +131,18 @@
  */
 import { chromium } from 'playwright';
 
+/**
+ * Split on the FIRST `=` only. The destructured `split('=')` truncated any
+ * value holding a second one, so `--url=…/?map=plains` measured `…/?map` —
+ * which `getLevel` falls back to the TOWN for, silently, and this gate then
+ * swept the town's cathedral apron while reporting itself as the plain's.
+ * `tools/stuckcheck.mjs` carries the same fix for the same reason.
+ */
 const args = Object.fromEntries(
   process.argv.slice(2).map((a) => {
-    const [k, v] = a.replace(/^--/, '').split('=');
-    return [k, v ?? true];
+    const s = a.replace(/^--/, '');
+    const i = s.indexOf('=');
+    return i < 0 ? [s, true] : [s.slice(0, i), s.slice(i + 1)];
   })
 );
 const BASE = args.url ?? 'http://127.0.0.1:4275/';

@@ -314,7 +314,9 @@ const TOWN_ROUTES = [
  *        RED-C   (-32, -88)   y -2.96   6.17 m
  *        RED-E   (112, -32)   y -5.37   5.42 m
  *        BLUE-W  (-128,  24)  y -4.46   4.26 m
- *        BLUE-C  (   8,  80)  y -5.57   8.42 m — the deepest hollow on the map
+ *        BLUE-C  ( -48,  32)  y -1.94   5.15 m — @see its own note; it was
+ *                                       (8, 80), the deepest hollow on the map,
+ *                                       until the fortress landed on it
  *        BLUE-E  (  64,  16)  y -1.83   5.03 m
  *
  *      `hold` is the only state that does not move, and the end of the approach
@@ -383,7 +385,14 @@ const PLAINS_ROUTES = [
       /** In to D from due west: the tower's footprint ends 26.6 m out. */
       { zone: 'D', points: [[-88, -24], [-60, -14], [-28, -4]] },
       { zone: 'E', points: [[-88, -24], [-40, -58], [24, -74], [80, -76]] },
-      { zone: 'B', points: [[-88, -24], [-58, 22], [0, 54], [62, 86]] },
+      /**
+       * SOUTH-WEST ROUND THE FORTRESS. The direct line crossed its western
+       * outwork and the leg was DROPPED at boot — "blocked by 3.6 m of
+       * unremovable mass over 3 samples at (-24, 41)", measured, which is the
+       * drop path doing exactly its job. NF-FORT is at (0, 48) with a 36 m
+       * reach; every point below clears it by 44 m or more.
+       */
+      { zone: 'B', points: [[-88, -24], [-70, 40], [-40, 84], [30, 100]] },
     ],
   },
   {
@@ -410,7 +419,13 @@ const PLAINS_ROUTES = [
       { zone: 'B', points: [[112, -32], [128, 14], [128, 62]] },
       /** In to D from due east, for the same reason RED-W comes from the west. */
       { zone: 'D', points: [[112, -32], [74, -18], [36, -4]] },
-      { zone: 'C', points: [[112, -32], [74, 14], [14, 48], [-62, 74]] },
+      /**
+       * NORTH OF THE FORTRESS, not through it. `(14, 48)` is 14 m from NF-FORT's
+       * centre — inside its 36 m reach — and this leg baked only because
+       * `_bakePath` slid samples up to `LATERAL_MAX` to find a way past. A route
+       * that survives by squeezing is a route the next course of masonry kills.
+       */
+      { zone: 'C', points: [[112, -32], [74, 14], [26, 10], [-40, 30], [-90, 62]] },
       { zone: 'A', points: [[112, -32], [62, -66], [-6, -86], [-72, -100]] },
     ],
   },
@@ -433,14 +448,36 @@ const PLAINS_ROUTES = [
     id: 'BLUE-C',
     team: 1,
     name: 'BLUE ARMOUR CENTRE',
-    approach: [[14, 136], [2, 124], [0, 108], [4, 94], [8, 80]],
+    /**
+     * ────────────────────────────────────────────────────────────────────
+     * THIS HUB MOVED, AND THE FORTRESS IS WHY — the exact failure this table
+     * was written not to have
+     * ────────────────────────────────────────────────────────────────────
+     * It was (8, 80): the deepest hollow on the plain, 8.42 m of crest toward
+     * the centre, and the best hull-down station the height field offers. Then
+     * NF-FORT landed at (0, 48) with a 36 m reach and (8, 80) went under 8.2 m
+     * of fortress — measured off `world.demolitions` and `physics.groundHeight`,
+     * not guessed: deck 3.2, first solid 11.4.
+     *
+     * IT STILL BAKED. `_bakePath` slides a sample up to `LATERAL_MAX` onto the
+     * middle of whatever span it finds, so the approach came back 62 m and
+     * clean while its END was inside a wall — and the end of the approach is
+     * the HOLD position, so this hull would have spent every idle second of the
+     * match parked in somebody's courtyard.
+     *
+     * (-48, 32) is the next-best measured hollow: 5.15 m of crest, 50 m clear of
+     * the fortress, 80 m clear of the tower, 58 m off D. The approach is 127 m
+     * rather than 62 now, down the spine and then west of the works, which is
+     * the drive this lane should have had anyway.
+     */
+    approach: [[14, 136], [-6, 124], [-22, 104], [-42, 72], [-48, 32]],
     spokes: [
-      { zone: 'C', points: [[8, 80], [-42, 92], [-94, 92]] },
-      { zone: 'B', points: [[8, 80], [56, 96], [94, 102]] },
-      /** Straight up the spine from the south — the tower is on D's far side. */
-      { zone: 'D', points: [[8, 80], [4, 50], [0, 24]] },
-      { zone: 'E', points: [[8, 80], [50, 46], [100, -20], [124, -62]] },
-      { zone: 'A', points: [[8, 80], [-46, 44], [-90, -14], [-112, -72]] },
+      { zone: 'C', points: [[-48, 32], [-84, 52], [-116, 74]] },
+      { zone: 'B', points: [[-48, 32], [-40, 84], [30, 102]] },
+      /** In to D from the north-west of the fortress and south of the tower. */
+      { zone: 'D', points: [[-48, 32], [-26, 14]] },
+      { zone: 'E', points: [[-48, 32], [-30, -14], [30, -70], [96, -84]] },
+      { zone: 'A', points: [[-48, 32], [-72, -10], [-96, -62], [-112, -90]] },
     ],
   },
   {

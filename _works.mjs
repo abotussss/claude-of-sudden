@@ -10,6 +10,7 @@ const b = await chromium.launch({ headless: true, args: ['--use-angle=metal', '-
 const p = await b.newPage({ viewport: { width: 900, height: 560 } });
 await p.goto(process.argv[2], { waitUntil: 'domcontentloaded' });
 await p.waitForFunction('window.__READY__===true', null, { timeout: 300000 });
+await p.evaluate((s) => { document.body.dataset.pts = s; }, process.argv[3] ?? '{}');
 const out = await p.evaluate(() => {
   const w = window.__ENGINE__.ctx.peek('world');
   const ph = window.__ENGINE__.ctx.peek('physics');
@@ -31,13 +32,13 @@ const out = await p.evaluate(() => {
     }
     return r;
   };
-  const lines = {};
-  for (const [k, v] of Object.entries({
-    'CENTRE z26': [-46, 26, 46, 26],
-    'CENTRE z40': [-46, 40, 46, 40],
-    'CENTRE z48': [-52, 48, 52, 48],
-  })) lines[k] = scan(v[0], v[1], v[2], v[3], 12);
-  return { demos, lines };
+  const pts = {};
+  for (const [k, q] of Object.entries(JSON.parse(document.body.dataset.pts || '{}'))) {
+    const g = ph.groundHeight(q[0], q[1], 60);
+    const deck = w.groundHeight(q[0], q[1]);
+    pts[k] = `deck ${deck.toFixed(1)} solid ${Number.isFinite(g) ? g.toFixed(1) : 'none'} over ${(Number.isFinite(g) ? g - deck : 0).toFixed(1)}`;
+  }
+  return { demos, pts };
 });
 console.log(JSON.stringify(out, null, 1));
 await b.close();
