@@ -332,7 +332,22 @@ const TOWN_ROUTES = [
  *      of it — and then diverge to three hubs 100-200 m apart. 144-182 m of
  *      approach on the wide lanes against the town's 62-65 m.
  *
- *   3. NOTHING HERE ASSUMES THE CENTRE IS OPEN. The control tower stands on the
+ *   3. A TRENCH IS A WALL WITH THREE DOORS, AND THE DOORS ARE MEASURED.
+ *      `plains-trench.js` cuts three lines out of the plain — NORDGRABEN
+ *      (-26,-138)->(-104,-108), SUDGRABEN (26,138)->(104,108) and MITTELSAPPE
+ *      (-13,-5)->(-29,34) — 1.6-1.7 m deep with 63° cheeks, which is over
+ *      `NavGrid`'s 46° limit and is therefore a wall rather than a way through.
+ *      NORDGRABEN lands squarely across the north base's western exit and
+ *      SUDGRABEN across the south's eastern one, so this is not scenery a route
+ *      can ignore. Probed at 3 m along each axis, the ground is AT GRADE in
+ *      exactly three places per line: both ramped mouths (s <= 0 and s >= 80 of
+ *      83.6) and one traverse at the midpoint, s = 40. The two flank approaches
+ *      cross at that traverse, perpendicular, and the three D spokes that would
+ *      otherwise run down MITTELSAPPE's corridor go round its north mouth.
+ *      Measured, not read: `over 0.0` at s = 0, 40 and 80; `over -1.6` to
+ *      `-1.7` everywhere between.
+ *
+ *   4. NOTHING HERE ASSUMES THE CENTRE IS OPEN. The control tower stands on the
  *      D pad at (0, -32) with a 25.4 m radius (`plains-tower.js`), the fortress
  *      and the trenches are still landing, and every one of them is mass this
  *      file did not author. So no D spoke comes at the point down the x = 0
@@ -378,7 +393,16 @@ const PLAINS_ROUTES = [
     id: 'RED-W',
     team: 0,
     name: 'RED ARMOUR WEST',
-    approach: [[-34, -138], [-60, -128], [-82, -108], [-95, -80], [-97, -50], [-88, -24]],
+    /**
+     * ────────────────────────────────────────────────────────────────────
+     * ACROSS NORDGRABEN AT ITS TRAVERSE — @see the trench note in the header
+     * ────────────────────────────────────────────────────────────────────
+     * The old line ran diagonally down the trench's own corridor. The whole
+     * wheel came back HUB 27 m and five spokes dropped: "no ground at sample 1".
+     * `(-67,-133) -> (-60,-114)` is a perpendicular crossing at s = 40, the one
+     * point on this line the probe finds at grade.
+     */
+    approach: [[-40, -148], [-58, -142], [-67, -133], [-60, -114], [-70, -80], [-88, -24]],
     spokes: [
       { zone: 'A', points: [[-88, -24], [-100, -50], [-112, -80]] },
       { zone: 'C', points: [[-88, -24], [-108, 8], [-126, 46]] },
@@ -425,7 +449,7 @@ const PLAINS_ROUTES = [
        * `_bakePath` slid samples up to `LATERAL_MAX` to find a way past. A route
        * that survives by squeezing is a route the next course of masonry kills.
        */
-      { zone: 'C', points: [[112, -32], [74, 14], [26, 10], [-40, 30], [-90, 62]] },
+      { zone: 'C', points: [[112, -32], [74, 14], [26, 10], [-46, 44], [-96, 62]] },
       { zone: 'A', points: [[112, -32], [62, -66], [-6, -86], [-72, -100]] },
     ],
   },
@@ -439,7 +463,8 @@ const PLAINS_ROUTES = [
     spokes: [
       { zone: 'C', points: [[-128, 24], [-134, 54]] },
       { zone: 'A', points: [[-128, 24], [-126, -26], [-122, -72]] },
-      { zone: 'D', points: [[-128, 24], [-92, 18], [-46, 8]] },
+      /** Round MITTELSAPPE's north mouth: the direct line crosses its cut. */
+      { zone: 'D', points: [[-128, 24], [-92, 18], [-52, -6], [-22, -14]] },
       { zone: 'B', points: [[-128, 24], [-98, 64], [-26, 96], [66, 104]] },
       { zone: 'E', points: [[-128, 24], [-98, -16], [-24, -52], [62, -78]] },
     ],
@@ -475,7 +500,17 @@ const PLAINS_ROUTES = [
       { zone: 'C', points: [[-48, 32], [-84, 52], [-116, 74]] },
       { zone: 'B', points: [[-48, 32], [-40, 84], [30, 102]] },
       /** In to D from the north-west of the fortress and south of the tower. */
-      { zone: 'D', points: [[-48, 32], [-26, 14]] },
+      /**
+       * ON TO RED-C'S LAST WAYPOINT, and that is the point rather than a
+       * coincidence. MITTELSAPPE's north mouth (-13,-5) and the tower's apron
+       * (0,-32, r 25.4) leave one 4.6 m gap between them, so there is exactly
+       * ONE line into D from the west and three wheels share it. `(-22,-10)`
+       * was two metres the tower's side of it and the leg came back "no ground
+       * at sample 50", standing 16.7 m off a 14 m circle — kept, because
+       * `ZONE_ARRIVE` is 34, and useless, because `captureBodies` counts a hull
+       * only inside the circle.
+       */
+      { zone: 'D', points: [[-48, 32], [-42, 4], [-30, -2]] },
       { zone: 'E', points: [[-48, 32], [-30, -14], [30, -70], [96, -84]] },
       { zone: 'A', points: [[-48, 32], [-72, -10], [-96, -62], [-112, -90]] },
     ],
@@ -484,7 +519,8 @@ const PLAINS_ROUTES = [
     id: 'BLUE-E',
     team: 1,
     name: 'BLUE ARMOUR EAST',
-    approach: [[34, 138], [58, 129], [79, 113], [90, 90], [82, 52], [64, 16]],
+    /** Across SUDGRABEN at its traverse, the mirror of RED-W's crossing. */
+    approach: [[40, 148], [58, 142], [67, 133], [60, 114], [70, 80], [64, 16]],
     spokes: [
       { zone: 'B', points: [[64, 16], [92, 50], [110, 82]] },
       { zone: 'E', points: [[64, 16], [98, -14], [118, -54]] },
