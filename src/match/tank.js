@@ -576,6 +576,45 @@ const STEP = 1.25;
 /** A route shorter than this is not a sortie. */
 const MIN_ROUTE = 16;
 
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * ONE SORTIE PER ROUND, AND WHY THAT WAS THE ARITHMETIC RATHER THAN THE INTENT
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「まだ戦車が登場したの一回も見ていないです」 is what put armour in this game, and
+ * the fix for it — `hold` became terminal, a hull that rolls never withdraws —
+ * quietly took the sortie COUNT down to one:
+ *
+ *   `_scheduleNext` refused to run while any hull was out of its pocket, and
+ *   `fire()` rolled EVERY parked hull at once. So sortie 1 emptied the pool,
+ *   nothing ever returned to `parked`, and `RULES.tankMaxPerMatch` (3) could
+ *   never be reached. `_park` — the withdrawal — was left behind as dead code,
+ *   which is exactly why nothing put a hull back. On the plain that is six
+ *   hulls in one event and then 900 s of nothing.
+ *
+ * TWO CHANGES, AND NEITHER OF THEM RECALLS A LIVING TANK:
+ *
+ *   A SORTIE IS A WAVE — one hull PER SIDE, taken in table order from whatever
+ *   is still parked. NACHTFELD's six hulls are three waves of two (RED-W/BLUE-W,
+ *   then -C, then -E, each wave driving a different sector), which is
+ *   `tankMaxPerMatch` exactly. The town has one hull a side, so its single wave
+ *   is what it always was.
+ *
+ *   A WRECK MAY BE CLEARED, and ONLY a wreck. When a sortie is due and every
+ *   hull is out, a hull that has been dead longer than `WRECK_HOLD` is parked —
+ *   its burn has finished, its smoke column (26 s) has run out — and it rolls
+ *   again as the next wave. That is what `_park` is for now. A LIVE hull is
+ *   still never touched: 「戦車は登場したら帰さないで 試合終了まで滞在させること」
+ *   holds, and the only exits from a live tank remain `_destroy` and `reset`.
+ *
+ * This is also what makes the town reach more than one sortie: its two hulls
+ * come back as replacements when the men kill them, which is the case worth
+ * rewarding, and stay a single permanent pair when nobody does.
+ */
+/** Seconds a wreck must have burned before its hull may be re-issued. */
+const WRECK_HOLD = 25;
+/** Retry interval when a sortie is owed and there is no hull to give it. */
+const WRECK_POLL = 8;
+
 /* ---- the hull as an obstacle to PEOPLE ----------------------------------- */
 /**
  * ────────────────────────────────────────────────────────────────────────────
@@ -1405,6 +1444,8 @@ export class Armour {
     this._m = new THREE.Matrix4();
     this._sc = new THREE.Vector3(1, 1, 1);
     this._targets = [];
+    /** The hulls of the next wave. Reused; at most one per team. @see `_wave`. */
+    this._waveBuf = [];
     this._blast = { position: this._v2, radius: 0, damage: 0, source: null };
     this._deathBlast = { position: this._v4, radius: 0, damage: 0, source: null };
     this._ev = { phase: '', id: '', team: 0, position: this._v2 };
@@ -4309,30 +4350,86 @@ export class Armour {
   /* THE SORTIE                                                             */
   /* ====================================================================== */
 
+  /**
+   * THE NEXT WAVE — one parked hull per side, in table order. @see the note on
+   * `WRECK_HOLD` for why a sortie is a wave rather than the whole pool.
+   *
+   * Returns a REUSED array (at most one entry per team, so at most two), and it
+   * is read at `call()` time and again when the telegraph expires. Nothing can
+   * change a hull's state in between — `_roll` is the only thing that takes a
+   * tank out of `parked` and it is the thing being scheduled — so the two reads
+   * agree by construction. That matters: `call()` writes each rolling hull's
+   * position back to the head of its route for the telegraph, and doing that to
+   * a hull already in the street would teleport it.
+   */
+  _wave() {
+    const out = this._waveBuf;
+    out.length = 0;
+    for (const t of this.tanks) {
+      if (t.state !== 'parked') continue;
+      let taken = false;
+      for (let i = 0; i < out.length; i++) if (out[i].team === t.team) { taken = true; break; }
+      if (!taken) out.push(t);
+    }
+    return out;
+  }
+
+  /**
+   * A WRECK GOES BACK IN ITS POCKET so its hull can be re-issued — and only a
+   * wreck, and only one that has finished burning. @see `WRECK_HOLD`.
+   */
+  _recycle() {
+    let any = false;
+    for (const t of this.tanks) {
+      if (t.state !== 'dead') continue;
+      if (t.uniforms.uT.value < WRECK_HOLD) continue;
+      this._park(t);
+      any = true;
+    }
+    return any;
+  }
+
   /** The telegraphed launch. */
   call() {
-    if (!this.ready || this.busy) return false;
+    if (!this.ready || this._pending >= 0) return false;
+    const wave = this._wave();
+    if (!wave.length) return false;
     this._pending = TANK_LEAD;
-    const first = this.tanks[0];
-    this._announce(this.onAnnounce, first);
+    this._announce(this.onAnnounce, wave[0]);
     if (this._audio ?? (this._audio = this.ctx.peek('audio'))) {
-      for (const t of this.tanks) {
+      for (const t of wave) {
         this._v.copy(t.position.set(t.legs[0].X[0], t.legs[0].Y[0] + 1.2, t.legs[0].Z[0]));
         this._audio.play?.('strike_jet', this._v, {
           level: 0.5, dur: TANK_LEAD, maxDist: 200, gain: 1.5, occlusion: 0.4,
         });
       }
     }
-    this._emit('inbound', this.tanks[0]);
+    this._emit('inbound', wave[0]);
     return true;
   }
 
-  /** Roll now, no telegraph. Every tank that is not already out. */
+  /**
+   * ROLL NOW, NO TELEGRAPH — EVERY tank that is not already out, and it stays
+   * the whole pool on purpose. This is the hand-fire hook the probes use
+   * (`_tankmatch.mjs`, `_tanklife.mjs`) and a screenshot needs armour on the map
+   * on a known frame; a probe that fires once and measures six hulls has to keep
+   * measuring six. The SCHEDULED sortie is `_rollWave`.
+   */
   fire() {
     if (!this.ready) return false;
     let any = false;
     for (const t of this.tanks) any = this._roll(t) || any;
     if (any) console.info(`[tank] SORTIE at t=${this.ctx.time.elapsed.toFixed(1)}s — ${this.tanks.map((t) => t.id).join(' + ')}`);
+    return any;
+  }
+
+  /** The scheduled sortie: this wave and no more. @see `_wave`. */
+  _rollWave() {
+    const wave = this._wave();
+    let any = false;
+    const ids = [];
+    for (const t of wave) if (this._roll(t)) { any = true; ids.push(t.id); }
+    if (any) console.info(`[tank] SORTIE ${this._sorties}/${RULES.tankMaxPerMatch} at t=${this.ctx.time.elapsed.toFixed(1)}s — ${ids.join(' + ')}`);
     return any;
   }
 
@@ -4400,7 +4497,8 @@ export class Armour {
 
     if (this._pending >= 0) {
       this._pending -= dt;
-      if (this._pending < 0) this.fire();
+      // THE WAVE, not the pool — `fire()` is the hand-fire hook. @see `_wave`.
+      if (this._pending < 0) this._rollWave();
     }
 
     for (const tank of this.tanks) {
@@ -4451,7 +4549,12 @@ export class Armour {
   _scheduleNext() {
     // `_ignoreCoBusy` is the cathedral's own sortie coming in through the dust.
     // @see `armAfter`.
-    if (this.busy || (this._coBusy && !this._ignoreCoBusy)) {
+    //
+    // THE GUARD IS THE TELEGRAPH, NOT `busy`. `busy` is "something of ours is on
+    // the map", and since `hold` became terminal that is true for the rest of
+    // the round after the first sortie — which is the whole reason there was
+    // only ever one. What may not overlap is two LAUNCHES. @see `WRECK_HOLD`.
+    if (this._pending >= 0 || (this._coBusy && !this._ignoreCoBusy)) {
       this._next = 6;
       return;
     }
@@ -4459,10 +4562,20 @@ export class Armour {
       this._next = Infinity;
       return;
     }
-    // A tank that is still a wreck in the street does not get a twin; the
-    // sortie is only re-run once both hulls are back in their pockets.
-    for (const t of this.tanks) if (t.state !== 'parked') return;
-    this.call();
+    /**
+     * A HULL TO GIVE IT. The pool first; failing that a wreck that has finished
+     * burning. If neither, ask again shortly rather than standing down for the
+     * round — a hull knocked out in the next minute is the next sortie's hull,
+     * and `_sorties` is not spent here so nothing is lost by waiting.
+     */
+    if (!this._wave().length && !this._recycle()) {
+      this._next = WRECK_POLL;
+      return;
+    }
+    if (!this.call()) {
+      this._next = WRECK_POLL;
+      return;
+    }
     this._sorties++;
     // Spent: every sortie after the first is the ordinary interval draw and
     // stands down for the sky like the other three air weapons.
@@ -4943,6 +5056,24 @@ export class Armour {
     }
   }
 
+  /**
+   * BACK IN ITS POCKET, AND IT IS A HULL AGAIN RATHER THAN A HIDDEN WRECK.
+   *
+   * Called on one thing only — a wreck old enough to clear, from `_recycle` —
+   * and never on a living tank. @see the note on `WRECK_HOLD`.
+   *
+   * THE MESH RESTORE IS THE HALF THAT WAS MISSING AND IT IS NOT COSMETIC.
+   * `_destroy` hides every mesh but `tank.wreck` (`mesh.visible = mesh ===
+   * tank.wreck`), and `_roll` only sets `root.visible` and `wreck.visible` — so
+   * a hull re-issued without this would roll out of its pocket INVISIBLE, with
+   * its wreck's no-shadow/no-prepass flags still on it. `reset()` carries the
+   * same four lines for the same reason at the end of a round; this is that
+   * restore for one tank in the middle of one.
+   *
+   * The plough piles are deliberately NOT put back (`reset` does that, this does
+   * not): what one sortie flattened stays flattened, and a route with less on it
+   * than it was baked with is a route that cannot wedge.
+   */
   _park(tank) {
     tank.state = 'parked';
     tank.alive = false;
@@ -4952,6 +5083,15 @@ export class Armour {
     tank.playerPin = 0;
     tank.root.visible = false;
     for (const c of tank.colliders) c.c.enabled = false;
+    tank.wreck.visible = false;
+    tank.wreck.userData.owNoShadow = false;
+    tank.wreck.userData.owNoPrepass = false;
+    for (const mesh of tank.meshes) mesh.visible = mesh !== tank.wreck;
+    tank.uniforms.uT.value = -1;
+    tank.uniforms.uAnim.value = 1;
+    tank.health = RULES.tankHealth;
+    tank.lastHitBy = null;
+    tank.target = null;
     this._emit('clear', tank);
   }
 
@@ -5816,9 +5956,9 @@ export class Armour {
   /**
    * ARM THE FIRST SORTIE, `seconds` from now. One line, called by `match` from
    * the cathedral event's beat sheet; everything after it is the interval
-   * scheduler this class already had (`RULES.tankInterval`, both hulls parked
-   * first, never under an inbound salvo). Idempotent — a second call while the
-   * armour is already armed or out does nothing.
+   * scheduler this class already had (`RULES.tankInterval`, a hull in the pool
+   * to give it, never under an inbound salvo — @see `WRECK_HOLD`). Idempotent —
+   * a second call while the armour is already armed or out does nothing.
    */
   armAfter(seconds) {
     if (!this.ready || this.busy) return false;
