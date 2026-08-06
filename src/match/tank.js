@@ -86,7 +86,7 @@
  *     neither `MASK.CHARACTER` nor `MASK.WORLD`, so A* and the height field
  *     cannot see a hull or a wreck wherever it stops. The boot log prints
  *     every leg's true closest approach and the zone it is to; believe it, not
- *     this comment. @see `ROUTES` and `_trimToStandoff`.
+ *     this comment. @see `MAP_ROUTES` and `_trimToStandoff`.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * NOTHING IS COMPUTED IN THE FRAME IT DIES
@@ -213,7 +213,7 @@ const L = townScaled;
  * The boot log prints every leg it baked and every one it did not. Believe it,
  * not this comment.
  */
-const ROUTES = [
+const TOWN_ROUTES = [
   {
     id: 'RED',
     team: 0,
@@ -273,6 +273,198 @@ const ROUTES = [
     ],
   },
 ];
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * NACHTFELD — THREE HULLS A SIDE, 「戦車を３台ずつ出したり」
+ * ════════════════════════════════════════════════════════════════════════════
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT WAS HERE BEFORE, AND WHY IT WAS THE WORST OF THE THREE STALE TABLES
+ * ────────────────────────────────────────────────────────────────────────────
+ * The plain used to bake the TOWN'S polylines. Measured at boot before this
+ * table existed:
+ *
+ *     RED    5 legs — HUB 63 m · C 186 m · E 183 m · A 269 m · B 316 m
+ *     BLUE   5 legs — HUB 60 m · C 183 m · E 194 m · B 273 m · A 308 m
+ *
+ * TEN LEGS OUT OF TEN, EVERY ONE OF THEM BAKED CLEAN, EVERY ONE OF THEM
+ * MEANINGLESS. That is not luck, it is the failure mode of a plain: `_bakePath`
+ * drops a leg when the measured span falls under `HULL_W + CLEARANCE`, and open
+ * grass is 40 m of span everywhere, so nothing was ever dropped and nothing was
+ * ever warned about. The strike sites and the air runs at least said what they
+ * had lost; the armour drove a street grid across a field and printed a healthy
+ * boot line while it did it.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * A PLAIN IS NOT A STREET GRID, SO THE WHEEL IS SHAPED BY THE GROUND INSTEAD
+ * ────────────────────────────────────────────────────────────────────────────
+ * On the town every waypoint is a street: the polyline exists because there is
+ * exactly one way through. Here there is no wall to route round for 300 m, and
+ * the three things that DO shape a route are the swell, the works standing on
+ * the centre pad, and the other two hulls on your own side.
+ *
+ *   1. EVERY HUB IS A MEASURED HOLLOW. `_plainscout.mjs` walks `plains.js`'s own
+ *      analytic height field on an 8 m lattice, finds every local minimum inside
+ *      the walkable disc, and reports how much crest stands between it and the
+ *      centre of the map in the first 45 m. The six hubs below are six of the
+ *      best of them:
+ *
+ *        RED-W   (-88, -24)   y -3.39   5.13 m of crest toward D
+ *        RED-C   (-32, -88)   y -2.96   6.17 m
+ *        RED-E   (112, -32)   y -5.37   5.42 m
+ *        BLUE-W  (-128,  24)  y -4.46   4.26 m
+ *        BLUE-C  (   8,  80)  y -5.57   8.42 m — the deepest hollow on the map
+ *        BLUE-E  (  64,  16)  y -1.83   5.03 m
+ *
+ *      `hold` is the only state that does not move, and the end of the approach
+ *      IS the hold position, so a hull with nothing to want sits in a dip with
+ *      four to eight metres of ground between its hull and the middle of the
+ *      map. That is what the undulation is for: a hull-down tank on this map is
+ *      a hull the swell is hiding, and `_acquire`'s `MASK.SIGHT` ray is stopped
+ *      by terrain like anything else.
+ *
+ *   2. THE APPROACHES ARE LONG AND THEY FAN. Three hulls a side leave the base
+ *      abreast, 20 m apart, six metres in front of the front rank — so the first
+ *      thing you see on foot is your own armour pulling out ahead of you, three
+ *      of it — and then diverge to three hubs 100-200 m apart. 144-182 m of
+ *      approach on the wide lanes against the town's 62-65 m.
+ *
+ *   3. NOTHING HERE ASSUMES THE CENTRE IS OPEN. The control tower stands on the
+ *      D pad at (0, -32) with a 25.4 m radius (`plains-tower.js`), the fortress
+ *      and the trenches are still landing, and every one of them is mass this
+ *      file did not author. So no D spoke comes at the point down the x = 0
+ *      axis: they arrive from the west, the east and the south, and the north
+ *      side's two western wheels swing wide round the tower's flank. If the
+ *      works grow, `_bakePath`'s span test cuts the leg and the boot log names
+ *      the pinch — which is the whole reason the drop path prints a reason.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT THREE A SIDE DOES TO TRAFFIC, AND WHAT IS DONE ABOUT IT
+ * ────────────────────────────────────────────────────────────────────────────
+ * One hull in a street cannot meet itself. Three on open ground can, and there
+ * are exactly two ways they do it:
+ *
+ *   THEY WANT THE SAME POINT. `_wantZone` takes the enemy-held zone with the
+ *   SHORTEST leg, and three identical wheels answer identically — all three
+ *   would drive at one circle and all three would stop inside `ZONE_ENTER` of
+ *   the same centre. That is fixed in `_wantZone` itself with a same-side claim:
+ *   a zone another living hull of this team is already going to is skipped while
+ *   any other destination is free. It is a NO-OP ON THE TOWN, where each side
+ *   has exactly one hull and the two are on opposite teams.
+ *
+ *   THEY SHARE A CORRIDOR. Fixed here, by construction: every spoke leaves its
+ *   OWN hub, and the three hubs of a side are 100-200 m apart, so two hulls
+ *   ordered to the same point (which the claim allows only when nothing else is
+ *   free) arrive on two different bearings and stand on two different arcs of
+ *   the circle.
+ *
+ * A hull is not a nav obstacle and is not simulated against the world — it is
+ * posed along a baked centreline — so two hulls meeting is a drawing problem
+ * rather than a wedge, and neither of the above is a collision fix. It is about
+ * what the player sees: three tanks nose to tail on one bearing is one tank
+ * drawn three times.
+ *
+ * THE COORDINATES ARE METRES AND THERE IS NO TRANSFORM. `plains.js` is authored
+ * at yaw 0, scale 1, origin 0, so a number here, a number in that file and a
+ * `--at=` argument to `tools/zonespot.mjs` are the same point. @see
+ * `src/match/geography.js`.
+ */
+const PLAINS_ROUTES = [
+  /* ---- the north base, (-14, -150) — team 0 takes the `attack` cluster ---- */
+  {
+    id: 'RED-W',
+    team: 0,
+    name: 'RED ARMOUR WEST',
+    approach: [[-34, -138], [-60, -128], [-82, -108], [-95, -80], [-97, -50], [-88, -24]],
+    spokes: [
+      { zone: 'A', points: [[-88, -24], [-100, -50], [-112, -80]] },
+      { zone: 'C', points: [[-88, -24], [-108, 8], [-126, 46]] },
+      /** In to D from due west: the tower's footprint ends 26.6 m out. */
+      { zone: 'D', points: [[-88, -24], [-60, -14], [-28, -4]] },
+      { zone: 'E', points: [[-88, -24], [-40, -58], [24, -74], [80, -76]] },
+      { zone: 'B', points: [[-88, -24], [-58, 22], [0, 54], [62, 86]] },
+    ],
+  },
+  {
+    id: 'RED-C',
+    team: 0,
+    name: 'RED ARMOUR CENTRE',
+    approach: [[-14, -136], [-2, -124], [-2, -108], [-16, -96], [-32, -88]],
+    spokes: [
+      { zone: 'A', points: [[-32, -88], [-62, -96], [-96, -102]] },
+      { zone: 'E', points: [[-32, -88], [18, -98], [76, -96]] },
+      /** WEST ROUND THE TOWER. Straight down x 0 walks into 25.4 m of concrete. */
+      { zone: 'D', points: [[-32, -88], [-56, -64], [-54, -24], [-30, -2]] },
+      { zone: 'C', points: [[-32, -88], [-72, -48], [-104, 6], [-124, 50]] },
+      { zone: 'B', points: [[-32, -88], [28, -52], [58, 6], [94, 66]] },
+    ],
+  },
+  {
+    id: 'RED-E',
+    team: 0,
+    name: 'RED ARMOUR EAST',
+    approach: [[6, -138], [38, -133], [70, -122], [96, -104], [110, -74], [112, -32]],
+    spokes: [
+      { zone: 'E', points: [[112, -32], [124, -58]] },
+      { zone: 'B', points: [[112, -32], [128, 14], [128, 62]] },
+      /** In to D from due east, for the same reason RED-W comes from the west. */
+      { zone: 'D', points: [[112, -32], [74, -18], [36, -4]] },
+      { zone: 'C', points: [[112, -32], [74, 14], [14, 48], [-62, 74]] },
+      { zone: 'A', points: [[112, -32], [62, -66], [-6, -86], [-72, -100]] },
+    ],
+  },
+
+  /* ---- the south base, (14, 150) — team 1 takes the `defend` cluster ------ */
+  {
+    id: 'BLUE-W',
+    team: 1,
+    name: 'BLUE ARMOUR WEST',
+    approach: [[-6, 138], [-38, 131], [-70, 118], [-97, 98], [-118, 66], [-128, 24]],
+    spokes: [
+      { zone: 'C', points: [[-128, 24], [-134, 54]] },
+      { zone: 'A', points: [[-128, 24], [-126, -26], [-122, -72]] },
+      { zone: 'D', points: [[-128, 24], [-92, 18], [-46, 8]] },
+      { zone: 'B', points: [[-128, 24], [-98, 64], [-26, 96], [66, 104]] },
+      { zone: 'E', points: [[-128, 24], [-98, -16], [-24, -52], [62, -78]] },
+    ],
+  },
+  {
+    id: 'BLUE-C',
+    team: 1,
+    name: 'BLUE ARMOUR CENTRE',
+    approach: [[14, 136], [2, 124], [0, 108], [4, 94], [8, 80]],
+    spokes: [
+      { zone: 'C', points: [[8, 80], [-42, 92], [-94, 92]] },
+      { zone: 'B', points: [[8, 80], [56, 96], [94, 102]] },
+      /** Straight up the spine from the south — the tower is on D's far side. */
+      { zone: 'D', points: [[8, 80], [4, 50], [0, 24]] },
+      { zone: 'E', points: [[8, 80], [50, 46], [100, -20], [124, -62]] },
+      { zone: 'A', points: [[8, 80], [-46, 44], [-90, -14], [-112, -72]] },
+    ],
+  },
+  {
+    id: 'BLUE-E',
+    team: 1,
+    name: 'BLUE ARMOUR EAST',
+    approach: [[34, 138], [58, 129], [79, 113], [90, 90], [82, 52], [64, 16]],
+    spokes: [
+      { zone: 'B', points: [[64, 16], [92, 50], [110, 82]] },
+      { zone: 'E', points: [[64, 16], [98, -14], [118, -54]] },
+      { zone: 'D', points: [[64, 16], [34, 10]] },
+      { zone: 'C', points: [[64, 16], [24, 54], [-40, 78], [-98, 88]] },
+      /** Round the WEST of the tower — the direct line clips its apron. */
+      { zone: 'A', points: [[64, 16], [26, 10], [-30, 6], [-72, -40], [-100, -84]] },
+    ],
+  },
+];
+
+/**
+ * THE WHEELS, PER MAP. @see `forMap` in `src/match/geography.js` — the same
+ * `world.level.id` selector `MAPS`/`layoutFor` and `MAP_RULES`/`applyMapRules`
+ * already use, and NOT a second parse of `?map=`.
+ */
+const MAP_ROUTES = { town: TOWN_ROUTES, plains: PLAINS_ROUTES };
 
 /* ---- the hull, in metres, in the tank's own frame ------------------------ */
 /** +Z forward, +X right, +Y up, origin on the ground between the tracks. */
@@ -1089,6 +1281,9 @@ export class Armour {
     this.enabled = true;
     this.ready = false;
     this.tanks = [];
+    /** How many wheels THIS MAP authored, so the boot log's fraction is honest
+     *  on a map with three hulls a side as well as on one with one. */
+    this._routeN = 0;
     this.buildMs = 0;
 
     /** Installed by `match`: fill `out` with the live hostiles of `team`. */
@@ -1250,7 +1445,16 @@ export class Armour {
       this._blocks = null;
       this._blockTri = null;
     }
-    for (const spec of ROUTES) {
+    /**
+     * WHICH MAP'S WHEELS. Keyed off `world.level.id`, exactly as `sites.js`
+     * keys its zone table and `rules.js` its tuning. @see `MAP_ROUTES`, and see
+     * the note above `PLAINS_ROUTES` for what baking the town's polylines
+     * against the plain looked like: ten legs out of ten, none of them dropped,
+     * none of them anywhere.
+     */
+    const routes = forMap(MAP_ROUTES, world, 'tank routes');
+    this._routeN = routes.length;
+    for (const spec of routes) {
       const tank = this._buildTank(spec, world, physics, props);
       if (tank) this.tanks.push(tank);
     }
@@ -1278,7 +1482,7 @@ export class Armour {
     this.ready = this.tanks.length > 0;
     this.buildMs = performance.now() - t0;
     console.info(
-      `[tank] ${this.tanks.length}/${ROUTES.length} tanks baked in ${this.buildMs.toFixed(0)}ms — ` +
+      `[tank] ${this.tanks.length}/${this._routeN} tanks baked in ${this.buildMs.toFixed(0)}ms — ` +
         this.tanks
           .map(
             (t) =>
@@ -1290,9 +1494,9 @@ export class Armour {
           )
           .join(' · ')
     );
-    if (this.tanks.length < ROUTES.length) {
+    if (this.tanks.length < this._routeN) {
       console.error(
-        `[tank] ${ROUTES.length - this.tanks.length} SORTIE(S) DROPPED — the route ` +
+        `[tank] ${this._routeN - this.tanks.length} SORTIE(S) DROPPED — the route ` +
           'coordinates in src/match/tank.js no longer match the map.'
       );
     }
@@ -2003,7 +2207,7 @@ export class Armour {
       console.error(
         `[tank] ${spec.id}: no drivable route from the authored polyline — SORTIE DROPPED. ` +
           'The street is narrower than the hull or the anchor is not on the ground; ' +
-          'fix `ROUTES` in src/match/tank.js.'
+          'fix this map\'s entry in `MAP_ROUTES` in src/match/tank.js.'
       );
       return null;
     }
@@ -4210,6 +4414,38 @@ export class Armour {
    * always has. A `locked` zone (D before the cathedral comes down) is not a
    * destination and has no spoke anyway — the hub is the stand-off on D.
    */
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * …AND WITH THREE HULLS A SIDE, "WHICH POINT" HAS TO BE A DIFFERENT ANSWER
+   * FOR EACH OF THEM — 「戦車を３台ずつ出したり」
+   * ────────────────────────────────────────────────────────────────────────
+   * The rule above is a pure function of the map's state and this wheel's leg
+   * lengths, so THREE HULLS OF ONE SIDE ANSWER IT IDENTICALLY. On the town that
+   * could never show: one hull a side, and the two are on opposite teams. On
+   * NACHTFELD it is three tanks driving at one circle, all three stopping
+   * inside `ZONE_ENTER` of the same centre, and — because `captureBodies` is
+   * worth `CAPTURE_BODIES` men each — three hulls' worth of capture arriving on
+   * one point while four others go uncontested.
+   *
+   * So a destination is CLAIMED. A zone another living hull of this team is
+   * already going to is skipped, unless skipping it would leave this hull with
+   * nothing at all to want — in which case two hulls on one point is still
+   * better than one hull standing still, which is the failure `_wantFallback`
+   * exists to prevent and the single most-reported defect in this file's
+   * history.
+   *
+   * IT IS A NO-OP WHEREVER EACH SIDE HAS ONE HULL: the loop can only match a
+   * DIFFERENT tank of the SAME team, and the town has none.
+   */
+  _claimedBySide(tank, zoneId) {
+    for (const o of this.tanks) {
+      if (o === tank || o.team !== tank.team) continue;
+      if (!o.alive || o.state === 'parked' || o.state === 'dead') continue;
+      if (o.targetZone === zoneId) return true;
+    }
+    return false;
+  }
+
   _wantZone(tank) {
     const m = this.ctx.peek('match');
     const zones = m?.allZones;
@@ -4217,6 +4453,10 @@ export class Armour {
     let best = null;
     let bestRank = 9;
     let bestLen = Infinity;
+    /** Second best, ignoring the claim — the fallback if every point is taken. */
+    let any = null;
+    let anyRank = 9;
+    let anyLen = Infinity;
     for (let i = 1; i < tank.legs.length; i++) {
       const leg = tank.legs[i];
       const z = zones.find((q) => q.id === leg.zone);
@@ -4224,13 +4464,19 @@ export class Armour {
       if (z.owner === tank.team) continue;
       // 0 = the enemy holds it, 1 = nobody does.
       const rank = z.owner === -1 ? 1 : 0;
+      if (rank < anyRank || (rank === anyRank && leg.length < anyLen)) {
+        anyRank = rank;
+        anyLen = leg.length;
+        any = leg.zone;
+      }
+      if (this._claimedBySide(tank, leg.zone)) continue;
       if (rank > bestRank) continue;
       if (rank === bestRank && leg.length >= bestLen) continue;
       bestRank = rank;
       bestLen = leg.length;
       best = leg.zone;
     }
-    return best;
+    return best ?? any;
   }
 
   /**
