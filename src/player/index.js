@@ -554,10 +554,20 @@ export class PlayerSystem {
     r.at = this.ctx.time.elapsed;
     r.amount = amount;
     r.type = opts?.type ?? 'bullet';
-    r.source = e?.source ?? null;
-    r.kind = e?.kind ?? null;
-    r.label = e?.label ?? null;
-    r.team = e?.team ?? -1;
+    /**
+     * THE CALLER OUTRANKS THE EVENT, and it took a tank to notice. A wound that
+     * arrives through neither of the two listeners below — `match/tank.js`
+     * running a man over is the one in the game — passed `{ type: 'explosion' }`
+     * and nothing else, so all four fields came off `_pending`, which is null on
+     * that path. The record then said "an explosion, from nobody", and forty
+     * tonnes of moving steel reached the kill cam as BOMBARDMENT · INDIRECT
+     * FIRE. `opts` is the caller stating what it knows; the event is the
+     * fallback for the two listeners that have one.
+     */
+    r.source = opts?.source ?? e?.source ?? null;
+    r.kind = opts?.kind ?? e?.kind ?? null;
+    r.label = opts?.label ?? e?.label ?? null;
+    r.team = opts?.team ?? e?.team ?? -1;
     r.hasFrom = !!from;
     if (from) r.from.set(from.x, from.y, from.z);
     /**
@@ -568,7 +578,7 @@ export class PlayerSystem {
      * approximate: a second unrelated blast at the same point in the same frame
      * is the same blast for every purpose this record has.
      */
-    if (!e && r.type === 'explosion' && from) {
+    if (!e && !opts?.source && r.type === 'explosion' && from) {
       const b = this._lastBlast;
       if (b.at === r.at) {
         const dx = b.x - from.x, dy = b.y - from.y, dz = b.z - from.z;

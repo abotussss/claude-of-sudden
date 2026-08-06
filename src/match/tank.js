@@ -4822,7 +4822,19 @@ export class Armour {
     if (tank.crushing) {
       // Nowhere to put him and forty tonnes still moving. A man who dies here
       // is a man who is not wedged here for the rest of the match.
-      player.applyDamage?.(CRUSH_DPS * dt, tank.position, { type: 'explosion' });
+      /**
+       * AND THE HULL SIGNS IT. This is the one wound in the game that reaches
+       * the player through neither `damage:dealt` nor `explosion`, so there was
+       * no event for `PlayerSystem._recordDamage` to take an attacker off and
+       * the kill cam called being run over by a named, teamed, forty-tonne
+       * vehicle "BOMBARDMENT · INDIRECT FIRE" — @see the note there. `kind`
+       * keeps it from becoming the other lie: a crush is not the main gun.
+       */
+      player.applyDamage?.(CRUSH_DPS * dt, tank.position, {
+        type: 'explosion',
+        source: tank,
+        kind: 'crush',
+      });
     } else {
       tank.playerPin += dt;
     }
