@@ -5,6 +5,7 @@ import { registerProps } from '../props.js';
 import { Rng } from '../../core/rng.js';
 import { buildTower, TOWER, TOWER_R } from './plains-tower.js';
 import { buildFort, FORT, FORT_R } from './plains-fort.js';
+import { buildTrenches, trenchKeepOut, inCorridor } from './plains-trench.js';
 import { publishWorks } from './plains-works.js';
 
 /**
@@ -332,6 +333,12 @@ const CLAIMS = [];
 const WORKS = [
   { id: 'NF-TOWER', x: TOWER.x, z: TOWER.z, r: TOWER_R + 1.2 },
   { id: 'NF-FORT', x: FORT.x, z: FORT.z, r: FORT_R + 1.2 },
+  /**
+   * …and the three trench lines, as a chain of circles along each cut. Nothing
+   * may be scattered into a trench: a `rock_a` instanced 1.6 m down a revetted
+   * cut is a collider in the middle of the only covered route on the map.
+   */
+  ...trenchKeepOut(),
 ];
 
 /** Is this point inside something that has been built on the plain? */
@@ -377,6 +384,19 @@ function terrainMesh(size, seg, fn) {
 function buildTerrain(A) {
   // ------------------------------------------------------------- the plain --
   const field = terrainMesh(FIELD, FIELD_SEG, plainsY);
+  /**
+   * …WITH A HOLE IN IT WHERE THE TRENCHES ARE.
+   *
+   * This mesh is 3.18 m quads and it is also the collision, so a trench dug
+   * UNDER it is a trench the height field's one downward ray never reaches —
+   * measured, `[ai] nav` returned 223 648 walkable cells with the trenches
+   * built and 223 648 without, to the cell. The field cannot resolve a 3 m
+   * section either (that is a quarter of one quad, and the resolution it would
+   * take is 10x this mesh), so the triangles over each cut are DROPPED and
+   * `plains-trench.stripMesh` lays the section in at 0.3 m across, running well
+   * past the ragged edge this leaves. @see `inCorridor`.
+   */
+  cutCorridors(field);
   paintMasks(field, (x, y, z, nx, ny, nz, out) => {
     // ny is the slope: 1 flat, 0 vertical. Steep ground is scoured to stone,
     // flat ground holds soil, and a broad noise keeps either from being uniform.
@@ -410,6 +430,29 @@ function buildTerrain(A) {
   });
   A.add('mountain_rock', far, null);
   far.dispose();
+}
+
+/**
+ * Drop every triangle whose centroid stands over a trench. Runs on the built
+ * geometry rather than on `plainsY`, because what has to go is TRIANGLES: the
+ * vertex grid is shared and moving one would pull the plain either side of it.
+ */
+function cutCorridors(geo) {
+  const idx = geo.getIndex();
+  const pa = geo.getAttribute('position');
+  const src = idx.array;
+  const keep = [];
+  for (let i = 0; i < src.length; i += 3) {
+    const a = src[i], b = src[i + 1], c = src[i + 2];
+    const cx = (pa.getX(a) + pa.getX(b) + pa.getX(c)) / 3;
+    const cz = (pa.getZ(a) + pa.getZ(b) + pa.getZ(c)) / 3;
+    if (inCorridor(cx, cz)) continue;
+    keep.push(a, b, c);
+  }
+  const dropped = (src.length - keep.length) / 3;
+  geo.setIndex(new THREE.BufferAttribute(
+    pa.count > 65535 ? new Uint32Array(keep) : new Uint16Array(keep), 1));
+  console.info(`[world] nachtfeld: ${dropped} terrain triangles cut for the trenches`);
 }
 
 /**
@@ -762,6 +805,13 @@ export const PLAINS = {
     const fort = buildFort(A, plainsY);
     works.push(fort.demolition);
     volumes.push(...fort.interiorVolumes);
+    /**
+     * The trenches carry no destroyed state and no interior volume: a cut in the
+     * ground is open to the sky, so the height field samples its floor without
+     * being told anything, and there is nothing standing up in it for an
+     * airstrike to take away.
+     */
+    buildTrenches(A, plainsY);
     this._works = works;
 
     return {
