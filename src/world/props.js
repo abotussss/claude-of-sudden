@@ -949,7 +949,26 @@ export function registerProps(A, rngIn) {
   P('sandbag_c', 'burlap', sandbag(rng, 2), LOOSE(0.095, 0.006));
   P('jersey', 'concrete_prop', jerseyBarrier(rng), { skirt: 0.69, maxDist: 0 });
   P('block_big', 'concrete_prop', concreteBlock(rng, 1.25, 0.95, 0.85), { skirt: 0.63, ...LOOSE(0.05, 0.03) });
-  P('block_small', 'concrete_dark', concreteBlock(rng, 0.55, 0.42, 0.4), { skirt: 0.31, ...SOLID, ...LOOSE(0.09, 0.018) });
+  /**
+   * 0.42 m TALL IS THE ONE HEIGHT A PROP MAY NOT BE, and this was the only
+   * SOLID prototype standing exactly on it. `_protoBox` refuses a proxy under
+   * `STANCE.stand.stepHeight` (0.42) — this block measured 0.42 EXACTLY, so it
+   * passed the test by a floating-point hair and then every instance of it was
+   * placed OVER the line: `put`'s jitter scales a loose prop by up to +8 % and
+   * the callers below scale some of them by 1.2 on top, and `LOOSE(0.09, …)`
+   * lifts a corner besides. Measured on the shipped level, all 44 of the
+   * ground-standing ones stood 0.428-0.642 m tall — a knee-high concrete kerb
+   * you could only clear by jumping, exactly the same trap `plinthCourse` is
+   * documented for in breach.js.
+   *
+   * IT IS LITTER, NOT COVER, so it loses the proxy rather than gaining height.
+   * `solidcheck` asks for collision on anything 0.55 m or taller (@see MIN_H,
+   * and the margin over the step is the reason for the number); a 0.42 m block
+   * is under that line by the gate's own measure, and it joins the bucket, the
+   * jerry can, the lying tyre, the pallet, the sandbags and the 0.46 m stool,
+   * which are all stepped over already.
+   */
+  P('block_small', 'concrete_dark', concreteBlock(rng, 0.55, 0.42, 0.4), { skirt: 0.31, ...LOOSE(0.09, 0.018) });
   P('tyre', 'rubber', tyre(rng), { skirt: 0.33, ...LOOSE(0.10, 0.008) });
   P('tyre_small', 'rubber', tyre(rng, 0.26), LOOSE(0.11, 0.006));
   P('pallet', 'wood_prop', pallet(rng), { skirt: 0.51, ...LOOSE(0.055, 0.02) });

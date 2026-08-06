@@ -1108,7 +1108,65 @@ export function rubbleMound(A, rng, x, y, z, radius, count, opts = {}) {
       { masks: [0.3, 0.75, 0.45] }
     );
   }
-  A.box(A.surfaceOf(key), x, y + radius * 0.14, z, radius * 1.5, radius * 0.34, radius * 1.5);
+  moundProxy(A, A.surfaceOf(key), x, y, z, radius);
+}
+
+/** The crest of a mound of `radius`, as the drawn rocks build it. */
+const MOUND_RISE = 0.31;
+/**
+ * The tallest vertical face a mound may present. `STANCE.stand.stepHeight` is
+ * 0.42 and `CharacterController.move` lifts a grounded move by exactly that, so
+ * anything under it is ridden over and anything over it is a wall. 0.30 leaves
+ * the same kind of margin `breach.js` leaves its spill (0.32) and sits under
+ * `NavGrid.maxStep` (0.45) from either direction as well.
+ */
+const MOUND_STEP = 0.30;
+
+/**
+ * THE PILE IS A CONE AND IT WAS PROXIED AS A PLATEAU.
+ *
+ * 「地面に落ちている石ころオブジェが移動の妨げです、ジャンプしないと乗り越えられない
+ *  ようになってる」 — and this is where most of that came from. The rocks above
+ * are drawn as a cone: the lift at radial distance `rr` is `(1 - rr/radius) *
+ * radius * 0.3`, so the pile is `radius * 0.31` at the middle and NOTHING at
+ * the rim. The proxy was ONE BOX, `radius * 1.5` across and `radius * 0.34`
+ * tall, which is that crest height held flat all the way out to 0.75 of the
+ * rim. At the edge of a 2.2 m mound the art is ankle-deep gravel and the
+ * collision was a vertical 0.68 m face — over `stepHeight`, so the only way
+ * across a heap of pebbles was to jump it.
+ *
+ * A heap of loose rubble is LITTER YOU WALK UP, not cover you take, so the fix
+ * is the shape rather than the presence: nothing is made intangible (which
+ * would put the player's shins through a mound and cost `solidcheck` a real
+ * obstacle), the box becomes the stepped cone the art already draws. Every
+ * tier rises `MOUND_STEP` or less over the one outside it and the outermost
+ * rises that much over the ground, so a walking man rides up and over without
+ * touching a key — and `src/ai/nav.js`, which samples one ray per cell and read
+ * the old plateau as an island 0.68 m above ground it could not step onto,
+ * gets a slope it can path over.
+ *
+ * Mounds whose whole crest is already under the step line keep the box they
+ * had: they were never in anybody's way and a second proxy there is triangles
+ * for nothing.
+ */
+function moundProxy(A, surface, x, y, z, radius) {
+  const crest = radius * MOUND_RISE;
+  // Sunk a little, exactly as the single box was, so no tier's underside is
+  // floating over a ground that dips away under it.
+  const sink = radius * 0.03;
+  if (crest <= 0.40) {
+    A.box(surface, x, y + radius * 0.14, z, radius * 1.5, radius * 0.34, radius * 1.5);
+    return;
+  }
+  const n = Math.ceil(crest / MOUND_STEP);
+  for (let i = 1; i <= n; i++) {
+    const top = (crest * i) / n;
+    // The cone's own half-width in the MIDDLE of this tier's band. Scaled by
+    // the same 0.75 of the drawn rim the single box used, so a mound covers the
+    // same share of its own art as it always did.
+    const hw = radius * 0.75 * (1 - (i - 0.5) / n);
+    A.box(surface, x, y + (top - sink) / 2, z, hw * 2, top + sink, hw * 2);
+  }
 }
 
 // --------------------------------------------------------------- utilities --
