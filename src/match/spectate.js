@@ -20,8 +20,37 @@
  * it.
  *
  * So `start()` now takes a KILLER, and for `KILLCAM_TIME` the camera stands
- * behind whatever it was, looking down its line at the place the player fell —
- * then hands over to the squad follow, unchanged, for the rest of the wait.
+ * behind whatever it was, LOOKING AT IT — then hands over to the squad follow,
+ * unchanged, for the rest of the wait.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「キルカメラもちゃんと相手を表示して」 — AND IT DID NOT
+ * ────────────────────────────────────────────────────────────────────────────
+ * The strip read `KILLED BY THRESHER — 192M` over a frame with no THRESHER in
+ * it, and `_kcframe.mjs` says why in one line: on all nine frames of a bot kill
+ * cam the killer was 179° OFF THE CAMERA AXIS — DIRECTLY BEHIND IT — 112 m
+ * away. Two faults, and the first is the whole of it:
+ *
+ *   1. `_avoidWall` WAS ANCHORED ON THE BODY. It sphere-casts from the point
+ *      being looked at toward the camera and pulls the camera in to the first
+ *      wall, which is right for the follow and the orbit (the subject IS the
+ *      look point) and catastrophic here: the camera stood BEYOND the killer,
+ *      so the cast ran the entire length of the shot he took. Any masonry in
+ *      between — i.e. exactly the geometry that made the fight a fight —
+ *      stopped the camera at the wall, tens of metres short of him, still
+ *      looking back at the corpse. The killer was then behind the lens by
+ *      construction. Measured 9/9 frames on a 192 m rifle kill and, at the
+ *      other extreme, 1.2 m from the crater on an airstrike.
+ *      It is now anchored on the KILLER, so the pull-in can only ever move the
+ *      camera toward him.
+ *   2. THE EYE WAS ON THE BODY, which can be 200 m down the street, and the
+ *      camera sat 2.9 m above the killer 3.4 m behind him — 25° of down-angle
+ *      that the look point did not share. Even with nothing in the way he was
+ *      pinned to the bottom edge of the frame with his feet cut off (chest at
+ *      ndc y −0.56, feet at −1.02 against a vertical FOV of 80°). The eye is
+ *      now on HIS CHEST and the camera is a head-height above him, which puts
+ *      him at ndc y +0.13..−0.35 — centred, whole, and with the line he shot
+ *      down running away up-frame toward the body.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * THE KILLER IS OFTEN NOT A PERSON, AND `describeKiller` IS WHERE THAT LIVES
@@ -71,12 +100,40 @@ const ORBIT_DIST = 4.2;
  * so a shorter delay shortens the cam rather than eating all of it.
  */
 export const KILLCAM_TIME = 3.2;
-/** How far behind the killer the camera stands, and how high. */
+/**
+ * How far behind the killer the camera stands, and how high ABOVE HIS EYE.
+ *
+ * 0.55 rather than 1.35: the camera looks at his chest from 3.4 m, so every
+ * centimetre of height is down-angle he is pushed toward the bottom edge by.
+ * At 0.55 he stands from ndc y +0.13 (head) to −0.35 (feet) — the whole man,
+ * centred, with the street he shot down still in frame above him.
+ */
 const CAM_BACK = 3.4;
-const CAM_UP = 1.35;
+const CAM_UP = 0.55;
 /** A blast has no shoulder to look over, so the camera stands off further. */
 const CAM_BACK_BLAST = 6.2;
 const CAM_UP_BLAST = 3.2;
+/**
+ * …and a HULL is seven metres of it, measured from its own centre. At a man's
+ * 3.4 m the camera stands inside the tank and the tank is what occludes the
+ * tank: 7 of 7 frames of a crush death, before this.
+ */
+const CAM_BACK_HULL = 9.0;
+const CAM_UP_HULL = 4.2;
+const HULL_LOOK_UP = 1.5;
+/** What the camera frames on a man: chest, as a fraction of his eye height. */
+const CHEST = 0.75;
+/** …and on a blast, which has no body — a little above the crater. */
+const BLAST_LOOK_UP = 0.6;
+/**
+ * Closer than this behind him and the camera is inside his head, so the shot
+ * goes OVER him instead. A wall 0.6 m off a man's back is a real place to be
+ * standing when you shoot somebody.
+ */
+const MIN_BACK = 1.6;
+/** The push-in: where the camera starts, relative to the settled shot. */
+const LEAD_BACK = 2.0;
+const LEAD_UP = 1.2;
 
 /**
  * ══════════════════════════════════════════════════════════════════════════
@@ -106,8 +163,12 @@ const CAM_UP_BLAST = 3.2;
  *   a bomber / strafe  'BOMBER RUN' / 'STRAFING RUN', the same treatment.
  *   a tank             the hull's own name (it has one and a team, which is
  *                      everything the killfeed asks of an attacker) plus
- *                      'MAIN GUN' or 'COAXIAL MG' depending on how it reached
- *                      you. A destroyed hull is still framed where it stood.
+ *                      'MAIN GUN', 'COAXIAL MG' or 'CRUSHED' depending on how
+ *                      it reached you — and being run over used to read as
+ *                      'BOMBARDMENT', because it is the one wound in the game
+ *                      that arrives with no event behind it at all (@see
+ *                      `PlayerSystem._recordDamage`). A destroyed hull is still
+ *                      framed where it stood.
  *   the C4             'THE CHARGE'.
  *   the cathedral, a
  *   zone bombardment,
@@ -132,6 +193,14 @@ export function describeKiller(out, last, playerTeam = -1, deathAt = null) {
   out.name = '';
   out.cause = '';
   out.dist = 0;
+  /**
+   * IS THE KILLER THE SIZE OF A VEHICLE. A hull is seven metres long and the
+   * `position` on it is its CENTRE, so the shoulder standoff a man gets puts
+   * the camera inside the tank — measured occluded on 7/7 frames of a crush,
+   * by the tank itself. It is on the record rather than read off `actor`
+   * because a destroyed hull is still framed and `actor` is null for one.
+   */
+  out.big = false;
   out.friendly = false;
   out.environmental = true;
   out.hasPoint = false;
@@ -150,9 +219,14 @@ export function describeKiller(out, last, playerTeam = -1, deathAt = null) {
     out.actor = src.alive === false || src.dead === true ? null : src;
     out.name = src.name ?? (src.isTank ? 'ARMOUR' : 'ENEMY');
     out.environmental = false;
+    out.big = src.isTank === true;
     const team = src.team ?? -1;
     out.friendly = playerTeam >= 0 && team === playerTeam;
-    if (src.isTank) out.cause = blast ? 'MAIN GUN' : 'COAXIAL MG';
+    // 'crush' is the hull itself rather than either of its weapons, and it is
+    // the only wound that arrives with no event behind it. @see src/match/tank.js.
+    if (src.isTank) {
+      out.cause = last.kind === 'crush' ? 'CRUSHED' : blast ? 'MAIN GUN' : 'COAXIAL MG';
+    }
     else if (blast) out.cause = last.kind === 'grenade' ? 'GRENADE' : 'EXPLOSION';
     const p = src.position;
     if (p) {
@@ -214,6 +288,12 @@ export class Spectator {
     this._pos = new THREE.Vector3();
     this._look = new THREE.Vector3();
     this._dir = new THREE.Vector3();
+    /**
+     * The body→killer direction, FLATTENED, kept apart from `_dir` because
+     * `_avoidWall` uses that one as scratch and the second candidate in
+     * `_solveKillShot` still needs the first one's bearing.
+     */
+    this._flat = new THREE.Vector3();
     this._up = new THREE.Vector3(0, 1, 0);
     this._m = new THREE.Matrix4();
     this._orbit = 0;
@@ -257,8 +337,18 @@ export class Spectator {
     if (this.kill) {
       this._killAt.set(kill.x, kill.y, kill.z);
       this.mode = 'kill';
-      // Start wide and settle in, so the cut reads as a move rather than a jump.
-      this._pos.lerp(this._killAt, 0.35);
+      /**
+       * SOLVE THE SHOT ON THE FRAME OF THE CUT, then start the camera a couple
+       * of metres behind it and ease forward. Starting AT THE BODY and easing
+       * (what this did) is a second's worth of empty street when the man who
+       * killed you is 190 m away, and the ease never arrives inside the 3.2 s.
+       * A fixed push-in reads the same at every range, and it is wall-checked
+       * against the settled shot so it cannot start inside masonry.
+       */
+      this._solveKillShot();
+      this._pos.copy(this._want).addScaledVector(this._dir, LEAD_BACK);
+      this._pos.y += LEAD_UP;
+      this._avoidWall(this._want, this._pos);
     } else {
       this.mode = 'orbit';
     }
@@ -335,46 +425,69 @@ export class Spectator {
   }
 
   /**
-   * THE SHOT: stand behind the killer, look down its line at the body. It is
-   * the same framing whether the killer is a man, a hull or a crater, because
-   * the information wanted is the same — where it came from, and what was
-   * between the two of you.
+   * THE SHOT, SOLVED: stand behind the killer, along the line he shot down, and
+   * LOOK AT HIM. It is the same framing whether the killer is a man, a hull or
+   * a crater, because the information wanted is the same — who it was, where he
+   * was standing, and what he could see of you from there.
    *
    * A live actor is TRACKED (a man who shot you and ran keeps the camera on
    * him); a dead or vanished one is frozen where it was, which is the whole
    * reason `describeKiller` separates the actor from the point.
+   *
+   * Writes `_look` and `_want` and nothing else, so `start()` can place the
+   * camera from the same solution the frame loop eases toward.
    */
-  _killShot(dt) {
+  _solveKillShot() {
     const k = this.kill;
     const p = k.actor?.position;
     if (p && k.actor.alive !== false && k.actor.dead !== true) this._killAt.copy(p);
     const blast = k.environmental;
     const eye = blast ? 0 : (k.actor?.eyeHeight ?? 1.55);
-    this._look.copy(this._anchor);
+    // A HULL IS NOT A SHOULDER. `position` on a tank is the centre of seven
+    // metres of steel, so a man's standoff stands the camera inside it.
+    const back = k.big ? CAM_BACK_HULL : blast ? CAM_BACK_BLAST : CAM_BACK;
+    const up = k.big ? CAM_UP_HULL : blast ? CAM_UP_BLAST : eye + CAM_UP;
+    // THE SUBJECT IS THE KILLER. Framing the body instead is what put him off
+    // the bottom of the screen — @see the header.
+    this._look.set(
+      this._killAt.x,
+      this._killAt.y + (k.big ? HULL_LOOK_UP : blast ? BLAST_LOOK_UP : eye * CHEST),
+      this._killAt.z
+    );
     // The line from the body to the killer — the camera sits beyond the killer
     // on that same line, so what is drawn is the shot he actually had.
-    this._dir.set(
+    this._flat.set(
       this._killAt.x - this._anchor.x,
       0,
       this._killAt.z - this._anchor.z
     );
-    const flat = this._dir.length();
+    const flat = this._flat.length();
     if (flat < 0.5) {
       // He was on top of you. Back off along the view instead of dividing by
       // nothing, and look down at the two of you.
-      this._dir.set(0, 0, 1);
+      this._flat.set(0, 0, 1);
     } else {
-      this._dir.divideScalar(flat);
+      this._flat.divideScalar(flat);
     }
-    this._want
-      .set(this._killAt.x, this._killAt.y + eye, this._killAt.z)
-      .addScaledVector(this._dir, blast ? CAM_BACK_BLAST : CAM_BACK);
-    this._want.y += blast ? CAM_UP_BLAST : CAM_UP;
+    this._want.copy(this._look).addScaledVector(this._flat, back);
+    this._want.y = this._killAt.y + up;
+    /**
+     * FROM THE KILLER, NOT FROM THE BODY. The camera stands beyond him, so a
+     * cast anchored on the corpse runs the whole length of his shot and parks
+     * the camera at the first wall in it — with him behind the lens. @see the
+     * header; it is the entire reported bug.
+     */
+    if (this._avoidWall(this._look, this._want) >= MIN_BACK) return;
+    // A wall right off his back. Go over the top rather than into his head.
+    this._want.copy(this._look).addScaledVector(this._flat, 1.1);
+    this._want.y = this._killAt.y + Math.max(up, eye + 2.0);
     this._avoidWall(this._look, this._want);
+  }
+
+  _killShot(dt) {
+    this._solveKillShot();
     // Ease in hard at the cut and settle: 1 - exp(-6 dt) is ~0.1 on a 60 Hz
     // frame, so the move is legible rather than a snap.
-    // The eye stays on the BODY and not on the killer: you are watching your
-    // own death from the other end of it.
     this._pos.lerp(this._want, 1 - Math.exp(-6 * dt));
   }
 
@@ -412,15 +525,22 @@ export class Spectator {
     this._pos.lerp(this._want, 1 - Math.exp(-5 * dt));
   }
 
-  /** Pull `want` in toward `from` if the level is in the way. Mutates `want`. */
+  /**
+   * Pull `want` in toward `from` if the level is in the way. Mutates `want`,
+   * leaves `_dir` holding the unit vector from `from` to it, and returns how
+   * far apart the two ended up — which is how `_solveKillShot` knows its first
+   * candidate was squashed against a wall.
+   */
   _avoidWall(from, want) {
     const phys = this._phys ?? (this._phys = this.ctx.peek('physics'));
-    if (!phys) return;
     this._dir.copy(want).sub(from);
     const d = this._dir.length();
-    if (d < 1e-3) return;
+    if (!phys || d < 1e-3) return d;
     this._dir.divideScalar(d);
     const hit = phys.sphereCast(from, this._dir, 0.22, d, phys.MASK.WORLD);
-    if (hit?.hit) want.copy(from).addScaledVector(this._dir, Math.max(0.5, hit.distance - 0.1));
+    if (!hit?.hit) return d;
+    const cut = Math.max(0.5, hit.distance - 0.1);
+    want.copy(from).addScaledVector(this._dir, cut);
+    return cut;
   }
 }
