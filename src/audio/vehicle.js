@@ -587,8 +587,22 @@ export function droneRotor(actx, bank, rng, o = {}) {
    * CONTINUOUS voice, and continuous sounds dominate a mix far more than their
    * level suggests — `_startEngine`'s note on the tank measuring seven times
    * the player's own rifle is the cautionary tale.
+   *
+   * 0.34 -> 0.26, 「ドローンの音は少し小さくして」. That is -2.3 dB, and it is
+   * deliberately a trim rather than a re-voicing: two aloft at a time on a
+   * 120 m range means the rotor is the longest-running thing in the mix after
+   * the ambience bed, so what it costs is presence, not audibility. The lever
+   * is here rather than on `_startRotor`'s emitter gain (0.85, battle.js)
+   * because that one is the DISTANCE curve — cutting it would take the drone
+   * at 100 m below the floor while barely touching the one overhead, and being
+   * heard coming is the whole reason this voice exists.
+   *
+   * NOT TOUCHED: `droneLock`'s warble and `droneDive` are separate voices and
+   * are not part of this ask. @see DRONE_TRIM below — the fade-in target has
+   * to match this or the trim is undone 0.3 s after every launch.
    */
-  const out = gain(actx, 0.34);
+  const DRONE_TRIM = 0.26;
+  const out = gain(actx, DRONE_TRIM);
   const nodes = [];
   const sources = [];
   const keep = (n) => { nodes.push(n); return n; };
@@ -645,9 +659,11 @@ export function droneRotor(actx, bank, rng, o = {}) {
   whine.start(t0);
   sources.push(whine);
 
-  // Fade in: `match` may hand us a drone that is already in the air.
+  // Fade in: `match` may hand us a drone that is already in the air. The target
+  // is the VOICE TRIM and must stay tied to it — a literal here would ramp the
+  // voice back to its old level 0.3 s after launch and silently undo the trim.
   out.gain.setValueAtTime(0.0001, t0);
-  out.gain.setTargetAtTime(0.34, t0, 0.3);
+  out.gain.setTargetAtTime(DRONE_TRIM, t0, 0.3);
 
   let stopped = false;
 
