@@ -1926,6 +1926,34 @@ export class Airstrike {
         isDown: () => !!rec.down,
       });
     }
+    /**
+     * `world.roofs` IS HERE AND `world.breaches` IS NOT, AND THE DIFFERENCE IS
+     * THE ONE THIS LIST EXISTS TO ASK ABOUT: does the PLANE a settled chunk is
+     * resting on stop existing?
+     *
+     * A breach never moves one. A ROOF IS NOTHING BUT A PLANE — it is the
+     * surface eleven of this file's own strike masses are authored to stand on,
+     * a bay of it at a time, and 「屋上破壊」 means the deck under a mound that
+     * settled ten minutes ago can now come in. That is exactly the case the
+     * cathedral entry was written for at 29 m, at house scale. The candidate is
+     * cheap and it BINDS, which is the test the note above sets.
+     *
+     * COLLISION ONLY, like every other entry: a probe re-asks what the ground
+     * is with the deck still visibly there, at boot, with no frame drawn.
+     */
+    for (const rec of world?.roofs ?? []) {
+      if (typeof rec.setCollision !== 'function' || !rec.position || !rec.navRect) continue;
+      const n = rec.navRect;
+      out.push({
+        id: rec.id,
+        rec,
+        centre: rec.position.clone(),
+        reach: Math.hypot((n.x1 - n.x0) / 2, (n.z1 - n.z0) / 2) + HOST_REACH,
+        swap: (down) => rec.setCollision(down),
+        probeSwap: (down) => rec.setCollision(down),
+        isDown: () => !!rec.down,
+      });
+    }
     const k = world?.cathedral;
     if (k && typeof k.setCollision === 'function' && typeof k.setRazed === 'function') {
       out.push({
