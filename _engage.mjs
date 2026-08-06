@@ -44,6 +44,13 @@ const URL = args.url ?? 'http://127.0.0.1:4535/';
 const SEEDS = String(args.seeds ?? args.seed ?? '7').split(',');
 const WARM = +(args.warm ?? 120);
 const WINDOW = +(args.window ?? 150);
+/**
+ * WHICH LEVEL. There are two now (`?map=town|plains`) and the plain's zones are
+ * 154-314 m apart against the town's 60-100, so every travel figure below is a
+ * different number on it. The default is what `DEFAULTS.map` is, so a command
+ * line written before this flag existed still measures what it used to.
+ */
+const MAP = args.map ?? 'town';
 
 const browser = await chromium.launch({
   headless: true,
@@ -55,7 +62,7 @@ for (const seed of SEEDS) {
   const page = await browser.newPage({ viewport: { width: 900, height: 520 } });
   const errs = [];
   page.on('pageerror', (e) => errs.push(String(e.message)));
-  await page.goto(`${URL}?capture=1&seed=${seed}`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${URL}?capture=1&map=${MAP}&seed=${seed}`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
 
   const out = await page.evaluate(async ({ WARM, WINDOW }) => {
