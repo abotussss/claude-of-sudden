@@ -80,6 +80,49 @@ export class MySystem {
 Shared, owned by the lead (do not edit): `src/core/`, `src/main.js`,
 `src/dev/`, `tools/`, `vite.config.js`.
 
+### There is more than one map
+
+`?map=town|plains` (`config.map`, `DEFAULTS.map = 'town'`) picks the LEVEL.
+Absent, everything boots exactly what it always booted — every tool, gate and
+capture path that knows nothing about levels is unaffected, and the town's
+geometry is bit-identical because `levels/town.js` is a MOVE of
+`WorldSystem.init`'s body with every pass in its original order (one `rng`
+stream drawn in sequence; re-ordering two calls moves several thousand props).
+
+```
+src/world/levels/index.js   the registry and the LEVEL CONTRACT — read first
+src/world/levels/town.js    AL-MARIYA, the market town, unchanged
+src/world/levels/plains.js  NACHTFELD, the night plain
+src/match/sites.js          MAPS / layoutFor(world) — the zone + spawn tables
+src/match/rules.js          MAP_RULES / applyMapRules(id) — the tuning patch
+```
+
+`WorldSystem.init` is the HOST: prologue (root, Assembler, transform), then
+`level.build(A, rng, ctx)`, then the epilogue (lights, `finalize`,
+`level.publish`, bounds, queries, `sky.setTimeOfDay` / `sky.setWeather`). A
+level declares its own yaw/scale/play box/spawn seeds/`groundY`/`isOpen`, and
+returns `{ buildings, cathedral, features, links, interiorVolumes, layout }` —
+EVERY FIELD OPTIONAL. A level with no cathedral, no enterable buildings, no
+destructible blocks and no caches publishes empty arrays and `match` degrades
+loudly rather than crashing: the caches, the medical zone, the district salvos,
+the civilians and the hidden squad all disable themselves with a console warning
+they already had, because each was written against a list that could be empty.
+
+`match` selects its own tables off **`world.level.id`**, never off a second
+parse of the query string — two readers of `?map=` is two things to disagree,
+and the failure is silent (the town's zones resolved onto the plain's ground and
+walked up to 35 m by `ensureReachable`, giving a boot that looks fine).
+
+WHAT IS STILL SINGLE-MAP, and it is authored geography rather than tuning:
+`STRIKE_SITES`/`SALVOS` (airstrike.js), `RUNS` (bomber.js), `LINES` (strafe.js),
+`ROUTES` (tank.js), `MEDIC_FEATURES` (caches.js), the cathedral act in
+`rules.js`, and `_bakeCathedralBarrage`'s assumption that the church is at the
+level origin and square to the plan (index.js). Each of those already drops
+itself with a logged reason when it cannot be baked, so they are safe — but on a
+new map they are all wrong until somebody authors them, and `SCALE`/`widenX` is
+still duplicated by hand in five files of `src/match` (the plain sidesteps that
+by being authored at yaw 0, scale 1, origin 0, so level space IS world space).
+
 ### `match` is the only gameplay owner
 
 Everything above `match` in that table is the engine. `match` is the ruleset —
@@ -110,6 +153,7 @@ ui.airAlert(a)              ui.airImpact(title)   ui.clearAirAlert()
 ui.airDanger(position, life, label)
 ui.setCaches(list)          ui.pickup(title, sub, kind)
 ui.droneLock(state)         ui.killCam(kill)      ui.clearKillCam()
+world.level                 { id, name, yaw, scale, boundsHalf, hour, … }
 world.levelYaw              world.levelToWorld(x, y, z, out)
 world.features              world.links          world.interiorVolumes
 world.demolitions           world.demolish(id, down)   world.demolishAll(down)

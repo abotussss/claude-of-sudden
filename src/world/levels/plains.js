@@ -586,11 +586,21 @@ function markPads(A) {
         r.range(-0.1, 0.1)
       );
     }
-    // and a mast at the centre, so the point has a vertical read
-    const my = plainsY(p.x, p.z);
-    A.add('metal_dark', BOX(A), LL(IDENT, p.x, my + 3.4, p.z, 0, 0.22, 6.8, 0.22), { masks: [0.9, 0.6, 0.2] });
-    A.box('metal', p.x, my + 3.4, p.z, 0.3, 6.8, 0.3);
-    A.add('ember', BOX_SOFT(A), LL(IDENT, p.x, my + 7.0, p.z, 0, 0.34, 0.34, 0.34));
+    /**
+     * A mast, so the point has a vertical read at 150 m — and it stands OFF
+     * CENTRE on purpose. At the centre it is a 0.3 m collider standing exactly
+     * where the objective is: `tools/zonespot.mjs` reported 0 m of wall on all
+     * eight bearings at A and B (its chest-height probe starts INSIDE the post),
+     * which is the tool correctly describing an obstacle in the middle of the
+     * flag. `stand` points are on a 7 m ring and were never affected; the read
+     * was still right.
+     */
+    const mx = p.x + p.r0 * 0.55;
+    const mz = p.z - p.r0 * 0.35;
+    const my = plainsY(mx, mz);
+    A.add('metal_dark', BOX(A), LL(IDENT, mx, my + 3.4, mz, 0, 0.22, 6.8, 0.22), { masks: [0.9, 0.6, 0.2] });
+    A.box('metal', mx, my + 3.4, mz, 0.3, 6.8, 0.3);
+    A.add('ember', BOX_SOFT(A), LL(IDENT, mx, my + 7.0, mz, 0, 0.34, 0.34, 0.34));
   }
 }
 
