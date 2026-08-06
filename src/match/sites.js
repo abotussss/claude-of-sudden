@@ -890,14 +890,8 @@ export const SPAWNS = {
  *                        D(0, 0)
  *      A(-118,-104)                           E(128, -86)
  *
- * D IS NOT LOCKED, and that is a deliberate hole for the next author rather
- * than an oversight. On the town, D is the cathedral and `locked: true` holds it
- * out of `MatchSystem.sites` until the church is brought down mid-match. This
- * map has no cathedral, so a locked D would never open. When the CONTROL TOWER
- * and the FORTRESS are built on this pad (「管制塔があり、要塞がある平原」) and
- * there is an event that destroys them, THIS is the zone to lock behind it —
- * `MatchSystem` finds the locked zone by predicate (`allZones.find(z => z.locked)`),
- * not by id, so nothing else has to change.
+ * D IS LOCKED NOW, and the hole the note here used to describe has been filled
+ * by the thing it was left for. @see the entry itself.
  */
 const P = (x, z) => [x, z];
 
@@ -934,9 +928,47 @@ export const PLAINS_ZONES = [
     holdLevel: P(118, 104),
     flankLevel: null,
   },
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * D — THE GROUND BETWEEN THE TOWER AND THE FORTRESS, AND IT IS NOT A CAPTURE
+   * POINT UNTIL THE TOWER IS OFF IT
+   * ────────────────────────────────────────────────────────────────────────
+   * 「D地点をちゃんと常設せずに…イベントによって出現させて」, and the precedent is
+   * the town's own D: the cathedral is not a zone, it is a building, and the
+   * zone is what stands in the wreckage afterwards.
+   *
+   * WHAT IS STANDING HERE BEFORE THE EVENT, and it is why this is the honest
+   * place to lock. `plains-tower.js` puts the control tower 32 m NORTH of this
+   * centre and `plains-fort.js` puts the fortress 48 m SOUTH of it; the capture
+   * point is the 21 m of open plain between the two, overlooked from a 43.7 m
+   * gallery on one side and a rampart on the other. A permanently live point in
+   * that gap is a point whose owner is whoever holds the tower — which is not a
+   * capture point, it is a consequence of one. Take the superstructure off and
+   * the gap is ground.
+   *
+   * `locked: true` IS THE WHOLE FEATURE and it costs nothing else. The zone is
+   * AUTHORED, RESOLVED, PROVED REACHABLE and PAINTED at boot exactly like the
+   * other four — so `navcheck`, `Airstrike._verifyRoutes` and `standRing` all
+   * measure it against the map they measure everything else against — and it is
+   * then held out of `MatchSystem.sites` until the act opens it. `MatchSystem`
+   * finds it by predicate (`allZones.find(z => z.locked)`) and not by id, so
+   * this one word is the entire change on this side of the seam.
+   *
+   * THE CENTRE STAYS (0, 0). It is the pad centre, it is `PADS.D` in
+   * `plains.js` (r0 16, held flat, blended out to 34), and it is 32 m clear of
+   * the tower's podium and 48 m clear of the fortress's rampart, so nothing
+   * about where a man stands here changes when the two structures do. Measured
+   * on the intact map at boot: `zone D "THE CENTRE" at 0.0, 0.0 · r14 · 8
+   * standing points`, with A* solving from all 42 spawn points.
+   *
+   * @see `MAP_EVENT_DEMOS` in `src/match/airstrike.js` for what keeps the two
+   * works out of every automatic draw until their acts call them, and
+   * `src/match/nachtfeld.js` for the acts.
+   */
   {
     id: 'D',
     name: 'THE CENTRE',
+    locked: true,
     level: P(0, 0),
     fallback: P(0, -8),
     holdLevel: P(0, 0),

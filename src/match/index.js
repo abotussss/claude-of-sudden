@@ -93,6 +93,8 @@ import { Caches } from './caches.js';
 import { Reinforcements } from './reinforce.js';
 import { Civilians } from './civilians.js';
 import { HiddenSquad } from './hidden.js';
+import { forMap } from './geography.js';
+import { MAP_ACTS, bakeBarrage, NF_GAP, NF_ARMOUR_AFTER, SCORCH_CEIL } from './nachtfeld.js';
 
 const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', MATCH_OVER: 'matchover' };
 
@@ -964,6 +966,13 @@ export class MatchSystem {
     /* ---- the scheduled map changes. @see `_updateMapEvents` ---- */
     /** The one authored `locked` zone (D), or null. It never leaves `allZones`. */
     this.lockedZone = this.allZones.find((z) => z.locked) ?? null;
+    /**
+     * DOES THIS MAP HAVE A CHURCH TO BRING DOWN? Read once, off the hook the
+     * whole act is built on rather than off a map name. It used to be implied by
+     * `lockedZone` and stopped being when NACHTFELD locked D behind its control
+     * tower. @see the guard in `_updateMapEvents`.
+     */
+    this._hasCathedral = typeof ctx.peek('world')?.cathedral?.setRazed === 'function';
     this._cathedralCalled = false;
     /**
      * ───────────────────────────────────────────────────────────────────────
@@ -1016,6 +1025,7 @@ export class MatchSystem {
       lead: 0,
     };
     this._bakeCathedralBarrage();
+    this._bakeActs();
 
     /* ---- events -------------------------------------------------------- */
     this._offs = [];
@@ -1238,6 +1248,31 @@ export class MatchSystem {
       this._cath.t = -1;
       this._cath.beat = 0;
       this._cath.shot = 0;
+      /**
+       * …AND SO DO THE PLAIN'S ACTS: every act un-called, the runner back at the
+       * first one, the clock at -1.
+       *
+       * THE STRUCTURES ARE NOT STOOD BACK UP HERE, AND THAT IS THE EXISTING
+       * BEHAVIOUR RATHER THAN AN OMISSION. `_setCathedralRazed(false)` above is
+       * the ONE building on either map that a new round rebuilds; every
+       * `world.demolitions` record — the town's six district blocks included —
+       * stays down once it has been levelled, because `Airstrike.armRound` only
+       * re-arms the SCHEDULER and `site.struck` is never cleared. So a second
+       * round of a DOMINATION match (which is one round long) would re-call an
+       * act whose structure is already rubble, and `callDemolition` declines it
+       * with a logged reason exactly as `callCathedralCollapse` does. Making
+       * either map rebuild its blocks between rounds is a change to a path this
+       * one is not touching.
+       */
+      if (this._nf) {
+        this._nf.act = null;
+        this._nf.t = -1;
+        this._nf.beat = 0;
+        this._nf.shot = 0;
+        this._nf.i = 0;
+        this._nf.gap = 0;
+        for (const a of this._acts ?? []) a.called = false;
+      }
       this._districtsFired = 0;
       this._districtGap = 0;
       this._finalCalled = false;
@@ -2671,15 +2706,25 @@ export class MatchSystem {
        * `armour` beat of `CATH_BEATS` — reached through `_beginCathedralEvent`,
        * which is guarded on `this.lockedZone`.
        *
-       * NACHTFELD HAS NO LOCKED ZONE, because it has no church to unlock one,
-       * so its six hulls baked, proved, printed their thirty-six legs at boot
-       * and never left their pockets. `!this.lockedZone` is exactly "this map
-       * has no cathedral act"; the town keeps the beat sheet untouched, because
-       * on the town this branch is never taken.
+       * `!this.lockedZone` IS "THIS MAP HAS NO SCORED ACT TO HANG THE ARMOUR
+       * OFF", and NACHTFELD used to satisfy it: it had no church to unlock a
+       * zone, so its six hulls baked, proved, printed their thirty-six legs at
+       * boot and never left their pockets, and this branch is what put them on
+       * the road at all.
+       *
+       * IT NO LONGER TAKES THIS BRANCH, AND THAT IS THE INTENDED CONSEQUENCE
+       * RATHER THAN A REGRESSION. The plain locks D behind the control tower
+       * now (@see `PLAINS_ZONES` in sites.js), so it HAS an act, and the armour
+       * goes back to being an act's consequence exactly as it is on the town —
+       * the `armour` beat of the FORTRESS act arms it. If that act ever drops
+       * (no `NF-FORT` record), the hulls stay in their pockets and
+       * `_bakeActs` says so in one line at boot, which is the honest failure.
+       * The town keeps this branch untouched, because on the town it is never
+       * taken.
        *
        * `armAfter` is idempotent and refuses while the armour is already armed
        * or out, so a second `_setPhase(LIVE)` in the same round changes nothing.
-       * @see `RULES.tankFirstSortie`.
+       * @see `RULES.tankFirstSortie` and `NF_ARMOUR_AFTER`.
        */
       if (!this.lockedZone) this.tank?.armAfter?.(RULES.tankFirstSortie);
     } else {
@@ -3207,8 +3252,12 @@ export class MatchSystem {
      * which are the half that is genuinely per-impact and which read as an area
      * to leave, and give up the strip and the banner. The headline is re-asserted
      * by the event itself at `raze` and `aftermath`. @see `_cathBeat`.
+     *
+     * NACHTFELD'S ACTS ARE THE SAME EVENT WITH A DIFFERENT BUILDING UNDER IT
+     * and they call the same two aircraft inside themselves, so they hold the
+     * strip on exactly the same terms. @see `_updateAct`.
      */
-    const inEvent = this._cath.t >= 0;
+    const inEvent = this._cath.t >= 0 || this._nf?.t >= 0;
     const h = this._airHud;
     const p = info.position;
     h.kind = info.kind;
@@ -3266,9 +3315,9 @@ export class MatchSystem {
   /** It went off. The strip switches to its impact read; the banner confirms. */
   _airLanded(info) {
     if (!info) return;
-    // Inside the cathedral event the impact read belongs to the event, not to
+    // Inside a scored event the impact read belongs to the event, not to
     // whichever of its parts happens to have landed. @see `_announceAir`.
-    if (this._cath.t >= 0) return;
+    if (this._cath.t >= 0 || this._nf?.t >= 0) return;
     const title =
       info.kind === 'SALVO'
         ? 'BLOCK LEVELLED'
@@ -3397,6 +3446,24 @@ export class MatchSystem {
     } else if (
       !this._cathedralCalled &&
       this.lockedZone &&
+      /**
+       * …AND THIS MAP HAS TO HAVE A CATHEDRAL, WHICH USED TO BE IMPLIED BY
+       * `lockedZone` AND IS NOT ANY MORE.
+       *
+       * `lockedZone` was the town's cathedral zone and nothing else, so the two
+       * conditions were the same condition. NACHTFELD locks D behind the control
+       * tower now (@see `PLAINS_ZONES` in sites.js), and without this line the
+       * plain would reach `cathedralScore` 300 of 1000 and begin the TOWN's
+       * cathedral act on a map with no church: twenty rounds walked over a
+       * 30 x 45 m footprint at the level origin, `callCathedralCollapse`
+       * declining, `_razeCathedral` returning false — and D opening on
+       * `cathedralOpenDelay` with nothing having happened to earn it.
+       *
+       * DERIVED, NEVER A MAP NAME. `world.cathedral.setRazed` is the hook the
+       * act is actually built on, so asking whether it exists asks the only
+       * question that matters and stays true for a third map that has one.
+       */
+      this._hasCathedral &&
       (RULES.cathedralScore > 0
         ? (this.score[0] > this.score[1] ? this.score[0] : this.score[1]) >= RULES.cathedralScore
         : p >= RULES.cathedralOpenProgress) &&
@@ -3405,6 +3472,14 @@ export class MatchSystem {
     ) {
       this._beginCathedralEvent(t, p);
     }
+
+    /* ---- NACHTFELD's acts --------------------------------------------- */
+    /**
+     * The plain's scored acts — the control tower, the fortress and the crash.
+     * A no-op on any map with no `MAP_ACTS` entry, which is the town.
+     * @see `src/match/nachtfeld.js` and `_updateNachtfeld`.
+     */
+    this._updateNachtfeld(dt, t, p);
 
     /* ---- the bombardment of A and B ----------------------------------- */
     this._bombardIn -= dt;
@@ -3518,7 +3593,8 @@ export class MatchSystem {
      */
     if (r.busy) return;
     if (this.airstrike?.busy || this.bomber?.busy || this.strafe?.busy) return;
-    if (this._cath.t >= 0) return;
+    // …and for the event that armed it, whichever map's it was.
+    if (this._cath.t >= 0 || this._nf?.t >= 0) return;
 
     /** THE SIDE THE PLAYER IS NOT ON. @see the header — never a literal. */
     const team = 1 - this.playerTeam;
@@ -4654,6 +4730,330 @@ export class MatchSystem {
       }
     }
     return changed;
+  }
+
+  /* ==================================================================== */
+  /* NACHTFELD — THE ACTS                                                 */
+  /* ==================================================================== */
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * SOLVE EVERY ACT'S BARRAGE AT BOOT, OR DROP THE ACT AND SAY SO
+   * ────────────────────────────────────────────────────────────────────────
+   * 「管制塔や要塞破壊イベント」. One runner plays whichever act is due; this is
+   * where the acts are resolved against the map that actually booted.
+   *
+   * AN ACT IS BOUND TO A `world.demolitions` RECORD BY ID AND DROPS ITSELF WHEN
+   * THERE IS NONE. That is the rule every authored table in `src/match` already
+   * follows — `airstrike.js:1559`, `bomber.js:546`, `tank.js:1794` — and it is
+   * what makes this safe on a map that has not been built yet: an act with no
+   * structure prints one line and never runs, instead of throwing inside a
+   * scheduled event.
+   *
+   * NOT ONE AIMING POINT IS AUTHORED. Each is a fraction of the structure's own
+   * published extent (`position`, `radius`, `halfW`, `top`), solved once here
+   * into three `Float32Array`s. @see `bakeBarrage` in `nachtfeld.js`.
+   */
+  _bakeActs() {
+    /**
+     * THE ACT CLOCK. `t` counts up from the warning, `beat` is how many entries
+     * of the sheet have been played, `shot` how many rounds have landed, `i`
+     * which act is next and `gap` the `NF_GAP` floor still owed. -1 is "no act
+     * running". One clock, the shape `_cath` proved.
+     */
+    this._nf = { act: null, t: -1, beat: 0, shot: 0, i: 0, gap: 0 };
+    /** Reused world point for an aiming point. Callers copy out synchronously. */
+    this._nfPos = new THREE.Vector3();
+    this._acts = [];
+    const world = this.ctx.peek('world');
+    const table = forMap(MAP_ACTS, world, 'scored acts');
+    if (!table.length) return;
+    const rng = this.rng.fork();
+    for (const act of table) {
+      const rec = (world?.demolitions ?? []).find((d) => d.id === act.id);
+      if (!rec) {
+        console.warn(`[match] act ${act.id} "${act.name}": no such demolition on this map — DROPPED`);
+        continue;
+      }
+      this._acts.push({
+        spec: act,
+        rec,
+        called: false,
+        aim: bakeBarrage(act, rec, rng),
+      });
+    }
+    if (!this._acts.length) return;
+    console.info(
+      `[match] ${this._acts.length} scored act(s) baked — ` +
+        this._acts
+          .map(
+            (a) =>
+              `${a.spec.id}@p${a.spec.progress} (${a.spec.barrage.shells} rounds over ` +
+              `${a.spec.barrage.span}s, ${a.spec.beats.length} beats, ${a.rec.top.toFixed(1)} m of structure)`
+          )
+          .join(' · ')
+    );
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE SCHEDULE — one act at a time, in order, with clear air between them
+   * ────────────────────────────────────────────────────────────────────────
+   * Called from `_updateMapEvents` and does nothing at all on a map with no
+   * acts, which is every map but NACHTFELD today.
+   *
+   * `p` is monotone and `_nf.gap` counts down, so this can only ever DELAY an
+   * act and can never skip one — the same guarantee `_districtGap` gives the
+   * cathedral. The acts are taken IN ORDER (`_nf.i`) rather than by whichever
+   * threshold is passed, because the second one's consequence assumes the
+   * first's has happened: the fortress arms the armour and the reinforcements,
+   * and both of those are meant to arrive on a map whose middle is already a
+   * capture point.
+   */
+  _updateNachtfeld(dt, t, p) {
+    if (!this._acts?.length) return;
+    this._nf.gap -= dt;
+    if (this._nf.t >= 0) {
+      this._updateAct(dt);
+      return;
+    }
+    const next = this._acts[this._nf.i];
+    if (!next || next.called) return;
+    if (p < next.spec.progress) return;
+    if (this._nf.gap > 0) return;
+    // Not on top of somebody else's event. `busy` is a salvo in the air or
+    // still settling; an act opening under one is two headlines in nine seconds.
+    if (this.airstrike?.busy) return;
+    this._beginAct(next, t, p);
+  }
+
+  /** Put the warning up and start the act's clock. Beat 0 of every sheet. */
+  _beginAct(a, t, p) {
+    const s = a.spec;
+    a.called = true;
+    this._nf.act = a;
+    this._nf.t = 0;
+    this._nf.beat = 0;
+    this._nf.shot = 0;
+
+    const h = this._airHud;
+    h.kind = 'SALVO';
+    h.title = s.title;
+    h.impactTitle = s.impactTitle;
+    h.name = s.name;
+    h.lead = s.lead;
+    h.x = a.rec.position.x;
+    h.y = a.rec.position.y;
+    h.z = a.rec.position.z;
+    this.ui.airAlert(h);
+    /**
+     * Reticles across the whole structure rather than on its centre, so the
+     * beaten zone reads as an AREA. Every third aiming point, which on a
+     * sixteen-round climb is the apron, the mid shaft and the gallery.
+     */
+    for (let i = 0; i < s.barrage.shells; i += 3) {
+      this.ui.airDanger(this._actAim(a, i), s.lead, 'BOMBARDMENT');
+    }
+    this.ui.banner.show(s.title, `${s.lead | 0} ${s.warnLine}`, 4.2);
+    const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+    audio?.play?.('strike_jet', a.rec.position, {
+      level: 1.2, dur: s.lead, maxDist: 620, gain: 3.6, occlusion: 0.15,
+    });
+    console.info(
+      `[match] ACT ${s.id} "${s.name}" called at t=${t.toFixed(0)}s p=${p.toFixed(2)} — ` +
+        `${s.lead}s warning, ${s.barrage.shells} rounds over ${s.barrage.span}s from ` +
+        `${s.barrage.open.toFixed(1)}s, structure down at +${(s.lead + s.beats.find((b) => b[1] === 'raze')[0]).toFixed(1)}s`
+    );
+  }
+
+  /**
+   * The beat sheet, played. Same shape as `_updateCathedralEvent`: `beat` is a
+   * monotone index so every beat fires exactly once and a long frame plays the
+   * ones it skipped rather than dropping them, and the barrage walks alongside
+   * on its own count.
+   */
+  _updateAct(dt) {
+    const c = this._nf;
+    const a = c.act;
+    const s = a.spec;
+    c.t += dt;
+
+    while (c.beat < s.beats.length && c.t >= s.lead + s.beats[c.beat][0]) {
+      this._actBeat(a, s.beats[c.beat++][1]);
+    }
+
+    const n = s.barrage.shells;
+    const t0 = s.lead + s.barrage.open;
+    if (c.shot < n && c.t >= t0) {
+      const step = s.barrage.span / n;
+      const due = Math.min(n, Math.floor((c.t - t0) / step) + 1);
+      while (c.shot < due) this._actShell(a, c.shot++);
+    }
+
+    if (c.beat >= s.beats.length && c.shot >= n) {
+      c.t = -1;
+      c.act = null;
+      c.gap = NF_GAP;
+      this._nf.i++;
+    }
+  }
+
+  /** One named beat. Kept apart from the clock so the sheet reads as a sheet. */
+  _actBeat(a, kind) {
+    const s = a.spec;
+    switch (kind) {
+      case 'bomber':
+        this.bomber?.fire?.(s.run);
+        break;
+      case 'strafe':
+        this.strafe?.fire?.(s.run);
+        break;
+      case 'raze': {
+        /**
+         * THE STRUCTURE. One line, and everything behind it — the fracture, the
+         * closed-form trajectories, the settled pose, the collision flip and the
+         * nav patch — was baked at boot. @see `Airstrike.callDemolition`.
+         */
+        const down = this.airstrike?.callDemolition?.(s.id) ?? false;
+        const h = this._airHud;
+        h.kind = 'SALVO';
+        h.title = s.razeTitle;
+        h.impactTitle = s.razeImpact;
+        h.name = s.name;
+        // Runs to the last round of the barrage, so the act keeps its own
+        // headline for its whole second half rather than handing the strip to
+        // whichever sub-event lands next.
+        h.lead = Math.max(2, s.barrage.open + s.barrage.span - this._nf.t + s.lead);
+        h.x = a.rec.position.x;
+        h.y = a.rec.position.y;
+        h.z = a.rec.position.z;
+        this.ui.airAlert(h);
+        console.info(
+          `[match] ACT ${s.id} STRUCTURE DOWN at +${this._nf.t.toFixed(1)}s ` +
+            `(${down ? 'fired' : 'declined — already down'})`
+        );
+        break;
+      }
+      case 'aftermath': {
+        this.ui.airImpact(s.afterTitle);
+        this.ui.banner.show(s.afterTitle, s.afterLine, 3.6);
+        const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+        audio?.play?.('strike_rubble', a.rec.position, {
+          level: 1.2, dur: 5.0, maxDist: 480, gain: 2.4, occlusion: 0.2,
+        });
+        break;
+      }
+      case 'open':
+        this._openLockedZone(s);
+        break;
+      case 'armour':
+        this.tank?.armAfter?.(NF_ARMOUR_AFTER);
+        break;
+      case 'reinforce':
+        this._reinforcePending = true;
+        console.info(
+          `[match] ACT ${s.id} aftermath ARMS the reinforcement drop for ` +
+            `${TEAM_NAME[1 - this.playerTeam]} (the player's enemy)`
+        );
+        break;
+      default:
+        break;
+    }
+  }
+
+  /**
+   * Aiming point `i` of an act, in world space, written into the reused
+   * `_nfPos`. Every caller copies out of it synchronously, exactly as
+   * `_cathAim`'s and `_bombardPoint`'s callers do.
+   *
+   * NO TRANSFORM. NACHTFELD is authored at yaw 0, scale 1, origin 0 — level
+   * space IS world space — so the baked offsets are already on the world axes.
+   * @see `PLAINS` in `src/match/geography.js`.
+   */
+  _actAim(a, i) {
+    const p = this._nfPos;
+    p.set(
+      a.rec.position.x + a.aim.x[i],
+      a.rec.position.y + a.aim.y[i] + 0.4,
+      a.rec.position.z + a.aim.z[i]
+    );
+    return p;
+  }
+
+  /**
+   * Round `i` of an act's barrage.
+   *
+   * THE ONE THING IT DOES THAT `_cathShell` DOES NOT is refuse to paint a
+   * scorch decal under an air burst. The cathedral's barrage is a walk over a
+   * floor and every round of it is a crater; half of the tower's goes off
+   * between 8 and 38 m up a shaft, and a 7 m black disc on the grass under one
+   * of those is a decal describing a crater that is not there. @see `SCORCH_CEIL`.
+   */
+  _actShell(a, i) {
+    const s = a.spec;
+    const at = this._actAim(a, i);
+    const p = this._blast;
+    p.position = this._blastPos.copy(at).setY(at.y + RULES.blastBurstHeight);
+    p.radius = s.barrage.radius;
+    p.damage = s.barrage.damage;
+    p.source = null;
+    this.ctx.events.emit('explosion', p);
+    const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
+    if (fx) {
+      fx.explosion?.({ position: at, radius: s.barrage.radius * 0.65 });
+      if (a.aim.y[i] <= SCORCH_CEIL) fx.scorch?.(at.x, at.y - 0.3, at.z, s.barrage.radius * 0.55);
+      fx.hazeRing?.(at.x, at.y, at.z, 3.4, 18, 0.5, 2.0);
+      if (fx.lights) fx.lights.flash(at.x, at.y + 1, at.z, 1, 0.66, 0.34, 1300, 0.6, 8, 52, 4);
+    }
+    const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+    audio?.play?.('strike_tail', at, { level: 1.0, dur: 2.6, maxDist: 400, gain: 2.0, occlusion: 0.2 });
+  }
+
+  /**
+   * THE LOCKED ZONE GOES LIVE IN THE GAP — 「D地点を…イベントによって出現させて」.
+   *
+   * The same three steps `_openCathedral` takes, in the same order and through
+   * the same two methods, with this map's own words on the HUD. It is NOT
+   * `_openCathedral` with a parameter, deliberately: that method is the town's
+   * and names the town's building in four strings, and the one thing this
+   * change may not do is make the map the user plays today read differently.
+   *
+   * Step 1, the re-probe, is expected to report a SMALL number here and that is
+   * the correct answer rather than a disappointing one. D's centre is 32 m from
+   * the tower and 48 m from the fortress and its circle is r14, so no part of
+   * either structure or either ruin is inside it — the gap between them was
+   * always open ground. The number is printed either way, because
+   * "the ruin is walkable" belongs in a log and not in a comment.
+   */
+  _openLockedZone(s) {
+    const z = this.lockedZone;
+    if (!z || this.sites.includes(z)) return;
+    const cells = this._reprobeZoneNav(z);
+    this._setZoneLive(z, true);
+    this.capture?.resetZone(z, this.ctx.time.elapsed);
+    this.ui.banner.show('SITE D IS OPEN', `${z.name} · ${s.openLine}`, 3.4);
+    this._airHud.kind = 'STRIKE';
+    this._airHud.title = 'SITE D OPEN';
+    this._airHud.impactTitle = 'SITE D OPEN';
+    this._airHud.name = z.name;
+    this._airHud.lead = 6;
+    this._airHud.x = z.position.x;
+    this._airHud.y = z.position.y;
+    this._airHud.z = z.position.z;
+    this.ui.airAlert(this._airHud);
+    this.ui.airDanger(z.position, 6, 'SITE D');
+    this._assignObjectives();
+    console.info(
+      `[match] SITE D OPEN — ${z.name} at ${z.position.x.toFixed(1)}, ${z.position.z.toFixed(1)} ` +
+        `· ${z.stand.length} standing points · ${cells} nav cells re-probed ` +
+        `· ${this.sites.length} zones live`
+    );
+    this.ctx.events.emit('match:capture', {
+      zone: z.id,
+      owner: -1,
+      previous: -1,
+      score: this.score,
+    });
   }
 
   /**

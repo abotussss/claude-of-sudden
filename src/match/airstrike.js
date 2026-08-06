@@ -425,11 +425,54 @@ const PLAINS_STRIKE_SITES = [];
 const PLAINS_SALVOS = [];
 
 /**
+ * ────────────────────────────────────────────────────────────────────────────
+ * DEMOLITIONS AN EVENT OWNS — the `scheduled`/`razeOnly` pair, applied by ID
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「大聖堂破壊イベントの時に破壊演出して欲しいのに、その前に破壊されてしまう場合が
+ *  ある」 — and the fix that sentence bought the cathedral is the SAME fix, one
+ * building later, on a different map.
+ *
+ * A record in `world.demolitions` is a whole building with a whole destroyed
+ * state, and `_buildDemoSites` turns every one of them into an ordinary strike
+ * site. On the town that is exactly right: the six district blocks ARE the
+ * random draw's stock and the two `DISTRICT-*` salvos are how `match` spends
+ * them. On NACHTFELD it is not. The control tower and the fortress are the only
+ * two structures on the map, each is the whole point of a scored act, and there
+ * is no second copy — so anything that can fire one of them early spends an
+ * irreplaceable headline, and the player sees the map change with nothing
+ * announcing it.
+ *
+ * THERE ARE THREE ENUMERATORS AND ALL THREE HAVE TO BE TOLD, which is what the
+ * cathedral's own note learned the hard way (`scheduled` alone left
+ * `callEverything` still holding it):
+ *
+ *   `_scheduleNext`   the weighted random draw   -> excluded by `scheduled`
+ *   `callEverything`  the final collapse         -> excluded by `razeOnly`
+ *   `_buildDemoSalvos` the derived district pair -> excluded below, and this
+ *                     one is the NEW half. Both plains records carry
+ *                     `zone: 'D'`, so that method grouped them into one
+ *                     `DISTRICT-D` salvo of two BUILDINGS 80 m apart —
+ *                     measured at boot before this landed:
+ *
+ *                       [airstrike] salvo DISTRICT-D: NF-TOWER+NF-FORT
+ *                                   — 1587 chunks, 2 BUILDINGS over 80.0 m
+ *
+ *                     i.e. `callDistrictSalvo` at `districtSalvoProgress[0]`
+ *                     would have spent BOTH acts, together, 0.20 of the way
+ *                     into the match, with a banner that says A DISTRICT.
+ *
+ * `match` fires these through `callDemolition(id)` and nothing else.
+ */
+const TOWN_EVENT_DEMOS = [];
+const PLAINS_EVENT_DEMOS = ['NF-TOWER', 'NF-FORT'];
+
+/**
  * THE SITES AND THE GROUPS, PER MAP. @see `forMap` in `src/match/geography.js`
  * — `world.level.id`, never a second parse of `?map=`.
  */
 const MAP_STRIKE_SITES = { town: TOWN_STRIKE_SITES, plains: PLAINS_STRIKE_SITES };
 const MAP_SALVOS = { town: TOWN_SALVOS, plains: PLAINS_SALVOS };
+const MAP_EVENT_DEMOS = { town: TOWN_EVENT_DEMOS, plains: PLAINS_EVENT_DEMOS };
 
 /**
  * THE DUST WALL a salvo leaves behind, and the reason it is authored separately
@@ -1050,6 +1093,10 @@ export class Airstrike {
     const byZone = new Map();
     for (const s of this.sites) {
       if (!s.demo || s.dropped) continue;
+      // …AND NOT THE ONES AN EVENT OWNS. @see `MAP_EVENT_DEMOS`: NACHTFELD's two
+      // works both carry `zone: 'D'` and would otherwise be one DISTRICT-D salvo
+      // that spends both scored acts at `districtSalvoProgress[0]`.
+      if (s.razeOnly) continue;
       const z = s.demo.zone ?? '?';
       if (!byZone.has(z)) byZone.set(z, []);
       byZone.get(z).push(s);
@@ -1221,9 +1268,17 @@ export class Airstrike {
   _buildDemoSites(world, physics) {
     const list = world.demolitions;
     if (!list?.length) return;
+    /** @see `MAP_EVENT_DEMOS` — the ids no automatic draw may spend. */
+    const owned = forMap(MAP_EVENT_DEMOS, world, 'event-owned demolitions');
     for (const rec of list) {
       const site = this._buildDemoSite(rec, this.sites.length, world, physics);
-      if (site) this.sites.push(site);
+      if (!site) continue;
+      if (owned.includes(rec.id)) {
+        site.scheduled = true;
+        site.razeOnly = true;
+        console.info(`[airstrike] ${site.id} is EVENT-OWNED — out of the draw, the salvos and the final collapse`);
+      }
+      this.sites.push(site);
     }
   }
 
@@ -3369,6 +3424,45 @@ export class Airstrike {
   callCathedralCollapse() {
     if (!this.ready || !this.enabled) return false;
     return this.callSalvo('CATHEDRAL');
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * BRING ONE NAMED BUILDING DOWN — 「管制塔や要塞破壊イベント」
+   * ────────────────────────────────────────────────────────────────────────────
+   * The counterpart of `callCathedralCollapse` for a map whose headline
+   * structures come through `world.demolitions` rather than through
+   * `world.cathedral`. `match` owns WHEN; this is only "and then what does it
+   * look like", and what it looks like is the demolition machinery that is
+   * already baked — the fracture, the closed-form trajectory, the settled pose,
+   * the collision flip, the nav patch and the `grand` spectacle.
+   *
+   * IT IS ONE SITE AND NOT A SALVO, and that is the whole reason it exists.
+   * `callSalvo` announces a GROUP and staggers its members; the tower and the
+   * fortress are two acts a minute and a half apart, each with its own beat
+   * sheet, and a group of two would make them one event played twice. @see
+   * `MAP_EVENT_DEMOS` for the three enumerators this keeps them out of.
+   *
+   * `grand` is set HERE rather than at bake time because it costs nothing to
+   * set and is a statement about the EVENT: these are the only two structures on
+   * a 400 m plain, and the district-block spectacle that is right for one of six
+   * identical blocks reads as a bonfire on this one. @see `_spectacle`.
+   *
+   * @param {string} id  the `world.demolitions` record id — 'NF-TOWER', 'NF-FORT'
+   * @returns {boolean}  false when there is no such site, or it is already down
+   */
+  callDemolition(id) {
+    if (!this.ready || !this.enabled) return false;
+    const site = this.sites.find((s) => s.demo && s.id === id);
+    if (!site || site.struck || site.dropped) return false;
+    site.grand = true;
+    return this.fire(site.index);
+  }
+
+  /** Is the named demolition still standing? Null when this map has no such site. */
+  demolitionStanding(id) {
+    const site = this.sites.find((s) => s.demo && s.id === id);
+    return site ? !site.struck && !site.dropped : null;
   }
 
   /**
