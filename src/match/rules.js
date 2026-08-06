@@ -985,6 +985,32 @@ export const RULES = {
    */
   tankAfterCathedral: 3.0,
   /**
+   * ────────────────────────────────────────────────────────────────────────
+   * …AND ON A MAP WITH NO CATHEDRAL, THIS IS THE WHOLE SCHEDULE
+   * ────────────────────────────────────────────────────────────────────────
+   * `tankAfterCathedral` above is the ONLY thing that ever arms the armour, and
+   * it is fired from the `armour` beat of `CATH_BEATS`, which is reached only
+   * through `_beginCathedralEvent`, which is guarded on `this.lockedZone`. The
+   * town locks D behind the church; NACHTFELD locks nothing, because it has no
+   * church to unlock it. So on the plain the armour was baked, proved, printed
+   * at boot — and never once left its pocket. Six hulls that never roll are
+   * not three tanks a side.
+   *
+   * `MatchSystem._setPhase` arms them here instead, on the round going live,
+   * for any map with no locked zone. Everything after the first sortie is the
+   * interval scheduler `Armour` already had.
+   *
+   * 210 s OF A 1200 s MATCH — 17.5 %, against the cathedral's 66-73 % on the
+   * town, and it is later than it looks. Crossing this map to a contested zone
+   * is a 100-200 m walk (`tools/navcheck.mjs` measures 103-297 m spawn to
+   * zone), so the first three and a half minutes are the two sides WALKING;
+   * armour arriving before that is armour arriving at empty ground. It is also
+   * inside `_scheduleNext`'s own rule that no hull may roll while another is
+   * still out, so on this map it is one sortie of six hulls rather than three
+   * of two.
+   */
+  tankFirstSortie: 210,
+  /**
    * Gap between sorties, seconds. Both hulls have to be parked first.
    *
    * WAS [95, 140], WHICH IS ONE SORTIE PER MATCH NOW THAT THE FIRST ONE IS THE

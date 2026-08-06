@@ -2661,6 +2661,27 @@ export class MatchSystem {
     // one cannot be called for `RULES.airstrikeFirstDelay` seconds after GO.
     if (phase === PHASE.LIVE) {
       for (const a of this.air) a.armRound();
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * …AND THE ARMOUR, ON A MAP THAT HAS NO CATHEDRAL TO BE THE CONSEQUENCE
+       * OF
+       * ────────────────────────────────────────────────────────────────────
+       * `Armour.armRound` deliberately schedules NOTHING: armour is the
+       * cathedral's consequence, so the only thing that ever arms it is the
+       * `armour` beat of `CATH_BEATS` — reached through `_beginCathedralEvent`,
+       * which is guarded on `this.lockedZone`.
+       *
+       * NACHTFELD HAS NO LOCKED ZONE, because it has no church to unlock one,
+       * so its six hulls baked, proved, printed their thirty-six legs at boot
+       * and never left their pockets. `!this.lockedZone` is exactly "this map
+       * has no cathedral act"; the town keeps the beat sheet untouched, because
+       * on the town this branch is never taken.
+       *
+       * `armAfter` is idempotent and refuses while the armour is already armed
+       * or out, so a second `_setPhase(LIVE)` in the same round changes nothing.
+       * @see `RULES.tankFirstSortie`.
+       */
+      if (!this.lockedZone) this.tank?.armAfter?.(RULES.tankFirstSortie);
     } else {
       for (const a of this.air) a.disarm();
     }
