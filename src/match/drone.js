@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RULES } from './rules.js';
+import { EmpZones } from './empzone.js';
 
 /**
  * ══════════════════════════════════════════════════════════════════════════
@@ -275,7 +276,12 @@ class Drone {
     this.name = '';
     this.team = 0;
     this.alive = false;
-    /** 'climb' | 'hunt' | 'lock' | 'dive' | 'recover' */
+    /**
+     * 'climb' | 'hunt' | 'lock' | 'dive' | 'recover' | 'fall'
+     *
+     * `fall` is dead air — an EMP field cut its power and it is on its way to
+     * the ground with no flight and no warhead. @see `_empKill`.
+     */
     this.state = 'climb';
     this.position = new THREE.Vector3();
     this.vel = new THREE.Vector3();
@@ -300,6 +306,16 @@ class Drone {
     this.scanT = 0;
     this.recoverT = 0;
     this.rotor = 0;
+    /**
+     * Rotor rate, rad/s. `ROTOR_SPIN` in flight and DECAYING once the power is
+     * cut — four props winding down is most of what says the airframe is dead
+     * rather than diving. @see `_fall`.
+     */
+    this.rotorRate = ROTOR_SPIN;
+    /** Tumble, integrated while falling. @see `_fall`. */
+    this.spinX = 0;
+    this.spinZ = 0;
+    this.fallT = 0;
     /** Halo beat/converge phase, integrated so a paused game freezes it. */
     this.markT = 0;
     /** From the LOCAL player's point of view, fixed at launch. @see `HALO_*`. */
@@ -409,6 +425,8 @@ export class Drones {
       launched: 0, perTeam: [0, 0], detonated: 0, shotDown: 0, scuttled: 0,
       kills: 0, friendlyKills: 0, playerKills: 0, locks: 0, lockSeconds: 0,
       playerLocks: 0, playerLockSeconds: 0, dives: 0, missed: 0, deferred: 0,
+      /** Lost their power to an EMP field, and how many of those hit the ground. */
+      empKilled: 0, crashed: 0,
     };
     this._blastAt = -100;
     this._blastPos = new THREE.Vector3();
@@ -515,6 +533,32 @@ export class Drones {
       halos.push(hl);
       this.materials.push(st, hl);
     }
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * THE THIRD PAINT: DEAD. @see `_empKill` and `src/match/empzone.js`.
+     * ──────────────────────────────────────────────────────────────────────
+     * A drone that has lost its power is neither friend nor enemy any more — it
+     * is falling debris — so it wears neither hex. The strobe stops emitting
+     * (the only thing on the airframe that ever did) and the halo goes to a
+     * dim, cold grey: still a mark, because the player has to be able to WATCH
+     * it fall to read what happened, but visibly the mark of something that has
+     * stopped working.
+     */
+    const deadStrobe = new THREE.MeshStandardMaterial({
+      color: 0x2a2f33, roughness: 0.7, metalness: 0.2,
+    });
+    const deadHalo = new THREE.MeshBasicMaterial({
+      color: 0x8d979c,
+      transparent: true,
+      opacity: 0.42,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    this._deadStrobe = deadStrobe;
+    this._deadHalo = deadHalo;
+    this.materials.push(deadStrobe, deadHalo);
+
     /** Near-black, so the colour has a hard edge on cloud and on brick alike. */
     const haloEdge = new THREE.MeshBasicMaterial({
       color: 0x05080b,
@@ -605,6 +649,28 @@ export class Drones {
       this.markGroup.add(m);
     }
     this.ctx.scene.add(this.group);
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * THE EMP FIELDS ARE THIS FILE'S, AND THAT IS THE POINT
+     * ──────────────────────────────────────────────────────────────────────
+     * `EmpZones` derives its own placement from `world.level.pads` and draws
+     * its own geometry, so there is no entry in `MAP_RULES`, no line in
+     * `MatchSystem` and no second parse of `?map=` anywhere in it. It is built,
+     * ticked, reset and disposed here because the only thing in the game it
+     * acts on is a drone, and every drone in the game is in `this.list`.
+     *
+     * WHICH IS ALSO THE ANSWER TO "DO THE BOTS' DRONES GO THROUGH THE SAME
+     * GATE": there is no such thing as a bot's drone. `src/ai` has no drone
+     * flight of any kind — `AiSystem.drones` is a SETTER that takes
+     * `match.drones.list` and builds a `Set` out of it (`ai/index.js`,
+     * `set drones(list)`), and the only thing `ai` ever does with a drone is
+     * decide whether to SHOOT at one (`_droneBias`). Both sides' drones are
+     * these drones, flown by this file, so `bites()` below is the single gate
+     * and it is impossible for a second implementation to drift away from it —
+     * which is the failure this project has had twice with the throwables, and
+     * is why the field lives on the drone rather than on the drone's owner.
+     */
+    this.emp = new EmpZones(this.ctx).build();
     this.ready = true;
     this.ctx.events.on('damage:dealt', this._onDamage);
     this.ctx.events.on('actor:death', this._onActorDeath);
@@ -627,6 +693,7 @@ export class Drones {
       if (Array.isArray(this.stats[k])) this.stats[k][0] = this.stats[k][1] = 0;
       else this.stats[k] = 0;
     }
+    this.emp?.reset();
     this._reportLock(null);
   }
 
@@ -637,6 +704,9 @@ export class Drones {
    */
   update(dt, live, progress = 0) {
     if (!this.ready || !this.enabled) return;
+    // The fields are lit whether or not the round is running: a player walking
+    // the map in warmup has to be able to see where they are.
+    this.emp?.update(dt);
     if (live) this._schedule(dt, progress);
     let warned = null;
     for (const d of this.list) {
@@ -704,6 +774,13 @@ export class Drones {
     d.vel.set(0, RULES.droneSpeed * 0.6, 0);
     d.scanT = this.rng.range(0, SCAN_EVERY);
     d.rotor = this.rng.range(0, Math.PI * 2);
+    // Back to a flying airframe: the pool is reused and the last drone in this
+    // slot may have come down in dead air. @see `_empKill`.
+    d.rotorRate = ROTOR_SPIN;
+    d.spinX = 0;
+    d.spinZ = 0;
+    d.fallT = 0;
+    d.group.rotation.set(0, 0, 0);
     d.group.visible = true;
     d.group.position.copy(d.position);
     /**
@@ -748,8 +825,20 @@ export class Drones {
   /* ====================================================================== */
 
   _fly(d, dt) {
+    /**
+     * DEAD AIR FIRST, AND IT IS THE FIRST TEST IN THE FLIGHT FOR A REASON: a
+     * drone inside an EMP field has no life clock, no scan, no lock and no
+     * warhead. It is falling. @see `_empKill`.
+     */
+    if (d.state === 'fall') { this._fall(d, dt); return; }
+
     d.life -= dt;
     if (d.life <= 0) { this._scuttle(d); return; }
+
+    if (this.emp) {
+      const zone = this.emp.bites(d.position);
+      if (zone) { this._empKill(d, zone); return; }
+    }
 
     d.scanT -= dt;
     const scan = d.scanT <= 0;
@@ -920,6 +1009,93 @@ export class Drones {
     if (d.recoverT <= 0 && d.position.y > ceil - 3) d.state = 'hunt';
   }
 
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * IT FLEW INTO AN EMP FIELD — 「EMPエリアでドローンを無効化」
+   * ────────────────────────────────────────────────────────────────────────
+   * @see `src/match/empzone.js` for where the fields are, what they look like
+   * and the argument for FALLING over the two other readings of "disabled".
+   * This is the half of that decision that lives on the airframe.
+   *
+   * FOUR THINGS STOP IN ONE FRAME, and each of them is doing a job:
+   *
+   *   THE FLIGHT. State goes to `fall`, which is outside the whole state
+   *   machine: no life clock, no scan, no lock, no steering. The horizontal
+   *   momentum it had is kept and bled off by drag, so it arcs rather than
+   *   dropping like a lift — a vertical drop reads as a bug.
+   *
+   *   THE WARHEAD. The `SHOOT_ONLY` proxy is REMOVED, so `_takeRound` can never
+   *   see this drone again and the one path that could still have set the
+   *   warhead off is gone with it. That is what makes the silence honest: it is
+   *   not that we chose not to explode, it is that there is nothing left to
+   *   explode. It also means a falling husk is not a target that costs anybody a
+   *   round.
+   *
+   *   THE LIGHTS. Strobe and halo to the dead paint (@see `_deadStrobe`), the
+   *   converging ring off, and the player's lock warning dropped if this was the
+   *   drone that owned it — a man who has been told he is being dived at needs
+   *   to be told, in the same frame, that he is not any more.
+   *
+   *   THE FIELD ANSWERS. `discharge` flashes the dome and its ground ring white.
+   *   Without it a falling drone is just a falling drone; with it the thing that
+   *   killed it is the thing that lit up, which is the entire requirement.
+   */
+  _empKill(d, zone) {
+    this.stats.empKilled++;
+    this.emp.discharge(zone);
+    d.state = 'fall';
+    d.target = null;
+    d.lockT = 0;
+    d.blindT = 0;
+    d.vector = null;
+    d.atPlayer = false;
+    d.fallT = 0;
+    if (d.warning) this._reportLock(null);
+    if (d.collider && this.physics?.removeCollider) this.physics.removeCollider(d.collider);
+    d.collider = null;
+    d.strobe.material = this._deadStrobe;
+    d.halo.material = this._deadHalo;
+    d.aim.visible = false;
+    // Whatever it was climbing at, it is not climbing now.
+    if (d.vel.y > 0) d.vel.y = 0;
+    this._emit('emp', d);
+  }
+
+  /**
+   * BALLISTIC AND TUMBLING. Gravity, a little drag on the horizontal, the rotors
+   * winding down and two spin rates on the airframe. The GROUND is not tested
+   * here: `_integrate`'s sweep is the exact answer and it is already firing
+   * every frame, so a fall ends where the sweep says the world is. `fallT` is
+   * the belt and braces for a drone that somehow finds a hole in the map.
+   */
+  _fall(d, dt) {
+    d.fallT += dt;
+    d.vel.y -= 9.81 * dt;
+    const drag = Math.max(0, 1 - 1.1 * dt);
+    d.vel.x *= drag;
+    d.vel.z *= drag;
+    d.rotorRate *= Math.max(0, 1 - 2.4 * dt);
+    d.spinX += 4.6 * dt;
+    d.spinZ += 6.9 * dt;
+    this._integrate(d, dt);
+    if (d.alive && (d.fallT > 9 || d.position.y < d.groundY - 4)) this._crash(d);
+  }
+
+  /**
+   * IT LANDED. Dust and a mark and NO BLAST — @see `_empKill` for why the
+   * silence is the whole tell. `down` is its own phase for the same reason
+   * `dead` is separate from `boom`: something counting shoot-downs must not
+   * count this.
+   */
+  _crash(d) {
+    this.stats.crashed++;
+    const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
+    fx?.hazeRing?.(d.position.x, d.position.y + 0.25, d.position.z, 1.1, 7, 0.42, 1.6);
+    fx?.scorch?.(d.position.x, d.position.y + 0.06, d.position.z, 1.7);
+    this._emit('down', d);
+    this._retire(d, 'emp');
+  }
+
   _recoverFrom(d) {
     d.state = 'recover';
     d.recoverT = RECOVER;
@@ -940,6 +1116,24 @@ export class Drones {
 
   /** Accelerate toward `want`, capped at `speed`. */
   _steer(d, dt, speed) {
+    /**
+     * THE CRUISE GOES ROUND AN EMP FIELD; A COMMITTED DIVE DOES NOT.
+     *
+     * The split is the whole balance of the feature. Without the deflection,
+     * twenty drones a match wander into dead air on their way somewhere else and
+     * the field reads as a bug that eats the sky. Without the EXEMPTION for
+     * `lock` and `dive`, no drone ever enters one, the field never fires, and a
+     * hazard nobody ever sees work is a hazard nobody believes in.
+     *
+     * With both, the field is what it says it is: a place a drone will not go,
+     * and a place a drone that has decided to kill YOU will follow you into and
+     * die. That is the counter-play — standing inside one is drone-proof ground
+     * — and it costs the drones almost nothing, because a man has to be in the
+     * 7 % of the map that is covered for it to happen at all.
+     */
+    if (this.emp && (d.state === 'hunt' || d.state === 'climb' || d.state === 'recover')) {
+      this.emp.deflect(d.position, d.want);
+    }
     this._dir.copy(d.want).sub(d.position);
     const dist = this._dir.length();
     if (dist < 1e-4) { d.vel.multiplyScalar(Math.max(0, 1 - 3 * dt)); return; }
@@ -983,8 +1177,9 @@ export class Drones {
           d.position.copy(hit.point).addScaledVector(this._dir, -0.3);
           // A drone that flies into a wall while hunting is a drone that has
           // stopped being a threat; one that does it in a dive is a near miss
-          // with a warhead on it.
+          // with a warhead on it; one that is FALLING has just hit the ground.
           if (d.state === 'dive') this._detonate(d);
+          else if (d.state === 'fall') this._crash(d);
           else { d.vel.set(0, RULES.droneSpeed, 0); this._pose(d, dt); }
           return;
         }
@@ -1001,11 +1196,15 @@ export class Drones {
     // Nose along the velocity, with the bank a real quad flies with.
     const vx = d.vel.x, vz = d.vel.z;
     const h = Math.hypot(vx, vz);
-    if (h > 0.2) {
+    if (d.state === 'fall') {
+      // No flight, no attitude to hold: it tumbles. @see `_fall`.
+      g.rotation.x = d.spinX;
+      g.rotation.z = d.spinZ;
+    } else if (h > 0.2) {
       g.rotation.y = Math.atan2(vx, vz);
       g.rotation.x = Math.min(0.5, (h / RULES.droneDiveSpeed) * 0.42);
     }
-    d.rotor += ROTOR_SPIN * dt;
+    d.rotor += d.rotorRate * dt;
     for (let i = 0; i < 4; i++) d.rotors[i].rotation.z = d.rotor * (i & 1 ? -1 : 1);
     d.collider?.setSphere(d.position.x, d.position.y, d.position.z, 0.31);
     this._mark(d, dt);
@@ -1293,6 +1492,8 @@ export class Drones {
     this.ctx.events.off?.('actor:death', this._onActorDeath);
     this.ctx.events.off?.('player:death', this._onPlayerDeath);
     for (const d of this.list) if (d.alive) this._retire(d, 'dispose');
+    this.emp?.dispose();
+    this.emp = null;
     this.group.removeFromParent();
     for (const g of this._geo) g.dispose();
     this._geo.length = 0;
