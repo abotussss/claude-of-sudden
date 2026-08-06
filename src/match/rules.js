@@ -1978,6 +1978,89 @@ export const RULES = {
 };
 
 /**
+ * ════════════════════════════════════════════════════════════════════════════
+ * PER-MAP OVERRIDES — the second half of the level seam
+ * ════════════════════════════════════════════════════════════════════════════
+ * `RULES` above has no map dimension and every number in it was tuned against
+ * ONE map: five zones 96-186 m apart, a 30 x 45 m church in the middle, a
+ * 600 s clock and a 500-point race. A second map with 315 m between its far
+ * zones plays a different game at the same numbers.
+ *
+ * THIS IS A PATCH ON `RULES`, NOT A SECOND `RULES`, and that is deliberate.
+ * `RULES` is imported by name in twenty files and read live on the frame it is
+ * needed; threading a per-map copy through all of them would be a change to
+ * every one of those call sites for a table that is chosen once, at boot,
+ * before anything reads it. `applyMapRules` is called at the top of
+ * `MatchSystem.init` — before `resolveLayout`, before the event schedule is
+ * built, before a single tick — and `RULES` is a plain object, not frozen.
+ *
+ * WHAT IS DELIBERATELY *NOT* HERE: the cathedral act (`cathedralScore`,
+ * `cathedralOpenProgress`, `cathedralBarrage*`, `districtSalvoProgress`), the
+ * strike sites, the bomber and strafe lines and the tank routes. All of those
+ * are authored geography rather than tuning, they live in their own files, and
+ * every one of them already DROPS ITSELF with a logged reason when it cannot be
+ * baked against the map it is given (`airstrike.js:1559`, `bomber.js:546`,
+ * `tank.js:1794`). On the plain they will all drop, loudly, and the match will
+ * play without them until somebody authors the tower, the fortress and the
+ * satellite that 「平原を火の海に」 asks for. That is the correct interim state:
+ * silent-but-wrong is what a fallback table would have given.
+ */
+export const MAP_RULES = {
+  plains: {
+    /**
+     * 「１０００ポイントゲームにして」 — literally the request, and it is not just a
+     * bigger number. `_matchProgress` is `max(elapsed / matchTime, leader /
+     * scoreTarget)`, so EVERY progress threshold in this file is measured
+     * against this pair. Doubling the target without moving the clock would make
+     * the clock the ending of every match and turn every `*Progress` threshold
+     * into a plain wall-clock time.
+     */
+    scoreTarget: 1000,
+    /**
+     * …so the clock doubles with it. The town's own note is explicit that these
+     * two move together ("Raise `scoreTarget` again and this has to move with
+     * it"). 1200 s keeps the same ~1.2-1.3x headroom over a decisive race that
+     * 600/500 gave, on a map where simply crossing to a contested zone is a
+     * 100-200 m walk rather than a 60 m one.
+     */
+    matchTime: 1200,
+    /**
+     * FIVE ZONES, FIVE ENTRIES PLUS THE ZERO — the same shape as the town's,
+     * scaled to the longer game. `scoreInterval` is 4 s, so holding three of
+     * five pays 5 points per tick = 75/min and a 1000-point race is ~13 min of
+     * three-zone dominance, against the town's ~11 min at 500.
+     */
+    zonePayout: [0, 2, 7, 10, 12, 14],
+    /**
+     * A 350 m plain with no buildings on it yet is a map you can be shot across.
+     * The capture circle grows with it: 8 m on a 19.5 m avenue is a street you
+     * hold, 8 m on open grass is a dot. 14 m matches the flattened pad
+     * (`PADS[].r0` is 16 in `plains.js`), so the whole circle is level ground.
+     */
+    captureRadius: 14,
+  },
+};
+
+/**
+ * Fold one map's overrides into `RULES`. Call ONCE, at the top of
+ * `MatchSystem.init`, before anything reads a rule. Returns what it applied (or
+ * null), which is what the boot log prints.
+ *
+ * IDEMPOTENT ONLY IN THE FORWARD DIRECTION: applying `plains` and then `town`
+ * does NOT restore the town's numbers, because a map with no entry has nothing
+ * to restore them from. That is fine — a map is chosen at boot and the engine is
+ * not re-initialised without a reload — and it is written down here rather than
+ * discovered later. If a mid-session map switch is ever wanted, snapshot the
+ * touched keys here first.
+ */
+export function applyMapRules(mapId) {
+  const o = MAP_RULES[mapId];
+  if (!o) return null;
+  Object.assign(RULES, o);
+  return o;
+}
+
+/**
  * Which side attacks in a given round (1-based). Rounds 1..swapAfterRound are
  * the human team's half on whichever side `RULES.playerTeam` starts on.
  *

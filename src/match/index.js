@@ -77,7 +77,7 @@
  */
 
 import * as THREE from 'three';
-import { RULES, MODE, TEAM, TEAM_NAME, TEAM_COLOR, ROLE, attackingTeam, roleOf, BOT_NAMES, REINFORCE_NAMES, HIDDEN_NAMES, TEAM_VARIANTS } from './rules.js';
+import { RULES, MODE, TEAM, TEAM_NAME, TEAM_COLOR, ROLE, attackingTeam, roleOf, BOT_NAMES, REINFORCE_NAMES, HIDDEN_NAMES, TEAM_VARIANTS, applyMapRules } from './rules.js';
 import { resolveLayout } from './sites.js';
 import { CaptureZones } from './capture.js';
 import { Bomb, BOMB } from './bomb.js';
@@ -326,6 +326,16 @@ export class MatchSystem {
     this.weapons = ctx.get('weapons');
     this.ui = ctx.get('ui');
     this.world = ctx.get('world');
+    /**
+     * WHICH MAP, AND ITS RULES — the FIRST thing this system does, because every
+     * line below reads `RULES` and `resolveLayout` reads it twice on its first
+     * statement. @see `MAP_RULES` in rules.js for what may and may not go in it.
+     */
+    const mapId = this.world?.level?.id ?? 'town';
+    const mapRules = applyMapRules(mapId);
+    if (mapRules) {
+      console.info(`[match] map "${mapId}" — ${Object.entries(mapRules).map(([k, v]) => `${k}=${Array.isArray(v) ? `[${v}]` : v}`).join(', ')}`);
+    }
     /**
      * PUT THE CATHEDRAL'S RUIN AWAY BEFORE THE FIRST FRAME.
      *
@@ -5732,6 +5742,14 @@ export class MatchSystem {
     h.spectating = this.spectator.active && !this.spectator.killCam
       ? this.spectator.targetName
       : '';
+    /**
+     * IS THE KILL CAM THE CAMERA RIGHT NOW — 「キルカメラのときに武器を表示しないで」.
+     * `h.spectating` above is the same fact stated as a name and cannot be read
+     * as one: it is also blank in the orbit over the body with nobody left
+     * alive. `ui` hides the viewmodel on this AND on `h.dead`, so a flag that
+     * somehow stuck could still never leave a living player unarmed.
+     */
+    h.killCam = this.spectator.killCam;
     /**
      * The kill cam's own bar: how much of the wait has gone. It is the respawn
      * clock when there is one and the cam's own clock when there is not (a

@@ -863,6 +863,137 @@ export const SPAWNS = {
 };
 
 /**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE SECOND MAP — NACHTFELD, the night plain
+ * ════════════════════════════════════════════════════════════════════════════
+ * @see `src/world/levels/plains.js`, which owns the ground these stand on.
+ *
+ * THE COORDINATES ARE METRES AND THERE IS NO TRANSFORM TO KEEP IN SYNC. That is
+ * the one thing this table gets that the town's never had: `plains.js` is
+ * authored at yaw 0, scale 1, origin 0, so level space IS world space, and the
+ * `SCALE`/`SPREAD`/`widenX` triple that is copied by hand into FIVE files of
+ * `src/match` (this one, `airstrike.js`, `bomber.js`, `strafe.js`, `tank.js`)
+ * with a comment begging whoever edits one to edit the others simply does not
+ * apply here. A number below, a number in `plains.js` and a `--at=` argument to
+ * `tools/zonespot.mjs` are the same point.
+ *
+ * EVERY CENTRE IS A `PADS` ENTRY IN `plains.js` — flattened ground, held level
+ * inside 16 m and blended out to 34. A capture point on a 20° swell is one that
+ * is always fought from above; these are the flat squares the plain has.
+ *
+ * THEY ARE 190-315 m APART — 「占領サイトの距離も空けて」. On the town, A and B
+ * measure 185.7 m and everything else is closer; here the shortest zone pair is
+ * A-C at 190 m and the longest is A-B at 315 m, with both bases 302 m apart.
+ * That is what the 1000-point game is FOR: crossing this map is a decision.
+ *
+ *      C(-128, 86)                            B(118, 104)
+ *                        D(0, 0)
+ *      A(-118,-104)                           E(128, -86)
+ *
+ * D IS NOT LOCKED, and that is a deliberate hole for the next author rather
+ * than an oversight. On the town, D is the cathedral and `locked: true` holds it
+ * out of `MatchSystem.sites` until the church is brought down mid-match. This
+ * map has no cathedral, so a locked D would never open. When the CONTROL TOWER
+ * and the FORTRESS are built on this pad (「管制塔があり、要塞がある平原」) and
+ * there is an event that destroys them, THIS is the zone to lock behind it —
+ * `MatchSystem` finds the locked zone by predicate (`allZones.find(z => z.locked)`),
+ * not by id, so nothing else has to change.
+ */
+const P = (x, z) => [x, z];
+
+export const PLAINS_ZONES = [
+  {
+    id: 'A',
+    name: 'THE WEST SHOULDER',
+    level: P(-118, -104),
+    fallback: P(-110, -97),
+    holdLevel: P(-118, -104),
+    flankLevel: null,
+  },
+  {
+    id: 'C',
+    name: 'THE SOUTH-WEST SWELL',
+    level: P(-128, 86),
+    fallback: P(-120, 80),
+    holdLevel: P(-128, 86),
+    flankLevel: null,
+  },
+  {
+    id: 'E',
+    name: 'THE NORTH-EAST SWELL',
+    level: P(128, -86),
+    fallback: P(120, -80),
+    holdLevel: P(128, -86),
+    flankLevel: null,
+  },
+  {
+    id: 'B',
+    name: 'THE EAST SHOULDER',
+    level: P(118, 104),
+    fallback: P(110, 97),
+    holdLevel: P(118, 104),
+    flankLevel: null,
+  },
+  {
+    id: 'D',
+    name: 'THE CENTRE',
+    level: P(0, 0),
+    fallback: P(0, -8),
+    holdLevel: P(0, 0),
+    flankLevel: null,
+  },
+];
+
+/**
+ * Both bases, 302 m apart on the plain's long diagonal. Twenty-one men a side in
+ * seven ranks of three, the same shape as the town's clusters and for the same
+ * reason: `Agent.viewRange` is 58 m, so the round has to open with both sides
+ * walking rather than shooting.
+ *
+ * yaw 0 faces +Z and `Math.PI` faces -Z (this level's transform is the identity,
+ * so `world.levelYaw` adds nothing). North base looks south down the plain,
+ * south base looks north.
+ */
+const plainsRank = (x0, z, yaw) => [
+  [x0 - 8, z, yaw],
+  [x0, z, yaw],
+  [x0 + 8, z, yaw],
+];
+export const PLAINS_SPAWNS = {
+  attack: [-158, -155.5, -153, -150.5, -148, -145.5, -143].flatMap((z) => plainsRank(-14, z, 0)),
+  defend: [158, 155.5, 153, 150.5, 148, 145.5, 143].flatMap((z) => plainsRank(14, z, Math.PI)),
+};
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE MAP TABLE — the seam that lets a second level have its own geography
+ * ────────────────────────────────────────────────────────────────────────────
+ * `resolveLayout` used to read the module-level `ZONES`/`SITES`/`SPAWNS`
+ * directly, which is the whole reason `src/match` was single-map: the zones were
+ * not merely tuned for the town, they were the ONLY zones that existed.
+ *
+ * The selector is `world.level.id` — published by `src/world/index.js` — and NOT
+ * a second copy of the query string, because two places parsing `?map=` is two
+ * places to disagree and the failure would be silent: the match would resolve
+ * the town's five zones onto the plain's ground, `ensureReachable` would walk
+ * each of them up to 35 m looking for a route, and the boot would come back with
+ * a playable-looking layout that is geometrically nonsense. An unknown id falls
+ * back to the town's table, exactly as `getLevel` falls back to the town.
+ */
+export const MAPS = {
+  town: { zones: ZONES, sites: SITES, spawns: SPAWNS },
+  plains: { zones: PLAINS_ZONES, sites: PLAINS_ZONES.slice(0, 2), spawns: PLAINS_SPAWNS },
+};
+
+export function layoutFor(world) {
+  const id = world?.level?.id;
+  const m = id ? MAPS[id] : null;
+  if (m) return m;
+  if (id) console.warn(`[match] no zone table for map "${id}" — using the town's`);
+  return MAPS.town;
+}
+
+/**
  * Turn the authored level coordinates into world-space points that a character
  * can actually stand on.
  *
@@ -878,7 +1009,9 @@ export const SPAWNS = {
  */
 export function resolveLayout(world, ai) {
   const domination = RULES.mode === MODE.DOMINATION;
-  const authored = domination ? ZONES : SITES;
+  /** WHICH MAP's geography. @see `MAPS` / `layoutFor` above. */
+  const map = layoutFor(world);
+  const authored = domination ? map.zones : map.sites;
   const defaultRadius = domination ? RULES.captureRadius : RULES.plantRadius;
   const snap = (lx, lz, fx, fz, tag) => {
     const primary = groundPoint(world, ai, lx, lz);
@@ -896,7 +1029,7 @@ export function resolveLayout(world, ai) {
       position: groundPoint(world, ai, x, z),
       yaw: yaw + (world?.levelYaw ?? 0),
     }));
-  const spawns = { attack: bake(SPAWNS.attack), defend: bake(SPAWNS.defend) };
+  const spawns = { attack: bake(map.spawns.attack), defend: bake(map.spawns.defend) };
   for (const k of ['attack', 'defend']) for (const sp of spawns[k]) walkable(ai, sp.position);
 
   const sites = authored.map((s) => {
