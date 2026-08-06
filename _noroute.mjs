@@ -55,7 +55,7 @@ for (const seed of SEEDS) {
   const errs = [];
   page.on('pageerror', (e) => errs.push(String(e.message)));
   await page.goto(`${URL}?capture=1&map=${MAP}&seed=${seed}`, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
+  await page.waitForFunction('window.__READY__===true', null, { timeout: 600000 });
 
   const out = await page.evaluate(async ({ WARM, WINDOW }) => {
     const e = window.__ENGINE__;
@@ -81,6 +81,7 @@ for (const seed of SEEDS) {
       grid: g ? { nx: g.nx, nz: g.nz, cell: g.cell, comps: g.components,
         maxNodes: g.maxNodes } : null,
       giveUps: 0, fallbackCalls: 0, fallbackRescued: 0, fallbackPending: 0,
+      fallbackDetour: 0,
       why: Object.create(null),           // the split, at the give-up
       whyMode: Object.create(null),       // ...crossed with the objective's verb
       goalFloor: [],                      // height of the goal cell, per give-up
@@ -112,6 +113,21 @@ for (const seed of SEEDS) {
        */
       slowWhy: Object.create(null), slowSamples: 0, fastSamples: 0,
       slowSpeedSum: 0,
+      /**
+       * ══════════════════════════════════════════════════════════════════════
+       * AND IF HE IS OFF THE HEIGHT FIELD, CAN RUNG ZERO ACTUALLY SAVE HIM?
+       * ══════════════════════════════════════════════════════════════════════
+       * `_unstick` rung zero is `_regainGrid` (the nearest cell within a stride,
+       * ten rings) then `_descend` (`nearestGroundBelow`), and `_trackProgress`
+       * already hands a man who is not moving to the ladder every `STUCK_WINDOW`.
+       * So "the fallback should call rung zero" is only a fix if rung zero has
+       * an answer for these men. Asked here WITHOUT side effects — the same two
+       * grid queries, nothing committed — at the instant the fallback gives up.
+       */
+      offGrid: {
+        n: 0, regain: 0, below: 0, neither: 0, onDetour: 0, moving: 0,
+        y: [], stuckRung: Object.create(null),
+      },
     };
     const prevSpeed = new Map();
     const scratch = [];
@@ -163,8 +179,16 @@ for (const seed of SEEDS) {
     const orig = proto._advanceFallback;
     proto._advanceFallback = function (obj) {
       S.fallbackCalls++;
+      /**
+       * A RESCUE IS NOT ALWAYS A MOVE TARGET. Rung zero (`_regainGrid` /
+       * `_descend`) hands the steering a raw DETOUR point rather than a path,
+       * so a probe that only looks at `hasMoveTarget` reports every man it
+       * saves as a man it gave up on.
+       */
+      const det0 = this._detourTimer;
       orig.call(this, obj);
       if (this.pathPending) { S.fallbackPending++; return; }
+      if (this._detourTimer > det0) { S.fallbackDetour++; return; }
       if (this.hasMoveTarget) { S.fallbackRescued++; return; }
       S.giveUps++;
       const k = this.name ?? String(this.id);
@@ -176,6 +200,25 @@ for (const seed of SEEDS) {
       lastCheck.set(k + ':w', w);
       bump(S.why, w);
       bump(S.whyMode, `${obj.mode}:${w.split(':')[0]}`);
+      if (w === 'offGrid' && g) {
+        const O = S.offGrid;
+        O.n++;
+        // `_regainGrid`'s own two tests: a cell inside ten rings and a stride,
+        // and it further than 0.9 m away in three dimensions.
+        const ci = g.nearest(this.position.x, this.position.z, this.position.y, 10, 1.5);
+        const okRegain = ci >= 0 && Math.hypot(
+          g.worldX(ci % g.nx) - this.position.x,
+          g.floor[ci] - this.position.y,
+          g.worldZ((ci / g.nx) | 0) - this.position.z) > 0.9;
+        const okBelow = g.nearestGroundBelow(this.position.x, this.position.z, this.position.y) >= 0;
+        if (okRegain) O.regain++;
+        if (okBelow) O.below++;
+        if (!okRegain && !okBelow) O.neither++;
+        if (this._detourTimer > 0) O.onDetour++;
+        if (this.speed > 0.4) O.moving++;
+        O.y.push(+this.position.y.toFixed(1));
+        bump(O.stuckRung, `rung${this.stuckRung}`);
+      }
       S.men[k] = (S.men[k] ?? 0) + 1;
       const gi = g ? g.nearest(obj.position.x, obj.position.z, obj.position.y) : -1;
       if (gi >= 0) S.goalFloor.push(+(g.floor[gi]).toFixed(2));
@@ -270,6 +313,7 @@ for (const seed of SEEDS) {
     seed, map: args.map ?? 'town', pageerrors: errs, grid: out.grid, ticks: out.ticks,
     fallback: {
       calls: out.fallbackCalls, rescued: out.fallbackRescued,
+      rescuedByDetour: out.fallbackDetour,
       pending: out.fallbackPending, gaveUp: out.giveUps,
       gaveUpPct: pct(out.giveUps, out.fallbackCalls),
     },
@@ -295,6 +339,17 @@ for (const seed of SEEDS) {
       staleMovingPct: pct(out.blockedButMoving, out.blockedFrames),
     },
     still: { frames: out.stillFrames, blockedPct: pct(out.stillBlocked, out.stillFrames) },
+    /* CAN RUNG ZERO SAVE THE OFF-GRID MAN. @see the `offGrid` field block. */
+    offGrid: {
+      giveUps: out.offGrid.n,
+      regainWouldWorkPct: pct(out.offGrid.regain, out.offGrid.n),
+      descendWouldWorkPct: pct(out.offGrid.below, out.offGrid.n),
+      neitherPct: pct(out.offGrid.neither, out.offGrid.n),
+      alreadyOnDetourPct: pct(out.offGrid.onDetour, out.offGrid.n),
+      movingPct: pct(out.offGrid.moving, out.offGrid.n),
+      medianY: (() => { const s = [...out.offGrid.y].sort((a, b) => a - b); return s[(s.length / 2) | 0] ?? null; })(),
+      rung: out.offGrid.stuckRung,
+    },
     /* THE SUB-5 TAIL. @see `slowWhy`. */
     slow: {
       samples: out.slowSamples,

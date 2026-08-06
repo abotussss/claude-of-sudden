@@ -63,7 +63,7 @@ for (const seed of SEEDS) {
   const errs = [];
   page.on('pageerror', (e) => errs.push(String(e.message)));
   await page.goto(`${URL}?capture=1&map=${MAP}&seed=${seed}`, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
+  await page.waitForFunction('window.__READY__===true', null, { timeout: 600000 });
 
   const out = await page.evaluate(async ({ WARM, WINDOW }) => {
     const e = window.__ENGINE__;

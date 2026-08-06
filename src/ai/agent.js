@@ -1192,6 +1192,31 @@ const VIA_SCALE = [1, 0.7, 0.45];
  */
 const FALLBACK_STEPS = [0.85, 0.7, 0.55, 0.4, 0.25];
 
+/**
+ * How far `Agent._advanceFallback` will look, around an objective it cannot
+ * reach, for a cell of the component the man is standing on. 120 rings is 96 m
+ * on an 0.8 m grid.
+ *
+ * `NavGrid.nearest` returns from the FIRST ring that has a hit, so this is a
+ * ceiling and not a cost: a man outside a sealed courtyard finds his own street
+ * within a dozen rings. The full sweep only runs for a man whose own ground
+ * never comes within 96 m of where he was sent, and it is the last thing that
+ * happens before he is told to stand — which is the one man for whom spending
+ * 57k cell tests once every few seconds is obviously worth it.
+ */
+const FALLBACK_RINGS = 120;
+
+/**
+ * How long a man may be in ADVANCE with no route at all before
+ * `Agent._advanceFallback` hands him to `_unstick`.
+ *
+ * It is `STUCK_WINDOW`'s own two seconds on purpose: this is the same judgement
+ * `_trackProgress` makes and it exists because that one cannot be made about
+ * this man. @see the block in `_advanceFallback` for the two clocks that reset
+ * each other, and `_noRouteSince` for what starts and stops this one.
+ */
+const NOROUTE_LADDER = 2.0;
+
 /** How long a man in ADVANCE with NO route at all waits before re-asking. */
 const REPATH_DRY = 0.5;
 
@@ -1946,6 +1971,14 @@ export class Agent {
      * has a different recovery. @see `STALL_WINDOW` and `_trackProgress`.
      */
     this._stallTime = 0;
+    /**
+     * When the current spell of HAVING NO ROUTE AT ALL began, or -1 when he has
+     * one. It is a third clock because neither of the two above can be trusted
+     * about this man — they reset each other every half second while he alternates
+     * between the speed `_advance` asks for and the zero `_advanceFallback`
+     * writes. @see `NOROUTE_LADDER`.
+     */
+    this._noRouteSince = -1;
     /** How far up the recovery ladder this man currently is, 0-5. */
     this.stuckRung = 0;
     /** Consecutive windows of real progress; two of them retire the ladder. */
@@ -2150,6 +2183,9 @@ export class Agent {
     }
     this.objective = { mode, position: this._objPos, site };
     if (changed) this.objectiveBlocked = false;
+    // A different place to go is a different question, so the spell of having no
+    // route to the OLD one ends with it. @see `NOROUTE_LADDER`.
+    if (changed) this._noRouteSince = -1;
     // Force a fresh path next time ADVANCE runs rather than finishing the old one.
     if (changed) {
       /**
@@ -2933,6 +2969,128 @@ export class Agent {
     const g = this.ai.grid;
     const here = g ? g.nearest(this.position.x, this.position.z, this.position.y, 3, OFFGRID_TOL) : -1;
     const comp = here >= 0 ? g.comp[here] : -1;
+    /**
+     * ══════════════════════════════════════════════════════════════════════════
+     * A MAN WHO IS NOWHERE HAS NOT GOT A BAD DESTINATION — HE HAS NO POSITION
+     * ══════════════════════════════════════════════════════════════════════════
+     * MEASURED (`_noroute.mjs`, town seed 7, 150 s of live round): this function
+     * gave up 194 times and **192 of them were a man OFF THE HEIGHT FIELD** —
+     * standing on a roof the interior carve re-sampled as its ground storey, on
+     * a stair landing, on a stall he was shoved onto. His objective was fine.
+     * Every rung below this one is a grid query taken from a cell he is not on,
+     * so all of them fail, and he was handed the bottom of the function: face
+     * the objective, `desiredSpeed = 0`, stand.
+     *
+     * The recovery for that man already exists — it is rung ZERO of `_unstick`:
+     * `_regainGrid` (the nearest cell within a stride, walked directly) and then
+     * `_descend` (the ground underneath him, @see `NavGrid.nearestGroundBelow`).
+     * `_trackProgress` is supposed to hand him to it. IT CANNOT, AND THE REASON
+     * IS THE LINE AT THE BOTTOM OF THIS FUNCTION:
+     *
+     *   the give-up sets `desiredSpeed = 0` and `repathTimer` to 2.5-4 s, which
+     *     `_advance`'s dry clamp then cuts to `REPATH_DRY` — half a second;
+     *   on the other ~29 frames of that half second `_advance` sets
+     *     `desiredSpeed` back to 4.3 x haste before this function is reached;
+     *   `_trackProgress` has TWO clocks and each frame resets the other one.
+     *     The give-up frame, with nothing asked for, zeroes `_progTime` (the
+     *     `STUCK_WINDOW` clock, 2.0 s); every other frame, with a walk asked
+     *     for, zeroes `_stallTime` (the `STALL_WINDOW` clock, 4.0 s). One resets
+     *     the other every half second, so NEITHER CLOCK
+     *     EVER COMPLETES — so `_unstick` is never called at all, the ladder
+     *     never climbs off rung zero, and the man is stranded for the round.
+     * Five men accounted for all 602 give-ups on seed 11. That is what a
+     * fifteen-per-cent `unstick:noPath` board is made of.
+     *
+     * THE FIX IS THE CLOCK, NOT A NEW MANOEUVRE. Every rung this man needs
+     * already exists and is already the right answer; what he needs is for the
+     * ladder to be REACHED. So the spell of having no route is timed here, on
+     * this function's own terms — `_noRouteSince`, cleared the moment `_advance`
+     * gets him a route — and once it has run `NOROUTE_LADDER` seconds he is
+     * handed to `_unstick` exactly as `_trackProgress` would have handed him.
+     * Nothing is bypassed: rung zero rescues him if he is off the field, rungs
+     * one to four work a wedge, rung five asks `match` for a different job, and
+     * the escalation and the blacklist behave as they were written to.
+     *
+     * The window is `STUCK_WINDOW`'s own two seconds, and it is the reason this
+     * is not a jerk on the leash: a man who is off the field for a moment —
+     * mid-fall, on a ramp, on a stair — is not touched, because he has a route
+     * again long before the clock runs out. @see the `post` guard, which is
+     * `_trackProgress`'s, for the one man whose whole job is to be up there.
+     */
+    const now = this.ctx.time.elapsed;
+    const timed = !(this.post && this.postPhase > 0);
+    if (timed && this._noRouteSince < 0) this._noRouteSince = now;
+    /**
+     * ══════════════════════════════════════════════════════════════════════════
+     * AND A BAD REQUEST IS NOT ANSWERED ALONG THE LINE TO IT
+     * ══════════════════════════════════════════════════════════════════════════
+     * MEASURED (`_noroute.mjs`, town seeds 7 / 11): this is the SMALL half of
+     * the split and it is written down as such — 2 and 9 give-ups against 192
+     * and 592 for the block above. It is kept because it is the only correct
+     * instrument for the case, because the case is a property of the LEVEL and
+     * the second map is new, and because it costs one component compare.
+     *
+     * The case: an objective that is STRUCTURALLY UNREACHABLE — an upper storey,
+     * a roof, the sealed side of a carve — where `NavGrid`'s own labels say no
+     * route can exist for anybody, ever. That is a different failure from a
+     * route that exists and would not solve, and the line walk below is the
+     * wrong instrument for it: five points on the straight line to a sealed
+     * courtyard are five points inside the courtyard's walls, each of which
+     * snaps (six rings, 4.8 m) onto nothing of his and is skipped.
+     *
+     * The right question for a bad request is not "how far along the line can I
+     * get" but WHAT IS THE NEAREST GROUND I CAN STAND ON TO WHERE I WAS SENT —
+     * which is one ring search around the OBJECTIVE, filtered to the component
+     * he is standing in. A cell of his own component has a route from him by
+     * construction, so the solve cannot come back zero, and `nearest` returns
+     * from the first ring that has a hit, so the common case (the street
+     * outside the building) costs a dozen rings and not the whole radius.
+     *
+     * `FALLBACK_RINGS` is 120 rings — 96 m — because the only man for whom the
+     * scan runs to the end is the man whose own ground never comes within 96 m
+     * of his objective, and for him the full sweep is the LAST thing that
+     * happens before he is told to hold. On the plain, whose zones are 154-314 m
+     * apart, that radius still lands him on the near rim of the objective rather
+     * than at his feet.
+     */
+    /**
+     * THE TEST HERE IS THE BARE COMPONENT COMPARE AND NOT `reachable`, AND THE
+     * DIFFERENCE IS MEASURED. `reachable` is deliberately optimistic — it says
+     * yes if `findPath`'s island re-anchor can find EITHER end a cell on the
+     * other's component — and on the town that optimism is right about the
+     * request and wrong about the outcome: 118 of 127 remaining give-ups came
+     * back `structural:severed`, i.e. the re-anchor found a cell, `reachable`
+     * said yes, and the solve still returned nothing. Up here the question is
+     * not "is it worth asking A*" (that has already been asked and has already
+     * failed) but "is the place he was sent ON HIS GROUND". If it is not, the
+     * ring search is the right answer whatever the re-anchor thinks.
+     */
+    const gi = g ? g.nearest(obj.position.x, obj.position.z, obj.position.y) : -1;
+    if (comp >= 0 && (gi < 0 || g.comp[gi] !== comp)) {
+      const ci = g.nearest(obj.position.x, obj.position.z, null, FALLBACK_RINGS, Infinity, comp);
+      if (ci >= 0) {
+        this._v.set(g.worldX(ci % g.nx), g.floor[ci], g.worldZ((ci / g.nx) | 0));
+        // Already standing on the closest ground his own component has to it:
+        // there is nowhere further forward to go, and the hold below is correct.
+        if (this.position.distanceToSquared(this._v) >= 2 * 2) {
+          if (this._goTo(this._v)) {
+            this.repathTimer = this.rng.range(1.5, 2.5);
+            /**
+             * THE FLAG STAYS. He is walking, which is the point, but he still
+             * cannot reach the place he was sent — and `match` re-tasks on it
+             * (`_orderZone` walks the standing ring, `_nearestFreeIndex` puts
+             * him at the back of the queue for that zone). Clearing it here
+             * would leave him parked on the near side of a wall for the round.
+             */
+            this.objectiveBlocked = true;
+            // He has somewhere to walk again. @see `NOROUTE_LADDER`.
+            this._noRouteSince = -1;
+            return;
+          }
+          if (this.pathPending) return;
+        }
+      }
+    }
     for (const t of FALLBACK_STEPS) {
       this._v.copy(this.position).lerp(obj.position, t);
       const ci = comp >= 0
@@ -2943,6 +3101,7 @@ export class Agent {
       if (this.position.distanceToSquared(this._v) < 2 * 2) continue; // already there
       if (this._goTo(this._v)) {
         this.repathTimer = this.rng.range(1.5, 2.5);
+        this._noRouteSince = -1;
         return;
       }
       // The frame's ration is spent, not the geometry. He keeps the destination
@@ -2950,8 +3109,31 @@ export class Agent {
       // only spend somebody else's solve on the same answer.
       if (this.pathPending) return;
     }
-    // Genuinely boxed in. Hold, face the objective, and let `match` re-task on
-    // its two-second objective refresh.
+    /**
+     * NOTHING CONSTRUCTIVE IS LEFT, SO THE LADDER GETS HIM. @see the clock at
+     * the top of this function for why it never did. Rung zero walks an off-grid
+     * man back onto the field or drops him off the roof he is stranded on, rungs
+     * one to four work a wedge, rung five asks `match` for a different job — and
+     * the clock restarts, so this is one escalation every `NOROUTE_LADDER`
+     * seconds and not one a frame.
+     */
+    if (timed && this._noRouteSince >= 0 && now - this._noRouteSince >= NOROUTE_LADDER) {
+      this._noRouteSince = now;
+      this._unstick();
+      return;
+    }
+    /**
+     * AND NOW THE HOLD IS A FINDING RATHER THAN A SHRUG, AND IT IS BOUNDED.
+     * Everything above has been tried: the nearest cell of his own component to
+     * the objective inside 96 m (or he is already standing on it), and five
+     * points along the line. To arrive here is to have PROVED that no ground he
+     * can walk to is nearer to his objective than the ground under his feet — so
+     * facing it is the correct answer, and the flag is what asks `match` for a
+     * different job. What has changed is that it is no longer where the man
+     * ENDS: the clock above is running, and two seconds of this hands him to the
+     * ladder. Standing still is now a pause between escalations rather than the
+     * last thing that ever happens to him.
+     */
     if (!this._loggedUnreachable) {
       this._loggedUnreachable = true;
       console.warn(
@@ -3237,7 +3419,49 @@ export class Agent {
       if (this.repathTimer <= 0 && !this.pathPending && this._detourTimer <= 0 && !airborne
         && (!this.hasMoveTarget || moved || this.stuckTimer > 0.6)) {
         this.repathTimer = this.rng.range(1.1, 2.2);
-        if (!this._goTo(target) && !this.pathPending) {
+        /**
+         * ══════════════════════════════════════════════════════════════════════
+         * DO NOT ASK FOR A ROUTE THE LABELS ALREADY SAY IS NOT THERE
+         * ══════════════════════════════════════════════════════════════════════
+         * `NavGrid.reachable` is the component test `findPath` performs anyway,
+         * without the search that follows it — so a request for an upper storey,
+         * a roof or the sealed side of a carve is answered here, in tens of
+         * microseconds, instead of by a bounded sweep that comes back empty. The
+         * man goes straight down the ladder to `_advanceFallback`, and this is
+         * the only place on it that knows the difference between "your lane is
+         * bad" (drop the lane) and "where you were sent does not exist for you"
+         * (go to the nearest ground that does).
+         *
+         * It is optimistic by construction — @see `reachable` — so the only
+         * behaviour it can change is to skip a solve that was going to fail.
+         */
+        const grid = this.ai.grid;
+        const askable = !grid || grid.reachable(this.position, target);
+        if (askable && this._goTo(target)) {
+          /**
+           * ══════════════════════════════════════════════════════════════════
+           * A ROUTE MAKES THE FLAG A LIE, AND A STALE FLAG IS EXPENSIVE
+           * ══════════════════════════════════════════════════════════════════
+           * `objectiveBlocked` was written by `_advanceFallback` or by the top
+           * rung of `_unstick`, and until now the ONLY thing that cleared it was
+           * a genuinely different order arriving (`setObjective`). So a man who
+           * was blocked once — by a lane, by a hold spot, by three quarters of a
+           * second in the air — carried it for the rest of that objective while
+           * walking a perfectly good route, and two things read it:
+           *   `_unstick` pins `stuckRung = 5` on any man carrying it, which
+           *     switches off rungs 1-4 — the side-step, the nudged re-path, the
+           *     skipped waypoint and the blacklist, i.e. every manoeuvre that
+           *     actually unwedges a BODY — for the rest of that objective;
+           *   `match._orderZone` walks his standing point round the ring on
+           *     every two-second refresh and `_nearestFreeIndex` puts him at the
+           *     back of the queue for the zone, so a man who is fine is churned
+           *     off the ground he is walking to.
+           * A route to where he was sent is the disproof, so it is spent here.
+           */
+          this.objectiveBlocked = false;
+          // …and the no-route clock stops. @see `NOROUTE_LADDER`.
+          this._noRouteSince = -1;
+        } else if (!this.pathPending) {
           // A lane that will not route is a lane, not a dead objective: drop it
           // and take the straight line before anything is called blocked.
           if (this._hasVia) this._hasVia = false;

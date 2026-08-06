@@ -1178,6 +1178,59 @@ export class NavGrid {
   }
 
   /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * CAN A MAN HERE GET TO THERE AT ALL — asked of the labels, never of a search
+   * ────────────────────────────────────────────────────────────────────────────
+   * `findPath` already knows this. `_label` is the connected-component pass over
+   * exactly the steps A* walks, so two ends with different labels are two ends
+   * no sequence of those steps joins; and the grid is labelled ONCE, at build,
+   * so the answer is a constant of the level for the whole round (`syncCoverBlocks`
+   * moves cover, not cells — nothing re-labels).
+   *
+   * WHAT IT IS FOR. A destination on an upper storey, on a roof, or on the far
+   * side of a carve is a request that cannot be satisfied — 36 820 cells above
+   * 2.5 m sit in 2113 components with NOT ONE of them joined to the ground. A
+   * man handed one of those asks A*, is refused, falls into
+   * `Agent._advanceFallback` and stands there. That is a BAD REQUEST, and the
+   * right response is to answer a different question ("what is the nearest
+   * ground I CAN stand on") rather than to keep asking this one.
+   *
+   * IT IS DELIBERATELY OPTIMISTIC. Every path from a `false` here is a man who
+   * will be sent somewhere else, so the cost of a wrong `false` is a man who
+   * gives up on a route he had; the cost of a wrong `true` is one bounded solve.
+   * So it says `true` for everything `findPath` has a chance on:
+   *   - either end off the grid — `nearest` has snapped it somewhere, and
+   *     `Agent._offGrid` / `_regainGrid` own that man, not this;
+   *   - the labels agree;
+   *   - `escape` says his component can FALL into the goal's (one-way drop
+   *     edges are not in `comp` on purpose — @see `_labelEscapes`);
+   *   - the island re-anchor `findPath` performs, in `findPath`'s own order and
+   *     with `findPath`'s own ring count, finds either end a cell on the other's
+   *     component.
+   * The one case it can be wrong about is a chain of TWO drops, which `escape`
+   * does not model — and `findPath` bounds that query to `CROSS_COMP_NODES`
+   * anyway, so it was already the query least likely to come back with a route.
+   */
+  reachable(from, to) {
+    if (!this.comp) return true;
+    const s = this.nearest(from.x, from.z, from.y);
+    if (s < 0) return true;
+    const g = this.nearest(to.x, to.z, to.y);
+    if (g < 0) return false;
+    const cs = this.comp[s], cg = this.comp[g];
+    if (cs < 0 || cg < 0 || cs === cg) return true;
+    if (this.escape.length > 0 && this.escape[cs] === cg) return true;
+    // The smaller end gives way first, exactly as in `findPath`.
+    const reStart = () =>
+      this.nearest(from.x, from.z, from.y, ISLAND_RINGS, Infinity, cg) >= 0;
+    const reGoal = () =>
+      this.nearest(to.x, to.z, to.y, ISLAND_RINGS, Infinity, cs) >= 0;
+    return this.componentSize(s) <= this.componentSize(g)
+      ? (reStart() || reGoal())
+      : (reGoal() || reStart());
+  }
+
+  /**
    * A* between two world points. Writes world-space waypoints into `out`
    * (an array of THREE.Vector3, reused) and returns the count.
    */
