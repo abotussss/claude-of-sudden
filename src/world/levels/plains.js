@@ -4,6 +4,7 @@ import { fbm3, patchGeometry, paintMasks, rockGeometry, disposeAll } from '../ut
 import { registerProps } from '../props.js';
 import { Rng } from '../../core/rng.js';
 import { buildTower, TOWER, TOWER_R } from './plains-tower.js';
+import { buildFort, FORT, FORT_R } from './plains-fort.js';
 import { publishWorks } from './plains-works.js';
 
 /**
@@ -165,6 +166,7 @@ const PADS = [
    * is authored off a single datum. @see `PAD_DATUM`.
    */
   { id: 'TOWER', x: 0, z: -32, r0: 28, r1: 46, datum: true },
+  { id: 'FORT', x: 0, z: 48, r0: 38, r1: 58, datum: true },
 ];
 
 /**
@@ -329,6 +331,7 @@ const CLAIMS = [];
  */
 const WORKS = [
   { id: 'NF-TOWER', x: TOWER.x, z: TOWER.z, r: TOWER_R + 1.2 },
+  { id: 'NF-FORT', x: FORT.x, z: FORT.z, r: FORT_R + 1.2 },
 ];
 
 /** Is this point inside something that has been built on the plain? */
@@ -756,6 +759,9 @@ export const PLAINS = {
     const tower = buildTower(A, plainsY);
     works.push(tower.demolition);
     volumes.push(...tower.interiorVolumes);
+    const fort = buildFort(A, plainsY);
+    works.push(fort.demolition);
+    volumes.push(...fort.interiorVolumes);
     this._works = works;
 
     return {

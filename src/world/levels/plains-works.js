@@ -116,9 +116,17 @@ export function prism(A, key, pts, y0, y1, opts = {}) {
     // each one is a slightly different mix. This is the detail layer that has to
     // survive at 0.5 m — a flat prism face is the failing case for this map.
     const lift = Math.abs((y % 1.2) - 0.6) / 0.6;
-    out[0] = Math.min(1, (up ? 0.5 : 0.22) + n * 0.4 + (1 - lift) * 0.18);
-    out[1] = Math.min(1, (up ? 0.3 : 0.42) + m * 0.36 + (1 - lift) * 0.2);
-    out[2] = Math.min(1, (up ? 0.1 : 0.24) + (1 - Math.min(1, y / 2.2)) * 0.4 + n * 0.15);
+    /**
+     * THE HORIZONTAL FACES ARE HELD DOWN, and that is a night-map decision
+     * rather than a taste one. `wear` exposes the pale aggregate under the
+     * render, and a 48 m courtyard of it metered as the brightest thing on a
+     * moonlit plain — photographed from the rampart, the walk and the yard came
+     * back near white while the parapet three metres away was in the dark. Deck
+     * faces get half the wear and more grime and AO instead.
+     */
+    out[0] = Math.min(1, (up ? 0.26 : 0.22) + n * (up ? 0.24 : 0.4) + (1 - lift) * 0.18);
+    out[1] = Math.min(1, (up ? 0.5 : 0.42) + m * 0.36 + (1 - lift) * 0.2);
+    out[2] = Math.min(1, (up ? 0.3 : 0.24) + (1 - Math.min(1, y / 2.2)) * 0.4 + n * 0.15);
   });
   const m = LL(IDENT, 0, y0, 0, 0, 1, 1, 1);
   A.add(key, g, m, opts.paint ? { paint: opts.paint } : null);
