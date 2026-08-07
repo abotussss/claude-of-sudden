@@ -90,7 +90,7 @@ for (const id of FIRE) {
       return !!s && s.baked === true;
     },
     id,
-    { timeout: 120000 }
+    { timeout: 300000 }
   );
   await wait(120);
   await p.evaluate(() => { window.__ENGINE__.ctx.time.scale = 1; });

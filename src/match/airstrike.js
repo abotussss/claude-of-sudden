@@ -2795,6 +2795,7 @@ export class Airstrike {
      * read per cell of a few-hundred-cell rectangle, at boot.
      */
     const carved = g.indoor;
+    /** Carved cells (rooms, gate passages) whose old floor is still standable. */
     let skipped = 0;
     /** Cells the ruin hung something over rather than filled. @see `probeUnder`. */
     let under_ = 0;
@@ -2806,7 +2807,6 @@ export class Airstrike {
         oldFlags[k] = g.flags[i];
         oldFloor[k] = g.floor[i];
         oldEnc[k] = g.enclosure[i];
-        if (carved && carved[i] === 1) skipped++;
         k++;
       }
     }
@@ -2817,35 +2817,49 @@ export class Airstrike {
     for (let iz = iz0; iz <= iz1; iz++) {
       for (let ix = ix0; ix <= ix1; ix++) {
         const i = g.index(ix, iz);
-        if (carved && carved[i] === 1) {
-          // @see the note above: the carve's answer stands, so the "after" is
-          // the "before" and the diff below drops this cell from the patch.
-          newFlags[k] = oldFlags[k];
-          newFloor[k] = oldFloor[k];
-          newEnc[k] = oldEnc[k];
-          k++;
-          continue;
-        }
         const probe = probeCell(g, physics, ix, iz);
         newFlags[k] = probe.flag;
         newFloor[k] = probe.floor;
         newEnc[k] = probe.enclosure;
         /**
-         * …AND IF THAT LIFTED A WALKABLE CELL ONTO SOMETHING, LOOK UNDER IT.
-         * A demolition drops mass; where it drops a slab ACROSS a road rather
-         * than INTO it, the road is still a road. @see `probeUnder` for the
-         * measurement — one row of cells at each of the fortress's two gates
-         * turned its whole interior into an island. Only for cells that were
-         * walkable before and have risen by more than a step, so the ordinary
-         * "the block collapsed into a crossable mound" case is untouched.
+         * ──────────────────────────────────────────────────────────────────
+         * …AND THEN ASK AGAIN FROM UNDERNEATH, FOR THE TWO CELLS THAT NEED IT
+         * ──────────────────────────────────────────────────────────────────
+         * `probeCell` casts from `g.topY` and `NavGrid` is a 2.5D height field,
+         * so on a cell with anything over it a top-down ray finds the thing
+         * over it. That is right for a rubble MOUND — you walk over a mound —
+         * and wrong in two cases, which are one case:
+         *
+         *   A CELL THE INTERIOR CARVE OWNS (`grid.indoor`). `_carveInteriors`
+         *   exists because a top-down probe cannot describe a room or a gate
+         *   passage; it re-samples from under the roof and records what it
+         *   took. A demolition removes mass — it does not move a doorway.
+         *
+         *   A WALKABLE CELL THAT HAS RISEN BY MORE THAN A STEP. Where the ruin
+         *   drops a slab ACROSS a road rather than INTO it, the road is still
+         *   a road.
+         *
+         * BOTH ARE *VERIFIED*, NOT ASSUMED, and that distinction is the whole
+         * of this note. The first version of this fix simply kept the carve's
+         * old answer for carved cells — which is wrong on the town, where a
+         * district block collapses INTO its own rooms: the old floor would
+         * survive in the grid as a phantom storey inside a rubble mound. So
+         * both cases go through `probeUnder`, which asks the same standing
+         * ladder from just over the old floor and returns null when the ruin
+         * has filled it in. When it returns null the mound reading stands.
+         *
+         * @see `probeUnder` for the measurement that found this: one row of
+         * cells at each of NACHTFELD's two gates put the entire fortress
+         * interior — 6204 cells — into an island of its own.
          */
-        if (oldFlags[k] && probe.floor - oldFloor[k] > g.maxStep) {
+        const look = oldFlags[k] && ((carved && carved[i] === 1) || probe.floor - oldFloor[k] > g.maxStep);
+        if (look) {
           const under = probeUnder(g, physics, ix, iz, oldFloor[k]);
           if (under) {
             newFlags[k] = under.flag;
             newFloor[k] = under.floor;
             newEnc[k] = under.enclosure;
-            under_++;
+            if (carved && carved[i] === 1) skipped++; else under_++;
           }
         }
         k++;
@@ -2882,7 +2896,7 @@ export class Airstrike {
     if (skipped || under_) {
       console.info(
         `[airstrike] ${site.id} nav patch: ${changed} of ${count} cells change, ` +
-          `${skipped} left to the interior carve, ${under_} re-read from under an overhang ` +
+          `${skipped} carved cells kept their floor, ${under_} more re-read from under an overhang ` +
           '(@see `probeUnder`)'
       );
     }
