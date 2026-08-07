@@ -779,6 +779,7 @@ export class Drones {
     const a = this.rng.range(0, Math.PI * 2);
     d.position.set(from.x + Math.cos(a) * 4, from.y + 1.6, from.z + Math.sin(a) * 4);
     d.groundY = from.y;
+    this._clearOfDeadAir(d, a, from);
     d.vel.set(0, RULES.droneSpeed * 0.6, 0);
     d.scanT = this.rng.range(0, SCAN_EVERY);
     d.rotor = this.rng.range(0, Math.PI * 2);
@@ -828,6 +829,59 @@ export class Drones {
     this._emit('launch', d);
     this.onLaunch?.(d);
     return d;
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * IT DOES NOT LAUNCH INTO ITS OWN DEAD AIR — and this was a real hole
+   * ────────────────────────────────────────────────────────────────────────
+   * MEASURED, `_dwhy.mjs`, a full NACHTFELD match on seed 7 before this
+   * existed: of twenty launches SEVEN died in an EMP field, every one of them
+   * in `climb`, every one with `life` 44.8 of 45 — a fifth of a second off the
+   * pad — and every one launched from a point `bites()` already said was inside
+   * a field. NOT ONE died in `lock` or `dive`.
+   *
+   * That is the exact failure `empzone.js` argues against ("twenty drones a
+   * match wander into dead air on their way somewhere else and the field reads
+   * as a bug that eats the sky") arriving through a door nobody had looked at.
+   * A side launches from its base OR ANY ZONE IT HOLDS OUTRIGHT (@see
+   * `MatchSystem._droneLaunchPoint`); zones A and B are two of those five; and
+   * `EmpZones` derives its fields FROM THE PAD TABLE, so on exactly those two
+   * the launch pad and the dead air are the same ground, to the metre. A side
+   * that took zone A was destroying its own drones on the rail — 35 % of the
+   * budget, silently, and it punished the side that was winning.
+   *
+   * NEITHER "SKIP THE LAUNCH" NOR "LET IT CLIMB OUT" WOULD DO. Skipping loses
+   * the budget the schedule exists to spend. Exempting `climb` from `bites()`
+   * puts a hole in the one gate the whole feature rests on, and a drone taking
+   * off through a dome the player has just watched kill one is worse than
+   * either. SO IT WALKS TO THE EDGE: the airframe comes out on the rim, on the
+   * bearing it was already given, six metres clear. The pad is still where the
+   * launch belongs, the field is still absolute, and nothing outside this method
+   * knows the difference.
+   *
+   * `groundY` is re-asked at the new point rather than kept from the pad datum —
+   * the field's radius is the pad's OUTER blend and the swell has come back by
+   * then, which is the same reason `empzone.js` puts its posts on
+   * `world.groundHeight` instead of on the centre's height.
+   */
+  _clearOfDeadAir(d, bearing, from) {
+    if (!this.emp) return;
+    const z = this.emp.bites(d.position);
+    if (!z) return;
+    const dx = d.position.x - z.position.x;
+    const dz = d.position.z - z.position.z;
+    const l = Math.hypot(dx, dz);
+    // Dead centre has no bearing of its own, so it takes the launch bearing —
+    // which is already the randomised one, so two drones do not stack.
+    const ux = l > 1e-3 ? dx / l : Math.cos(bearing);
+    const uz = l > 1e-3 ? dz / l : Math.sin(bearing);
+    const R = z.r + 6;
+    const x = z.position.x + ux * R;
+    const zz = z.position.z + uz * R;
+    const g = this._groundAt(x, zz, (from?.y ?? z.position.y) + 40);
+    d.groundY = g;
+    d.position.set(x, g + 1.6, zz);
   }
 
   /* ====================================================================== */
