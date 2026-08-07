@@ -111,6 +111,36 @@ export class Assembler {
     this.skirts = true;
     /**
      * ────────────────────────────────────────────────────────────────────────
+     * PROPS STANDING ON A PLAYER-ONLY SURFACE HAVE TO BE PLAYER-ONLY TOO
+     * ────────────────────────────────────────────────────────────────────────
+     * While this is on, a SOLID prototype's proxy is registered on `LAYER.CLIP`
+     * instead of `LAYER.STATIC` — the same trade `clipBox()` documents, for the
+     * same reason and with the same cost.
+     *
+     * IT IS A CONSISTENCY RULE, NOT A CONVENIENCE. `clipBox()` exists because a
+     * deck the bot height field can see becomes the FLOOR of every cell under
+     * it; a deck put on CLIP is invisible to `MASK.WORLD` and the ground below
+     * stays ground. But `put()` was never part of that decision, so a crate,
+     * a drum or a dish set down on such a deck kept a STATIC proxy and became
+     * exactly the overhead solid the deck was moved to CLIP to avoid — with
+     * NOTHING UNDER IT IN THAT MASK, because the thing holding it up is in the
+     * other one.
+     *
+     * Measured on NACHTFELD's control tower: four props on a `clip: true` cab
+     * roof, all four hit by a `MASK.WORLD` ray dropped from the sky at y 35.2-
+     * 35.9 with the next solid down at 29.0, and two of them reported by
+     * `_floatcheck --region=all --down=none` as masses standing on nothing.
+     * They were only NOT the floor of the tower's own nav cells because all
+     * four happen to fall inside the control room's `interiorVolume`, whose
+     * re-probe replaces the cell — i.e. it was luck, over a 8.6 m cab roof and
+     * a 6.5 m volume.
+     *
+     * Lexical, like `skirts`: turn it on round the placements on the deck and
+     * off again. Nothing reads it but `_collideProto`.
+     */
+    this.clipProps = false;
+    /**
+     * ────────────────────────────────────────────────────────────────────────
      * SCOPES — a named span of everything written between two calls
      * ────────────────────────────────────────────────────────────────────────
      * @see `src/world/demolition.js`, the only caller. A building that carries
@@ -571,7 +601,7 @@ export class Assembler {
       // actually in the BVH.
       const e = _cm.elements;
       Assembler.TAG.push({
-        k: 'prop', id: p.id, surface: c.surface,
+        k: this.clipProps ? 'prop-clip' : 'prop', id: p.id, surface: c.surface,
         sx: Math.hypot(e[0], e[1], e[2]),
         sy: Math.hypot(e[4], e[5], e[6]),
         sz: Math.hypot(e[8], e[9], e[10]),
@@ -581,7 +611,8 @@ export class Assembler {
         at: new Error().stack,
       });
     }
-    this._accum(c.surface).add(UNIT_BOX, _cm);
+    // @see `clipProps` — the deck a prop stands on decides which mask it is in.
+    (this.clipProps ? this._clipAccum(c.surface) : this._accum(c.surface)).add(UNIT_BOX, _cm);
   }
 
   /**

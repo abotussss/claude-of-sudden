@@ -837,10 +837,40 @@ function buildCab(A, rng, y, lights) {
     handrail(A, 'metal_rust', e.mx - e.tx * e.len * 0.45, e.mz - e.tz * e.len * 0.45,
       e.mx + e.tx * e.len * 0.45, e.mz + e.tz * e.len * 0.45, y(CAB_TOP), { h: 1.05 });
   }
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE ARRAY ON THE ROOF IS PLAYER-ONLY, BECAUSE THE ROOF IS
+   * ────────────────────────────────────────────────────────────────────────
+   * Every piece of this cab — the floor prism, the roof prism, the glazing, the
+   * consoles and the mast — is authored `clip: true` / `clipBox`, i.e. on
+   * `LAYER.CLIP`, which `MASK.WORLD` does not contain. These four are `put()`,
+   * and a SOLID prototype's proxy went on `LAYER.STATIC`: four solid masses at
+   * 34-36 m standing on a surface the world mask cannot see.
+   *
+   * MEASURED, not inferred. A `MASK.WORLD` ray dropped from y 70 hit
+   * sat_dish 35.86, sat_dish 35.62, roof_vent 35.22 and water_tank 35.40, with
+   * the next solid down at 29.01 — the top of the shaft. `_floatcheck
+   * --region=all --down=none` reported the two biggest of them as masses
+   * standing on nothing, which is what they were.
+   *
+   * It was not only a gate failing. `NavGrid.build` drops ONE ray per cell under
+   * that same mask and keeps the FIRST hit, so each of these was on course to
+   * become the FLOOR of the cells beneath it — the tower's own centre, at 35 m.
+   * The only reason it was not is that all four happen to fall inside the
+   * control room's 6.5 m `interiorVolume`, whose re-probe replaces the cell;
+   * the cab roof is 8.6 m across, so a fifth one set down a metre further out
+   * would have been a walkable island in the sky and nothing would have said so.
+   *
+   * `clipProps` puts their proxies where the roof's is. They still stop the
+   * player and the bots and they are still drawn; bullets and sightlines pass
+   * through them, exactly as they already do through the roof they stand on.
+   */
+  A.clipProps = true;
   A.put('sat_dish', TOWER.x + 4.4, y(CAB_TOP) + 0.5, TOWER.z - 2.2, 2.1, 1.7);
   A.put('sat_dish', TOWER.x - 3.6, y(CAB_TOP) + 0.5, TOWER.z + 3.0, -0.6, 1.35);
   A.put('roof_vent', TOWER.x - 4.4, y(CAB_TOP) + 0.1, TOWER.z - 3.4, 0.4, 1.2);
   A.put('water_tank', TOWER.x + 2.0, y(CAB_TOP) + 0.1, TOWER.z + 4.2, 1.1, 1.0);
+  A.clipProps = false;
 
   // the lattice mast: four legs, bracing every 1.6 m, guys down to the cab roof
   const legs = [[-0.62, -0.62], [0.62, -0.62], [0.62, 0.62], [-0.62, 0.62]];
