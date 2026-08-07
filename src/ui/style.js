@@ -1224,6 +1224,124 @@ const CSS = `
   letter-spacing:.2em; color: var(--ink-3);
 }
 
+/* ============================================================ map select */
+/* The picker. Same design system as the pause menu — amber rule, condensed
+   uppercase, --k scaling — but CENTRED rather than left-anchored, because it is
+   two objects being compared rather than a list of settings being adjusted.
+   No --friend/--enemy anywhere in here: those two mean "relative to
+   RULES.playerTeam" on this HUD and a map card has no team. */
+.ow-mapsel {
+  position:absolute; inset:0; pointer-events:auto;
+  background: radial-gradient(120% 100% at 50% 40%, rgba(4,6,8,.86), rgba(2,3,4,.96));
+  backdrop-filter: blur(calc(11px * var(--k))) saturate(.65) brightness(.75);
+  opacity:0; will-change: opacity;
+  display:flex; align-items:center; justify-content:center;
+}
+.ow-mapsel-inner { position:relative; width: calc(760px * var(--k)); max-width: 92vw; }
+.ow-mapsel-head { display:flex; align-items:baseline; gap: calc(var(--u) * 3); }
+.ow-mapsel h1 {
+  font-family: var(--fd); font-size: calc(34px * var(--k)); font-weight:700;
+  letter-spacing:.3em; color: var(--ink); text-shadow: 0 2px 6px rgba(0,0,0,.8);
+}
+.ow-mapsel .sub { font-size: calc(10px * var(--k)); letter-spacing:.28em; color: var(--ink-3); }
+.ow-mapsel .rule {
+  margin: calc(var(--u) * 3) 0 calc(var(--u) * 4); height:1px;
+  background: linear-gradient(to right, var(--amber), rgba(255,176,42,0) 70%);
+}
+.ow-mapsel-grid { display:flex; gap: calc(var(--u) * 4); align-items:stretch; }
+
+.ow-mapcard {
+  appearance:none; flex:1 1 0; min-width:0; text-align:left; cursor:pointer;
+  font-family: var(--ff); color: var(--ink);
+  background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.015));
+  border:1px solid var(--hair); border-top-width: calc(2px * var(--k));
+  border-top-color: rgba(255,255,255,.18);
+  padding: calc(var(--u) * 4);
+  transition: background .12s, border-color .12s, transform .12s;
+}
+.ow-mapcard:hover { background: rgba(255,255,255,.09); border-color: rgba(255,255,255,.42); }
+.ow-mapcard.on { border-top-color: var(--amber); background: rgba(255,176,42,.07); }
+.ow-mapcard .art {
+  display:block; width:100%; aspect-ratio:1 / 1; margin-bottom: calc(var(--u) * 3);
+}
+.ow-mapart { display:block; width:100%; height:100%; }
+.ow-mapart .frame { fill: rgba(255,255,255,.02); stroke: var(--hair-2); stroke-width:.8; }
+.ow-mapart .street { stroke: rgba(255,255,255,.10); stroke-width:1.1; }
+.ow-mapart .ring { fill:none; stroke: rgba(255,255,255,.16); stroke-width:1.4; }
+.ow-mapart .ring.in { stroke: rgba(255,255,255,.07); stroke-width:.9; }
+.ow-mapart .block { fill: rgba(255,255,255,.13); stroke: rgba(255,255,255,.20); stroke-width:.6; }
+.ow-mapart .landmark { fill: rgba(255,255,255,.30); stroke:none; }
+.ow-mapart .base { fill:none; stroke: var(--ink-2); stroke-width:1.2; }
+.ow-mapart .zone { fill: rgba(255,176,42,.22); stroke: var(--amber); stroke-width:1.2; }
+.ow-mapart .fire { fill: rgba(255,110,40,.55); stroke:none; }
+
+.ow-mapcard .top { display:flex; align-items:baseline; gap: calc(var(--u) * 2); }
+.ow-mapcard .name {
+  font-family: var(--fd); font-size: calc(24px * var(--k)); letter-spacing:.16em;
+  color: var(--ink);
+}
+.ow-mapcard .live {
+  font-size: calc(8.5px * var(--k)); letter-spacing:.24em; color:#100b02;
+  background: var(--amber); padding: calc(1.5px * var(--k)) calc(5px * var(--k));
+}
+.ow-mapcard .sub {
+  margin-top: calc(var(--u) * .8); font-size: calc(9.5px * var(--k));
+  letter-spacing:.26em; color: var(--ink-3);
+}
+.ow-mapcard .facts {
+  display:flex; gap: calc(var(--u) * 5); margin-top: calc(var(--u) * 3);
+  padding-top: calc(var(--u) * 2.5); border-top:1px solid var(--hair-2);
+}
+.ow-mapcard .facts .k {
+  font-size: calc(8.5px * var(--k)); letter-spacing:.22em; color: var(--ink-3);
+}
+.ow-mapcard .facts .v {
+  font-family: var(--fm); font-size: calc(13px * var(--k)); letter-spacing:.02em;
+  color: var(--amber); margin-top: calc(var(--u) * .5);
+}
+.ow-mapcard .note {
+  margin-top: calc(var(--u) * 2.5); font-size: calc(9px * var(--k));
+  letter-spacing:.14em; line-height:1.5; color: var(--ink-2);
+}
+
+.ow-mapsel-foot {
+  margin-top: calc(var(--u) * 4); font-size: calc(9px * var(--k));
+  letter-spacing:.2em; color: var(--ink-3);
+}
+.ow-mapsel .ow-btns { margin-top: calc(var(--u) * 3.5); }
+.ow-mapsel .hint {
+  margin-top: calc(var(--u) * 3); font-size: calc(9.5px * var(--k));
+  letter-spacing:.2em; color: var(--ink-3);
+}
+
+/* The reload curtain. Covers the panel so the click cannot be repeated and so
+   the navigation reads as a transition rather than a crash. */
+.ow-mapsel-deploy {
+  position:absolute; inset: calc(var(--u) * -4); z-index:2;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap: calc(var(--u) * 2);
+  background: rgba(3,5,7,.93);
+  border-left: calc(2px * var(--k)) solid var(--amber);
+}
+.ow-mapsel-deploy .n {
+  font-family: var(--fd); font-size: calc(44px * var(--k)); letter-spacing:.3em;
+  color: var(--ink); text-shadow: 0 2px 8px rgba(0,0,0,.9);
+}
+.ow-mapsel-deploy .s {
+  font-size: calc(10px * var(--k)); letter-spacing:.32em; color: var(--amber);
+}
+
+/* The discoverability line, shown under the HUD until the first pointer lock.
+   Never built in capture mode — see MapSelect's constructor. */
+.ow-maphint {
+  position:absolute; left:50%; bottom: calc(var(--pad) * 1.4);
+  transform: translateX(-50%); white-space:nowrap;
+  font-size: calc(9.5px * var(--k)); letter-spacing:.26em;
+  color: var(--ink-2); text-shadow: var(--sh-o1);
+  border-top:1px solid var(--hair-2); border-bottom:1px solid var(--hair-2);
+  padding: calc(var(--u) * 1) calc(var(--u) * 3);
+}
+
 /* ========================================================== round / mode */
 /* Everything below belongs to the demolition mode: the alive-count strip, the
    C4 fuse panel, the scoreboard and the spectator line. Same design system as

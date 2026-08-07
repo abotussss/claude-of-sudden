@@ -145,6 +145,105 @@ export const DEFAULTS = {
   deterministic: false,
 };
 
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE MAP CATALOGUE — what the picker in `src/ui/mapselect.js` reads
+ * ════════════════════════════════════════════════════════════════════════════
+ * 「マップを選べるようにしてくれ」. Until this table the only way to pick a map was
+ * to type `?map=plains` into the address bar, which is a developer's switch.
+ *
+ * WHY IT LIVES IN `core/config.js` AND NOT IN THE LEVEL OR IN `match/rules.js`.
+ * A picker has to describe the map you are NOT running. `src/world/levels` and
+ * `src/match/rules.js` only ever know about the one that booted — `world.level`
+ * is the built level and `applyMapRules` has already folded exactly one entry
+ * into `RULES`. Reaching for the others would mean `src/ui` importing every
+ * level module (and with them the 3 200-line authored layout tables) just to
+ * print two numbers, on a page where the whole point is that the OTHER map has
+ * not been built. So this is a small, static, display-only catalogue that sits
+ * in the layer both sides already import.
+ *
+ * IT IS THEREFORE A TRANSCRIPTION, AND THE TRUTH IS ELSEWHERE:
+ *   `scoreTarget` / `matchTime`   `RULES` in src/match/rules.js for the town,
+ *                                 `MAP_RULES.plains` for the plain
+ *   `light`                       the level's `hour` (src/world/levels/*.js)
+ *   `art.zones` / `art.bases`     the `level` positions in src/match/sites.js
+ *                                 and `PADS` in src/world/levels/plains.js,
+ *                                 normalised to -1..1 across the play box
+ * Nothing here is read by the simulation — changing a number in this table
+ * changes the card and not the match. If the two ever disagree the card is
+ * wrong, which is a caption bug and not a gameplay one.
+ *
+ * `art` is drawn as an SVG schematic at runtime: no images, no screenshots,
+ * nothing to keep in a folder. `blocks`/`landmark` are [cx, cz, w, h] and
+ * `fires` are bearings in radians, all in the same normalised space.
+ */
+export const MAPS = [
+  {
+    id: 'town',
+    name: 'AL-MARIYA',
+    sub: 'MARKET TOWN',
+    scoreTarget: 500,
+    matchTime: 600,
+    light: 'AFTERNOON',
+    note: 'CLOSE STREETS · FIVE ZONES · THE CATHEDRAL COMES DOWN',
+    art: {
+      ring: false,
+      blocks: [
+        [-0.86, 0.34, 0.2, 0.62],
+        [-0.62, 0.34, 0.2, 0.62],
+        [0.86, -0.34, 0.2, 0.62],
+        [0.62, -0.34, 0.2, 0.62],
+        [-0.32, 0.64, 0.36, 0.24],
+        [0.32, -0.64, 0.36, 0.24],
+        [-0.36, -0.46, 0.26, 0.3],
+        [0.36, 0.46, 0.26, 0.3],
+      ],
+      landmark: [0, -0.02, 0.22, 0.24],
+      zones: [
+        [-0.81, 0.75],
+        [-0.48, -0.02],
+        [0.48, -0.02],
+        [0.81, -0.79],
+        [0, -0.02],
+      ],
+      bases: [],
+      fires: [],
+    },
+  },
+  {
+    id: 'plains',
+    name: 'NACHTFELD',
+    sub: 'NIGHT PLAIN',
+    scoreTarget: 1000,
+    matchTime: 1200,
+    light: 'NIGHT',
+    note: 'OPEN GROUND · ZONES 154-314 M APART · TOWER, FORTRESS, SATELLITE',
+    art: {
+      ring: true,
+      blocks: [],
+      landmark: [0, -0.16, 0.1, 0.16],
+      zones: [
+        [-0.59, -0.52],
+        [-0.64, 0.43],
+        [0.64, -0.43],
+        [0.59, 0.52],
+        [0, 0],
+      ],
+      bases: [
+        [-0.07, -0.75],
+        [0.07, 0.75],
+      ],
+      fires: [-2.42, -1.15, 0.24, 1.36, 2.62],
+    },
+  },
+];
+
+/** The catalogue entry for a map id, or undefined. */
+export function getMapInfo(id) {
+  for (const m of MAPS) if (m.id === id) return m;
+  return undefined;
+}
+
 export function createConfig(overrides = {}) {
   const cfg = { ...DEFAULTS, ...overrides };
   cfg.q = { ...QUALITY_PRESETS[cfg.quality] };

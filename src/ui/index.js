@@ -15,6 +15,7 @@ import { AirAlert } from './airalert.js';
 import { DroneLock } from './dronelock.js';
 import { KillCam } from './killcam.js';
 import { PauseMenu } from './menu.js';
+import { MapSelect } from './mapselect.js';
 import { ScopeOverlay } from './scope.js';
 import { RoundStrip, ZoneStrip, BombPanel, Scoreboard, SpectateBar } from './round.js';
 import { CapturePanel } from './capture.js';
@@ -193,6 +194,23 @@ export class UiSystem {
     this.spectateBar = new SpectateBar(this.chromeLayer);
     this.scoreboard = new Scoreboard(this.root);
     this.menu = new PauseMenu(this.root, ctx);
+    /**
+     * WHICH MAP. Stacks above the pause menu (added after it) because it opens
+     * OVER the menu and the menu keeps owning the freeze while it is up.
+     * @see src/ui/mapselect.js for why choosing a map reloads the page.
+     */
+    this.mapSelect = new MapSelect(this.root, ctx, this.chromeLayer);
+    this.menu.onOpenMap = () => this.mapSelect.show(this.menu.open);
+    /**
+     * THE OTHER HALF OF THE RELOAD. The picker leaves the chosen map's name in
+     * sessionStorage and navigates; this is the boot on the other side saying
+     * the name back, so the black boot screen is bracketed by "leaving for
+     * NACHTFELD" and "NACHTFELD" instead of ending in an unexplained restart.
+     * Consumed either way so it cannot leak into a later boot; only DRAWN
+     * outside capture mode, where a banner would change every reference frame.
+     */
+    const arrived = MapSelect.takeHandoff();
+    if (arrived && !ctx.config?.deterministic) this.banner.show(arrived, 'DEPLOYED', 2.8);
 
     this.health.onBeat = (i) => this.sfx('heartbeat', 0.35 + i * 0.5);
 
@@ -669,15 +687,30 @@ export class UiSystem {
 
     // ---- pause -----------------------------------------------------------
     if (ctx.input.enabled && !ctx.input.frozen) {
-      if (ctx.input.actionPressed('pause')) this.menu.toggle();
+      // Escape backs OUT of the map picker rather than toggling the menu
+      // behind it, so ESC always means "one screen back".
+      if (ctx.input.actionPressed('pause')) {
+        if (this.mapSelect.open) this.mapSelect.close();
+        else this.menu.toggle();
+      }
+      /**
+       * M — THE MAP PICKER, and it deliberately answers before the first click.
+       * `keydown` is bound on the window, so this fires on a page that has just
+       * loaded and never taken pointer lock: a player can choose a map without
+       * having entered a match at all. `KeyM` is bound to no action.
+       */
+      if (ctx.input.pressed('KeyM') && !this.mapSelect.open) this.mapSelect.show(this.menu.open);
       // Losing pointer lock mid-match is the same intent as pressing Escape.
+      // ...unless the picker took the lock itself, in which case the pause menu
+      // must NOT pop up behind it.
       if (ctx.input.pointerLocked) this._hadPointerLock = true;
-      else if (this._hadPointerLock && !this.menu.open) {
+      else if (this._hadPointerLock && !this.menu.open && !this.mapSelect.open) {
         this._hadPointerLock = false;
         this.menu.show();
       }
     }
     this.menu.update(rawDt);
+    this.mapSelect.update(rawDt);
 
     // ---- external state --------------------------------------------------
     // `simulate` means a scripted debug timeline owns the HUD numbers; letting
@@ -760,7 +793,7 @@ export class UiSystem {
     const heading = (Math.atan2(fx, -fz) * 180) / Math.PI;
 
     // ---- widgets ---------------------------------------------------------
-    const hudGoal = this.hudTarget * (this.menu.open ? 0.15 : 1);
+    const hudGoal = this.hudTarget * (this.menu.open || this.mapSelect.open ? 0.15 : 1);
     this.hudVisible = damp(this.hudVisible, hudGoal, 10, rawDt);
     setStyle(this.chromeLayer, 'opacity', this.hudVisible.toFixed(3));
     setStyle(this.worldLayer, 'opacity', this.hudVisible.toFixed(3));
@@ -1004,6 +1037,7 @@ export class UiSystem {
     this.spectateBar.dispose();
     this.scoreboard.dispose();
     this.menu.dispose();
+    this.mapSelect.dispose();
     this.root.remove();
     removeStyles();
   }

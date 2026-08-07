@@ -1,4 +1,5 @@
 import { el, setText, setStyle, clamp, damp, ease } from './util.js';
+import { getMapInfo } from '../core/config.js';
 
 const PRESETS = ['low', 'medium', 'high', 'ultra'];
 
@@ -25,6 +26,25 @@ export class PauseMenu {
     el('div', 'rule', inner);
 
     this.rows = el('div', null, inner);
+
+    /**
+     * ---- MAP --------------------------------------------------------------
+     *
+     * 「マップを選べるようにしてくれ」. This row does two jobs and the first one is
+     * the one that was missing: it SAYS WHICH MAP YOU ARE ON. There was no
+     * surface anywhere in the game that named the level — a picker that does
+     * not tell you where you are is half a picker, and so is a pause menu.
+     *
+     * Clicking opens the full picker (`src/ui/mapselect.js`), which owns the
+     * comparison and the reload. `ui` supplies `onOpenMap`; this row is inert
+     * without it rather than reaching across for the screen itself.
+     */
+    this.onOpenMap = null;
+    const mapRow = this._row('Map');
+    const mapSeg = el('div', 'ow-seg', mapRow);
+    this.mapBtn = el('button', null, mapSeg, '');
+    this.mapBtn.type = 'button';
+    this.mapBtn.addEventListener('click', () => this.onOpenMap?.());
 
     // ---- quality preset --------------------------------------------------
     this.qBtns = [];
@@ -104,7 +124,7 @@ export class PauseMenu {
       this.ctx.config.invertY = false;
       this.setQuality('ultra');
     });
-    el('div', 'hint', inner, 'ESC RESUME · WASD MOVE · SHIFT SPRINT · R RELOAD · F USE');
+    el('div', 'hint', inner, 'ESC RESUME · M MAP · WASD MOVE · SHIFT SPRINT · R RELOAD · F USE');
 
     this.open = false;
     this.shown = 0;
@@ -241,6 +261,11 @@ export class PauseMenu {
   syncFromConfig() {
     const cfg = this.ctx.config;
     this._buildWeaponRow();
+    // The BUILT level is the truth, not `config.map`: `getLevel` falls back to
+    // the default on an unknown `?map=` rather than throwing, so the two can
+    // legitimately disagree and the menu must name what is actually running.
+    const mapId = this.ctx.peek('world')?.level?.id ?? cfg.map;
+    if (this.mapBtn) setText(this.mapBtn, `${getMapInfo(mapId)?.name ?? mapId} ›`);
     // Highlight the chosen PRIMARY, not whatever is in hand — the pistol being
     // out must not leave every button unlit. @see WeaponSystem.setPrimary
     const active = this.ctx.peek('weapons')?.primaryId;
