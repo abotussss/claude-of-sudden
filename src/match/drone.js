@@ -333,6 +333,14 @@ class Drone {
     this.groundY = 0;
     /** True while this drone owns the player's lock warning. */
     this.warning = false;
+    /**
+     * `ai`'s own opt-out, declared here rather than added on the fly so the
+     * shape of a `Drone` is fixed at construction. `Infinity` while it is
+     * falling. @see `_empKill`.
+     */
+    this.aiProtectedUntil = 0;
+    /** The one emissive mesh on the airframe. Assigned in `build`. */
+    this.strobe = null;
   }
 }
 
@@ -780,6 +788,8 @@ export class Drones {
     d.spinX = 0;
     d.spinZ = 0;
     d.fallT = 0;
+    // It is a target again. @see `_empKill`, which sets this to `Infinity`.
+    d.aiProtectedUntil = 0;
     d.group.rotation.set(0, 0, 0);
     d.group.visible = true;
     d.group.position.copy(d.position);
@@ -1053,6 +1063,22 @@ export class Drones {
     if (d.warning) this._reportLock(null);
     if (d.collider && this.physics?.removeCollider) this.physics.removeCollider(d.collider);
     d.collider = null;
+    /**
+     * AND IT STOPS BEING A TARGET, which the first cut of this got wrong.
+     *
+     * `ai` puts every `alive` drone in `_hostiles` (`ai/index.js`, "…AND THE
+     * DRONES, on exactly the same terms again"), and a husk stays `alive` for
+     * the second or two it takes to reach the ground. With the proxy gone it
+     * cannot be hit — so a bot that picks one is a bot standing in the open
+     * emptying a magazine at something that will never die, until it lands.
+     * Measured before this line: `ai.targetable(d)` was `true` all the way down.
+     *
+     * `aiProtectedUntil` is `ai`'s OWN published opt-out — the field
+     * `AiSystem.protect()` writes and `AiSystem.targetable()` reads — so this is
+     * one property on an object this file owns and not an import, a hook or a
+     * second copy of a rule. Cleared in `_launch`, because the pool is reused.
+     */
+    d.aiProtectedUntil = Infinity;
     d.strobe.material = this._deadStrobe;
     d.halo.material = this._deadHalo;
     d.aim.visible = false;

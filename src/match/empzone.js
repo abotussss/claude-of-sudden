@@ -64,6 +64,16 @@ import * as THREE from 'three';
  *             is never a flat wash of colour at any distance the player can put
  *             his face at. There is no texture and no asset anywhere in here.
  *
+ * AND THE OTHER HALF OF "SEEING IT COSTS YOU NOTHING": IT HAS TO GET OUT OF THE
+ * WAY. The first cut of this file passed the far read and failed the near one —
+ * photographed at 4 m outside the rim, the dome was a green wall across two
+ * thirds of the screen and the man on the ridge behind it was gone. A hazard
+ * you can see from 200 m is worth nothing if walking up to it blinds you. @see
+ * the `prox` block in `FIELD_FS`: inside about two and a half radii the RIM is
+ * spent down to an eighth and what is left is the lattice, which is a membrane
+ * rather than a pane. The ground band keeps its full weight throughout, because
+ * that is the read a man standing in one actually needs.
+ *
  * ──────────────────────────────────────────────────────────────────────────
  * 3. THE COLOUR IS NOBODY'S, DELIBERATELY
  * ──────────────────────────────────────────────────────────────────────────
@@ -90,11 +100,14 @@ import * as THREE from 'three';
  * `src/match/geography.js` exists to state.
  *
  * ZONES A AND B, WHICH IS TWO OF FIVE AND ONE PER SIDE. A is the north side's
- * shoulder and B is the south's, they are 154 m apart on opposite corners, and
- * between them they take about 7 % of the play area. The middle of the map — D
- * with its tower and its fortress, C, E, both bases and every metre between
- * them — is drone country, which it has to be or twenty launches a match have
- * nowhere to go.
+ * shoulder (-118, -104) and B is the south's (118, 104): they are the FURTHEST
+ * PAIR ON THE MAP, 314.6 m apart on opposite corners, which is the placement
+ * that matters. Two fields next to each other would be one 70 m no-fly area on
+ * one flank; at opposite corners each side has exactly one piece of drone-proof
+ * ground and it is the piece furthest from the other man's. Between them they
+ * take about 7 % of the play area. The middle — D with its tower and its
+ * fortress, C, E, both bases and every metre between them — is drone country,
+ * which it has to be or twenty launches a match have nowhere to go.
  *
  * THE TOWN GETS NONE, and that is a decision rather than an omission. The town
  * is the map the player actually plays; its counter-play to a drone is already
@@ -168,6 +181,7 @@ const FIELD_FS = /* glsl */ `
   uniform vec3 uColor;
   uniform vec3 uCentre;
   uniform float uGround;
+  uniform float uR;
 
   float hash(vec3 p) {
     return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
@@ -210,27 +224,65 @@ const FIELD_FS = /* glsl */ `
     float h = vW.y - uCentre.y;
     float sweep = 0.5 + 0.5 * sin(h * 1.15 - uT * 2.2);
 
+    // ══════════════════════════════════════════════════════════════════════
+    // HOW CLOSE THE MAN IS TO THE FIELD, IN RADII — and it is the term that
+    // makes this survivable to stand near.
+    // ══════════════════════════════════════════════════════════════════════
+    // PHOTOGRAPHED -- shots/emp-A-boundary.png, before this line: standing 4 m
+    // outside the rim, the dome was a GREEN WALL across two thirds of the
+    // screen -- the ridge fires, the skyline and any man on it washed out
+    // behind it. The header claimed this had been budgeted for and it had not.
+    //
+    // WHY IT HAPPENS, AND WHY THE EXISTING GUARDS DO NOT CATCH IT. uNear
+    // fades the surface within 4 m OF THE CAMERA, which handles the metre of
+    // shell you have your face in. It cannot touch the problem, which is the
+    // FAR wall: from the rim the opposite side of the dome is 70 m away, edge
+    // on, so fres is near 1 over an enormous slice of screen. A shell whose
+    // alpha peaks at grazing incidence fills the view of anyone standing in
+    // its own plane. That is inherent, and no per-fragment distance ramp
+    // reaches it -- the fragments are far away, they are just everywhere.
+    //
+    // SO IT IS ANSWERED WITH THE ONE QUANTITY THAT ACTUALLY DESCRIBES THE
+    // SITUATION: where the CAMERA is relative to the whole field. Outside two
+    // and a half radii the dome subtends little enough screen that a bright rim
+    // costs nothing and is the entire long-range read; at the rim and within,
+    // the same rim is a wall. prox is 0 at the boundary and inward, 1 past
+    // 2.6 r, and uR is the only new uniform in the file.
+    float camR = length(cameraPosition.xz - uCentre.xz);
+    float prox = smoothstep(uR, uR * 2.6, camR);
+
     // THE WEIGHTS ARE A READABILITY BUDGET, NOT A LOOK. A man standing INSIDE
-    // one of these has to be able to fight in it, and the first pass put the
-    // crown of the dome across the whole upper half of his screen at an alpha
-    // that hid the skyline -- the same mistake the plains level records the far
-    // mountains making, where the auto-exposure metered on them and the ground
-    // went black. So the lattice LINES carry the read and the gaps between them
-    // are all but clear: 0.014 of base against 0.40 of rim.
+    // one of these has to be able to fight in it -- the same mistake the plains
+    // level records the far mountains making, where the auto-exposure metered on
+    // them and the ground went black. So the lattice LINES carry the read and
+    // the gaps between them are all but clear: 0.014 of base against 0.40 of
+    // rim, and the RIM IS THE PART THAT IS SPENT AT RANGE. Up close it drops to
+    // an eighth and the lattice is what is left, which is a membrane you can see
+    // a man through rather than a pane of glass you cannot.
+    float rim = mix(0.12, 1.0, prox);
     float a = 0.014
             + lat * 0.115
             + fine * 0.05 * (0.4 + 0.6 * grain)
-            + fres * 0.40
+            + fres * 0.40 * rim
             + sweep * 0.045 * (0.5 + 0.5 * grain);
     // The ground band is a mark on the floor rather than a shell in the air, so
-    // it carries none of the fresnel and all of the lattice.
+    // it carries none of the fresnel and all of the lattice -- AND NONE OF THE
+    // PROXIMITY FADE EITHER. It is the thing that tells a man standing in one
+    // where the edge is, which is precisely the read he needs at the range the
+    // shell has to get out of his way at.
     a = mix(a, 0.13 + lat * 0.20 + fine * 0.09 + sweep * 0.09, uGround);
 
     float uFar = mix(1.0, 0.34, smoothstep(90.0, 300.0, d));
     float uNear = smoothstep(0.5, 4.0, d);
-    a *= uFar * mix(uNear, 1.0, uGround);
+    a *= uFar * mix(uNear * mix(0.5, 1.0, prox), 1.0, uGround);
 
-    vec3 col = uColor * (0.45 + 0.75 * (lat + fine * 0.5) + fres * 0.9);
+    // AND THE BAND IS EXCUSED THE FRESNEL IN THE COLOUR TOO, which was the other
+    // half of the same oversight: the alpha above already excludes it, but the
+    // brightness did not, and a flat ring seen from 4 m is edge-on everywhere it
+    // is not underfoot -- so fres ~ 1 across the whole thing and it came out at
+    // 2.1x the base colour, a white glare lying across the lower screen. It is a
+    // mark on the floor. A mark on the floor is not a rim.
+    vec3 col = uColor * (0.45 + 0.75 * (lat + fine * 0.5) + fres * 0.9 * (1.0 - uGround));
     // The discharge: the whole surface goes to white and then falls away.
     col = mix(col, vec3(1.6, 1.9, 1.75), uFlash * 0.85);
     a = clamp(a + uFlash * 0.55, 0.0, 0.95);
@@ -301,6 +353,8 @@ export class EmpZones {
             uColor: { value: new THREE.Color(EMP_HEX) },
             uCentre: { value: z.position.clone() },
             uGround: { value: ground },
+            /** The field's own radius, so `prox` is in radii. Never written again. */
+            uR: { value: r },
           },
           vertexShader: FIELD_VS,
           fragmentShader: FIELD_FS,
