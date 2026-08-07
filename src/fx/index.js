@@ -10,6 +10,7 @@ import { Ambience } from './ambience.js';
 import { spawnImpact } from './impacts.js';
 import { muzzleFlash } from './muzzle.js';
 import { spawnTracer } from './tracers.js';
+import { farTracer, farFlash, farImpact, farShell } from './warfx.js';
 import { explode } from './explosions.js';
 import { V, cone } from './util.js';
 
@@ -492,6 +493,42 @@ export class FxSystem {
     if (!from || !to) return;
     this.now = this.ctx.time.elapsed;
     spawnTracer(this, from, to, speed);
+  }
+
+  /* ------------------------------------------------- the war over there -- */
+  /**
+   * AMBIENT ORDNANCE AT 60-400 m. @see `src/fx/warfx.js` for what each one is
+   * and, more to the point, for what each one DELIBERATELY DOES NOT TOUCH — no
+   * `LightPool` slot, no `Ambience` smoke emitter, no decal. `src/match/warfield.js`
+   * decides where and when; none of these four carries damage, an event or a
+   * physics query, so calling one can change nothing but pixels.
+   *
+   * Coordinates are loose numbers rather than vectors on purpose: the caller
+   * spawns these dozens of times a second off values it already has in
+   * registers, and a `Vector3` per round is exactly the per-frame allocation
+   * the engine contract forbids.
+   */
+  farTracer(x0, y0, z0, x1, y1, z1, warm) {
+    this.now = this.ctx.time.elapsed;
+    farTracer(this, x0, y0, z0, x1, y1, z1, warm);
+  }
+
+  /** A muzzle flash seen from a long way off — two sprites, no light. */
+  farFlash(x, y, z, scale) {
+    this.now = this.ctx.time.elapsed;
+    farFlash(this, x, y, z, scale);
+  }
+
+  /** Rounds arriving on somebody else's position — sparks and a dust puff. */
+  farImpact(x, y, z, scale) {
+    this.now = this.ctx.time.elapsed;
+    farImpact(this, x, y, z, scale);
+  }
+
+  /** A shell landing somewhere else: flash, fireball and a column that stays. */
+  farShell(x, y, z, scale) {
+    this.now = this.ctx.time.elapsed;
+    farShell(this, x, y, z, scale);
   }
 
   /** Full explosion: fireball, shockwave, debris, smoke column, light, scorch. */
