@@ -106,8 +106,42 @@ const CELLS = 27;
  * and not its members. 432 quads with no lighting, no depth write and an early
  * `discard` is a rounding error next to the 1587 chunks the two demolitions
  * already carry.
+ *
+ * 16 -> 22, for the second half of the same argument. @see `_buildFlames` —
+ * every tongue is now a FRACTION of a flame rather than a whole one, so what
+ * makes the body of the fire is how many of them are on top of each other.
  */
-const TONGUES = 16;
+const TONGUES = 26;
+/**
+ * THE BED, and it is what 「火の海」 actually means.
+ *
+ * Photographed at 20, 80 and 200 m (`shots/scar/SCAR-before-*.png`) the scar
+ * was a row of separate vertical needles standing on unlit grass: at 20 m you
+ * could count them, at 80 m they were a dotted line and at 200 m they were a
+ * dozen white specks. Tongues alone cannot fix that at ANY brightness, because
+ * the thing that is missing is not intensity — it is CONTINUITY. Ground that is
+ * on fire is a burning floor with licks coming off it, and the floor is the
+ * part that survives distance, joins one cell to the next and lights the turf.
+ *
+ * So each cell also gets `BED` quads that are wide, short and dim — 2-4.5 m
+ * across and under 1.5 m tall — scattered across the FULL swathe rather than
+ * biased to the spine. They are the same instanced mesh, the same draw call and
+ * the same `uT`; `aKind` is the only thing that tells them apart.
+ *
+ * They are view-space billboards like the tongues and NOT quads laid flat on
+ * the ground, which was the first idea and is a trap on this map: a horizontal
+ * quad 6 m across on a plain that rolls intersects the turf, and an additive
+ * quad clipped by the depth buffer has a hard terrain-shaped edge through it.
+ *
+ * THE BED IS ALSO THE ONLY LIGHT THIS FIRE HAS. `_light` asks `LightPool` for
+ * three lights down the whole 157 m and asks at `priority: 1`, which is the
+ * ordinary tier — `LightPool.flash` will hand a slot straight to the next
+ * muzzle flash that wants it, and in a live firefight it does. So the fire
+ * cannot rely on lighting its own ground and the bed has to BE the glow: wide,
+ * low, continuous and bright enough to read as burning ground from 200 m,
+ * without spending a single light slot the gunfight needs.
+ */
+const BED = 16;
 /**
  * Seconds the ground keeps burning after the wreck stops.
  *
@@ -264,7 +298,7 @@ export class Crash {
         `${this._fall.toFixed(1)}s of approach at ${SPEED} m/s, ` +
         `impact (${this.impact.x.toFixed(0)}, ${this.impact.z.toFixed(0)}) y=${this.impact.y.toFixed(1)}, ` +
         `ploughs ${len.toFixed(0)} m over ${PLOUGH}s into ${n} fire cells ` +
-        `(${(n * TONGUES)} flames, ${BURN_W} m wide, burns ${BURN_S}s; ` +
+        `(${n * TONGUES} tongues + ${n * BED} of bed, ${BURN_W} m wide, burns ${BURN_S}s; ` +
         `${this._lifted} of them sit more than 0.5 m off their own cell's height, ` +
         'which is why each is probed for its own)'
     );
@@ -375,9 +409,48 @@ export class Crash {
    * base — with the shape carried entirely by the fragment's alpha: a taper
    * that closes to a point, a soft edge, and a body that goes transparent
    * towards the tip so the tongues behind show through the ones in front.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * AND IT STILL PHOTOGRAPHED PALE, FOR A REASON THAT IS IN THE COMPOSITE
+   * ────────────────────────────────────────────────────────────────────────
+   * Its own author signed it off as "better than cones, not final — the flames
+   * still read slightly pale at distance". Photographed properly (20 m, 80 m,
+   * 200 m, at night: `shots/scar/SCAR-before-*.png`) it was not slightly pale,
+   * it was CREAM: pale straw needles with no orange in them at all, standing on
+   * grass the fire was not lighting.
+   *
+   * THE COLOURS IN THIS SHADER ARE NOT THE COLOURS ON THE SCREEN, and that is
+   * the whole bug. `render/index.js` sets `renderer.toneMapping =
+   * NoToneMapping` and tonemaps in the composite instead, where the frame is
+   * first multiplied by an AUTO-EXPOSURE — measured at roughly 14x on this
+   * night map, and `composite.js` says so in its own comment — and then run
+   * through AgX. AgX desaturates hard as it rolls off, which it must: that is
+   * what stops every bright thing in the game from being a colour cast. So a
+   * fragment authored at `vec3(1.0, 0.34, 0.05)` arrives at the tone mapper as
+   * `(14, 4.8, 0.7)`, which is three channels all far above the shoulder, and
+   * three channels above the shoulder is WHITE whatever their ratio was.
+   *
+   * Being brighter cannot fix that; it is what causes it. The two things that
+   * do are:
+   *
+   *   1. FAR MORE SATURATION THAN LOOKS RIGHT IN THE SOURCE. The body of the
+   *      flame is `(1.00, 0.150, 0.012)` — a colour that would be nearly pure
+   *      red on any ordinary display and is a correct orange after 14x and AgX.
+   *      Yellow-white is authored ONLY for the root, where a fire really is
+   *      that hot, and it is reached through `heat` rather than being the
+   *      average colour of the whole tongue.
+   *   2. A PER-TONGUE RADIANCE WELL UNDER ONE. Each tongue contributes about a
+   *      third of what it used to, so a single one is a dim orange lick and it
+   *      takes three or four overlapping to reach the hot core. THAT is the
+   *      crowd argument made in radiance instead of in count: the bright part
+   *      of the fire is now a place where tongues agree, which is a thing the
+   *      eye cannot count, rather than each tongue being individually white.
+   *
+   * `heat` also carries `body`, so a tongue's SPINE is hotter than its edges.
+   * A flame's cross-section is not flat and a flat one reads as paper.
    */
   _buildFlames(physics) {
-    const n = CELLS * TONGUES;
+    const n = CELLS * (TONGUES + BED);
     /** A unit quad with its BASE on y=0, so scaling y is scaling the flame. */
     const g = new THREE.PlaneGeometry(1, 1);
     g.translate(0, 0.5, 0);
@@ -390,10 +463,13 @@ export class Crash {
     const fire = new Float32Array(n * 4);
     /** x, y, z of the base and the tongue's own width. */
     const at = new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4);
+    /** 0 = a tongue, 1 = a quad of the bed. @see BED */
+    const kind = new THREE.InstancedBufferAttribute(new Float32Array(n), 1);
     let k = 0;
     let lifted = 0;
     for (let c = 0; c < CELLS; c++) {
-      for (let j = 0; j < TONGUES; j++, k++) {
+      for (let j = 0; j < TONGUES + BED; j++, k++) {
+        const bed = j >= TONGUES;
         const a = this.rng.range(0, Math.PI * 2);
         /**
          * `float()^1.6` RATHER THAN `sqrt(float())`. The square root spreads
@@ -401,8 +477,14 @@ export class Crash {
          * wrong for a fire: it put as much flame on the cold outer edge of the
          * swathe as on the line the wreck actually ploughed. This biases inward,
          * so the scar has a bright spine and a ragged edge.
+         *
+         * THE BED IS THE EXCEPTION AND IT IS DELIBERATELY FLAT (^0.95, very
+         * slightly biased OUTWARD of the even spread): the burning floor has to reach the edges of the
+         * swathe or the scar is a bright line with dark ground either side of
+         * it, which is what 24 m of `BURN_W` is for. The SPINE is the tongues'
+         * job and they still bias hard into it.
          */
-        const r = Math.pow(this.rng.float(), 1.6) * BURN_W * 0.5;
+        const r = Math.pow(this.rng.float(), bed ? 0.95 : 1.6) * BURN_W * 0.5;
         const x = this._cx[c] + Math.cos(a) * r;
         const z = this._cz[c] + Math.sin(a) * r;
         /**
@@ -415,23 +497,55 @@ export class Crash {
         const y = physics ? physics.groundHeight(x, z, 400) : this._cy[c];
         if (Math.abs(y - this._cy[c]) > 0.5) lifted++;
         at.array[k * 4 + 0] = x;
-        at.array[k * 4 + 1] = y - 0.25;
+        /** The bed sits deeper: it is ground that is alight, not a lick of it. */
+        at.array[k * 4 + 1] = y - (bed ? 0.35 : 0.25);
         at.array[k * 4 + 2] = z;
-        /**
-          * HALF-WIDTH 0.26-0.8 m against a height of 1.8-5.5, i.e. a tongue
-          * three to ten times taller than it is wide. It was 0.7-2.1 against
-          * 1.4-4.6 — as wide as it was tall — and a flame that is as wide as it
-          * is tall is a traffic cone.
-          */
-        at.array[k * 4 + 3] = this.rng.range(0.26, 0.8);
+        kind.array[k] = bed ? 1 : 0;
+        if (bed) {
+          /**
+           * WIDE AND LOW. 3.2-7.0 m of half-width against 0.7-2.0 m of height,
+           * so a bed quad is three to twenty times WIDER than it is tall — the
+           * exact inverse of a tongue, and the reason a cell reads as a patch of
+           * ground on fire rather than as a bundle of sticks.
+           *
+           * SIXTEEN OF THEM, THIS WIDE, BECAUSE OF THE 200 m FRAME. Twelve at
+           * 5.5 m left most of a 24 m swathe dark, and at 200 m what was left
+           * was a five-pixel dashed orange line where a 157 x 24 m fire should
+           * have been a band twenty-five pixels deep. The bed has to COVER the
+           * swathe — that is the difference between a fire you can see from the
+           * far side of the map and a row of lights.
+           */
+          at.array[k * 4 + 3] = this.rng.range(3.2, 7.0);
+          fire[k * 4 + 2] = this.rng.range(0.7, 2.0);
+          /** Slower than a tongue. A burning floor breathes; it does not whip. */
+          fire[k * 4 + 3] = this.rng.range(0.7, 1.9);
+        } else {
+          /**
+           * HALF-WIDTH 0.26-0.8 m against a height of 1.8-5.5, i.e. a tongue
+           * three to ten times taller than it is wide. It was 0.7-2.1 against
+           * 1.4-4.6 — as wide as it was tall — and a flame that is as wide as it
+           * is tall is a traffic cone.
+           *
+           * 0.26-0.8 -> 0.40-1.15, and the height is drawn `1.5 + u^2 * 3.9`
+           * rather than uniformly. Both are the same correction: at 20 m the
+           * uniform draw gave twenty-seven cells of near-identical needles, and
+           * a fire is mostly LOW with a few tall licks in it. Squaring the
+           * uniform puts two thirds of the tongues under 2.2 m and still throws
+           * the occasional 5 m one, which is the size distribution the eye
+           * reads as turbulence instead of as a fence.
+           */
+          at.array[k * 4 + 3] = this.rng.range(0.40, 1.15);
+          const u = this.rng.float();
+          fire[k * 4 + 2] = 1.5 + u * u * 3.9;
+          fire[k * 4 + 3] = this.rng.range(2.2, 4.6);
+        }
         fire[k * 4 + 0] = this._ct[c] + this.rng.range(0, 0.5);
         fire[k * 4 + 1] = this.rng.range(0, 20);
-        fire[k * 4 + 2] = this.rng.range(1.8, 5.5);
-        fire[k * 4 + 3] = this.rng.range(2.2, 4.6);
       }
     }
     geo.setAttribute('aAt', at);
     geo.setAttribute('aFire', new THREE.InstancedBufferAttribute(fire, 4));
+    geo.setAttribute('aKind', kind);
     geo.instanceCount = n;
     geo.boundingSphere = new THREE.Sphere(
       new THREE.Vector3((this._cx[0] + this._cx[CELLS - 1]) / 2, this._cy[0] + 4, (this._cz[0] + this._cz[CELLS - 1]) / 2),
@@ -447,19 +561,25 @@ export class Crash {
       blending: THREE.AdditiveBlending,
       side: THREE.DoubleSide,
       vertexShader: `
-        attribute vec4 aAt;    // xyz base, w width
-        attribute vec4 aFire;  // x light-at, y phase, z height, w flicker
+        attribute vec4 aAt;     // xyz base, w half-width
+        attribute vec4 aFire;   // x light-at, y phase, z height, w flicker
+        attribute float aKind;  // 0 tongue, 1 bed
         uniform float uT;
         varying vec2 vUv;
         varying float vHot;
+        varying float vKind;
         void main() {
           vUv = uv;
+          vKind = aKind;
           float on = step( aFire.x, uT );
           float age = max( 0.0, uT - aFire.x );
           // Two out-of-phase sines: one body flicker, one faster tip flutter.
           float f = sin( age * aFire.w + aFire.y ) * 0.5 + sin( age * aFire.w * 2.7 + aFire.y * 1.7 ) * 0.5;
           float grow = clamp( age * 1.9, 0.0, 1.0 );
-          float h = aFire.z * ( 0.68 + f * 0.32 ) * grow * on;
+          // A tongue whips through two thirds of its height; the bed only
+          // breathes, because ground that is alight does not change shape.
+          float amp = mix( 0.32, 0.11, aKind );
+          float h = aFire.z * ( 1.0 - amp + f * amp ) * grow * on;
           float w = aAt.w * ( 0.92 + f * 0.12 );
           vHot = 0.55 + f * 0.45;
           /**
@@ -468,8 +588,32 @@ export class Crash {
            * faces the camera from every bearing and still stands on its base.
            */
           vec4 base = modelViewMatrix * vec4( aAt.xyz, 1.0 );
-          // Lean the tip with its own phase — a flame is never plumb.
-          float lean = sin( age * 0.8 + aFire.y ) * 0.13;
+          /**
+           * WHY THE FIRE WENT PALE AT EIGHTY METRES, AND IT IS NOT THE COLOUR.
+           *
+           * The tongue's shape is carried by the FRAGMENT's alpha, evaluated
+           * once at each pixel centre. That is fine while the quad is many
+           * pixels across; it is not fine when the quad is one or two, because
+           * the only samples taken are somewhere out on the flanks where the
+           * taper has already closed, and the tongue loses most of its own
+           * energy to where the samples happened to land. It does not fade
+           * evenly, either: it scintillates and averages dim, which is exactly
+           * "reads pale at distance" and is why no change of colour fixed it.
+           *
+           * So a quad is never allowed to subtend less than MIN_ANG of the
+           * view, and whatever it is widened by it is dimmed by — a little
+           * less than exactly (^0.85), because a fire at 200 m genuinely does
+           * glow through the air rather than merely getting smaller. This is a
+           * function of the instance and the camera, so it stays closed-form
+           * and costs nothing per frame; the depth is already in hand.
+           */
+          float depth = max( -base.z, 1.0 );
+          float widen = max( 1.0, 0.0016 / max( w / depth, 1e-6 ) );
+          w *= widen;
+          vHot /= pow( widen, 0.85 );
+          // Lean the tip with its own phase — a flame is never plumb. The bed
+          // does not lean: it has no tip to lean.
+          float lean = sin( age * 0.8 + aFire.y ) * 0.13 * ( 1.0 - aKind );
           base.x += position.x * w + position.y * h * lean;
           base.y += position.y * h;
           gl_Position = projectionMatrix * base;
@@ -478,8 +622,10 @@ export class Crash {
         uniform float uFade;
         varying vec2 vUv;
         varying float vHot;
+        varying float vKind;
         void main() {
           float t = vUv.y;
+          float d = abs( vUv.x - 0.5 ) * 2.0;
           /**
            * THE SHAPE IS THE ALPHA, NOT THE MESH, and the falloff has to be
            * SOFT ALL THE WAY OUT or the quad's own edge shows. The first pass
@@ -488,24 +634,49 @@ export class Crash {
            * shoulder at all: bright on the spine, asymptotic at the edge, so the
            * tongue has no outline to give it away.
            *
+           * The BED closes far later and far more gently than a tongue does:
+           * 1 - t*t holds nearly its full width to two thirds of its height and
+           * only then rolls off, so it reads as a mound of burning ground
+           * rather than as a very fat lick.
+           *
            * (No backticks in here. This comment lives inside a JS template
            * literal and one backtick ends the shader.)
            */
-          float taper = pow( 1.0 - t, 0.55 );
-          float d = abs( vUv.x - 0.5 ) * 2.0;
+          float taper = mix( pow( 1.0 - t, 0.55 ), pow( max( 0.0, 1.0 - t * t ), 0.40 ), vKind );
           float body = pow( max( 0.0, 1.0 - d / max( taper, 1e-3 ) ), 2.2 );
-          float a = body * pow( 1.0 - t, 1.6 ) * uFade * vHot;
+          float fall = mix( pow( 1.0 - t, 1.6 ), pow( 1.0 - t, 1.0 ), vKind );
+          /**
+           * RADIANCE PER QUAD, AND IT IS DELIBERATELY A FRACTION.
+           *
+           * See the header of _buildFlames — the composite multiplies this
+           * frame by ~14x before AgX sees it, so a quad that peaks near 1 is a
+           * quad that arrives white however it was coloured. At 0.38 a single
+           * tongue is a dim orange lick and it takes three or four overlapping
+           * to make the hot core, which is the crowd argument stated in
+           * radiance rather than in count. The bed is lower again (0.34) and
+           * there are sixteen of them a cell, so the floor of the fire is bright
+           * because it is CONTINUOUS and not because any part of it is intense.
+           */
+          float a = body * fall * uFade * vHot * mix( 0.42, 0.34, vKind );
           if ( a <= 0.004 ) discard;
           /**
-           * SATURATED, WITH A SMALL WHITE CORE. Additive blending washes a pale
-           * colour straight out to white over the whole tongue; the white has
-           * to be confined to the spine of the root (high body, low t) so
-           * everything else stays orange.
+           * TEMPERATURE, NOT PAINT. heat is 1 on the spine of the root and 0
+           * at the tip and the edges, and the ramp below is the order a real
+           * flame cools in: yellow where the fuel is burning, orange through
+           * the body, deep red where it is going out. Carrying body into it
+           * is what gives the tongue a hot centre line and cool flanks — a
+           * flame's cross-section is not flat, and a flat one reads as paper.
+           *
+           * THESE NUMBERS LOOK WRONG IN THE SOURCE AND ARE RIGHT ON THE SCREEN.
+           * (1.00, 0.150, 0.012) is very nearly pure red here; after 14x
+           * exposure and AgX's roll-off it is the orange of a fire. Anything
+           * with more green in it than this comes out cream, which is exactly
+           * what the previous (1.0, 0.66, 0.20) did.
            */
-          float core = body * ( 1.0 - smoothstep( 0.0, 0.30, t ) );
-          vec3 c = mix( vec3( 1.0, 0.34, 0.05 ), vec3( 1.0, 0.66, 0.20 ), smoothstep( 0.0, 0.45, t ) );
-          c = mix( c, vec3( 0.50, 0.11, 0.03 ), smoothstep( 0.45, 1.0, t ) );
-          c += vec3( 0.55, 0.42, 0.24 ) * core;
+          float heat = pow( 1.0 - t, 1.25 ) * ( 0.55 + 0.45 * body );
+          vec3 c = mix( vec3( 0.42, 0.030, 0.004 ), vec3( 1.00, 0.150, 0.012 ),
+                        smoothstep( 0.10, 0.58, heat ) );
+          c = mix( c, vec3( 1.00, 0.520, 0.150 ), smoothstep( 0.66, 1.00, heat ) );
           gl_FragColor = vec4( c, a );
         }`,
     });
