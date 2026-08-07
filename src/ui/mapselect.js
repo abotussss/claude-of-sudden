@@ -354,7 +354,9 @@ export class MapSelect {
         setStyle(this.hint, 'display', 'none');
       } else {
         const info = getMapInfo(this.currentId());
-        setText(this.hint, `MAP · ${info?.name ?? this.currentId()}    PRESS M TO CHANGE`);
+        // Separated with the same middot the rest of the HUD uses — runs of
+        // spaces collapse in HTML and read as one run-on line.
+        setText(this.hint, `MAP · ${info?.name ?? this.currentId()} · PRESS M TO CHANGE`);
         setStyle(this.hint, 'display', '');
       }
     }
