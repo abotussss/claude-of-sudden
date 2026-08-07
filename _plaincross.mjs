@@ -99,9 +99,44 @@ const out = await page.evaluate(() => {
     const h = ph.raycast(x, 300, z, 0, -1, 0, 400, MASK);
     return h.hit ? h.point.y : null;
   };
-  const dist = (x, y, z, dx, dz, cap) => {
-    const h = ph.raycast(x, y, z, dx, 0, dz, cap, MASK);
-    return h.hit ? h.distance : cap;
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * A HORIZONTAL RAY IS NOT A SIGHTLINE, AND THE FIRST CUT OF THIS FILE USED
+   * ONE
+   * ────────────────────────────────────────────────────────────────────────
+   * The plain swells ±6 m over a 100 m wavelength. A ray fired flat out of a
+   * hollow at 1.62 m is five metres in the AIR by the time it is 60 m away —
+   * it sails clean over a 2.5 m berm standing on the route and then hits the
+   * far side of the next swell, and the number it reports is the distance to
+   * that hillside. Measured: with 39 pieces of cover standing on the walks,
+   * the flat-ray version moved the mean lane by seven metres and reported
+   * "nothing on the lane" for routes with two burnt lorries lying across them.
+   *
+   * A sightline is EYE TO MAN. So this marches a real man down the route — a
+   * chest at 1.2 m over whatever the ground is THERE — and asks whether the
+   * line from the standing eye to him is clear. That line follows the ground,
+   * so cover on the ground is in it.
+   */
+  const CHEST = 1.2;
+  const MARCH = 4;
+  /**
+   * The target man is always ON the route, so the whole route's ground is
+   * sampled ONCE at `STEP` and every march step reads it out of that array —
+   * `MARCH` is a multiple of `STEP` so the lookup is exact. Without it this is
+   * 85 000 redundant downward rays and a twelve-minute run.
+   */
+  const seen = (x, y, z, i0, sign, prof, cap) => {
+    const k = MARCH / STEP;
+    for (let d = MARCH, j = i0 + sign * k; d <= cap; d += MARCH, j += sign * k) {
+      if (j < 0 || j >= prof.length) return d;
+      const p = prof[j];
+      if (!p) return d;
+      const dx = p.x - x, dy = p.g + CHEST - y, dz = p.z - z;
+      const len = Math.hypot(dx, dy, dz);
+      const h = ph.raycast(x, y, z, dx / len, dy / len, dz / len, len - 0.15, MASK);
+      if (h.hit) return d;
+    }
+    return cap;
   };
 
   const rows = [];
@@ -109,23 +144,37 @@ const out = await page.evaluate(() => {
     const [ax, az] = P[aId]; const [bx, bz] = P[bId];
     const L = Math.hypot(bx - ax, bz - az);
     const tx = (bx - ax) / L, tz = (bz - az) / L;
+    // The ground down the WHOLE route, once. @see `seen`.
+    const prof = [];
+    for (let s = 0; s <= L + 1e-6; s += STEP) {
+      const x = ax + tx * s, z = az + tz * s;
+      const g = groundAt(x, z);
+      prof.push(g === null ? null : { x, z, g, s });
+    }
     // Skip the pads themselves at each end: the capture circle is not the walk.
     const s0 = 18, s1 = L - 18;
     const samples = [];
-    for (let s = s0; s <= s1; s += STEP) {
-      const x = ax + tx * s, z = az + tz * s;
-      const g = groundAt(x, z);
-      if (g === null) continue;
+    for (let i = 0; i < prof.length; i++) {
+      const p = prof[i];
+      if (!p || p.s < s0 || p.s > s1) continue;
+      const s = p.s, x = p.x, z = p.z, g = p.g;
       const y = g + EYE;
-      const fwd = dist(x, y, z, tx, tz, CAP);
-      const back = dist(x, y, z, -tx, -tz, CAP);
+      const fwd = seen(x, y, z, i, 1, prof, CAP);
+      const back = seen(x, y, z, i, -1, prof, CAP);
+      /**
+       * `reach` and `near` stay FLAT rays on purpose. They are not sightlines,
+       * they are the question "is there mass beside me" — the 8 m one is "can I
+       * get behind something in a sprint step" — and a flat ray at chest height
+       * is exactly right for that at the ranges it is asked over.
+       */
       let sum = 0, near = REACH_CAP;
       for (let i = 0; i < NAZ; i++) {
         const a = (i / NAZ) * Math.PI * 2;
-        const d = dist(x, y, z, Math.cos(a), Math.sin(a), REACH_CAP);
+        const h = ph.raycast(x, y - 0.3, z, Math.cos(a), 0, Math.sin(a), REACH_CAP, MASK);
+        const d = h.hit ? h.distance : REACH_CAP;
         sum += d; if (d < near) near = d;
       }
-      samples.push({ s, lane: fwd + back, reach: sum / NAZ, near });
+      samples.push({ s, lane: fwd + back, reach: sum / NAZ, near, fwd, back });
     }
     if (!samples.length) continue;
     const n = samples.length;
@@ -146,6 +195,16 @@ const out = await page.evaluate(() => {
       exposed: +exposed.toFixed(3),
       covered: +covered.toFixed(3),
       run: +run.toFixed(0),
+      /**
+       * WHERE THE OCCLUDERS ACTUALLY ARE, along the route. `s + fwd` is the
+       * along-route coordinate the forward ray died at, so the set of them is
+       * the list of things standing on this lane — and the GAPS between them
+       * are the answer to "why did the number not move". Placing a piece 16 m
+       * off a 200 m lane changes `covered` and does not change `lane`, and this
+       * row is what says so rather than a guess.
+       */
+      hits: samples.filter((v) => v.fwd < CAP).map((v) => Math.round(v.s + v.fwd))
+        .filter((v, i, a) => i === 0 || v - a[i - 1] > 3),
     });
   }
   const w = rows.reduce((a, r) => a + r.n, 0);
@@ -173,6 +232,10 @@ console.log(' ' + '-'.repeat(70));
 console.log(` ${pad('ALL', 14)}${num('', 4)}${num(out.agg.samples, 5)}${num(out.agg.lane, 8)}${num('', 6)}${num(out.agg.reach, 8)}` +
   `${num((out.agg.exposed * 100).toFixed(0) + '%', 8)}${num((out.agg.covered * 100).toFixed(0) + '%', 8)}${num(out.agg.runMax, 6)}`);
 console.log(`\n runMax=${out.agg.runMax} m  runMean=${out.agg.runMean} m   (longest continuous walk with a >120 m clear lane)`);
+if (args.detail) {
+  console.log('\n where the forward ray dies, in metres along each route:');
+  for (const r of out.rows) console.log(`  ${pad(r.route, 14)} ${r.hits.join(' ') || '— nothing on the lane —'}`);
+}
 console.log(errs.length ? `[pageerror] ${errs.length}: ${errs[0]}` : '[pageerror] none');
 if (args.json) writeFileSync(args.json, JSON.stringify(out, null, 1));
 await b.close();

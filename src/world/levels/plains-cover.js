@@ -257,8 +257,13 @@ const CROSSINGS = [
  */
 const KINDS = ['wreck', 'berm', 'emplace', 'ruin', 'wreck', 'emplace', 'berm', 'wreck'];
 
-/** Plan radius each kind claims, for the separation and keep-out tests. */
-const KIND_R = { wreck: 6.0, berm: 9.5, emplace: 4.5, ruin: 10.5 };
+/**
+ * Half-extent each kind claims ACROSS the walk (`KIND_R`, which is also the
+ * separation radius) and ALONG it (`KIND_W`). A berm is 19 m of wall and 5 m of
+ * thickness; a ruin is square-ish; a wreck cluster is two hulls abreast.
+ */
+const KIND_R = { wreck: 9.0, berm: 9.5, emplace: 4.5, ruin: 8.0 };
+const KIND_W = { wreck: 4.5, berm: 3.0, emplace: 3.0, ruin: 7.0 };
 
 // ─────────────────────────────────────────────────────────────── the placer ──
 /**
@@ -276,12 +281,35 @@ function stations(rng, pads, isOpen) {
   const placed = [];
   const out = [];
 
-  /** Clear of every capture circle and every base — the objective is not cover. */
+  /**
+   * Clear of every capture circle and every base — the objective is not cover,
+   * and a spawn cluster with a burnt lorry in it is a spawn cluster you die in.
+   * The margin is on the PIECE, not on the point: `r` is its half-extent, so
+   * nothing crosses the ring at all rather than nothing being centred on it.
+   */
   const offPads = (x, z, r) => {
     for (const p of pads) {
       if (p.id === 'TOWER' || p.id === 'FORT') continue; // `isOpen` owns those
-      const keep = (p.id.startsWith('BASE') ? p.r0 + 12 : p.r0 + 6) + r;
+      const keep = (p.id.startsWith('BASE') ? p.r0 + 7 : p.r0 + 4) + r;
       if ((x - p.x) ** 2 + (z - p.z) ** 2 < keep * keep) return false;
+    }
+    return true;
+  };
+
+  /**
+   * DOES THE WHOLE PIECE FIT, not just the point at the middle of it.
+   *
+   * The first cut of this tested the CENTRE against `isOpen` inflated by the
+   * piece's radius, which is the same class of mistake as `interiors.js`
+   * testing a prop's centre against a doorway circle: a 19 m berm laid ACROSS a
+   * crossing is 19 m of extent on one axis and 5 on the other, and a single
+   * inflated point either refuses ground it fits on or accepts ground it does
+   * not. So the piece's own long axis is sampled end to end.
+   */
+  const fits = (x, z, halfLen, halfW, ax, az) => {
+    for (let i = -2; i <= 2; i++) {
+      const u = (i / 2) * halfLen;
+      if (!isOpen(x + ax * u, z + az * u, halfW + 1.5)) return false;
     }
     return true;
   };
@@ -294,30 +322,95 @@ function stations(rng, pads, isOpen) {
     const L = Math.hypot(dx, dz);
     const tx = dx / L, tz = dz / L;
     const nx = tz, nz = -tx;         // left of the direction of travel
-    let k = 0;
-    for (let s = A0.r0 + 14; s < L - B0.r0 - 14; s += c.gap) {
-      const kind = KINDS[(k + ci) % KINDS.length];
+    /**
+     * EVERY PIECE IS LAID ACROSS THE WALK, and this is the correction that made
+     * the difference between the first cut and this one. Measured: 33 stations
+     * placed, `covered` (something within 8 m) up from 28 % to 47 % — and the
+     * LANE, which is what the complaint is about, moved by four metres. The
+     * pieces were parallel to the route. A berm lying along a crossing is a
+     * handrail; the same berm turned ninety degrees is a wall you have to walk
+     * round, and the ray down the middle of the route stops at it.
+     */
+    const yaw = Math.atan2(tx, tz);
+
+    /**
+     * Try to stand one piece near `s`. THE SEARCH SLIDES ALONG THE WALK BEFORE
+     * IT SLIDES OFF IT, and that order is the difference between cover and
+     * decoration: a berm 22 m to the side of a 190 m lane changes `covered` and
+     * does not change `lane` by one metre, because the man walking the middle
+     * of the route is still in the open. Only when nothing on the line will fit
+     * — which on BASE-N -> A is most of its length, because NORDGRABEN is dug
+     * within four metres of that walk and `isOpen` refuses the whole corridor —
+     * does it give up and take the flank.
+     */
+    const tryAt = (s, kind, slack) => {
       const r = KIND_R[kind];
-      let put = null;
-      // Try this station's own offset first, then the rest, then a slide along
-      // the line — a station that cannot be placed is dropped, never forced.
-      for (let attempt = 0; attempt < 12 && !put; attempt++) {
-        const o = c.off[(k + attempt) % c.off.length] * rng.range(0.8, 1.25);
-        const along = s + (attempt < 4 ? 0 : rng.range(-9, 9));
+      for (let attempt = 0; attempt < 34; attempt++) {
+        const wide = attempt < 20 ? 1 : attempt < 27 ? 1.9 : 2.8;
+        const o = c.off[attempt % c.off.length] * rng.range(0.8, 1.2) * wide;
+        const along = s + (attempt < 3 ? 0 : rng.range(-slack, slack));
         const x = A0.x + tx * along + nx * o;
         const z = A0.z + tz * along + nz * o;
-        if (!isOpen(x, z, r + 2)) continue;
+        if (along < A0.r0 + 8 || along > L - B0.r0 - 8) continue;
         if (!offPads(x, z, r)) continue;
+        // the long axis runs across the walk, so it is sampled along `n`
+        if (!fits(x, z, r, KIND_W[kind], nx, nz)) continue;
         let clash = false;
         for (const p of placed) {
-          const need = p.r + r + 7;
+          const need = p.r + r + 4;
           if ((x - p.x) ** 2 + (z - p.z) ** 2 < need * need) { clash = true; break; }
         }
         if (clash) continue;
-        put = { x, z, r, kind, yaw: Math.atan2(tx, tz) + rng.range(-0.5, 0.5), route: ci };
+        const st = {
+          x, z, r, kind, yaw: yaw + rng.range(-0.32, 0.32), route: ci,
+          /** Along-route coordinate, and whether the piece covers the middle. */
+          s: along, onLane: Math.abs(o) - r < 2.5,
+        };
+        placed.push(st); out.push(st);
+        return st;
       }
-      if (put) { placed.push(put); out.push(put); }
+      return null;
+    };
+
+    const mine = [];
+    let k = 0;
+    for (let s = A0.r0 + 10; s < L - B0.r0 - 10; s += c.gap) {
+      const st = tryAt(s, KINDS[(k + ci) % KINDS.length], 10);
+      if (st) mine.push(st);
       k++;
+    }
+
+    /**
+     * ────────────────────────────────────────────────────────────────────
+     * THE GAP PASS — the one that actually moves the number
+     * ────────────────────────────────────────────────────────────────────
+     * The loop above places on a fixed rhythm and drops whatever will not fit,
+     * so a crossing that loses two neighbouring stations to a trench, a pad or
+     * another crossing's claim ends up with sixty metres of nothing in the
+     * middle of it and a run of exposure exactly that long. `run` is the
+     * headline number and it is a MAXIMUM, so one gap ruins a route however
+     * good the rest of it is.
+     *
+     * So: sort what stood up, and wherever two consecutive LANE-BLOCKING pieces
+     * are more than `MAX_GAP` apart — including the stretch from each end pad —
+     * put one more in between and let it search the whole gap. An emplacement
+     * does not count as a blocker: it is 1.4 m and a standing eye is 1.62, so
+     * you see straight over it, which is the entire point of it.
+     */
+    const MAX_GAP = 46;
+    for (let pass = 0; pass < 3; pass++) {
+      const line = mine.filter((m) => m.onLane && m.kind !== 'emplace')
+        .map((m) => m.s).sort((a, b) => a - b);
+      const edges = [A0.r0 + 6, ...line, L - B0.r0 - 6];
+      let added = false;
+      for (let i = 1; i < edges.length; i++) {
+        const gap = edges[i] - edges[i - 1];
+        if (gap <= MAX_GAP) continue;
+        const st = tryAt((edges[i] + edges[i - 1]) / 2,
+          rng.float() < 0.55 ? 'wreck' : 'berm', gap * 0.34);
+        if (st) { mine.push(st); added = true; }
+      }
+      if (!added) break;
     }
   }
   return out;
@@ -589,7 +682,11 @@ function wreck(A, rng, gy, cx, cz, yaw, variant) {
     /* ---- a ruptured tanker on a dropped trailer ----------------------- */
     const L = rng.range(6.6, 8.0);
     put('metal_rust', 0, 0.62, 0, 2.15, 0.34, L);
-    const tank = tubeY(1.0, L - 1.6, { seg: 14 });
+    // `tubeY` stands the cylinder on y=0, so it is re-centred before being
+    // tipped onto its side — otherwise `rx` swings it a whole barrel off its
+    // own chassis and the tanker floats beside the trailer.
+    const tank = tubeY(1.0, L - 1.6, { radial: 14 });
+    tank.translate(0, -(L - 1.6) / 2, 0);
     const [tx, tz] = P(0, 0.2);
     A.addOnce('steel', tank, LL(IDENT, tx, g + 1.5, tz, yaw, 1, 1, 1, Math.PI / 2), { masks: [0.9, 0.75, 0.2] });
     A.box('metal', tx, g + 1.5, tz, 2.0, 2.0, L - 1.6, yaw);
@@ -675,7 +772,14 @@ function berm(A, rng, gy, cx, cz, yaw) {
     A.addOnce('steppe_bare', g, LL(IDENT, cx, gy(cx, cz) - 0.06, cz, yaw + (side > 0 ? 0 : Math.PI)),
       { masks: [0.3, 0.6, 0.35] });
   }
-  /** Collision as a run of boxes down the crest — the drawn skin is a shell. */
+  /**
+   * Collision as a run of boxes down the crest — the drawn skin is a shell.
+   * THE BOX'S LONG SIDE IS ITS `sx`, because the crest runs along local x and
+   * `A.box`'s `ry` maps local x to `(cos ry, -sin ry)`; giving the segment
+   * length to `sz` instead lays every proxy at ninety degrees to the earth it
+   * is standing in for, which is a berm you can walk through and a wall four
+   * metres to the side of it.
+   */
   const n = Math.max(3, Math.round(len / 2.4));
   for (let i = 0; i < n; i++) {
     const u = (i + 0.5) / n;
@@ -683,7 +787,7 @@ function berm(A, rng, gy, cx, cz, yaw) {
     const lx = (u - 0.5) * len;
     const x = cx + c * lx, z = cz - s * lx;
     const hh = h * (0.55 + 0.45 * taper);
-    A.box('dirt', x, gy(x, z) + hh / 2 - 0.1, z, w * 0.72, hh, len / n + 0.1, yaw);
+    A.box('dirt', x, gy(x, z) + hh / 2 - 0.1, z, len / n + 0.1, hh, w * 0.72, yaw);
   }
   /**
    * WHAT WAS PUSHED UP WITH IT. A bank of bare spoil is a shape; the stone,
@@ -880,12 +984,35 @@ function swardGeometry(rng, blades, w, h) {
   return g;
 }
 
+/**
+ * One stone, at the cheapest polygon count a stone can have.
+ *
+ * `rockGeometry` is an icosahedron: 20 triangles even at detail 0, and a bed of
+ * eleven of them is 220 triangles for a patch of gravel — measured, the first
+ * cut of this pass put 4.2 M instanced triangles on the map and three quarters
+ * of them were grit. A tetrahedron is FOUR, warped and squashed reads as a chip
+ * of stone at the 0.05-0.2 m these are, and nothing in the frame is close
+ * enough to count its faces.
+ */
+function chipGeometry(rng, size, squash) {
+  const g = new THREE.TetrahedronGeometry(size * 0.62, 0);
+  const pa = g.getAttribute('position');
+  for (let i = 0; i < pa.count; i++) {
+    pa.setXYZ(i,
+      pa.getX(i) * rng.range(0.7, 1.4),
+      pa.getY(i) * squash * rng.range(0.7, 1.3),
+      pa.getZ(i) * rng.range(0.7, 1.4));
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
 /** A bed of grit: a handful of little faceted stones, merged into one draw. */
 function gritGeometry(rng, n, spread, size) {
   const list = [];
   for (let i = 0; i < n; i++) {
     const s = size * rng.range(0.5, 1.5);
-    const r = rockGeometry(rng, s, 0, rng.range(0.3, 0.6));
+    const r = chipGeometry(rng, s, rng.range(0.35, 0.7));
     const m = new THREE.Matrix4();
     m.makeRotationFromEuler(new THREE.Euler(rng.range(-0.6, 0.6), rng.float() * 6.28, rng.range(-0.6, 0.6), 'YXZ'));
     const a = rng.float() * 6.28;
@@ -1027,28 +1154,45 @@ export function buildCover(A, groundY, isOpen, pads, ctx) {
 
   for (const st of sites) {
     counts[st.kind]++;
+    /**
+     * `st.yaw` looks DOWN the walk, and everything below ends up ACROSS it —
+     * @see the note in `stations`. The two conventions in this file differ by a
+     * right angle and it is worth saying which is which, because getting it
+     * wrong is invisible in a screenshot and costs the whole point of the pass:
+     *
+     *   a berm, a ruin and a sandbag line run along their own LOCAL X, which a
+     *   yaw of `y` maps to `(cos y, -sin y)` — perpendicular to the walk when
+     *   `y` is the walk's own yaw. They are handed `st.yaw` unchanged.
+     *   a vehicle runs along its LOCAL Z, which the same yaw maps to
+     *   `(sin y, cos y)` — down the walk. It is handed `st.yaw + PI/2`.
+     */
+    const across = st.yaw + Math.PI / 2;
+    /** Unit vector ACROSS the walk, so a cluster spreads over the lane. */
+    const px = Math.cos(st.yaw), pz = -Math.sin(st.yaw);
     if (st.kind === 'ruin') {
-      ruin(A, rng, groundY, st.x, st.z, st.yaw);
+      ruin(A, rng, groundY, st.x, st.z, st.yaw + rng.range(-0.2, 0.2));
     } else if (st.kind === 'berm') {
-      berm(A, rng, groundY, st.x, st.z, st.yaw + Math.PI / 2 + rng.range(-0.35, 0.35));
+      berm(A, rng, groundY, st.x, st.z, st.yaw + rng.range(-0.28, 0.28));
     } else if (st.kind === 'emplace') {
-      emplacement(A, rng, groundY, st.x, st.z, st.yaw + Math.PI / 2 + rng.range(-0.6, 0.6));
+      emplacement(A, rng, groundY, st.x, st.z, st.yaw + rng.range(-0.4, 0.4));
     } else {
       /**
-       * WRECKS COME IN TWOS AND THREES. One burnt lorry on 350 m of grass is a
-       * prop; three of them nose to tail with the ground between them churned
-       * is a column that was caught in the open, which is the story this map is
-       * already telling with five burning ridges and a crashed satellite.
+       * WRECKS COME IN TWOS. One burnt lorry on 350 m of grass is a prop; two
+       * of them abreast with the ground between them churned is a column that
+       * was caught in the open, which is the story this map is already telling
+       * with five burning ridges and a crashed satellite — and two hulls
+       * abreast is also sixteen metres of lane rather than six.
        */
-      const n = rng.float() < 0.45 ? 2 : 1;
+      const n = rng.float() < 0.7 ? 2 : 1;
       for (let i = 0; i < n; i++) {
-        const a = st.yaw + rng.range(-0.6, 0.6);
-        const off = i === 0 ? 0 : rng.range(6.5, 9.5);
-        const wx = st.x + Math.sin(a + 1.57) * off + rng.range(-1, 1);
-        const wz = st.z + Math.cos(a + 1.57) * off + rng.range(-1, 1);
+        const a = across + rng.range(-0.55, 0.55);
+        const off = i === 0 ? rng.range(-2, 2) : rng.range(8.0, 10.5) * rng.pick([1, -1]);
+        const lag = i === 0 ? 0 : rng.range(-3.5, 3.5);
+        const wx = st.x + px * off + Math.sin(st.yaw) * lag + rng.range(-1.2, 1.2);
+        const wz = st.z + pz * off + Math.cos(st.yaw) * lag + rng.range(-1.2, 1.2);
         if (i > 0 && !isOpen(wx, wz, 5)) continue;
-        wreck(A, rng, groundY, wx, wz, a, Math.floor(rng.float() * 4));
-        if (rng.float() < 0.34) fires.push({ x: wx, z: wz, route: st.route });
+        wreck(A, rng, groundY, wx, wz, a, rng.int(0, 3));
+        if (rng.float() < 0.4) fires.push({ x: wx, z: wz, route: st.route });
       }
     }
   }
