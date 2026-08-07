@@ -86,6 +86,7 @@ import { SiteMarks } from './sitemark.js';
 import { Airstrike, JET_LEAD } from './airstrike.js';
 import { Bomber } from './bomber.js';
 import { Strafe } from './strafe.js';
+import { Crash } from './crash.js';
 import { Armour } from './tank.js';
 import { Drones } from './drone.js';
 import { AmmoDrops } from './ammo.js';
@@ -603,6 +604,27 @@ export class MatchSystem {
      * rolling a tank out under an inbound salvo is two telegraphs at once.
      */
     this.tank = new Armour(ctx, { rng: this.rng.fork() }).build();
+    /**
+     * ─────────────────────────────────────────────────────────────────────
+     * THE CRASH — 「戦闘機や衛星落下イベントで平原を火の海に」
+     * ─────────────────────────────────────────────────────────────────────
+     * The fifth of these and the only one with NO SCHEDULER OF ITS OWN. The
+     * other four decide when they go; this one is fired by exactly one caller,
+     * the `crash` beat of NACHTFELD's third act, because it is not a weapon
+     * either side has — it is a thing that happens to the map, once, and a
+     * second one would make the first one weather.
+     *
+     * It is NOT in anybody's `coBusy` either, and that is the same call
+     * `Armour` makes for the opposite reason: the act it belongs to fires the
+     * bomber and the fighter INSIDE ITSELF, on its own beat sheet, and a
+     * mutual stand-down between two halves of one event is an event that
+     * cancels itself. `_updateNachtfeld` already refuses to OPEN an act while
+     * the sky is busy; once it is open, the sheet is the authority.
+     *
+     * A no-op on any map with no track, which today is the town. @see
+     * `MAP_TRACK` in `src/match/crash.js`.
+     */
+    this.crash = new Crash(ctx, { rng: this.rng.fork() }).build();
     this.air = [this.airstrike, this.bomber, this.strafe, this.tank];
     // Each stands down while EITHER of the other two has something in the air.
     this.airstrike.coBusy = [this.bomber, this.strafe];
@@ -1305,6 +1327,10 @@ export class MatchSystem {
     this.strafe?.reset();
     // Both hulls back in their pockets, invisible, colliders off, wreck hidden.
     this.tank?.reset();
+    // …and the plain put out: nothing falling, nothing burning, no wreck on the
+    // grass. @see the note on `Crash.reset` for why this one DOES undo itself
+    // where a `world.demolitions` record deliberately does not.
+    this.crash?.reset();
     /**
      * AND THE THIRTY GO BACK ON THE SHELF. The budget is per MATCH, so this is
      * the one call that makes "thirty a match" true across a restart: anything
@@ -3116,6 +3142,13 @@ export class MatchSystem {
     this.strafe?.update(dt, live);
     this.tank?.update(dt, live);
     /**
+     * …and the crash, in EVERY phase and with no `live` argument, because it
+     * has no scheduler to gate: what it is running is an event somebody else
+     * started, and a wreck that is still ploughing when the round ends still
+     * has to finish stopping. @see `Crash.update`.
+     */
+    this.crash?.update(dt);
+    /**
      * The helicopter runs its own clock in every phase, exactly as the four
      * above do: a sortie that is in the air when a match ends still has to
      * finish crossing the map. `live` is what stops the MEN arriving — a canopy
@@ -4773,9 +4806,32 @@ export class MatchSystem {
     if (!table.length) return;
     const rng = this.rng.fork();
     for (const act of table) {
-      const rec = (world?.demolitions ?? []).find((d) => d.id === act.id);
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * WHAT AN ACT IS ANCHORED TO, AND WHY IT IS NOT ALWAYS A BUILDING
+       * ────────────────────────────────────────────────────────────────────
+       * The first two acts each bring one `world.demolitions` record down and
+       * take their HUD reticle, their banner and every aiming point off that
+       * record's own published extent. THE THIRD HAS NO BUILDING. It is a
+       * satellite coming down on open grass, and the thing it is about is a
+       * place rather than a structure.
+       *
+       * `anchor: 'crash'` binds it to the point `Crash` published at boot after
+       * probing the real ground height there — in the SAME SHAPE
+       * `world.demolitions` publishes (`position`, `top`, `radius`,
+       * `halfW`/`halfD`), which is the whole reason there is no second case
+       * below this line. An act that asks for an anchor nobody published drops
+       * itself and says so, exactly as one with a missing record does.
+       */
+      const rec =
+        act.anchor === 'crash'
+          ? this.crash?.anchor ?? null
+          : (world?.demolitions ?? []).find((d) => d.id === act.id) ?? null;
       if (!rec) {
-        console.warn(`[match] act ${act.id} "${act.name}": no such demolition on this map — DROPPED`);
+        console.warn(
+          `[match] act ${act.id} "${act.name}": no ${act.anchor === 'crash' ? 'crash track' : 'such demolition'} ` +
+            'on this map — DROPPED'
+        );
         continue;
       }
       this._acts.push({
@@ -4792,7 +4848,8 @@ export class MatchSystem {
           .map(
             (a) =>
               `${a.spec.id}@p${a.spec.progress} (${a.spec.barrage.shells} rounds over ` +
-              `${a.spec.barrage.span}s, ${a.spec.beats.length} beats, ${a.rec.top.toFixed(1)} m of structure)`
+              `${a.spec.barrage.span}s, ${a.spec.beats.length} beats, ` +
+              `${(a.rec.top - a.rec.position.y).toFixed(1)} m of structure)`
           )
           .join(' · ')
     );
@@ -4854,8 +4911,19 @@ export class MatchSystem {
      * beaten zone reads as an AREA. Every third aiming point, which on a
      * sixteen-round climb is the apron, the mid shaft and the gallery.
      */
-    for (let i = 0; i < s.barrage.shells; i += 3) {
-      this.ui.airDanger(this._actAim(a, i), s.lead, 'BOMBARDMENT');
+    if (s.barrage.shells) {
+      for (let i = 0; i < s.barrage.shells; i += 3) {
+        this.ui.airDanger(this._actAim(a, i), s.lead, 'BOMBARDMENT');
+      }
+    } else {
+      /**
+       * AN ACT WITH NO BARRAGE STILL NEEDS A RETICLE, and without this the
+       * crash put its warning strip up over nothing at all: the loop above is
+       * over `barrage.shells`, which is 0 for an act whose telegraph is the
+       * event itself. One reticle on the anchor — the point `Crash` probed at
+       * boot — which is where it is actually going to land.
+       */
+      this.ui.airDanger(a.rec.position, s.lead, 'IMPACT');
     }
     this.ui.banner.show(s.title, `${s.lead | 0} ${s.warnLine}`, 4.2);
     const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
@@ -5025,6 +5093,26 @@ export class MatchSystem {
         audio?.play?.('strike_rubble', a.rec.position, {
           level: 1.2, dur: 5.0, maxDist: 480, gain: 2.4, occlusion: 0.2,
         });
+        break;
+      }
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * IT COMES DOWN — 「戦闘機や衛星落下イベントで平原を火の海に」
+       * ────────────────────────────────────────────────────────────────────
+       * The whole of Act III is one call, and that is the point: the approach,
+       * the impact and the 160 m of burning ground are `Crash`'s own thirteen
+       * seconds of closed-form performance, baked at boot. `match` owns WHEN.
+       * @see `src/match/crash.js`.
+       *
+       * The beat is placed so the AIRFRAME IS ON SCREEN WHILE THE WARNING STRIP
+       * IS STILL COUNTING DOWN, which is the one thing neither of the first two
+       * acts can do: their telegraph is a siren over a building that looks
+       * exactly as it did a minute ago, and this one's telegraph is the event
+       * itself, visible from every capture point on the map.
+       */
+      case 'crash': {
+        const ok = this.crash?.fire?.() ?? false;
+        console.info(`[match] ACT ${s.id} INBOUND at +${this._nf.t.toFixed(1)}s (${ok ? 'falling' : 'declined'})`);
         break;
       }
       case 'open':
@@ -6533,6 +6621,7 @@ export class MatchSystem {
     this.airstrike?.dispose();
     this.bomber?.dispose();
     this.strafe?.dispose();
+    this.crash?.dispose();
     this.tank?.dispose();
     this.drones?.dispose();
     this.reinforce?.dispose();

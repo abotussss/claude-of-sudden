@@ -442,8 +442,75 @@ const FORT_ACT = {
   ],
 };
 
+/**
+ * ACT III — THE CRASH, AND IT IS THE MAP'S SIGNATURE
+ *
+ * 「戦闘機や衛星落下イベントで平原を火の海に」. `plains.js`'s own header has been
+ * carrying the line "the satellite that sets the plain on fire is still to
+ * come" since the map was built. This is it, and it is meant to be the biggest
+ * thing in the game.
+ *
+ * IT IS THE ONE ACT WITH NO BUILDING, and almost everything else about it
+ * follows from that:
+ *
+ *   NO BARRAGE. `shells: 0`. The first two acts telegraph with artillery over a
+ *   building that looks exactly as it did a minute ago; this one telegraphs
+ *   with THE EVENT ITSELF — a burning airframe entering 400 m off the map at
+ *   180 m of altitude, thirteen seconds out, visible from every capture point.
+ *   Putting a bombardment in front of that would be putting a support act in
+ *   front of the headline.
+ *
+ *   NO `raze`. There is no `world.demolitions` record to bring down. It is
+ *   anchored to the point `Crash` probed at boot instead (`anchor: 'crash'`),
+ *   which is what `_beginAct`'s log line used to throw on.
+ *
+ *   THE LONGEST LEAD ON THE MAP — 16 s against the tower's 10 and the
+ *   fortress's 14 — because the thing being announced takes thirteen of them to
+ *   arrive and the alert has to be up before it is in the sky.
+ *
+ *   AND ITS CONSEQUENCE IS THE ONLY ONE THAT IS STILL THERE TWO MINUTES LATER.
+ *   The tower's is a capture point and the fortress's is a helicopter; both are
+ *   spent inside a minute. This one leaves 160 m of burning plain that is still
+ *   burning when the match ends. @see `BURN_S` in `crash.js`.
+ */
+const CRASH_ACT = {
+  id: 'NF-CRASH',
+  name: 'THE CRASH',
+  /** T-160 s on the measured curve — the last event before the endgame. */
+  progress: 0.60,
+  /** @see `_bakeActs` — bound to `Crash.anchor`, not to a demolition record. */
+  anchor: 'crash',
+  lead: 16.0,
+  /** No aircraft of its own: it IS the aircraft. `run` is never read. */
+  run: null,
+  title: 'SOMETHING IS COMING DOWN',
+  impactTitle: 'IT IS COMING DOWN ON THE PLAIN',
+  warnLine: 'SECONDS · GET CLEAR OF THE WEST',
+  afterTitle: 'THE PLAIN IS BURNING',
+  afterLine: 'THE WEST IS ON FIRE FOR THE REST OF THIS',
+  openLine: 'CONTEST THE GAP',
+  barrage: { shells: 0, open: 0, span: 1, radius: 0, damage: 0, aim: () => {} },
+  beats: [
+    /**
+     * MINUS THIRTEEN. It is in the sky while the strip is still counting down —
+     * `Crash`'s approach is `APPROACH / SPEED` = 13.0 s and the lead is 16.0, so
+     * the player has three seconds of siren, then ten of watching it come, then
+     * it lands ON the count expiring.
+     */
+    [-13.0, 'crash'],
+    /** The plough is 5 s; this is the banner over the far end of the scar. */
+    [6.0, 'aftermath'],
+    /**
+     * …and the drop, once. The fortress armed one too and `_reinforcePending`
+     * is a flag rather than a counter, so if that one has not been spent this
+     * is a no-op — which is the correct behaviour and not a missed beat.
+     */
+    [12.0, 'reinforce'],
+  ],
+};
+
 /** THE ACTS, IN ORDER. `MatchSystem` walks this list and never indexes it by id. */
-export const NF_ACTS = [TOWER_ACT, FORT_ACT];
+export const NF_ACTS = [TOWER_ACT, FORT_ACT, CRASH_ACT];
 
 /**
  * The acts, per map. @see `forMap` in `src/match/geography.js` — `world.level.id`,
