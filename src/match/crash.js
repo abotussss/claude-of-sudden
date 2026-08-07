@@ -815,6 +815,21 @@ export class Crash {
    * reset would be this file's own leak.
    */
   reset() {
+    /**
+     * A MAP WITH NO CRASH TRACK HAS NO AIRFRAME AND NO FLAMES.
+     *
+     * `build()` returns early on any map `MAP_TRACK` does not author — the town
+     * — leaving `ready` false and `flames`, `hull` and `_fireU` undefined.
+     * `MatchSystem._beginRound` calls `this.crash?.reset()`, and `?.` does not
+     * help: the object exists, it is its fields that do not. Unguarded this
+     * threw `Cannot set properties of undefined (setting 'visible')` out of
+     * `_extinguish` on EVERY round begin — measured at 2688 pageerrors in 25 s
+     * on the town, which never left warmup.
+     *
+     * Same shape as `fire()` and `update()`, which both open on `ready`. This
+     * is the third entry point and it was the one without the test.
+     */
+    if (!this.ready) return;
     this._t = -1;
     this._cell = 0;
     this.struck = false;
@@ -826,7 +841,8 @@ export class Crash {
   }
 
   dispose() {
-    this._extinguish();
+    /** @see the note in `reset()` — a map with no track has nothing to put out. */
+    if (this.ready) this._extinguish();
     this.hull?.geometry?.dispose();
     this.hullMat?.dispose();
     this.fireGeo?.dispose();
