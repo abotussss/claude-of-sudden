@@ -5057,31 +5057,30 @@ export class MatchSystem {
         const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
         /**
          * ──────────────────────────────────────────────────────────────────
-         * `strike_rubble` + `strike_tail`, AND NOT `collapse_sub`, WHICH CRASHED
+         * `collapse_sub` — THE FLOOR UNDER THE EVENT, WHICH IS THE WHOLE POINT
          * ──────────────────────────────────────────────────────────────────
-         * THE VOICE NAME IS NOT FREE. `AudioSystem.play` routes the three
-         * `COLLAPSE_KINDS` — `collapse_tear`, `collapse_sub`, `collapse_bell` —
-         * down `_playCollapse`, whose first statement is
-         * `this.field.distanceTo(...)`; `this.field` is null until the
-         * AudioContext has actually started, which needs a user gesture. So a
-         * `collapse_sub` from a scheduled event that fires before the player has
-         * clicked is an uncaught `TypeError` INSIDE THE MATCH UPDATE — measured,
-         * on the first run of this act:
+         * This beat is NOT A BIGGER SHELL, and a louder shell is what the two
+         * voices that used to stand here were. `collapse_sub` is the only voice
+         * in the bank that answers a magazine cooking off: the bottom two
+         * octaves, and — because `_playCollapse` ducks the mix and concusses the
+         * listener on the SUB specifically — the rest of the match getting out
+         * of its way for half a second. That is what makes it a different beat
+         * rather than a bigger one.
          *
-         *   TypeError: Cannot read properties of null (reading 'distanceTo')
-         *     at AudioSystem._playCollapse … at MatchSystem._actBeat
+         * IT USED TO CRASH THE FRAME AND NO LONGER CAN. `_playCollapse` read
+         * `this.field` before the `!this.running` guard that every other voice
+         * entry point in `src/audio/index.js` opens with, and `field` is null
+         * until a user gesture has started the AudioContext — so this call, from
+         * a scheduled event on an unclicked page, was an uncaught TypeError
+         * inside the match update. The guard is now at the dereference and a
+         * collapse asked for before the graph exists returns false, like every
+         * other voice. @see AudioSystem._playCollapse.
          *
-         * The two below are on the ordinary `play` path, which is guarded, and
-         * they are the pair every other beat on both maps' sheets already uses.
-         * The unguarded null in `_playCollapse` is a real defect in
-         * `src/audio/index.js` and it is not this change's to fix.
+         * Only `dur` and the act's own reach are passed: the gain, the maxDist
+         * default, the occlusion and the priority of a collapse are mix facts
+         * and they live in `_playCollapse`.
          */
-        audio?.play?.('strike_rubble', a.rec.position, {
-          level: 1.8, dur: 4.2, maxDist: 900, gain: 5.0, occlusion: 0.1,
-        });
-        audio?.play?.('strike_tail', a.rec.position, {
-          level: 1.4, dur: 3.0, maxDist: 700, gain: 3.2, occlusion: 0.15,
-        });
+        audio?.play?.('collapse_sub', a.rec.position, { dur: 2.0, maxDist: 900 });
         this.ui.airImpact(s.razeTitle);
         console.info(`[match] ACT ${s.id} MAGAZINE at +${this._nf.t.toFixed(1)}s — ${p.radius.toFixed(0)} m blast`);
         break;
