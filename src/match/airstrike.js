@@ -2766,6 +2766,38 @@ export class Airstrike {
     const newFloor = new Float32Array(count);
     const newEnc = new Uint8Array(count);
 
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * A DEMOLITION MAY NOT RE-PROBE A CELL THE INTERIOR CARVE OWNS
+     * ──────────────────────────────────────────────────────────────────────
+     * `probeCell` is `NavGrid.build`'s TOP-DOWN probe, and `NavGrid` is a 2.5D
+     * height field: for a cell with something over it, a ray from above finds
+     * the ROOF. That is exactly why `_carveInteriors` exists — it re-samples
+     * the cells inside a published `interiorVolume` from UNDER the roof, so the
+     * storey with the doors in it is the one the grid keeps, and it records
+     * which cells it owns in `grid.indoor`.
+     *
+     * THIS PATCH HAD NO SUCH RULE AND IT COST THE FORTRESS ITS OWN COURTYARD.
+     * Measured (`_nfgate.mjs`), the north gate passage on NACHTFELD:
+     *
+     *   intact      floor 3.21 (the passage under the arch), component 0
+     *   NF-FORT down  floor 7.60 (the top of the rampart), and the interior
+     *                 6204 cells — courtyard AND rampart walk — is an island
+     *
+     * Nothing was in the doorway. The ruin is not the problem: a top-down
+     * re-probe of a cell that is a TUNNEL simply cannot return the tunnel, so
+     * the patch replaced the only two ways in with two pieces of rampart top,
+     * and A* lost a 4.4 m step it had never needed to take.
+     *
+     * A demolition removes mass. It does not move a gate passage, so a cell the
+     * carve owns keeps the carve's answer, and the patch confines itself to the
+     * cells a top-down probe is actually able to describe. Cheap: one array
+     * read per cell of a few-hundred-cell rectangle, at boot.
+     */
+    const carved = g.indoor;
+    let skipped = 0;
+    /** Cells the ruin hung something over rather than filled. @see `probeUnder`. */
+    let under_ = 0;
     let k = 0;
     for (let iz = iz0; iz <= iz1; iz++) {
       for (let ix = ix0; ix <= ix1; ix++) {
@@ -2774,6 +2806,7 @@ export class Airstrike {
         oldFlags[k] = g.flags[i];
         oldFloor[k] = g.floor[i];
         oldEnc[k] = g.enclosure[i];
+        if (carved && carved[i] === 1) skipped++;
         k++;
       }
     }
@@ -2783,10 +2816,38 @@ export class Airstrike {
     k = 0;
     for (let iz = iz0; iz <= iz1; iz++) {
       for (let ix = ix0; ix <= ix1; ix++) {
+        const i = g.index(ix, iz);
+        if (carved && carved[i] === 1) {
+          // @see the note above: the carve's answer stands, so the "after" is
+          // the "before" and the diff below drops this cell from the patch.
+          newFlags[k] = oldFlags[k];
+          newFloor[k] = oldFloor[k];
+          newEnc[k] = oldEnc[k];
+          k++;
+          continue;
+        }
         const probe = probeCell(g, physics, ix, iz);
         newFlags[k] = probe.flag;
         newFloor[k] = probe.floor;
         newEnc[k] = probe.enclosure;
+        /**
+         * …AND IF THAT LIFTED A WALKABLE CELL ONTO SOMETHING, LOOK UNDER IT.
+         * A demolition drops mass; where it drops a slab ACROSS a road rather
+         * than INTO it, the road is still a road. @see `probeUnder` for the
+         * measurement — one row of cells at each of the fortress's two gates
+         * turned its whole interior into an island. Only for cells that were
+         * walkable before and have risen by more than a step, so the ordinary
+         * "the block collapsed into a crossable mound" case is untouched.
+         */
+        if (oldFlags[k] && probe.floor - oldFloor[k] > g.maxStep) {
+          const under = probeUnder(g, physics, ix, iz, oldFloor[k]);
+          if (under) {
+            newFlags[k] = under.flag;
+            newFloor[k] = under.floor;
+            newEnc[k] = under.enclosure;
+            under_++;
+          }
+        }
         k++;
       }
     }
@@ -2818,6 +2879,13 @@ export class Airstrike {
       j++;
     }
     site.nav = { grid: g, cells: c, oldFlags: of, oldFloor: oy, oldEnc: oe, newFlags: nf, newFloor: ny, newEnc: ne };
+    if (skipped || under_) {
+      console.info(
+        `[airstrike] ${site.id} nav patch: ${changed} of ${count} cells change, ` +
+          `${skipped} left to the interior carve, ${under_} re-read from under an overhang ` +
+          '(@see `probeUnder`)'
+      );
+    }
   }
 
   /**
@@ -4123,6 +4191,53 @@ function probeCell(g, phys, ix, iz) {
   }
   _probe.enclosure = blocked;
   return _probe;
+}
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE SAME CELL, ASKED FROM UNDER WHATEVER THE RUIN JUST PUT OVER IT
+ * ────────────────────────────────────────────────────────────────────────────
+ * `probeCell` casts from `g.topY`, so on a cell with a slab hanging over it the
+ * first thing it finds is the slab. That is correct for a rubble MOUND, which
+ * is what this file was written for — you walk over a mound — and it is wrong
+ * for an OVERHANG, which you walk under.
+ *
+ * MEASURED, NACHTFELD'S FORTRESS (`_nfgate.mjs`). The ruin drops the snapped
+ * gate towers and the parapet across both gate approaches at about 7.7 m, four
+ * and a half metres over a road that is still perfectly clear:
+ *
+ *   z=16, x=0   intact  floor 3.21   ·  NF-FORT down  top-down ray 7.69
+ *               under the overhang: ground 3.21, capsule FITS
+ *
+ * The patch took the 7.69, A* lost a step it had never needed to take, and the
+ * ENTIRE FORTRESS INTERIOR — 6204 cells, courtyard and rampart walk — became an
+ * island. One row of cells at each gate did it.
+ *
+ * So: start from just over the OLD floor and ask the same ladder. Returns null
+ * when there is nothing standable down there, in which case the mound reading
+ * stands and the cell really has been filled in.
+ */
+function probeUnder(g, phys, ix, iz, oldFloor) {
+  const MASK = phys.MASK.WORLD;
+  const x = g.worldX(ix);
+  const z = g.worldZ(iz);
+  const down = phys.raycast(x, oldFloor + g.maxStep + 0.4, z, 0, -1, 0, g.maxStep + 1.2, MASK);
+  if (!down.hit) return null;
+  const fy = down.point.y;
+  if (down.normal.y < g.maxSlope) return null;
+  const up = phys.raycast(x, fy + 0.25, z, 0, 1, 0, g.height - 0.2, MASK);
+  let flag;
+  if (!up.hit) flag = 1;
+  else if (up.distance > g.crouchHeight - 0.25) flag = 2;
+  else return null;
+  let blocked = 0;
+  for (let d = 0; d < 4; d++) {
+    const dx = d === 0 ? 1 : d === 1 ? -1 : 0;
+    const dz = d === 2 ? 1 : d === 3 ? -1 : 0;
+    if (phys.raycastAny(x, fy + 0.95, z, dx, 0, dz, g.radius + 0.06, MASK)) blocked++;
+  }
+  if (blocked >= 3) return null;
+  return { flag, floor: fy, enclosure: blocked };
 }
 
 /** Boot diagnostics: if either number looks wrong the site is in the wrong place. */
