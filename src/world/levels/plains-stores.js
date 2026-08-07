@@ -120,7 +120,7 @@ function bay(A, x, y, z, yaw, w, d, tint = 'concrete_dark') {
 }
 
 /** Ordnance: a chest with a lid and stencilled bands. `h` is its own height. */
-function chest(A, rng, key, x, y, z, yaw, w, h, d, lid = 'metal_dark') {
+function chest(A, rng, solid, key, x, y, z, yaw, w, h, d, lid = 'metal_dark') {
   A.add(key, BOX(A), LL(IDENT, x, y + h / 2, z, yaw, w, h, d), {
     paint: (px, py, pz, nx, ny, nz, out) => {
       const n = fbm3(px * 0.9, py * 0.9, pz * 0.9, 2);
@@ -131,7 +131,7 @@ function chest(A, rng, key, x, y, z, yaw, w, h, d, lid = 'metal_dark') {
       out[2] = Math.min(1, 0.2 + n * 0.25);
     },
   });
-  A.box(A.surfaceOf(key), x, y + h / 2, z, w, h, d, yaw);
+  solid(A.surfaceOf(key), x, y + h / 2, z, w, h, d, yaw);
   A.add(lid, BOX_SOFT(A), LL(IDENT, x, y + h + 0.035, z, yaw, w + 0.07, 0.09, d + 0.07), { masks: [0.85, 0.5, 0.1] });
   // the two catches and the rope handle at each end
   for (const s of [-1, 1]) {
@@ -159,22 +159,34 @@ function chest(A, rng, key, x, y, z, yaw, w, h, d, lid = 'metal_dark') {
  * 「石ころオブジェが移動の妨げです」 is about. So every piece here is either under
  * 0.40 (walked over) or over 0.75 (walked round); nothing sits in the band.
  */
-export function dressPost(A, rng, kind, x, y, z, yaw = 0) {
+export function dressPost(A, rng, kind, x, y, z, yaw = 0, opts = {}) {
   const c = Math.cos(yaw), s = Math.sin(yaw);
   /** post-local (right, forward) -> world. `forward` is the facing. */
   const px = (r, f) => x + c * r + s * f;
   const pz = (r, f) => z - s * r + c * f;
+  /**
+   * `opts.clip` PUTS THE WHOLE POST ON `LAYER.CLIP`, and it is not decoration.
+   * `NavGrid.build` drops one ray per cell under `MASK.WORLD`, which does not
+   * contain CLIP, and keeps the FIRST hit — so a `STATIC` proxy standing on a
+   * CLIP deck twenty-six metres up becomes the FLOOR of the cells under it and
+   * a walkable island in the sky. Four props on this tower's cab roof were
+   * exactly that until `clipProps` was put round them. A post dressed on any
+   * clip surface has to go on the same layer as the surface.
+   */
+  const solid = opts.clip
+    ? (surf, ...a) => A.clipBox(surf, ...a)
+    : (surf, ...a) => A.box(surf, ...a);
 
   if (kind === 'ammo') {
     bay(A, x, y, z, yaw, 3.4, 3.0);
     // a pallet stack of belted ammunition, at working height and no higher
     A.add('wood', BOX_SOFT(A), LL(IDENT, px(-0.85, 0.5), y + 0.07, pz(-0.85, 0.5), yaw, 1.5, 0.14, 1.1), { masks: [0.6, 0.4, 0.2] });
-    A.box('wood', px(-0.85, 0.5), y + 0.07, pz(-0.85, 0.5), 1.5, 0.14, 1.1, yaw);
-    chest(A, rng, 'metal_green', px(-0.85, 0.5), y + 0.14, pz(-0.85, 0.5), yaw, 1.24, 0.86, 0.78);
-    chest(A, rng, 'metal_green', px(0.95, -0.35), y, pz(0.95, -0.35), yaw + 0.5, 1.0, 0.82, 0.66);
+    solid('wood', px(-0.85, 0.5), y + 0.07, pz(-0.85, 0.5), 1.5, 0.14, 1.1, yaw);
+    chest(A, rng, solid, 'metal_green', px(-0.85, 0.5), y + 0.14, pz(-0.85, 0.5), yaw, 1.24, 0.86, 0.78);
+    chest(A, rng, solid, 'metal_green', px(0.95, -0.35), y, pz(0.95, -0.35), yaw + 0.5, 1.0, 0.82, 0.66);
     // the OPEN one, and the light out of it is what reads at forty metres
     A.add('metal_green', BOX(A), LL(IDENT, px(0.55, 0.85), y + 0.19, pz(0.55, 0.85), yaw - 0.3, 0.92, 0.38, 0.62), { masks: [0.5, 0.4, 0.2] });
-    A.box('metal', px(0.55, 0.85), y + 0.19, pz(0.55, 0.85), 0.92, 0.38, 0.62, yaw - 0.3);
+    solid('metal', px(0.55, 0.85), y + 0.19, pz(0.55, 0.85), 0.92, 0.38, 0.62, yaw - 0.3);
     A.add('ember', BOX_SOFT(A), LL(IDENT, px(0.55, 0.85), y + 0.4, pz(0.55, 0.85), yaw - 0.3, 0.74, 0.05, 0.46));
     // brass on the deck round it
     for (let i = 0; i < 14; i++) {
@@ -189,7 +201,7 @@ export function dressPost(A, rng, kind, x, y, z, yaw = 0) {
     bay(A, x, y, z, yaw, 2.8, 2.6);
     // a low steel table with the frags laid out on it, open crates under it
     A.add('metal_dark', BOX(A), LL(IDENT, px(0, 0), y + 0.36, pz(0, 0), yaw, 1.7, 0.07, 0.95), { masks: [0.8, 0.5, 0.15] });
-    A.box('metal', px(0, 0), y + 0.2, pz(0, 0), 1.7, 0.4, 0.95, yaw);
+    solid('metal', px(0, 0), y + 0.2, pz(0, 0), 1.7, 0.4, 0.95, yaw);
     for (let i = 0; i < 10; i++) {
       const r = -0.62 + (i % 5) * 0.31;
       const f = i < 5 ? -0.16 : 0.16;
@@ -199,7 +211,7 @@ export function dressPost(A, rng, kind, x, y, z, yaw = 0) {
     // the fibre carriers they came in, stood on end against the back
     for (let i = 0; i < 3; i++) {
       A.add('wood_dark', BOX(A), LL(IDENT, px(-0.9 + i * 0.34, -1.0), y + 0.44, pz(-0.9 + i * 0.34, -1.0), yaw + rng.range(-0.15, 0.15), 0.3, 0.88, 0.3), { masks: [0.6, 0.5, 0.25] });
-      A.box('wood', px(-0.9 + i * 0.34, -1.0), y + 0.44, pz(-0.9 + i * 0.34, -1.0), 0.3, 0.88, 0.3, yaw);
+      solid('wood', px(-0.9 + i * 0.34, -1.0), y + 0.44, pz(-0.9 + i * 0.34, -1.0), 0.3, 0.88, 0.3, yaw);
     }
     A.add('ember', BOX_SOFT(A), LL(IDENT, px(0, 0), y + 0.42, pz(0, 0), yaw, 1.5, 0.03, 0.8));
     return;
@@ -217,7 +229,7 @@ export function dressPost(A, rng, kind, x, y, z, yaw = 0) {
      */
     for (const r of [-1.05, 1.05]) {
       A.add('metal_dark', BOX(A), LL(IDENT, px(r, 0), y + 0.9, pz(r, 0), yaw, 0.12, 1.8, 0.5), { masks: [0.8, 0.5, 0.15] });
-      A.box('metal', px(r, 0), y + 0.9, pz(r, 0), 0.12, 1.8, 0.5, yaw);
+      solid('metal', px(r, 0), y + 0.9, pz(r, 0), 0.12, 1.8, 0.5, yaw);
     }
     for (const h of [0.42, 1.05, 1.62]) {
       A.add('metal_dark', BOX_THIN(A), LL(IDENT, px(0, 0.13), y + h, pz(0, 0.13), yaw + Math.PI / 2, 0.07, 0.07, 2.1), { masks: [0.85, 0.55, 0.1] });
@@ -231,7 +243,7 @@ export function dressPost(A, rng, kind, x, y, z, yaw = 0) {
     }
     // the bench of loaded magazines in front of it
     A.add('metal_dark', BOX(A), LL(IDENT, px(0, 0.85), y + 0.19, pz(0, 0.85), yaw, 1.9, 0.38, 0.6), { masks: [0.75, 0.5, 0.2] });
-    A.box('metal', px(0, 0.85), y + 0.19, pz(0, 0.85), 1.9, 0.38, 0.6, yaw);
+    solid('metal', px(0, 0.85), y + 0.19, pz(0, 0.85), 1.9, 0.38, 0.6, yaw);
     for (let i = 0; i < 7; i++) {
       A.add('metal_green', BOX_FINE(A), LL(IDENT, px(-0.72 + i * 0.24, 0.85), y + 0.44, pz(-0.72 + i * 0.24, 0.85), yaw + rng.range(-0.2, 0.2), 0.07, 0.1, 0.2), { masks: [0.55, 0.55, 0.1] });
     }
@@ -256,7 +268,7 @@ export function dressPost(A, rng, kind, x, y, z, yaw = 0) {
         px(Math.cos(a) * rr, Math.sin(a) * rr), y + 0.09 + tier * 0.19, pz(Math.cos(a) * rr, Math.sin(a) * rr),
         yaw + a + rng.range(-0.15, 0.15), rng.range(0.98, 1.14));
     }
-    chest(A, rng, 'metal_green', px(-0.55, -0.35), y, pz(-0.55, -0.35), yaw + 0.35, 1.06, 0.82, 0.7);
+    chest(A, rng, solid, 'metal_green', px(-0.55, -0.35), y, pz(-0.55, -0.35), yaw + 0.35, 1.06, 0.82, 0.7);
     A.add('ember', BOX_SOFT(A), LL(IDENT, px(-0.55, -0.35), y + 0.9, pz(-0.55, -0.35), yaw, 0.82, 0.04, 0.5));
     // the scope on its tripod, pointed the way the position faces
     for (let k = 0; k < 3; k++) {
@@ -280,12 +292,12 @@ export function dressPost(A, rng, kind, x, y, z, yaw = 0) {
      * 2.15 m standard that dressing stands off the centre.
      */
     A.add('plaster_sand', BOX(A), LL(IDENT, px(0, 0), y + 0.17, pz(0, 0), yaw, 0.95, 0.34, 0.62), { masks: [0.3, 0.3, 0.15] });
-    A.box('concrete', px(0, 0), y + 0.17, pz(0, 0), 0.95, 0.34, 0.62, yaw);
+    solid('concrete', px(0, 0), y + 0.17, pz(0, 0), 0.95, 0.34, 0.62, yaw);
     A.add('ember', BOX_FINE(A), LL(IDENT, px(0, 0), y + 0.35, pz(0, 0), yaw, 0.5, 0.02, 0.16));
     A.add('ember', BOX_FINE(A), LL(IDENT, px(0, 0), y + 0.35, pz(0, 0), yaw, 0.16, 0.02, 0.5));
     // a second, closed chest and a rolled stretcher beside it
     A.add('plaster_sand', BOX(A), LL(IDENT, px(-0.85, -0.3), y + 0.15, pz(-0.85, -0.3), yaw + 0.4, 0.72, 0.3, 0.5), { masks: [0.35, 0.3, 0.15] });
-    A.box('concrete', px(-0.85, -0.3), y + 0.15, pz(-0.85, -0.3), 0.72, 0.3, 0.5, yaw + 0.4);
+    solid('concrete', px(-0.85, -0.3), y + 0.15, pz(-0.85, -0.3), 0.72, 0.3, 0.5, yaw + 0.4);
     A.add('fabric_cream', BOX_SOFT(A), LL(IDENT, px(0.95, 0.15), y + 0.14, pz(0.95, 0.15), yaw + 1.2, 0.28, 0.28, 1.9), { masks: [0.4, 0.35, 0.2] });
     for (const s of [-1, 1]) {
       A.add('wood', BOX_THIN(A), LL(IDENT, px(0.95 + s * 0.17, 0.15), y + 0.09, pz(0.95 + s * 0.17, 0.15), yaw + 1.2, 0.05, 0.05, 2.1), { masks: [0.6, 0.4, 0.2] });
