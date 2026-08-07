@@ -26,11 +26,31 @@
  * counts as getting out even though you cannot climb back in. Exactly the model
  * `floorcheck` uses, for the same reason: it is what the controller can do.
  *
+ * THE ONE THING THIS MODEL CANNOT SEE, and it decides how a boundary must be
+ * AUTHORED, so read it before you build one. A cell is refused when the standing
+ * capsule overlaps something — `physics.checkCapsule`, which is
+ * `StaticWorld.overlapCapsule`, which collects TRIANGLES WITHIN `radius` OF THE
+ * CAPSULE. It is a surface test and not a containment test, and a hollow box is
+ * twelve triangles: a capsule in the middle of a 3.8 m thick one is metres from
+ * every face, reports zero contacts, and the flood walks the inside of the solid
+ * one cell at a time. Measured on NACHTFELD's first rim, which registered 332
+ * segments, stopped a `MASK.CHARACTER` ray dead on all 720 bearings tested, and
+ * was crossed anyway.
+ *
+ * It is not a hole in the map — `CharacterController` sweeps, and a swept
+ * capsule stops at the outer face at any speed — but it is a hole in what this
+ * gate can see, and the rule that falls out of it is the one `cordon.js` already
+ * follows without saying why: A BOUNDARY MUST BE THIN. A wall of thickness `t`
+ * refuses every cell within `t/2 + 0.315` of its centreline, so the blocked band
+ * is `t + 0.63` wide, and a `--cell` grid crossing it has a sample inside it only
+ * while `t + 0.63 > cell`. At the default 0.8 m that means anything up to about
+ * 1.2 m is honestly measured and anything thicker is not. The town's compound
+ * wall is 0.55 m; NACHTFELD's rim is 0.62 m. Build mass around a thin membrane,
+ * not a thick solid.
+ *
  * Every cell the flood reaches is then classified against the AUTHORED CONTENT
- * of the level — the street and its pavements, the three lanes and both
- * courtyards, every building footprint, the site works, the relief terraces and
- * decks, the gate. A reached cell further than `--slack` metres from all of it
- * is VOID: ground the player can stand on where the level has authored nothing.
+ * of the level. A reached cell further than `--slack` metres from all of it is
+ * VOID: ground the player can stand on where the level has authored nothing.
  * Void cells are grouped into connected regions and the gate FAILS on any
  * region bigger than `--maxvoid` m², because that is the thing being
  * complained about — not a 2 m gap behind a block, but a field.
@@ -39,6 +59,37 @@
  * reports, per bearing, how far the flood got and whether the far end of that
  * bearing is authored ground or void — which is the "how far can I walk that
  * way" question in the form the player asked it.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE FLOOD IS GENERIC. THE CLASSIFICATION IS NOT — `BOUND_RULES`
+ * ────────────────────────────────────────────────────────────────────────────
+ * This gate was written when there was one map and it was hard-wired to that
+ * map's authored tables: `L.STREET.kerb`, the three lanes, the building
+ * footprints, the relief terraces, the gate. Pointed at NACHTFELD it died on
+ * line 77 with `Cannot read properties of undefined (reading 'kerb')`, so the
+ * plain — the map with a 46 m mountain for a boundary and no cordon behind it —
+ * had NO BOUNDARY GATE AT ALL.
+ *
+ * The two halves are cleanly separable and only one of them was ever
+ * map-specific:
+ *
+ *   GENERIC — the capsule, the three moves, the surface columns, the flood, the
+ *             void regions, the leak trace back down `pred`, the bearings, the
+ *             plan view. None of it names a map.
+ *   PER-MAP — how big the grid is, how high to start the downward scan and how
+ *             far down to carry it, and the two predicates: is there anything
+ *             AUTHORED here, and is this cell inside the PLAY AREA.
+ *
+ * `BOUND_RULES` is that second half, one entry per level, selected by
+ * `world.level.id`. It is the fourth table of its kind in this codebase and it
+ * is deliberately the same shape as the other three — `MAPS`/`layoutFor` in
+ * `src/match/sites.js`, `MAP_RULES`/`applyMapRules` in `src/match/rules.js`,
+ * `forMap` in `src/match/geography.js` — down to the fallback, which uses the
+ * town's rule and SAYS SO rather than throwing. It reads `world.level.id` and
+ * NOT a second parse of `?map=`, for the reason `layoutFor` gives: two places
+ * parsing the query string is two places to disagree, and this tool has already
+ * been bitten once by a truncating `split('=')` that ran the town while
+ * reporting the plain.
  *
  * NOT MEASURED: whether the boundary looks good. Take a screenshot.
  */
@@ -51,7 +102,8 @@ const args = Object.fromEntries(process.argv.slice(2).map((a) => {
   return i < 0 ? [s, true] : [s.slice(0, i), s.slice(i + 1)];
 }));
 const URL = args.url ?? 'http://127.0.0.1:4173/';
-const CELL = Number(args.cell ?? 0.8);
+/** null = take the active map's own default out of `BOUND_RULES`. */
+const CELL = args.cell === undefined ? null : Number(args.cell);
 const BEARINGS = Number(args.bearings ?? 64);
 const SLACK = Number(args.slack ?? 3.0);
 const MAXVOID = Number(args.maxvoid ?? 20);
@@ -74,7 +126,7 @@ await page.evaluate(() => {
   c.peek('ui')?.banner?.hide?.();
 });
 
-const report = await page.evaluate(({ CELL, SLACK }) => {
+const report = await page.evaluate(({ CELL_ARG, SLACK }) => {
   const c = window.__ENGINE__.ctx;
   const w = c.peek('world'), phys = c.peek('physics');
   const L = w.layout;
@@ -83,99 +135,236 @@ const report = await page.evaluate(({ CELL, SLACK }) => {
   const MASK = phys.MASK.CHARACTER;
 
   const R = 0.32, H = 1.78, STEP = 0.42, MANTLE_UP = 1.85, DROP_MAX = 6.0, MREACH = 1.05;
-  /** Ray start for the surface scan. Above every parapet the flood may stand on
-   *  (the compound wall tops out under 4 m) and below the lowest real roof. */
-  const SCAN_TOP = 8.0;
-  const MAXSURF = 3;
   const _a = new V(), _b = new V(), _wp = new V(), _wq = new V();
 
-  // ------------------------------------------------------- authored content --
   /**
-   * The level's authored ground, in LEVEL space. Everything here is somewhere a
-   * designer put something: a surface to walk on, a footprint to walk round, or
-   * mass to fight over. `pad` is how far from the thing itself still counts as
-   * "at" it — you stand against a building, not inside it.
+   * ══════════════════════════════════════════════════════════════════════════
+   * BOUND_RULES — the map-specific half. @see the header.
+   * ══════════════════════════════════════════════════════════════════════════
+   * One entry per level, keyed by `world.level.id`. Each answers five questions
+   * and nothing else; every one of them is about the LEVEL's authored content,
+   * and none of the flood below knows which map it is walking.
+   *
+   *   cell            grid pitch, metres. The town's 0.8 is the number every
+   *                   figure in `cordon.js`'s header was measured at, so it is
+   *                   not a shared default that a second map may drift.
+   *   surfaces        how many stacked floors one (x, z) column may hold. The
+   *                   town's 3 is the depth every figure in `cordon.js` was
+   *                   measured at; the plain needs a fourth for a trench floor
+   *                   under a parapet under a fortress walk.
+   *   ext(L, w)       grid half-extent in LEVEL metres. Must cover every
+   *                   collidable triangle the flood could reach, or the gate
+   *                   reports a boundary that is really the edge of its own grid.
+   *   scanTop(lx,lz)  where the downward surface scan starts, LEVEL y.
+   *   scanFloor(lx,lz) the lowest y that still counts as a standable surface;
+   *                   the ray itself is carried `PROBE_UNDER` past it so a floor
+   *                   sitting exactly on the limit is still found.
+   *   authored(lx,lz,slack,surface) -> tag|null
+   *                   "has a designer put anything here", with `slack` metres of
+   *                   grace. null IS the failure — it means VOID.
+   *   inPlay(lx,lz,surface) -> bool
+   *                   the play area with NO grace at all. This is what the
+   *                   confined flood is allowed to walk, and the difference
+   *                   between the two floods is what names the LEAKS.
    */
-  const rects = [];
-  const addRect = (x0, z0, x1, z1, pad, tag) => rects.push({
-    x0: Math.min(x0, x1) - pad, x1: Math.max(x0, x1) + pad,
-    z0: Math.min(z0, z1) - pad, z1: Math.max(z0, z1) + pad, tag,
-  });
-  const S = L.STREET;
-  addRect(-S.kerb, S.zMin, S.kerb, S.zMax, 0.6, 'street');
-  for (const a of L.ALLEYS ?? []) addRect(a.rect[0], a.rect[1], a.rect[2], a.rect[3], 0.6, 'lane');
-  for (const b of L.BUILDINGS ?? []) {
-    addRect(b.x - b.w / 2, b.z - b.d / 2, b.x + b.w / 2, b.z + b.d / 2, 1.2, `bldg ${b.id}`);
-  }
-  for (const p of L.SITEWORKS ?? []) addRect(p.x - p.w / 2, p.z - p.d / 2, p.x + p.w / 2, p.z + p.d / 2, 1.5, `sitework ${p.id}`);
-  for (const t of L.RELIEF?.terraces ?? []) addRect(t.rect[0], t.rect[1], t.rect[2], t.rect[3], 2.0, `terrace ${t.id}`);
-  for (const d of L.RELIEF?.decks ?? []) addRect(d.rect[0], d.rect[1], d.rect[2], d.rect[3], 1.5, `deck ${d.id}`);
-  for (const b of L.RELIEF?.blocks ?? []) addRect(b.rect[0], b.rect[1], b.rect[2], b.rect[3], 1.5, `block ${b.id}`);
-  if (L.GATE) addRect(-L.GATE.outerW, L.GATE.z - L.GATE.depth, L.GATE.outerW, L.GATE.z + L.GATE.depth, 2.5, 'gate');
-  /** Anything the world publishes as a place worth going: loot, vantages. */
-  for (const f of w.features ?? []) {
-    const p = w.worldToLevel(f.position.x, f.position.y, f.position.z, new V());
-    addRect(p.x, p.z, p.x, p.z, 3.5, `feature ${f.id}`);
-  }
+  const PROBE_UNDER = 1.8;
+  const BOUND_RULES = {
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * AL-MARIYA — the town. Rects, plus the surface tag under your feet.
+     * ──────────────────────────────────────────────────────────────────────
+     * Verbatim the classification this tool shipped with, moved not rewritten:
+     * every figure in `src/world/cordon.js`'s header (14 659 m² reached, 5 645
+     * void, the six crossings at x ±10) was measured by this code and the town
+     * is the regression check for the split.
+     */
+    town: {
+      cell: 0.8,
+      surfaces: 3,
+      /** The whole terrain plane, so the flood can walk off the end of the map. */
+      ext: (L) => 168 * (L.SCALE ?? 1) * 0.5 + 2,
+      /** Above every parapet the flood may stand on (the compound wall tops out
+       *  under 4 m) and below the lowest real roof. */
+      scanTop: () => 8.0,
+      scanFloor: () => -1.2,
+      build(L, w) {
+        /**
+         * The level's authored ground, in LEVEL space. Everything here is
+         * somewhere a designer put something: a surface to walk on, a footprint
+         * to walk round, or mass to fight over. `pad` is how far from the thing
+         * itself still counts as "at" it — you stand against a building, not
+         * inside it.
+         */
+        const rects = [];
+        const addRect = (x0, z0, x1, z1, pad, tag) => rects.push({
+          x0: Math.min(x0, x1) - pad, x1: Math.max(x0, x1) + pad,
+          z0: Math.min(z0, z1) - pad, z1: Math.max(z0, z1) + pad, tag,
+        });
+        const S = L.STREET;
+        addRect(-S.kerb, S.zMin, S.kerb, S.zMax, 0.6, 'street');
+        for (const a of L.ALLEYS ?? []) addRect(a.rect[0], a.rect[1], a.rect[2], a.rect[3], 0.6, 'lane');
+        for (const b of L.BUILDINGS ?? []) {
+          addRect(b.x - b.w / 2, b.z - b.d / 2, b.x + b.w / 2, b.z + b.d / 2, 1.2, `bldg ${b.id}`);
+        }
+        for (const p of L.SITEWORKS ?? []) addRect(p.x - p.w / 2, p.z - p.d / 2, p.x + p.w / 2, p.z + p.d / 2, 1.5, `sitework ${p.id}`);
+        for (const t of L.RELIEF?.terraces ?? []) addRect(t.rect[0], t.rect[1], t.rect[2], t.rect[3], 2.0, `terrace ${t.id}`);
+        for (const d of L.RELIEF?.decks ?? []) addRect(d.rect[0], d.rect[1], d.rect[2], d.rect[3], 1.5, `deck ${d.id}`);
+        for (const b of L.RELIEF?.blocks ?? []) addRect(b.rect[0], b.rect[1], b.rect[2], b.rect[3], 1.5, `block ${b.id}`);
+        if (L.GATE) addRect(-L.GATE.outerW, L.GATE.z - L.GATE.depth, L.GATE.outerW, L.GATE.z + L.GATE.depth, 2.5, 'gate');
+        /** Anything the world publishes as a place worth going: loot, vantages. */
+        for (const f of w.features ?? []) {
+          const p = w.worldToLevel(f.position.x, f.position.y, f.position.z, new V());
+          addRect(p.x, p.z, p.x, p.z, 3.5, `feature ${f.id}`);
+        }
+        const rectTag = (lx, lz, slack) => {
+          for (let i = 0; i < rects.length; i++) {
+            const r = rects[i];
+            if (lx >= r.x0 - slack && lx <= r.x1 + slack && lz >= r.z0 - slack && lz <= r.z1 + slack) return r.tag;
+          }
+          return null;
+        };
+        /**
+         * THE SURFACE UNDER YOUR FEET IS THE HONEST TEST, and it is why this
+         * gate can be strict without a hand-maintained list of every authored
+         * square metre.
+         *
+         * `buildGround` lays ONE sand plane under the whole 252 m terrain and
+         * then puts the road, the pavements, the lanes and both courtyards ON
+         * it as their own collision boxes with their own surface tags; `physics`
+         * reports the tag of the triangle a ray lands on. So "the player is
+         * standing on bare `sand`" IS "the player is standing on ground nobody
+         * authored a floor for" — the dunes that carry the horizon, which is
+         * exactly the ground in the screenshot. Everything else (dirt, gravel,
+         * concrete, metal, wood, a roof, a container, a rubble pile) is
+         * something somebody put there.
+         *
+         * The rect list still matters, because a designer may legitimately want
+         * you standing on sand — inside a courtyard, on a terrace, against a
+         * building. Authored = a floor tag, or inside one of those rects.
+         */
+        const authored = (lx, lz, slack, surface) =>
+          (surface && surface !== 'sand' ? surface : null) ?? rectTag(lx, lz, slack);
+        /**
+         * THE PLAY AREA ITSELF — authored ground with NO pad round it.
+         *
+         * The pads above are what makes "is there anything here" a fair question
+         * and they are exactly wrong for "can he get out this way": a 1.2 m
+         * skirt round every background block is a continuous authored footpath
+         * all the way round the outside of the map, so the confined flood walked
+         * the ring it was supposed to be excluded from and reported 108 leaks,
+         * one per block corner. Confined to floors and footprints only, it stops
+         * where the level does.
+         */
+        const core = [];
+        const addCore = (x0, z0, x1, z1) => core.push({
+          x0: Math.min(x0, x1), x1: Math.max(x0, x1), z0: Math.min(z0, z1), z1: Math.max(z0, z1),
+        });
+        addCore(-S.kerb, S.zMin, S.kerb, S.zMax);
+        for (const a of L.ALLEYS ?? []) addCore(a.rect[0], a.rect[1], a.rect[2], a.rect[3]);
+        for (const b of L.BUILDINGS ?? []) addCore(b.x - b.w / 2, b.z - b.d / 2, b.x + b.w / 2, b.z + b.d / 2);
+        for (const t of L.RELIEF?.terraces ?? []) addCore(t.rect[0], t.rect[1], t.rect[2], t.rect[3]);
+        for (const d of L.RELIEF?.decks ?? []) addCore(d.rect[0], d.rect[1], d.rect[2], d.rect[3]);
+        const inCore = (lx, lz) => {
+          for (let i = 0; i < core.length; i++) {
+            const r = core[i];
+            if (lx >= r.x0 && lx <= r.x1 && lz >= r.z0 && lz <= r.z1) return true;
+          }
+          return false;
+        };
+        return {
+          note: `${rects.length} authored rects, ${core.length} play rects, sand = unauthored`,
+          authored,
+          inPlay: (lx, lz, surface) => surface !== 'sand' || inCore(lx, lz),
+        };
+      },
+    },
 
-  const rectTag = (lx, lz, slack) => {
-    for (let i = 0; i < rects.length; i++) {
-      const r = rects[i];
-      if (lx >= r.x0 - slack && lx <= r.x1 + slack && lz >= r.z0 - slack && lz <= r.z1 + slack) return r.tag;
-    }
-    return null;
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * NACHTFELD — the night plain. A DISC, because the level says so.
+     * ──────────────────────────────────────────────────────────────────────
+     * The town's two tests both fail here and it is worth being exact about why
+     * rather than porting them badly:
+     *
+     *   THE SURFACE TAG SAYS NOTHING. The whole 470 m terrain — plain, ridge
+     *   face, crest and the ground past it — is ONE mesh registered with one
+     *   call, `A.collideGeo('dirt', field)`. Every triangle on this map reports
+     *   `dirt`, so "what am I standing on" cannot separate the play area from
+     *   the mountain the way `sand` separates the town's dunes from its road.
+     *
+     *   THERE ARE NO FOOTPRINTS TO LIST. A plain's authored ground is the plain.
+     *   Rect-listing five pads, two bases and three trench lines would call
+     *   ninety per cent of the map void.
+     *
+     * What the level DOES state, in one line of its own code, is where it stops:
+     * `plainsOpen()` opens with `if (r > RIDGE_R0 - margin) return false` — past
+     * the foot of the mountain the face pitches over and nothing stands there.
+     * That is the authored boundary, it is published as `layout.RIDGE.r0`, and
+     * every scatter pass on the map is already clipped to it. So the play area
+     * is the disc, the mountain is out, and a cell up the face or over the crest
+     * is exactly the "why can I get here, there is nothing here" the tool exists
+     * to answer.
+     *
+     * The tag returned names the nearest authored thing rather than just
+     * "plain", so the bearings table reads as a map instead of one repeated word.
+     */
+    plains: {
+      cell: 0.8,
+      surfaces: 4,
+      /**
+       * PAST THE CREST AND PAST THE LAST COLLIDABLE TRIANGLE. The walked field
+       * is 470 m across and all of it is collision, so the flood has to be able
+       * to reach the far corner of it or the gate would report the edge of its
+       * own grid as the edge of the map — which is the one failure a boundary
+       * tool must never have.
+       */
+      ext: (L) => Math.max(L.BOUNDS_HALF ?? 0, L.RIDGE?.r1 ?? 0) + 26,
+      /**
+       * THE SCAN FOLLOWS THE GROUND, and on this map it has to. The town's
+       * fixed 8 m works because its terrain is flat to a metre; here the floor
+       * runs from a trench bottom to a 64 m crest, so a fixed ceiling would
+       * scan the sky over the mountain and the inside of the hill over the
+       * plain. `level.groundY` is the analytic height field the terrain mesh
+       * was built from — one statement, no drift.
+       */
+      scanTop: (lx, lz, w) => w.level.groundY(lx, lz) + 34,
+      /** Under the deepest trench cut, so a revetted floor is still a surface. */
+      scanFloor: (lx, lz, w) => w.level.groundY(lx, lz) - 9,
+      build(L, w) {
+        const R0 = L.RIDGE?.r0 ?? 176;
+        const pads = L.PADS ?? [];
+        const works = L.WORKS ?? [];
+        const near = (lx, lz) => {
+          for (const p of pads) {
+            if ((lx - p.x) ** 2 + (lz - p.z) ** 2 < p.r1 * p.r1) return `pad ${p.id}`;
+          }
+          for (const q of works) {
+            if ((lx - q.x) ** 2 + (lz - q.z) ** 2 < (q.r + 4) ** 2) return `works ${q.id}`;
+          }
+          return 'plain';
+        };
+        return {
+          note: `disc r<=${R0} m (layout.RIDGE.r0), ${pads.length} pads, ${works.length} works`,
+          authored: (lx, lz, slack) =>
+            (Math.hypot(lx, lz) <= R0 + slack ? near(lx, lz) : null),
+          inPlay: (lx, lz) => Math.hypot(lx, lz) <= R0,
+        };
+      },
+    },
   };
 
-  /**
-   * THE SURFACE UNDER YOUR FEET IS THE HONEST TEST, and it is why this gate can
-   * be strict without a hand-maintained list of every authored square metre.
-   *
-   * `buildGround` lays ONE sand plane under the whole 252 m terrain and then
-   * puts the road, the pavements, the lanes and both courtyards ON it as their
-   * own collision boxes with their own surface tags; `physics` reports the tag
-   * of the triangle a ray lands on. So "the player is standing on bare `sand`"
-   * IS "the player is standing on ground nobody authored a floor for" — the
-   * dunes that carry the horizon, which is exactly the ground in the
-   * screenshot. Everything else (dirt, gravel, concrete, metal, wood, a roof,
-   * a container, a rubble pile) is something somebody put there.
-   *
-   * The rect list still matters, because a designer may legitimately want you
-   * standing on sand — inside a courtyard, on a terrace, against a building.
-   * Authored = a floor tag, or inside one of those rects.
-   */
-  const authoredTag = (lx, lz, slack, surface) =>
-    (surface && surface !== 'sand' ? surface : null) ?? rectTag(lx, lz, slack);
-
-  /**
-   * THE PLAY AREA ITSELF — authored ground with NO pad round it.
-   *
-   * The pads above are what makes "is there anything here" a fair question, and
-   * they are exactly wrong for "can he get out this way": a 1.2 m skirt round
-   * every background block is a continuous authored footpath all the way round
-   * the outside of the map, so the confined flood walked the ring it was
-   * supposed to be excluded from and reported 108 leaks, one per block corner.
-   * Confined to floors and footprints only, it stops where the level does.
-   */
-  const core = [];
-  const addCore = (x0, z0, x1, z1) => core.push({
-    x0: Math.min(x0, x1), x1: Math.max(x0, x1), z0: Math.min(z0, z1), z1: Math.max(z0, z1),
-  });
-  addCore(-S.kerb, S.zMin, S.kerb, S.zMax);
-  for (const a of L.ALLEYS ?? []) addCore(a.rect[0], a.rect[1], a.rect[2], a.rect[3]);
-  for (const b of L.BUILDINGS ?? []) addCore(b.x - b.w / 2, b.z - b.d / 2, b.x + b.w / 2, b.z + b.d / 2);
-  for (const t of L.RELIEF?.terraces ?? []) addCore(t.rect[0], t.rect[1], t.rect[2], t.rect[3]);
-  for (const d of L.RELIEF?.decks ?? []) addCore(d.rect[0], d.rect[1], d.rect[2], d.rect[3]);
-  const inCore = (lx, lz) => {
-    for (let i = 0; i < core.length; i++) {
-      const r = core[i];
-      if (lx >= r.x0 && lx <= r.x1 && lz >= r.z0 && lz <= r.z1) return true;
-    }
-    return false;
-  };
+  const levelId = w.level?.id ?? null;
+  let ruleId = levelId;
+  let RULE = BOUND_RULES[levelId];
+  if (!RULE) { ruleId = 'town'; RULE = BOUND_RULES.town; }
+  const CELL = CELL_ARG ?? RULE.cell;
+  const cls = RULE.build(L, w);
+  const authoredTag = cls.authored;
+  const inPlayAt = cls.inPlay;
+  const MAXSURF = RULE.surfaces;
 
   // ------------------------------------------------------------- the grid --
-  /** The whole terrain plane, so the flood can walk off the end of the map. */
-  const EXT = 168 * (L.SCALE ?? 1) * 0.5 + 2;
+  const EXT = RULE.ext(L, w);
   const nx = Math.ceil((EXT * 2) / CELL) + 1;
   const nz = nx;
   const idx = (ix, iz) => iz * nx + ix;
@@ -191,14 +380,18 @@ const report = await page.evaluate(({ CELL, SLACK }) => {
     if (list !== undefined) return list;
     list = [];
     const ix = ci % nx, iz = (ci / nx) | 0;
-    w.levelToWorld(lxOf(ix), 0, lzOf(iz), _wp);
-    let from = SCAN_TOP;
+    const lx = lxOf(ix), lz = lzOf(iz);
+    w.levelToWorld(lx, 0, lz, _wp);
+    /** Both ends of the scan are the map's to choose. @see `BOUND_RULES`. */
+    const top = RULE.scanTop(lx, lz, w);
+    const floor = RULE.scanFloor(lx, lz, w);
+    let from = top;
     for (let s = 0; s < MAXSURF; s++) {
       rays++;
-      const hit = phys.raycast(_wp.x, from, _wp.z, 0, -1, 0, from + 3.0, MASK);
+      const hit = phys.raycast(_wp.x, from, _wp.z, 0, -1, 0, from - floor + PROBE_UNDER, MASK);
       if (!hit.hit) break;
       const fy = hit.point.y;
-      if (fy < -1.2) break;
+      if (fy < floor) break;
       from = fy - 0.06;
       // A floor faces up. The BVH reports backfaces, so a downward ray through
       // a slab hands back its underside too — see the same note in floorcheck.
@@ -208,7 +401,7 @@ const report = await page.evaluate(({ CELL, SLACK }) => {
       if (!phys.checkCapsule(_a, _b, R - 0.005, MASK)) continue;
       list.push(nodeY.length);
       nodeY.push(fy); nodeCell.push(ci); nodeSurf.push(hit.surface);
-      if (from < -1.2) break;
+      if (from < floor) break;
     }
     cellNodes[ci] = list;
     return list;
@@ -243,7 +436,7 @@ const report = await page.evaluate(({ CELL, SLACK }) => {
     let t = inPlay[k];
     if (t !== undefined) return t;
     const ci = nodeCell[k];
-    t = nodeSurf[k] !== 'sand' || inCore(lxOf(ci % nx), lzOf((ci / nx) | 0));
+    t = inPlayAt(lxOf(ci % nx), lzOf((ci / nx) | 0), nodeSurf[k]);
     inPlay[k] = t;
     return t;
   };
@@ -440,6 +633,10 @@ const report = await page.evaluate(({ CELL, SLACK }) => {
   }
 
   return {
+    /** ECHOED FROM INSIDE THE PAGE, never from the query string. A truncating
+     *  `split('=')` in this repo's probes has already turned `?map=plains` into
+     *  `?map` once and run the town while reporting the plain. */
+    level: { id: levelId, name: w.level?.name ?? null, rule: ruleId, note: cls.note },
     grid: { cell: CELL, nx, nz, ext: +EXT.toFixed(1) },
     cost: { rays, popped, nodes: nodeY.length, columns: cellNodes.reduce((a, v) => a + (v === undefined ? 0 : 1), 0) },
     seeds: seedInfo,
@@ -473,14 +670,19 @@ const report = await page.evaluate(({ CELL, SLACK }) => {
       return rows;
     })(),
   };
-}, { CELL, SLACK });
+}, { CELL_ARG: CELL, SLACK });
 
 if (!report || report.err) {
   console.log('[boundcheck]', report?.err ?? 'no report');
   await browser.close(); process.exit(2);
 }
 
-console.log(`\n  grid ${report.grid.nx}x${report.grid.nz} @ ${report.grid.cell} m over level ±${report.grid.ext} m`);
+console.log(`\n  MAP "${report.level.id}" — ${report.level.name}`);
+console.log(`  classified by BOUND_RULES.${report.level.rule}: ${report.level.note}`);
+if (report.level.rule !== report.level.id) {
+  console.log(`  !! no BOUND_RULES entry for "${report.level.id}" — falling back to the town's`);
+}
+console.log(`  grid ${report.grid.nx}x${report.grid.nz} @ ${report.grid.cell} m over level ±${report.grid.ext} m`);
 console.log(`  ${report.cost.rays} rays, ${report.cost.columns} columns sampled, ${report.cost.nodes} standable surfaces`);
 const badSeed = report.seeds.filter((s) => !s.ok);
 if (badSeed.length) console.log(`  !! ${badSeed.length} seed(s) had no standable surface: ${JSON.stringify(badSeed)}`);
