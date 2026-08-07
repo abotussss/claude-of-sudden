@@ -1172,6 +1172,33 @@ export class AudioSystem {
    * and the watchdog is now watching the muffle anyway.
    */
   _playCollapse(kind, position, o) {
+    /**
+     * THE GUARD BELONGS HERE, WHERE THE FIRST DEREFERENCE IS.
+     *
+     * `this.field` is the SpatialField, and it does not exist until `start()`
+     * has built a graph on a live AudioContext — it is `null` in the
+     * constructor, assigned only inside `start()`, and set back to `null` by
+     * `_teardown()`. A browser will not give us a context before the first user
+     * gesture, so `field === null` IS THE NORMAL STATE of a page nobody has
+     * clicked yet and of a headless boot, not an error.
+     *
+     * Every other voice entry point already knows that: `_playAt` and
+     * `_playDry` both open with `!this.running || suspended -> return false`,
+     * and every event handler opens with `!this.running`. This method did not,
+     * because its guard was DOWNSTREAM — inside the `_playAt` it calls on the
+     * line after it had already read `this.field`. So a `collapse_sub`
+     * scheduled by `src/match` before the first click threw
+     * `TypeError: Cannot read properties of null (reading 'distanceTo')` out of
+     * `play()` and into the caller's frame; on the plain that was an act beat,
+     * and it took the match update down with it.
+     *
+     * Returning false is not a voice silently declining something it could have
+     * played: with no context there is nothing to play it WITH, and false is
+     * exactly the answer `_playAt` would have given one line later. Note the
+     * order — `this.actx` is only read once `running` is true, and the two are
+     * set and cleared together.
+     */
+    if (!this.running || this.actx.state === 'suspended') return false;
     const dist = this.field.distanceTo(position.x, position.y, position.z);
     const near = clamp(1 - dist / 140, 0, 1);
     const bag = this._collapseBag;
@@ -1203,6 +1230,12 @@ export class AudioSystem {
    * voices a second.
    */
   playFar(x, y, z, o) {
+    // THE SAME NULL, THE SAME PATH. `gain:` below reads `this.field` while it is
+    // building the bag it hands to `_playAt`, i.e. before `_playAt`'s guard runs
+    // — identical to the `_playCollapse` defect above. `BattleLayer` is built in
+    // `start()` and so cannot call this early, but this is a public method on the
+    // same voice surface and the storm calls it directly. @see _playCollapse.
+    if (!this.running || this.actx.state === 'suspended') return false;
     return this._playAt('far', x, y, z, {
       profile: o.profile, rounds: o.rounds, spacing: o.spacing,
       level: o.level ?? 1,
