@@ -211,6 +211,14 @@ export class Crash {
     this._blast = { position: null, radius: 0, damage: 0, source: 'crash' };
     /** Persistent smoke tags, so `dispose`/`reset` can take them back. */
     this._smoke = [];
+    /**
+     * THE PLOUGH'S VOICE while it is running, `{ drive, stop }` or null.
+     * @see src/audio/crash.js. It is a SUSTAINED voice holding a slot in the
+     * spatial field, which makes it the one thing this act owns that has to be
+     * given back — `fire()`, `reset()` and `dispose()` all end it, and if none
+     * of them ever runs the emitter's own three-second lease reclaims the slot.
+     */
+    this._plough = null;
     /** Seconds since the last trail puff, so the approach does not emit per frame. */
     this._puff = 0;
   }
@@ -716,6 +724,8 @@ export class Crash {
     this._puff = 0;
     this.struck = false;
     this.busy = true;
+    /** A second firing must not strand the first one's voice. @see _plough */
+    this._stopPlough();
     this._fireU.uT.value = -1;
     this._fireU.uFade.value = 1;
     this.flames.visible = false;
@@ -811,6 +821,43 @@ export class Crash {
     this._poseHull(this._v, 0.06, 0);
     this._fireU.uT.value = skid;
     while (this._cell < CELLS && this._ct[this._cell] <= skid) this._light(this._cell++);
+
+    /**
+     * ────────────────────────────────────────────────────────────────────
+     * THE VOICE TRAVELS WITH THE WRECK, AND ITS PITCH IS THIS DERIVATIVE
+     * ────────────────────────────────────────────────────────────────────
+     * `_poseAt` skids on `d = 1 - (1-u)^2`, so the ground speed is
+     * `len * dd/du / PLOUGH` = `len * 2(1-u) / PLOUGH` — 64 m/s on the frame
+     * of contact, falling LINEARLY to nothing at rest. It is differentiated
+     * here rather than measured off successive positions for the reason
+     * `battle.js` has to do the opposite: that file cannot see inside a tank
+     * and must difference what it is given, and this one authored the curve
+     * two lines up. Differencing it would be measuring our own arithmetic
+     * through a frame time.
+     *
+     * `src/audio/crash.js` turns that number into a RATE of stick-slip grabs,
+     * so the pitch of the scrape falls because the wreck is slowing down and
+     * cannot drift out of step with the picture. `u` goes as the second
+     * argument: it is how far into the furrow the wreck has buried itself,
+     * and it is what closes the airframe's ring down.
+     *
+     * IT ENDS AT `PLOUGH`, NOT AT `PLOUGH + 0.4`. The wreck is at rest from
+     * `skid = 5.0`; the extra four tenths below are for the fire and the
+     * camera. Carrying the scrape through them would be four tenths of a
+     * second of a stationary object grinding.
+     */
+    if (this._plough) {
+      if (skid >= PLOUGH) {
+        this._plough.stop();
+        this._plough = null;
+      } else {
+        const u = skid / PLOUGH;
+        this._plough.drive(
+          (this._len * 2 * (1 - u)) / PLOUGH, u,
+          this._v.x, this._v.y, this._v.z
+        );
+      }
+    }
 
     if (skid >= PLOUGH + 0.4) {
       this._t = -1;
@@ -930,8 +977,27 @@ export class Crash {
      * on a satellite would be the wrong voice played correctly. The plough's
      * own sound is a separate piece of work and it is NOT done here; say so
      * rather than half-do it.
+     *
+     * THAT WORK IS DONE NOW, AND IT IS ITS OWN VOICE. @see src/audio/crash.js.
+     * The reasoning above stands unchanged — nothing about this wreck is
+     * failing under its own weight, it is being DRAGGED — so what plays over
+     * the next five seconds is stick-slip: a rate of grabs set by the ground
+     * speed, which falls three decades as the wreck decelerates and takes the
+     * pitch of the whole voice down with it. It is started on the frame of
+     * contact, one line under the blast, because the ground contact IS the
+     * event; it travels with the wreck (`update` below drives it); and it
+     * ENDS, on a settle, rather than fading out.
      */
     audio?.play?.('collapse_sub', at, { dur: 2.6, maxDist: 1200 });
+    /**
+     * `?? null` AND NOT `??=`. `startPlough` returns null when there is no
+     * graph yet, when the pool refused the slot or when nobody is near enough
+     * to spend one on — all three are ordinary, none is an error, and every
+     * call site below is `this._plough?.`. A truthy-but-not-callable handle is
+     * what shadowed `fire()` with a mesh and threw on the frame this act was
+     * supposed to appear; a null is safe in a way that was learned here.
+     */
+    this._plough = audio?.startPlough?.(at) ?? null;
     this.flames.visible = true;
     console.info(`[crash] IMPACT at (${at.x.toFixed(0)}, ${at.y.toFixed(1)}, ${at.z.toFixed(0)}) — 34 m blast`);
   }
@@ -995,6 +1061,18 @@ export class Crash {
     }
   }
 
+  /**
+   * END THE SCRAPE IF ONE IS RUNNING. Idempotent, and deliberately NOT folded
+   * into `_extinguish`: putting the fire out and stopping the plough are two
+   * different events five seconds apart, and `_extinguish` is also what runs
+   * 240 seconds later when the ground finally stops burning.
+   */
+  _stopPlough() {
+    if (!this._plough) return;
+    this._plough.stop();
+    this._plough = null;
+  }
+
   /** The fire is out. Take the smoke back and hide the field. */
   _extinguish() {
     this._burn = 0;
@@ -1044,6 +1122,7 @@ export class Crash {
     this._cell = 0;
     this.struck = false;
     this.busy = false;
+    this._stopPlough();
     this._extinguish();
     this._fireU.uT.value = -1;
     this._fireU.uFade.value = 1;
@@ -1051,6 +1130,17 @@ export class Crash {
   }
 
   dispose() {
+    /**
+     * THE VOICE IS NOT GATED ON `ready` AND THE FIRE IS.
+     *
+     * `_extinguish` dereferences `this.flames`, which a map with no crash track
+     * does not have — that is the bug `reset()`'s own note is about, measured at
+     * 2688 pageerrors on the town. `_stopPlough` reads one nullable field of
+     * this object and can be called on any map in any state, so it is outside
+     * the test: a guard that is wider than its dereference is how this file
+     * shipped a crash, and a guard that is narrower is how audio shipped six.
+     */
+    this._stopPlough();
     /** @see the note in `reset()` — a map with no track has nothing to put out. */
     if (this.ready) this._extinguish();
     this.hull?.geometry?.dispose();

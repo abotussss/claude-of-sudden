@@ -547,6 +547,25 @@ class Emitter {
     this.lease = Infinity;
     /** What KIND of sound is in this slot. @see SpatialField.acquire */
     this.kindTag = null;
+    /**
+     * A FIXED OCCLUSION FOR THE LIFE OF THIS VOICE, or null to measure it.
+     *
+     * `acquire` has always taken an `occlusion` override and `refresh` has
+     * always ignored it and re-measured — which is right for almost everything,
+     * because a tracked voice is usually a thing walking about behind cover.
+     * It is wrong for a source that is not a POINT. Measured on the plain, the
+     * satellite's five-second plough sat at `occ = 1.0` for every frame of its
+     * life: two rays from a listener 90 m away, both into the same rise, and a
+     * 157 m furrow declared fully muffled by a hill in the middle of it. That
+     * is `_playCollapse`'s "a collapse must not be occluded by the building it
+     * IS", one subsystem down and with a source three times longer.
+     *
+     * `holdOcclusion` is an OPT-IN and touches nothing that does not ask for
+     * it: it is set on every `acquire`, so a recycled slot cannot inherit one.
+     * It also saves the two raycasts a frame, which is the whole cost of
+     * refreshing a fast-moving voice every frame instead of once a round robin.
+     */
+    this.occHold = null;
     this.pos = { x: 0, y: 0, z: 0 };
     this._connected = false;
     this._sendConnected = false;
@@ -954,7 +973,14 @@ export class SpatialField {
 
     const t = opts.when ?? now;
     const dist = opts.dist ?? this.distanceTo(opts.x, opts.y, opts.z);
-    const occ = opts.occlusion !== undefined ? opts.occlusion : this.occlusionAt(opts.x, opts.y, opts.z);
+    /**
+     * `holdOcclusion` is BOTH the value now and the value `refresh` will keep
+     * using; `occlusion` is only the value now. Assigned unconditionally so a
+     * recycled slot never inherits the last voice's. @see Emitter.occHold
+     */
+    em.occHold = opts.holdOcclusion ?? null;
+    const occ = opts.holdOcclusion ?? (opts.occlusion !== undefined
+      ? opts.occlusion : this.occlusionAt(opts.x, opts.y, opts.z));
     const atten = (opts.atten ?? this.attenuation(dist)) * (1 - 0.62 * occ);
 
     em.free = false;
@@ -1052,7 +1078,8 @@ export class SpatialField {
     const t = this.actx.currentTime;
     const p = em.pos;
     const dist = this.distanceTo(p.x, p.y, p.z);
-    const occ = this.occlusionAt(p.x, p.y, p.z);
+    /** @see Emitter.occHold — a source that is not a point does not re-measure. */
+    const occ = em.occHold ?? this.occlusionAt(p.x, p.y, p.z);
     const atten = this.attenuation(dist) * (1 - 0.62 * occ);
     em.occ = occ;
     em.dist = dist;

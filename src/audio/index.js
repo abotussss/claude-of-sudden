@@ -11,6 +11,9 @@
  *   audio.start()                      force-start (returns Promise<boolean>)
  *   audio.deafness                     0..1 concussion; UI/post may read this
  *   audio.play(kind, position, opts)   one-shot; position null = head-locked
+ *   audio.startPlough(position)        the ONE sustained voice `src/match` owns
+ *                                      -> { drive(speed, dug, x, y, z), stop() }
+ *                                      or null. @see src/audio/crash.js
  *   audio.bark(kind, position, opts)   enemy voice: 'spot' | 'reload' |
  *                                      'grenade' | 'flank' | 'suppress' |
  *                                      'advance' | 'hurt' | 'death' | 'copy'
@@ -46,6 +49,7 @@ import {
 } from './weapons.js';
 import { tankGun, droneRotor, droneLock, droneDive } from './vehicle.js';
 import { collapseTear, collapseSub, collapseBell } from './collapse.js';
+import { ploughScrape } from './crash.js';
 import { BattleLayer } from './battle.js';
 import { AudioWatchdog } from './watchdog.js';
 import {
@@ -179,6 +183,83 @@ const COLLAPSE_PRIORITY = 1.3;
  */
 const COLLAPSE_KINDS = { collapse_tear: 6.2, collapse_sub: 6.6, collapse_bell: 4.6 };
 
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE PLOUGH — the three numbers a MOVING set piece needs, and why each one is
+ * NOT the number the collapse voices use
+ * ────────────────────────────────────────────────────────────────────────────
+ * `Crash` ploughs a wreck 157 m across the plain over five seconds and it was
+ * silent. @see src/audio/crash.js for the voice; these are the mix facts, and
+ * they live here for the same reason `_playCollapse`'s do — a caller that
+ * restates a mix fact is a caller that goes stale, and `_onExplosion` restating
+ * `send: 1.0` is what killed a whole reverb pass.
+ *
+ * PRIORITY 1.1, AND IT IS DELIBERATELY BETWEEN THE TWO EXISTING FLOORS.
+ *
+ *   1.00  `_onExplosion`, and the plough plays OVER twenty-seven of them: every
+ *         fire cell the wreck lights emits one. The event must not be bidding
+ *         from below against its own consequences — that is the whole of the
+ *         bug `COLLAPSE_PRIORITY` 0.995 -> 1.3 fixed ten hours ago.
+ *   1.10  here.
+ *   1.20  `SpatialField.PROTECTED_PRI`. NOTHING BUT A COLLAPSE VOICE MAY BE AT
+ *         OR ABOVE THIS and this is not, on purpose: the scan skips a candidate
+ *         whose priority is >= 1.2 AND >= the requester's, so at 1.1 the plough
+ *         cannot take a slot off `collapse_sub` at 1.3 — including the one
+ *         `Crash._impact` fires half a second before it. The containment holds.
+ *
+ * It is also `tracked`, which means the steal loop refuses it outright
+ * (`if (e.tracked) continue`) — so the barrage cannot take THIS one back
+ * either, and the priority above is only ever about what the plough may take.
+ * A tracked slot is a LEASE and not a grant: `startPlough` sets three seconds
+ * and every `drive()` renews it, so a `Crash` that stops updating — a round
+ * reset, a throw upstream — loses the slot rather than pinning it for the rest
+ * of the match. @see Emitter.lease.
+ */
+const PLOUGH_PRIORITY = 1.1;
+/**
+ * GAIN 5.2, MEASURED — `_ploughvoice.mjs`, rendered through the real mixer at
+ * the distances this event is actually heard from.
+ *
+ * It is under `collapse_sub`'s 6.6 and that is the correct order: the sub is
+ * one arrival, half a second wide, that the mix ducks for. This is FIVE SECONDS
+ * of continuous voice, and `_startEngine`'s note on the tank is the cautionary
+ * tale — a hull at gain 2.4 measured seven times the player's own rifle purely
+ * because it never stopped. A sustained voice dominates a mix far more than its
+ * level suggests.
+ */
+const PLOUGH_GAIN = 5.2;
+/**
+ * How far a 400 m plain has to carry it. The same 1200 the impact's own
+ * `strike_rubble` uses, because they are the same event two seconds apart.
+ */
+const PLOUGH_MAXDIST = 1200;
+/**
+ * DRY, at 0.12. 「リバーブが強いです、まだ」 has been answered six times in this
+ * subsystem and a five-second bed is the fastest way to earn it back. It is
+ * also simply true: this is a furrow being cut across open ground at night and
+ * there is nothing out there for it to reflect off.
+ */
+const PLOUGH_SEND = 0.12;
+/**
+ * OCCLUSION 0.10, HELD — not measured, and this is the same argument
+ * `_playCollapse` makes when it stops a cathedral being muffled by itself.
+ *
+ * MEASURED FIRST (`_ploughvoice.mjs`): with occlusion left to the field the
+ * plough sat at `occ = 1.0` on every frame of its life, from a listener 90 m
+ * away on open ground. `occlusionAt` fires two rays at a POINT, and this source
+ * is a 157 m furrow — a rise in the middle of the plain answers both rays and
+ * the whole event is declared behind a wall. `atten` carries `1 - 0.62 * occ`,
+ * so the biggest thing on the map was playing 8.4 dB under its own authored
+ * level and 9.3 dB under the `collapse_sub` fired at the same instant from the
+ * same coordinates. A voice that plays at the wrong level is a different bug
+ * from one that throws, and both look identical to a call count.
+ *
+ * 0.10 rather than 0: there IS ground between the listener and most of the
+ * scar most of the time, and a set piece that ignores the terrain completely
+ * would be the opposite error. @see `SpatialField.Emitter.occHold`.
+ */
+const PLOUGH_OCC = 0.10;
+
 /** Finite Vector3-ish check — one NaN from any subsystem must not throw. */
 function isVec(p) {
   return !!p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z);
@@ -306,6 +387,13 @@ export class AudioSystem {
 
     this.battle = null;
     this.watchdog = null;
+    /**
+     * THE PLOUGH, at most one of. `{ voice, em, handle }` while it is running.
+     * @see startPlough
+     */
+    this._plough = null;
+    /** …and the one that is ending, waiting for its settle to ring out. */
+    this._ploughDying = null;
     /** Preallocated option bag for the collapse voices. @see _playCollapse */
     this._collapseBag = {
       dur: undefined, size: undefined, f0: undefined, strikes: undefined,
@@ -558,6 +646,17 @@ export class AudioSystem {
 
   _teardown() {
     try {
+      /**
+       * THE PLOUGH FIRST OF ALL, because it is a loop source on a tracked slot
+       * and its owner is `src/match`, not this file — nothing else in this
+       * teardown knows it exists. `free()` rather than `stopPlough()`: a
+       * subsystem that is being torn down does not want a settle ringing out
+       * into a context that is about to close.
+       */
+      if (this._plough) { try { this._plough.voice.free(); } catch { /* gone */ } }
+      if (this._ploughDying) { try { this._ploughDying.voice.free(); } catch { /* gone */ } }
+      this._plough = null;
+      this._ploughDying = null;
       // Before the field: it holds tracked emitters (tank engines) and loop
       // sources that have to be stopped while the context still exists.
       this.watchdog?.dispose();
@@ -656,6 +755,13 @@ export class AudioSystem {
        * true once this frame's expiries have been processed.
        */
       this.battle.update(dt, actx.currentTime);
+      /**
+       * The plough's own reaper, and it is here rather than inside
+       * `_drivePlough` for the reason `battle.js` moved `_reap` out of
+       * `_updateTanks`: the thing that drives a voice is exactly the thing
+       * that has STOPPED by the time it needs reaping.
+       */
+      this._reapPlough(actx.currentTime);
 
       /* ---- head-locked voice teardown ---------------------------- */
       /**
@@ -1242,6 +1348,191 @@ export class AudioSystem {
       if (near > 0.08) this.mixer.concuss(Math.pow(near, 1.3) * 0.34);
     }
     return ok;
+  }
+
+  /* ================================================================ */
+  /* THE PLOUGH — one moving, sustained set-piece voice                */
+  /* ================================================================ */
+
+  /**
+   * START THE SCRAPE, and hand back something that can be driven and stopped.
+   *
+   * This is `_playCollapse`'s sibling for a voice that MOVES. `play()` cannot
+   * express it: every path through `play()` claims a slot, builds a one-shot
+   * and hands the field a fixed end time, and this event is a hundred tonnes
+   * travelling 157 m over five seconds while decelerating from 63 m/s to
+   * nothing. The sound has to be AT THE WRECK the whole way — a five second
+   * scrape anchored at the impact point is a scrape coming from somewhere the
+   * wreck no longer is, and on a 400 m plain that is 157 m of error.
+   *
+   * The shape is `battle.js`'s `_startEngine` / `_startRotor`, which is the
+   * house pattern for a continuous spatialised voice: acquire a `tracked`
+   * emitter, build the motor, `hold` it, and let the owner's frame loop move it
+   * and renew its lease. The differences from those two are all this event's:
+   *
+   *   - THEY REFUSE TO START while the render governor has the pool clamped
+   *     (`capacity < emitters * 0.66`), because a tank is one of thirty things
+   *     that might want a slot and there will be another one along. This does
+   *     not, and must not: it happens once a match, it is the map's signature
+   *     act, and a clamped pool is not a reason to play the biggest event in
+   *     the game silently. It takes ONE slot for five seconds.
+   *   - `_playCollapse` ducks the mix and concusses the listener. This does
+   *     NEITHER. `Crash._impact` fires `collapse_sub` half a second earlier and
+   *     that voice already ducked for this event; a second duck inside two
+   *     seconds is the exact mistake `nachtfeld.js` documents for Act II's
+   *     magazine — it flattens two beats into one smear. A duck also cannot be
+   *     held for five seconds without the rest of the match simply going away.
+   *
+   * @param {{x:number,y:number,z:number}} position where the wreck is NOW
+   * @returns {?{drive:Function, stop:Function}} null when there is no graph,
+   *          no slot, or the event is too far away to be worth one.
+   */
+  startPlough(position, o = {}) {
+    /**
+     * THE GUARD IS HERE, AT THE FIRST DEREFERENCE, and that placement is the
+     * whole lesson of `_playCollapse`'s own bug: its guard used to be one line
+     * DOWNSTREAM, inside the `_playAt` it called, and it had already read
+     * `this.field` — which is null on every page nobody has clicked yet and in
+     * every headless boot. Read `this.running` before `this.actx`, and both
+     * before `this.field`.
+     */
+    if (!this.running || this.actx.state === 'suspended') return null;
+    if (!isVec(position)) return null;
+    // Never two. A second act firing over a running one replaces it rather
+    // than layering, and the first one gets its ending instead of vanishing.
+    if (this._plough) this.stopPlough();
+    try {
+      const f = this.field;
+      const now = this.actx.currentTime;
+      const dist = f.distanceTo(position.x, position.y, position.z);
+      if (dist > (o.maxDist ?? PLOUGH_MAXDIST)) return null;
+      const em = f.acquire({
+        x: position.x, y: position.y, z: position.z,
+        when: now, dist, bus: 'weapons',
+        priority: o.priority ?? PLOUGH_PRIORITY,
+        send: PLOUGH_SEND,
+        gain: o.gain ?? PLOUGH_GAIN,
+        /**
+         * A long provisional deadline, because a `tracked` emitter is not
+         * expired by it at all — the LEASE is what holds this slot and
+         * `stopPlough` writes the real end time when the voice ends.
+         */
+        endTime: now + 30,
+        tracked: true,
+        lease: 3,
+        holdOcclusion: o.occlusion ?? PLOUGH_OCC,
+        tag: 'plough',
+      });
+      if (!em) return null;
+      let voice = null;
+      try {
+        voice = ploughScrape(this.actx, this.bank, this.rng, { when: now });
+      } catch (err) {
+        em.detach();          // never leak the slot on a voice that failed
+        throw err;
+      }
+      f.hold(em, voice.node, now + 30, PLOUGH_SEND);
+      this.stats.events++;
+      const rec = { voice, em };
+      const handle = {
+        drive: (speed, dug, x, y, z) => this._drivePlough(rec, speed, dug, x, y, z),
+        stop: () => (this._plough === rec ? this.stopPlough() : false),
+      };
+      rec.handle = handle;
+      this._plough = rec;
+      return handle;
+    } catch (err) {
+      this._error(err);
+      return null;
+    }
+  }
+
+  /**
+   * MOVE IT, RENEW IT AND WORK IT. Called once a frame by `Crash.update`.
+   *
+   * `field.refresh` is called EVERY frame here and not left to the field's own
+   * round robin, which re-evaluates ONE tracked emitter per frame — at 72
+   * emitters that is a 1.5 Hz worst case. It is plenty for a bed or a tank
+   * doing 4 m/s and it is not remotely enough for this: at 63 m/s the wreck
+   * moves forty metres between two visits, so its distance attenuation would
+   * be describing where it used to be. It costs NO rays, because the emitter
+   * holds a fixed occlusion. @see PLOUGH_OCC.
+   */
+  _drivePlough(rec, speed, dug, x, y, z) {
+    if (!this.running || this._plough !== rec) return false;
+    /**
+     * THE POOL MAY HAVE TAKEN IT BACK. A watchdog `drain()` frees every
+     * emitter including tracked ones, and an unrenewed lease frees them too.
+     * Either way the voice is now playing into a disconnected node, which is
+     * the "plays and is inaudible" failure this subsystem has shipped before —
+     * so notice it, end the voice properly, and stop pretending.
+     */
+    if (rec.em.free) {
+      this._plough = null;
+      try { rec.voice.free(); } catch { /* already gone */ }
+      return false;
+    }
+    try {
+      const now = this.actx.currentTime;
+      // `isVec` takes an object and this runs every frame of the event, so the
+      // three numbers are checked directly — a scratch object here would be an
+      // allocation in a frame loop, which is the one thing this file's own
+      // header promises it does not do.
+      if (Number.isFinite(x + y + z)) {
+        rec.em.moveTo(x, y, z, 0.05);
+        this.field.refresh(rec.em);
+      }
+      rec.em.lease = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000 + 3;
+      rec.voice.drive(speed, dug, now);
+      return true;
+    } catch (err) {
+      this._error(err);
+      return false;
+    }
+  }
+
+  /**
+   * END IT — and ending is not fading. @see `ploughScrape.stop`, which builds
+   * the settle: the airframe's own modes struck once with the Q pulled out of
+   * them, and the mass of it arriving.
+   *
+   * The emitter stops being `tracked` on this line and gets the voice's real
+   * end time, so the field's ORDINARY expiry loop owns it from here — there is
+   * no lease left to renew and nothing for a dead owner to pin. The voice's
+   * nodes are freed on the frame loop in `update()` and never from a timer: a
+   * `setTimeout` outlives `dispose()` and fires into a closed context, which is
+   * the trap `tankEngine.stop` documents.
+   */
+  stopPlough() {
+    const rec = this._plough;
+    if (!rec) return false;
+    this._plough = null;
+    try {
+      const now = this.actx?.currentTime ?? 0;
+      const at = rec.voice.stop(now);
+      if (!rec.em.free) {
+        rec.em.tracked = false;
+        rec.em.lease = Infinity;
+        rec.em.endTime = at;
+        rec.em.wallEnd = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000 +
+          (at - now) + 0.5;
+      }
+      this._ploughDying = { voice: rec.voice, em: rec.em, at: at + 0.15 };
+    } catch (err) {
+      try { rec.voice.free(); } catch { /* already gone */ }
+      rec.em?.detach();
+      this._error(err);
+    }
+    return true;
+  }
+
+  /** Disconnect a finished plough. Called from `update`, on the frame loop. */
+  _reapPlough(now) {
+    const d = this._ploughDying;
+    if (!d || now < d.at) return;
+    this._ploughDying = null;
+    try { d.voice.free(); } catch { /* already gone */ }
+    d.em?.detach();
   }
 
   /**
