@@ -2202,6 +2202,37 @@ export class Agent {
      * find. Carrying it across a re-task costs nothing, because the only code
      * that reads it is the fallback, and reaching the fallback at all means the
      * new objective has no route either.
+     *
+     * AND HERE IS THE OTHER HALF, WHICH THE HAND THAT WROTE THE LINE ABOVE NEVER
+     * GOT TO MEASURE. Three builds cut from one tree within two minutes of each
+     * other, identical but for this file, so the only variable is this clock:
+     * BASE is the pass before `NOROUTE_LADDER` existed, WITH is that pass with
+     * the clear on re-task, WITHOUT is this text. `_engage.mjs`, 150 s live,
+     * warm 120 s, and the whole travel refusal board underneath the two columns
+     * that matter:
+     *
+     *                          town s7                town s11
+     *                     BASE   WITH  WITHOUT   BASE   WITH  WITHOUT
+     *   `unstick:noPath`  11.0 % 12.4 %  2.8 %    3.3 % 14.3 %  2.7 %
+     *     ...of it `objectiveBlocked`
+     *                     74.5 % 81.5 %  5.5 %   31.9 % 46.6 %  4.3 %
+     *   travel under 5 m/s
+     *                     31.7 % 35.1 % 20.0 %   22.1 % 33.3 % 20.7 %
+     *   at his OWN ceiling
+     *                     60.6 % 57.7 % 70.6 %   68.5 % 58.4 % 70.4 %
+     *
+     * `_noroute.mjs` on the same three, town seed 11, says what those men were:
+     * the fallback was called 346 times and gave up 342 (315 of them a man off
+     * the height field) on BASE, 576 and 543 (537 off the field) WITH the clear
+     * — the trap, undiminished, exactly as the paragraph above predicts — and 59
+     * and 12 (9 off the field) WITHOUT it. The clear was not a small mistake in
+     * a good change; it was the change failing to fire at all.
+     *
+     * ON THE PLAIN IT IS A NO-OP AND THAT IS THE RESULT, NOT AN ABSENCE OF ONE:
+     * 0.6 % `noPath` and 11.1 % under 5 m/s WITH, 0.6 % and 10.5 % WITHOUT. Its
+     * zones are 154-314 m apart across open ground and nobody is stranded on a
+     * roof out there, so a fix aimed at the town's carved interiors has nothing
+     * to bite on — and, more to the point, costs nothing where it is not needed.
      */
     // Force a fresh path next time ADVANCE runs rather than finishing the old one.
     if (changed) {
