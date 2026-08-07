@@ -1377,17 +1377,19 @@ if (args.foot) {
  * the three new voices marked. What has to be true afterwards: the collapse
  * voices played, nothing was dropped, and the governor came back to full.
  *
- *   node tools/audiotest.mjs --collapse [--url=…] [--scale=1]
+ *   node tools/audiotest.mjs --collapse [--url=…] [--scale=1] [--bare] [--inject]
  */
 if (args.collapse) {
   const CSCALE = Number(args.scale ?? 1);
-  await page.evaluate(({ scale, bare }) => {
+  await page.evaluate(({ scale, bare, inject }) => {
     const e = window.__ENGINE__;
     const a = e.ctx.peek('audio');
     const rec = [];
     // `--bare` is the CONTROL: the same event, the same match, without the three
     // new voices, so what they cost the pool is a difference rather than a claim.
     window.__CBARE__ = !!bare;
+    // @see the scaffold note below — off unless explicitly asked for.
+    window.__CINJECT__ = !!inject;
     window.__CT__ = rec;
     const played = { tear: 0, sub: 0, bell: 0, tail: 0, rubble: 0, settle: 0 };
     window.__CPLAY__ = played;
@@ -1395,15 +1397,34 @@ if (args.collapse) {
     // to tell "the voice was refused" from "the event never called for it".
     const orig = a.play.bind(a);
     /**
-     * INJECT THE THREE NEW VOICES WHERE THE COLLAPSE WILL PLAY THEM.
+     * INJECT THE THREE NEW VOICES WHERE THE COLLAPSE WILL PLAY THEM — BUT ONLY
+     * IF THE MATCH STILL DOES NOT PLAY THEM ITSELF.
      *
-     * `src/match` does not call them yet — it asked for them to exist and is
-     * wiring its side separately — so measuring the pool without them would
-     * measure the old event and prove nothing about the new one. The first
-     * `strike_tail` of the raze is the collapse frame (the caller sends it at
-     * level 1.8, far above the 1.25 an ordinary site uses), so the three are
-     * fired at that instant, at that position, exactly as the caller intends:
-     * the bed and the sub together, the bell a beat later as the tower goes.
+     * THE SCAFFOLD, AND IT HAS OUTLIVED ITS REASON — SO IT IS NOW OPT-IN.
+     *
+     * This used to open "`src/match` does not call them yet", which was true
+     * when it was written and is not any more: `_cathBeat`'s `raze` case fires
+     * the tear, the sub and the bell on the frame the building goes. Left on,
+     * it fired a SECOND set on top of the real ones and the gate reported six
+     * collapse emitters for a three-voice event — a probe measuring its own
+     * scaffolding and reporting it as the game. That is precisely the class of
+     * mistake this file exists to catch.
+     *
+     * STANDING IT DOWN ON THE FIRST REAL COLLAPSE CALL IS NOT ENOUGH, and that
+     * was tried: the trigger below is the salvo's `strike_tail`, which lands
+     * `RULES.cathedralRazeDelay` seconds BEFORE the raze beat, so the injection
+     * has already happened by the time the match asks for anything. The order
+     * cannot be fixed from inside the hook.
+     *
+     * So it is `--inject`, off by default. Default runs now measure what the
+     * game actually plays; `--inject` reproduces the historical scaffold on a
+     * build where the wiring is missing, which is the only state it was ever
+     * meant for. `--bare` is unchanged and still suppresses everything.
+     *
+     * The trigger, when it is asked for: the first `strike_tail` of the raze is
+     * the collapse frame (the caller sends it at level 1.8, far above the 1.25
+     * an ordinary site uses), so the three go at that instant, at that position
+     * — the bed and the sub together, the bell a beat later.
      */
     let injected = false;
     a.play = (kind, pos, opts) => {
@@ -1414,7 +1435,7 @@ if (args.collapse) {
       else if (kind === 'strike_rubble') played.rubble++;
       else if (kind === 'strike_settle') played.settle++;
       const r = orig(kind, pos, opts);
-      if (!window.__CBARE__ && !injected && kind === 'strike_tail' && (opts?.level ?? 0) >= 1.5 && pos) {
+      if (window.__CINJECT__ && !window.__CBARE__ && !injected && kind === 'strike_tail' && (opts?.level ?? 0) >= 1.5 && pos) {
         injected = true;
         const at = { x: pos.x, y: pos.y, z: pos.z };
         orig('collapse_tear', at, { dur: 7, size: 1 });
@@ -1449,7 +1470,7 @@ if (args.collapse) {
       });
     }, 50);
     e.time.scale = scale;
-  }, { scale: CSCALE, bare: !!args.bare });
+  }, { scale: CSCALE, bare: !!args.bare, inject: !!args.inject });
 
   // Let the match settle into `live` before dropping a cathedral on it, so the
   // pool is carrying a real firefight rather than a freeze-time idle.
