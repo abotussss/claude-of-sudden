@@ -117,7 +117,8 @@ export function buildFort(A, groundY) {
   curtain(A, rng, y);
   volumes.push(...gates(A, rng, y));
   courtyardRamps(A, rng, y);
-  courtyard(A, rng, y);
+  /** The barrack shed is a room now, and a room has to be published. */
+  volumes.push(courtyard(A, rng, y));
 
   const ruin = A.beginScope('ruin:NF-FORT');
   buildFortRuin(A, new Rng(0x50f7ae), y);
@@ -244,9 +245,31 @@ function curtain(A, rng, y) {
           course: 0.55, copingKey: 'concrete_dark' });
       const px = (ax + bx) / 2, pz = (az + bz) / 2;
       const len = Math.hypot(bx - ax, bz - az);
-      A.add('concrete_dark', BOX_SOFT(A), LL(IDENT, px + e.nx * 0.25, y(0.24), pz + e.nz * 0.25,
-        e.yaw, 1.9, 0.66, len), { masks: [0.8, 0.5, 0.2] });
-      A.box('concrete', px + e.nx * 0.25, y(0.24), pz + e.nz * 0.25, 1.9, 0.66, len, e.yaw);
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * THE PLINTH IS 0.41 m PROUD, NOT 0.57, AND THE NUMBER IS `maxStep`
+       * ────────────────────────────────────────────────────────────────────
+       * The revetment is 1.1 m thick and this splay is 1.9, so 0.65 m of it
+       * stands out in the open all the way round the trace. At 0.57 m proud
+       * that shelf was over `NavGrid.maxStep` (0.45) and therefore an island:
+       * measured on the intact map, TWO components of exactly 100 cells each,
+       * x ±30..31 over z 28..68, floor 3.8 — the whole length of both flat
+       * curtains, walkable and with no step onto it from anywhere.
+       *
+       * It is the same 0.57 that put the courtyard in a 5 477-cell island when
+       * this splay still ran across both gates, and it was fixed there by
+       * stopping the run either side of the opening. That was the local fix;
+       * this is the general one. Under `maxStep` the shelf is a kerb the height
+       * field walks straight up, so it joins the glacis instead of floating off
+       * it — and the gates keep their break, because the run there is also what
+       * keeps the passage floor clear of a lip.
+       *
+       * The bottom is left at -0.09 (buried), so what changed is 0.16 m of
+       * height on a 4.4 m wall.
+       */
+      A.add('concrete_dark', BOX_SOFT(A), LL(IDENT, px + e.nx * 0.25, y(0.16), pz + e.nz * 0.25,
+        e.yaw, 1.9, 0.5, len), { masks: [0.8, 0.5, 0.2] });
+      A.box('concrete', px + e.nx * 0.25, y(0.16), pz + e.nz * 0.25, 1.9, 0.5, len, e.yaw);
     }
 
     // the inner revetment, seen from the courtyard
@@ -702,25 +725,209 @@ function courtyard(A, rng, y) {
   }
 
   // a barrack shed, a water point, and the litter of a held position
-  {
-    const bx = FORT.x - 13, bz = FORT.z + 12;
-    A.add('corrugated', box, LL(IDENT, bx, y(1.5), bz, 0.35, 9.0, 3.0, 5.0), { masks: [0.85, 0.6, 0.15] });
-    A.box('metal', bx, y(1.5), bz, 9.0, 3.0, 5.0, 0.35);
-    A.add('corrugated', box, LL(IDENT, bx, y(3.2), bz, 0.35, 9.6, 0.24, 5.6, 0, 0.06), { masks: [0.9, 0.7, 0.2] });
-    for (let i = 0; i < 5; i++) {
-      A.add('metal_rust', BOX_THIN(A), LL(IDENT, bx - 4.2 + i * 2.1, y(1.5), bz - 2.55, 0.35, 0.14, 3.0, 0.14),
-        { masks: [0.9, 0.6, 0] });
-    }
-    practical(A, bx + 4.9, y(2.7), bz, 0xffc07a, 8, 12, { s: 0.14 });
-  }
+  const shedVolume = barrackShed(A, y);
   A.put('water_tank', FORT.x + 12, y(0.02), FORT.z + 13, 0.6, 1.5);
   for (let i = 0; i < 26; i++) {
     const a = rng.float() * Math.PI * 2;
     const d = Math.sqrt(rng.float()) * (R_IN - 2);
-    A.put(rng.pick(['barrel_rust', 'barrel_blue', 'jerry_can', 'tyre', 'pallet', 'crate_b', 'bucket', 'block_small']),
-      FORT.x + Math.cos(a) * d, y(0.02), FORT.z + Math.sin(a) * d, rng.float() * 6.28, rng.range(0.85, 1.15));
+    /**
+     * EVERY DRAW IS TAKEN BEFORE ANYTHING IS SKIPPED. The shed has a door in it
+     * now, and a `barrel_rust` dropped in a 1.8 m opening is the doorway bug
+     * this file's own magazine note counts five shipped instances of. Skipping
+     * AFTER the draws keeps `rng` on exactly the sequence it was on, so nothing
+     * else in the courtyard moves.
+     */
+    const id = rng.pick(['barrel_rust', 'barrel_blue', 'jerry_can', 'tyre', 'pallet', 'crate_b', 'bucket', 'block_small']);
+    const ry = rng.float() * 6.28;
+    const sc = rng.range(0.85, 1.15);
+    const px = FORT.x + Math.cos(a) * d, pz = FORT.z + Math.sin(a) * d;
+    if (nearShed(px, pz, 1.6)) continue;
+    A.put(id, px, y(0.02), pz, ry, sc);
   }
   practical(A, FORT.x + 9, y(5.4), FORT.z + 9, 0xffb066, 16, 22, { s: 0.2 });
+  return shedVolume;
+}
+
+// ─────────────────────────────────────────────────────────────── barrack shed ──
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE BARRACK SHED — HOLLOW, WITH A DOOR, AND THAT IS A NAV FIX
+ * ════════════════════════════════════════════════════════════════════════════
+ * It used to be one solid box: `A.box('metal', …, 9.0, 3.0, 5.0, 0.35)`. A solid
+ * box under open sky has a FLAT TOP, and a flat top is what `NavGrid.build`'s one
+ * downward ray finds — measured on the intact map, 71 walkable cells at floor 6.2
+ * over x -18..-8, z 57..63, in their own component, three metres up, with no
+ * ramp, stair or climb to them. A bot could not get on it and a bot put on it
+ * could not get off, which is the exact failure this map's gate towers were made
+ * solid to the top to avoid.
+ *
+ * The two honest fixes are to JOIN it or to STOP IT BEING WALKABLE, and for a
+ * 9 x 5 m hut the first one is also the better building: a corrugated shed is
+ * hollow. So it is four walls, a door facing the courtyard, a roof — and an
+ * `interiorVolume`, which is what this map already does for the magazine, for the
+ * control room and for both gate passages. The re-probe REPLACES the roof
+ * reading with the floor under it, so the 71 cells stop being an island in the
+ * sky and become a room joined to the courtyard through the door.
+ *
+ * It is legal here for the test the tower's header states: the only thing above
+ * the room is the shed's own roof, and the roof has no way onto it.
+ *
+ * ITS OWN RNG STREAM, for the reason every structure on this map has one — the
+ * fortress hands `courtyard()` the shared stream and the order of the draws IS
+ * the courtyard, so a shed that drew from it would move every scattered barrel
+ * the day somebody adds a bolt here.
+ */
+const SHED = { x: FORT.x - 13, z: FORT.z + 12, yaw: 0.35, hw: 4.5, hd: 2.5, wall: 0.24, eave: 3.0 };
+const SHED_C = Math.cos(SHED.yaw), SHED_S = Math.sin(SHED.yaw);
+/** Shed-local (lx, lz) -> world. Level space IS world space on this map. */
+const shedX = (lx, lz) => SHED.x + lx * SHED_C + lz * SHED_S;
+const shedZ = (lx, lz) => SHED.z - lx * SHED_S + lz * SHED_C;
+/** Is a world point inside the shed, or in front of its door? */
+function nearShed(x, z, margin = 0) {
+  const dx = x - SHED.x, dz = z - SHED.z;
+  const lx = dx * SHED_C - dz * SHED_S;
+  const lz = dx * SHED_S + dz * SHED_C;
+  return Math.abs(lx) <= SHED.hw + margin && Math.abs(lz) <= SHED.hd + margin;
+}
+
+function barrackShed(A, y) {
+  const box = BOX(A);
+  const rng = new Rng(0x50f7b2);
+  const { hw, hd, wall: WT, eave: EAVE, yaw } = SHED;
+  const DOOR_W = 1.8, DOOR_H = 2.2;
+  const put = (key, geo, lx, lz, ly, ry, sx, sy, sz, masks, rx = 0, rz = 0) =>
+    A.add(key, geo, LL(IDENT, shedX(lx, lz), y(ly), shedZ(lx, lz), ry, sx, sy, sz, rx, rz), { masks });
+
+  /**
+   * FOUR WALLS, SPELLED OUT RATHER THAN INDEXED. @see the magazine's own note,
+   * which is about the build where `i % 2` swapped the half-widths and put four
+   * slabs through the middle of the room in a cross. `yaw` is the direction the
+   * wall RUNS, because every box in this kit is (sx ACROSS, sy up, sz ALONG).
+   */
+  const SIDES = [
+    { lx: 0, lz: -(hd - WT / 2), ry: yaw + Math.PI / 2, len: hw * 2, door: false, tz: false },
+    { lx: 0, lz: hd - WT / 2, ry: yaw + Math.PI / 2, len: hw * 2, door: false, tz: false },
+    { lx: -(hw - WT / 2), lz: 0, ry: yaw, len: hd * 2, door: false, tz: true },
+    /** The door end faces the middle of the courtyard — @see `nearShed`. */
+    { lx: hw - WT / 2, lz: 0, ry: yaw, len: hd * 2, door: true, tz: true },
+  ];
+  for (const S of SIDES) {
+    // the wall's own tangent, in shed-local coordinates
+    const tx = S.tz ? 0 : 1, tz = S.tz ? 1 : 0;
+    const spans = S.door
+      ? [[-S.len / 2, -DOOR_W / 2], [DOOR_W / 2, S.len / 2]]
+      : [[-S.len / 2, S.len / 2]];
+    for (const [a, b] of spans) {
+      const m = (a + b) / 2, len = b - a;
+      const lx = S.lx + tx * m, lz = S.lz + tz * m;
+      put('corrugated', box, lx, lz, EAVE / 2, S.ry, WT, EAVE, len,
+        [0.7 + rng.float() * 0.25, 0.5 + rng.float() * 0.3, 0.15]);
+      A.box('metal', shedX(lx, lz), y(EAVE / 2), shedZ(lx, lz), WT, EAVE, len, S.ry);
+      // the rusted foot of a sheet that has stood in the mud for years, and the
+      // rail it is bolted to — the detail that has to read at half a metre
+      put('metal_rust', BOX_THIN(A), lx, lz, 0.22, S.ry, WT + 0.06, 0.44, len, [0.95, 0.8, 0.35]);
+      put('metal_rust', BOX_THIN(A), lx, lz, EAVE - 0.18, S.ry, WT + 0.05, 0.12, len, [0.85, 0.6, 0.1]);
+      for (let k = 0, n = Math.max(2, Math.round(len / 0.9)); k < n; k++) {
+        const t = (k + 0.5) / n - 0.5;
+        put('metal_dark', BOX_FINE(A), lx + tx * len * t, lz + tz * len * t, rng.range(0.9, 2.4),
+          S.ry, WT + 0.09, 0.07, 0.07, [0.9, 0.7, 0.2]);
+      }
+    }
+    if (S.door) {
+      // the head over the opening, its steel frame, and the leaf hooked back
+      put('corrugated', box, S.lx, S.lz, DOOR_H + (EAVE - DOOR_H) / 2, S.ry, WT, EAVE - DOOR_H, DOOR_W,
+        [0.75, 0.5, 0.2]);
+      A.box('metal', shedX(S.lx, S.lz), y(DOOR_H + (EAVE - DOOR_H) / 2), shedZ(S.lx, S.lz),
+        WT, EAVE - DOOR_H, DOOR_W, S.ry);
+      put('metal_dark', box, S.lx, S.lz, DOOR_H + 0.09, S.ry, WT + 0.14, 0.18, DOOR_W + 0.4, [0.85, 0.5, 0.15]);
+      for (const k of [-1, 1]) {
+        put('metal_dark', box, S.lx, S.lz + k * (DOOR_W / 2 + 0.09), DOOR_H / 2, S.ry,
+          WT + 0.12, DOOR_H, 0.18, [0.85, 0.5, 0.15]);
+      }
+      // the leaf, hooked back flat against the sheeting and CLEAR OF THE
+      // OPENING — half its width plus half the door's, or it stands in the way
+      // of the one hole in the building.
+      put('metal_green', box, S.lx + 0.15, S.lz - (DOOR_W - 0.06), DOOR_H / 2 - 0.06, S.ry,
+        0.08, DOOR_H - 0.14, DOOR_W - 0.12, [0.9, 0.6, 0.1]);
+    }
+  }
+
+  /**
+   * THE ROOF, AND IT IS SOLID ON `LAYER.STATIC` ON PURPOSE. Putting it on CLIP
+   * would also take the island away — the height field would look through it and
+   * find the floor — but the rampart walk is 4.4 m and this roof is 3.2, so a
+   * man on the walk would have a sightline and a firing line straight down
+   * through it into the room. `MASK.BULLET` and `MASK.SIGHT` exclude CLIP, and
+   * that trade is the wrong way round for a roof somebody is standing over.
+   */
+  A.add('corrugated', box, LL(IDENT, SHED.x, y(EAVE + 0.2), SHED.z, yaw, hw * 2 + 0.6, 0.24, hd * 2 + 0.6, 0, 0.06),
+    { masks: [0.9, 0.7, 0.2] });
+  A.box('metal', SHED.x, y(EAVE + 0.2), SHED.z, hw * 2 + 0.6, 0.24, hd * 2 + 0.6, yaw, 0, 0.06);
+  // purlins under the sheet, seen from inside, and the ridge cap over it
+  for (let k = 0; k < 6; k++) {
+    const t = (k + 0.5) / 6 - 0.5;
+    put('metal_rust', BOX_THIN(A), hw * 2 * t, 0, EAVE - 0.06, yaw, 0.1, 0.12, hd * 2 + 0.4, [0.9, 0.65, 0.25]);
+  }
+  put('metal_dark', BOX_SOFT(A), 0, 0, EAVE + 0.36, yaw, hw * 2 + 0.8, 0.14, 0.5, [0.8, 0.6, 0.2]);
+  // the stanchions the sheets are hung on, outside the long walls
+  for (const s of [-1, 1]) {
+    for (let i = 0; i < 5; i++) {
+      put('metal_rust', BOX_THIN(A), -hw + 0.4 + i * ((hw * 2 - 0.8) / 4), s * (hd + 0.13), EAVE / 2,
+        yaw + Math.PI / 2, 0.14, EAVE + 0.3, 0.14, [0.9, 0.6, 0]);
+    }
+  }
+
+  /**
+   * WHAT IS IN IT. Kept off the doorway by each prop's OWN extent, which is the
+   * measure `A.footprintR` exists for — a crate is 0.64 m across and this repo
+   * has shipped the centre-of-the-object test five times.
+   */
+  const door = { lx: hw + 0.4, lz: 0 };
+  const ids = ['crate_a', 'crate_b', 'crate_c', 'pallet', 'shelf', 'barrel_rust', 'box_card_a', 'bucket'];
+  const placed = [];
+  for (let i = 0; i < 90 && placed.length < 11; i++) {
+    const lx = rng.range(-hw + 1.0, hw - 1.0);
+    const lz = rng.range(-hd + 1.0, hd - 1.0);
+    const id = rng.pick(ids);
+    const sc = rng.range(0.9, 1.12);
+    const r = (A.footprintR(id, sc) ?? 0.4) + 0.18;
+    // the gangway down the middle stays clear, stores go against the walls
+    if (Math.abs(lz) < hd - 1.5) continue;
+    if (Math.hypot(lx - door.lx, lz - door.lz) < 2.6 + r) continue;
+    let ok = true;
+    for (const q of placed) if (Math.hypot(lx - q.lx, lz - q.lz) < q.r + r + 0.9) ok = false;
+    if (!ok) continue;
+    A.put(id, shedX(lx, lz), y(0.04), shedZ(lx, lz), yaw + rng.range(-0.3, 0.3), sc);
+    placed.push({ lx, lz, r });
+  }
+  for (let i = 0; i < 14; i++) {
+    const lx = rng.range(-hw + 0.3, hw - 0.3), lz = rng.range(-hd + 0.3, hd - 0.3);
+    const g = patchGeometry(rng, rng.range(0.4, 1.4), { lobes: 10, wobble: 0.5 });
+    A.addOnce('road_dust', g, LL(IDENT, shedX(lx, lz), y(0.06), shedZ(lx, lz), rng.float() * 6.28,
+      1, 1, rng.range(0.5, 1.1)), { masks: [0.3, rng.range(0.5, 0.95), 0.4] });
+  }
+  /**
+   * ONE BULB, MOVED INSIDE. It is the same light the shed already had standing
+   * off its end — `render` distance-culls punctual lights and Three bakes the
+   * VISIBLE point-light count into every material's program cache key, so the
+   * slot budget `WorldSystem._addBallast` holds is not something to spend on a
+   * hut. Inside, it also lights the doorway, which is the read from the gate.
+   */
+  practical(A, shedX(hw - 1.6, 0), y(EAVE - 0.45), shedZ(hw - 1.6, 0), 0xffc07a, 8, 12, { s: 0.14 });
+
+  /**
+   * …and the record without which all of the above is a 71-cell island with a
+   * door in it. `hw`/`hd` are the OUTER footprint: a volume clipped to the inner
+   * face leaves the threshold cell reading the roof, and the room is an island
+   * with a doorway nobody can walk through. @see the control room's own note.
+   */
+  return {
+    building: 'NF-FORT-SHED',
+    cx: SHED.x, cz: SHED.z, c: SHED_C, s: SHED_S,
+    hw, hd,
+    floorY: y(0.04),
+    probeY: y(1.6),
+  };
 }
 
 /**
