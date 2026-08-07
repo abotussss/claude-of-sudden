@@ -44,6 +44,16 @@ const BASE = args.url ?? 'http://127.0.0.1:4578/?map=plains';
 const SCALE = Number(args.scale ?? 8);
 const WANT = Number(args.acts ?? 3);
 const SEED = args.seed;
+/**
+ * `--natural` LEAVES THE WIN CHECK ALONE, and it is the run that prices things.
+ *
+ * 「後半3〜5分」 is a question about seconds REMAINING, so a fire time and the end
+ * it is measured against have to come out of the SAME match — stitching this
+ * probe's t onto `_nftime.mjs`'s end is two different games' dice. The default
+ * still suppresses the win, because that is the run that guarantees every act
+ * gets to play at all.
+ */
+const NATURAL = args.natural === true || args.natural === 'true';
 
 const url = SEED === undefined ? BASE : `${BASE}${BASE.includes('?') ? '&' : '?'}seed=${SEED}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -95,7 +105,8 @@ if (boot.level !== 'plains') {
 /* ---- let the match start on its own, then hold it open -------------------- */
 await page.evaluate((s) => (window.__ENGINE__.time.scale = s), SCALE);
 await page.waitForFunction("window.__ENGINE__.ctx.peek('match').phase==='live'", null, { timeout: 240000 });
-await page.evaluate(() => {
+await page.evaluate((nat) => {
+  window.__NATURAL__ = nat;
   const m = window.__ENGINE__.ctx.peek('match');
   /**
    * HOLD THE MATCH OPEN, AND ONLY THAT. `roundClock` is what `_matchProgress`'s
@@ -103,7 +114,7 @@ await page.evaluate(() => {
    * on it is suppressed, by keeping the check from ending the round. Otherwise
    * a domination match reaches `scoreTarget` 1000 and ends before act III.
    */
-  m._checkWinConditions = () => {};
+  if (!window.__NATURAL__) m._checkWinConditions = () => {};
   m.airstrike.enabled = true;
   /** WATCH, do not drive. One tap per act, recording the clock as it happens. */
   window.__NF__ = { acts: [], beats: [] };
@@ -128,12 +139,13 @@ await page.evaluate(() => {
     });
     return actBeat(a, kind);
   };
-});
+}, NATURAL);
 
 /* ---- wait it out --------------------------------------------------------- */
 const T0 = Date.now();
 let last = 0;
-while (Date.now() - T0 < 600000) {
+let END = null;
+while (Date.now() - T0 < 900000) {
   const st = await page.evaluate(() => {
     const m = window.__ENGINE__.ctx.peek('match');
     const w = window.__ENGINE__.ctx.peek('world');
@@ -153,9 +165,15 @@ while (Date.now() - T0 < 600000) {
     last = st.n;
     console.log(`  … act ${st.n} began at t=${st.t}s p=${st.p} score=${st.score}`);
   }
-  if (st.n >= WANT && st.running < 0) break;
+  /**
+   * In `--natural` the acts finishing is NOT the end of the run: the number the
+   * whole probe exists for is seconds-REMAINING, so it waits for the match to
+   * actually end. Without this it stopped 140 s early and printed no T-minus.
+   */
+  if (!NATURAL && st.n >= WANT && st.running < 0) break;
   if (st.phase === 'matchover' || st.phase === 'over') {
-    console.log(`  ! match ended (phase=${st.phase}) at t=${st.t}s with ${st.n} act(s) fired`);
+    END = Number(st.t);
+    console.log(`  ! match ENDED (phase=${st.phase}) at t=${st.t}s with ${st.n} act(s) fired`);
     break;
   }
   await sleep(700);
@@ -178,12 +196,18 @@ const out = await page.evaluate(() => {
 
 console.log('\n──── MEASURED ────');
 for (const a of out.acts) {
-  console.log(`${a.id} "${a.name}"  t=${a.t}s of 1200  p=${a.p}  score=${a.score}`);
+  console.log(
+    `${a.id} "${a.name}"  t=${a.t}s of 1200  p=${a.p}  score=${a.score}` +
+      (END ? `  ◄ T-${(END - a.t).toFixed(0)}s` : '')
+  );
   for (const b of out.beats.filter((b) => b.id === a.id)) {
     console.log(`      +${b.at.toFixed(2).padStart(6)}s  ${b.kind.padEnd(10)} standing: ${b.standing.join(',') || '—'}`);
   }
 }
-console.log(`\nend: t=${out.t}s p=${out.p} score=${out.score} live=${out.live.join('')}`);
+console.log(
+  `\nend: t=${out.t}s p=${out.p} score=${out.score} live=${out.live.join('')}` +
+    (END ? `  · NATURAL END t=${END}s — 「後半3〜5分」 is T-180..T-300` : '  · win check SUPPRESSED, no T-minus')
+);
 console.log(`demolitions: ${out.demos.map((d) => `${d.id}=${d.down ? 'DOWN' : 'standing'}`).join(' ')}`);
 console.log(`tank: armed=${out.tank.armed} sorties=${out.tank.sorties}`);
 console.log(`pageerrors: ${errs.length}${errs.length ? '\n  ' + errs.join('\n  ') : ''}`);

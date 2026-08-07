@@ -86,7 +86,29 @@ export const SCORCH_CEIL = 3.0;
  * reason: a side printing points fast covers 0.1 of progress in twenty seconds,
  * and three big events inside twenty seconds is one big event.
  */
-export const NF_GAP = 45;
+export const NF_GAP = 26;
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 45 -> 26, AND THE REASON IS THAT THE GAP TURNED OUT TO BE THE WHOLE SCHEDULE
+ * ────────────────────────────────────────────────────────────────────────────
+ * At 45 this was not a floor, it was the timetable. Measured, all three acts,
+ * seed 101 — two of the three thresholds below had ALREADY BEEN PASSED by the
+ * time the gap let their act open, so they decided nothing:
+ *
+ *   act      threshold   p when it actually fired   t
+ *   ─────    ─────────   ────────────────────────   ───────
+ *   TOWER      0.40        0.402                    232.4 s   ◄ the only one its
+ *   FORT       0.50        0.569                    301.8 s     own threshold set
+ *   CRASH      0.60        0.821                    387.0 s
+ *
+ * — and 387 s on a match that ends near 440 is T-53, which is not 「後半3〜5分」
+ * under any reading of it. `RULES.districtSalvoGap`'s own note says exactly this
+ * about itself ("IT IS THE BINDING CONSTRAINT, NOT THE BACKSTOP") and settled on
+ * 25 for events of about twelve seconds. These are 24-34 s events, so 26 is the
+ * same judgement one size up: still clear air between two headlines, no longer
+ * the thing that chooses when they happen.
+ */
 
 /* ────────────────────────────────────────────────────── the barrage shapes ── */
 
@@ -263,8 +285,35 @@ const TOWER_ACT = {
    * 0.46 WAS NOT WRONG SO MUCH AS UNMEASURED — it lands at T-216/T-231, inside
    * the band on its own. It moves because it is now the FIRST of three and the
    * two behind it need the room. @see the measured firings in the commit.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * 0.40 -> 0.30, AND THE ARITHMETIC THAT FORCES IT — WRITTEN OUT, BECAUSE IT
+   * IS THE ONE THING ABOUT THIS MAP THAT CANNOT BE FIXED BY MOVING A NUMBER
+   * ──────────────────────────────────────────────────────────────────────────
+   * THREE ACTS COST 141 SECONDS OF MATCH and they cannot be moved apart:
+   *
+   *   TOWER 24 s + gap 26 + FORT 34 s + gap 26 + CRASH 25 s  =  135 s
+   *   …so the CRASH opens 110 s after the TOWER does, always.
+   *
+   * The match itself is 430-470 s. 「後半3〜5分」 is T-180..T-300, a band 120 s
+   * wide — and 110 s of that band is spent before the third act can even start.
+   * So the set has to SPAN the band rather than sit inside it, and the only
+   * free choice is which end of it Act I anchors.
+   *
+   * 0.40 ANCHORED THE WRONG END. It put the tower at T-208 (well inside the
+   * band, on its own merits) and therefore the crash at T-53 — 「大イベント」 as
+   * a footnote to an endgame that was already decided. 0.30 fires at t=172-177
+   * on the measured curve and hands the crash T-140 instead of T-53, which is
+   * the whole of the improvement and it is bought entirely here.
+   *
+   * WHAT 0.30 COSTS, AND WHY IT IS AFFORDABLE. `rules.js` puts the town's
+   * cathedral at three fifths of the way in and argues its D needs 85-120 s
+   * afterwards to be "a second act and not a flourish". At 0.30 this D opens at
+   * t≈193 of a 430 s match and gets 240 s — TWICE the town's upper bound. The
+   * precedent is about how much match a new point needs after it, not about the
+   * fraction, and 240 s clears it by a factor of two.
    */
-  progress: 0.40,
+  progress: 0.30,
   lead: 10.0,
   /** Which of `PLAINS_RUNS` / `PLAINS_LINES` this act's aircraft fly. */
   run: 'CENTREWEST',
@@ -387,8 +436,15 @@ export const NF_ARMOUR_AFTER = 3.0;
 const FORT_ACT = {
   id: 'NF-FORT',
   name: 'THE FORTRESS',
-  /** T-200 s / T-205 s on the measured curve. @see `TOWER_ACT.progress`. */
-  progress: 0.50,
+  /**
+   * 0.50 -> 0.42. It is the middle act and in practice `NF_GAP` sets it, not
+   * this — but a threshold that is only ever reached late is a threshold that
+   * does nothing in a SLOW match, which is the one case the gap cannot cover.
+   * 0.42 is where the curve puts it 26 s after the tower is spent, so the two
+   * agree instead of one always overriding the other.
+   * @see `TOWER_ACT.progress` for the arithmetic and `NF_GAP` for the measurement.
+   */
+  progress: 0.42,
   /** Four seconds longer than the tower's, because the guns open under it. */
   lead: 14.0,
   run: 'CENTREEAST',
@@ -409,7 +465,15 @@ const FORT_ACT = {
      * three seconds of announcement rather than six of ranging fire.
      */
     open: -8.0,
-    span: 26.0,
+    /**
+     * 26 -> 20. A round a second was the argument and it still is — twenty
+     * rounds over twenty seconds — but the SPAN was 26 s against a sheet that
+     * ended at 22, so the act's own length was set by the guns rather than by
+     * the drama, and every second of it was a second of `NF_GAP` pushed onto
+     * the crash. @see `TOWER_ACT.progress` for what 110 s of unavoidable
+     * spacing costs on a 430 s match.
+     */
+    span: 20.0,
     radius: 11,
     damage: 150,
     aim: siegeAim,
@@ -422,23 +486,23 @@ const FORT_ACT = {
      * and this is what they set off: one blast at the fort's own centre, the
      * size of the whole courtyard, two seconds before the structure follows.
      */
-    [12.0, 'magazine'],
+    [10.0, 'magazine'],
     /**
      * …AND THE CROWN COMES OFF BEHIND IT. Two seconds, so the magazine reads as
      * the CAUSE. Act I razes on the arrival beat with the barrage still walking
      * up the shaft; this one razes at the end of its walk. Same method, opposite
      * dramatic order, and that is the difference between two events and one.
      */
-    [14.0, 'raze'],
+    [12.0, 'raze'],
     /** The fighter through the smoke, AFTER. On the tower's sheet it is first. */
-    [17.0, 'strafe'],
-    [22.0, 'aftermath'],
+    [15.0, 'strafe'],
+    [18.0, 'aftermath'],
     /**
      * NO `open` AND NO `armour` BEAT. D is already live and the hulls are
      * already rolling — Act I owns both, and an act whose consequence has
      * already happened is an act with no consequence. This one's is the drop.
      */
-    [26.0, 'reinforce'],
+    [20.0, 'reinforce'],
   ],
 };
 
@@ -476,8 +540,14 @@ const FORT_ACT = {
 const CRASH_ACT = {
   id: 'NF-CRASH',
   name: 'THE CRASH',
-  /** T-160 s on the measured curve — the last event before the endgame. */
-  progress: 0.60,
+  /**
+   * 0.60 -> 0.54. In practice `NF_GAP` opens this one and this number never
+   * gets to decide — @see `NF_GAP` for the measurement that showed it firing at
+   * p=0.821 with a threshold of 0.60. It is set where the curve puts it 26 s
+   * after the fortress is spent, so that in a SLOW match, where the gap is not
+   * binding, it still lands in the same place in the shape of the match.
+   */
+  progress: 0.54,
   /** @see `_bakeActs` — bound to `Crash.anchor`, not to a demolition record. */
   anchor: 'crash',
   lead: 16.0,
@@ -499,13 +569,13 @@ const CRASH_ACT = {
      */
     [-13.0, 'crash'],
     /** The plough is 5 s; this is the banner over the far end of the scar. */
-    [6.0, 'aftermath'],
+    [5.0, 'aftermath'],
     /**
      * …and the drop, once. The fortress armed one too and `_reinforcePending`
      * is a flag rather than a counter, so if that one has not been spent this
      * is a no-op — which is the correct behaviour and not a missed beat.
      */
-    [12.0, 'reinforce'],
+    [9.0, 'reinforce'],
   ],
 };
 
