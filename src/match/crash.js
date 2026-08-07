@@ -722,6 +722,45 @@ export class Crash {
     audio?.play?.('strike_tail', at, {
       level: 1.6, dur: 4.0, maxDist: 1000, gain: 4.0, occlusion: 0.1,
     });
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * THE FLOOR UNDER THE BIGGEST EVENT IN THE GAME, WHICH IT DID NOT HAVE
+     * ──────────────────────────────────────────────────────────────────────
+     * MEASURED with `_collvoice.mjs` before this line: the whole act — thirteen
+     * seconds of approach, a 34 m blast and 160 m of burning plain — made 0
+     * calls to any `collapse_*` and put 0 emitters tagged `collapse` in the
+     * field. What it had was the two voices above, and the argument
+     * `src/audio/collapse.js` opens with is precisely that those two ARE NOT
+     * ENOUGH FOR SOMETHING THIS SIZE and no amount of gain makes them enough:
+     * `strikeRubble` is masonry ARRIVING and `strikeTail` is mid-heavy BY
+     * CONSTRUCTION (it is a roll built to carry across a map), so between them
+     * this event had nothing at all below 40 Hz. The weight of something
+     * falling out of orbit is not loudness, it is bandwidth.
+     *
+     * AND IT IS THE HALF OF 「もっと音大きく激しくして」 THAT LOUDNESS CANNOT BUY.
+     * `AudioSystem._playCollapse` ducks the whole mix and concusses the
+     * listener on `collapse_sub` SPECIFICALLY — everything else in the match
+     * getting out of the way for half a second is what makes an event enormous
+     * once the limiter is already working, and it is the one thing this event
+     * was not doing. The fortress magazine got it this session; the act that
+     * the map's own header calls its signature did not.
+     *
+     * WHAT IS PASSED, AND WHAT DELIBERATELY IS NOT. `dur` and `maxDist` only:
+     * how long the thing takes and how far a 400 m plain has to carry it are
+     * facts about this event, and gain, occlusion, priority, the duck depth and
+     * the concussion are facts about the MIX — they live in `_playCollapse`,
+     * they were measured, and a caller that restates them is a caller that goes
+     * stale. This is the same bag the fortress magazine passes, one beat longer.
+     * (`_onExplosion` restating `send: 1.0` is what killed a whole reverb pass.)
+     *
+     * NO `collapse_tear`. It is tempting — the plough IS five seconds of an
+     * airframe coming apart — but that voice is masonry to its bones: three
+     * load-shed modes of a MASONRY BOX, vault ribs and floor plates. Using it
+     * on a satellite would be the wrong voice played correctly. The plough's
+     * own sound is a separate piece of work and it is NOT done here; say so
+     * rather than half-do it.
+     */
+    audio?.play?.('collapse_sub', at, { dur: 2.6, maxDist: 1200 });
     this.flames.visible = true;
     console.info(`[crash] IMPACT at (${at.x.toFixed(0)}, ${at.y.toFixed(1)}, ${at.z.toFixed(0)}) — 34 m blast`);
   }

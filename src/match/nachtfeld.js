@@ -331,6 +331,50 @@ const TOWER_ACT = {
   afterTitle: 'THE TOWER IS DOWN',
   afterLine: 'THE CENTRE IS OPEN GROUND',
   openLine: 'CONTEST THE GAP',
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * WHAT THIS STRUCTURE SOUNDS LIKE WHEN IT FAILS — read by the `raze` beat
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE VOICE IS IN THE SHEET AND NOT IN `_actBeat` BECAUSE THE TWO RAZES ARE
+   * NOT THE SAME EVENT. Both acts run through the same `case 'raze'`, so a
+   * `collapse_sub` written into that case would fire on the fortress as well —
+   * two seconds after the `magazine` beat has already fired one. Two subs two
+   * seconds apart is not a bigger event: `AudioSystem._playCollapse` ducks the
+   * whole mix and concusses the listener on the SUB SPECIFICALLY, once, on the
+   * impact, and doing that twice inside two seconds re-ducks a mix that is
+   * still recovering and re-deafens a player who is still deaf. So each act
+   * says what its own structure is worth, and an act that says nothing gets
+   * nothing.
+   *
+   * `size` IS THE ONE NUMBER THAT MATTERS AND IT IS NOT A LOUDNESS. In
+   * `collapseTear` it scales the load-shed modes, the tear and the mass roar,
+   * and it sets HOW MANY slabs there are (`lerp(4, 9, size)`): it is the
+   * building's mass, not its volume. 1.0 is a 30 x 45 m cathedral. THIS IS A
+   * SHAFT WITH A CAB ON IT — the same object that has nothing in it to cook off
+   * (@see the fortress's `magazine` beat) — so it fails faster, with less under
+   * it and with a handful of slabs rather than nine. Asking for a cathedral
+   * here would make the map's smallest structure its heaviest sound.
+   *
+   * `maxDist` 900 IS GEOMETRY, NOT MIX. The default in `_playCollapse` is 640 m
+   * and it was measured on the town, whose cathedral is at the centre of a map
+   * you can cross in twenty seconds. NACHTFELD is 400 m of open plain and its
+   * capture points are further apart than that ceiling, so the reach is stated
+   * here for the same reason the `magazine` beat states it. Everything else —
+   * gain, occlusion, priority, the duck, the concussion — is deliberately NOT
+   * stated: those are mix facts, they live in `_playCollapse`, and a caller
+   * that repeats them is a caller that goes stale the next time they are tuned.
+   *
+   * NO BELL. There is one modelled bell in this game and it is in the town's
+   * campanile. @see `src/audio/collapse.js`.
+   *
+   * These bags are authored once, at module scope, and passed by reference to
+   * `audio.play`, which copies out of them into its own preallocated bag. No
+   * beat allocates.
+   */
+  collapse: {
+    tear: { dur: 4.2, size: 0.55, maxDist: 900 },
+    sub: { dur: 1.6, maxDist: 900 },
+  },
   barrage: {
     shells: 16,
     /** Opens BEFORE the arrival, so the structure going is the SECOND thing. */
@@ -456,6 +500,26 @@ const FORT_ACT = {
   afterTitle: 'THE FORTRESS IS BROKEN',
   afterLine: 'THE WALLS ARE OPEN TO THE SKY',
   openLine: 'CONTEST THE GAP',
+  /**
+   * THE CROWN COMES OFF, AND IT IS A TEAR WITH NO SUB UNDER IT.
+   *
+   * `sub` IS ABSENT ON PURPOSE AND ITS ABSENCE IS THE POINT. This act already
+   * fires one, two seconds earlier, from the `magazine` beat — that is the
+   * floor of THIS event, and the sheet is built so the magazine is the CAUSE
+   * and the crown coming off is the consequence. A second sub here would duck
+   * a mix that is still ducked and concuss a listener who is still deaf, and it
+   * would flatten the two beats into one loud smear. @see `TOWER_ACT.collapse`
+   * for why this lives in the sheet rather than in the shared `raze` case.
+   *
+   * `size` 0.8 AGAINST THE TOWER'S 0.55. What comes down here is the parapet,
+   * both gatehouses, two bastions and the magazine — a great deal more stone
+   * than a shaft with a cab on it, and much less than a cathedral, which is
+   * what 1.0 means. `dur` is the longer of the two for the same reason: a
+   * curtain wall lets go along its length rather than at a point.
+   */
+  collapse: {
+    tear: { dur: 5.4, size: 0.8, maxDist: 900 },
+  },
   barrage: {
     shells: 26,
     /**

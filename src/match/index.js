@@ -4488,6 +4488,54 @@ export class MatchSystem {
         h.y = z?.position.y ?? 0;
         h.z = z?.position.z ?? 0;
         this.ui.airAlert(h);
+        /**
+         * ──────────────────────────────────────────────────────────────────
+         * AND IT MAKES A SOUND — 「また大聖堂破壊の時は破壊演出がないですね？？？」
+         * ──────────────────────────────────────────────────────────────────
+         * THE THREE COLLAPSE VOICES WERE BUILT FOR THIS BEAT AND THIS BEAT HAS
+         * NEVER PLAYED THEM. `src/audio/collapse.js` was written against this
+         * event by name — its header is about a 30 x 45 m building at the
+         * centre of the map, `COLLAPSE_KINDS`' gains were measured on a
+         * cathedral at 40 m, and `collapse_bell` exists because there is a bell
+         * modelled in this campanile and nowhere else in the game. None of it
+         * was reachable from a match: MEASURED with `_collvoice.mjs`, a full
+         * cathedral event ran to `SITE D OPEN` with 0 calls to any
+         * `collapse_*` and 0 emitters tagged `collapse` in the field. The only
+         * game caller of a collapse voice was the plain's fortress magazine;
+         * `tools/audiotest.mjs --collapse` had to INJECT the three to measure
+         * them and says so in its own comment. A building of this size coming
+         * down through nothing but `strike_rubble` is the same "破壊演出がない"
+         * complaint in another medium.
+         *
+         * ON THE `raze` BEAT, WHICH IS THE FRAME THE BUILDING GOES. Not on the
+         * aftermath nine seconds later — that beat is the dust settling and it
+         * already has `strike_rubble`, which is masonry ARRIVING. The tear is
+         * the structure LOSING ITS ABILITY TO STAND, and it has to be under the
+         * chunks rather than after them.
+         *
+         * WHY THE VOICES ARE HANDED ALMOST NOTHING. Gain, reach, occlusion,
+         * priority, the mix duck and the concussion are mix facts and they live
+         * in `AudioSystem._playCollapse`, whose defaults were measured on THIS
+         * building; a caller that passes them again is a caller that will be
+         * wrong the next time they are retuned. That is not a style preference
+         * — `_onExplosion` passing `send: 1.0` overrode every voice's authored
+         * character and killed a whole reverb pass. So only the shape of the
+         * event is passed: how long it takes, that it is full size, and that
+         * the bell follows the failure rather than opening it.
+         *
+         * IT IS NOT GATED ON `razed`. That flag is "world had a ruin mesh to
+         * swap to", and the salvo's two thousand chunks are in the air on this
+         * frame either way. A guard in the wrong place is how every bug in this
+         * subsystem has shipped, and gating the sound of the event on a mesh
+         * swap would be one more.
+         */
+        const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+        const at = z?.position ?? null;
+        audio?.play?.('collapse_tear', at, { dur: 6.5, size: 1 });
+        audio?.play?.('collapse_sub', at, { dur: 2.0 });
+        // The campanile is the last thing standing and the bell goes with it,
+        // so it is struck a beat AFTER the failure opens rather than on it.
+        audio?.play?.('collapse_bell', at, { strikes: 3, extraDelay: 0.9 });
         console.info(
           `[match] cathedral SHELL DOWN at +${(RULES.cathedralLead + RULES.cathedralRazeDelay).toFixed(1)}s ` +
             `(${razed ? 'levelled' : 'no ruin state available'})`
@@ -5008,6 +5056,36 @@ export class MatchSystem {
         h.y = a.rec.position.y;
         h.z = a.rec.position.z;
         this.ui.airAlert(h);
+        /**
+         * …AND IT MAKES A SOUND, WHICH THIS BEAT HAS NEVER DONE.
+         *
+         * MEASURED with `_collvoice.mjs` before this line existed: the tower
+         * act ran end to end with 0 calls to any `collapse_*` and 0 emitters
+         * tagged `collapse`, and the fortress act's ONLY one was the `magazine`
+         * beat's sub. A structure the size of either of these coming down
+         * through nothing but the barrage that felled it is the town's
+         * 「破壊演出がない」 complaint on the other map.
+         *
+         * THE VOICE IS THE ACT'S, NOT THIS CASE'S. Both acts razed here and
+         * they are deliberately not the same event: `TOWER_ACT.collapse`
+         * carries a tear AND a sub, `FORT_ACT.collapse` carries a tear ONLY
+         * because its sub has already played two seconds earlier on the
+         * magazine, and the crash has no `raze` beat at all. An act that
+         * declares nothing plays nothing, which is what makes this safe to add
+         * to a sheet nobody has written yet. @see `TOWER_ACT.collapse` for the
+         * whole argument and for why gain and reach are split the way they are.
+         *
+         * NOT GATED ON `down`. That is "the demolition had a ruin state to
+         * swap to"; the chunks and the barrage are on this frame either way,
+         * and a guard in the wrong place is how every bug in this subsystem has
+         * shipped.
+         */
+        const cv = s.collapse;
+        if (cv) {
+          const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+          if (cv.tear) audio?.play?.('collapse_tear', a.rec.position, cv.tear);
+          if (cv.sub) audio?.play?.('collapse_sub', a.rec.position, cv.sub);
+        }
         console.info(
           `[match] ACT ${s.id} STRUCTURE DOWN at +${this._nf.t.toFixed(1)}s ` +
             `(${down ? 'fired' : 'declined — already down'})`
