@@ -7,6 +7,8 @@ import { buildTower, TOWER, TOWER_R } from './plains-tower.js';
 import { buildFort, FORT, FORT_R } from './plains-fort.js';
 import { buildTrenches, trenchKeepOut, inCorridor } from './plains-trench.js';
 import { publishWorks } from './plains-works.js';
+import { buildRim } from './plains-rim.js';
+import { buildCover } from './plains-cover.js';
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -771,7 +773,7 @@ export const PLAINS = {
   works: WORKS,
   plainsY,
 
-  build(A, rng) {
+  build(A, rng, ctx) {
     // The prop library first: the plain's stone and scrub are its prototypes.
     registerProps(A, rng);
 
@@ -812,6 +814,22 @@ export const PLAINS = {
      * airstrike to take away.
      */
     buildTrenches(A, plainsY);
+    /**
+     * …AND THE EDGE OF THE MAP, LAST. `boundcheck` measured the player walking
+     * out over the ridge on 64 bearings out of 64 — @see `plains-rim.js`, which
+     * carries the numbers and the reason the collision is on `LAYER.CLIP`. Own
+     * fixed-seed stream, draws nothing from `rng`, moves nothing above it.
+     */
+    buildRim(A, plainsY);
+    /**
+     * …AND THE COVER, AFTER EVERYTHING. 「平原にしても障害物なさすぎ … 平原での移動に
+     * もう少し無防備な時間を少なくして」 — ruined buildings, wrecked vehicles, smoke
+     * and the plain's own grass and gravel. @see `plains-cover.js`, which is
+     * placed against the WALKS between the pads rather than scattered, and which
+     * is measured by `_plaincross.mjs` rather than counted. Own fixed-seed
+     * stream: it draws nothing from `rng` and moves nothing above it.
+     */
+    buildCover(A, plainsY, plainsOpen, PADS, ctx);
     this._works = works;
 
     return {
