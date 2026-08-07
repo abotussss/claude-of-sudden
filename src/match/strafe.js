@@ -191,6 +191,30 @@ const PLAINS_LINES = [
   { id: 'EASTFLANK', name: 'THE EAST FLANK', from: [124, -40], to: [124, 40] },
   { id: 'CENTREWEST', name: 'WEST OF THE WORKS', from: [-58, 40], to: [-58, -50] },
   { id: 'CENTREEAST', name: 'EAST OF THE WORKS', from: [58, -50], to: [58, 40] },
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE TWO TRAVERSES — the bomber's new cross-map corridors, INNER HALF ONLY
+   * ──────────────────────────────────────────────────────────────────────────
+   * `PLAINS_RUNS` gained a pair of lines running in x rather than in z, so that
+   * the plain has a horizon to watch other than north and south (@see the note
+   * on `NORTHCROSS` there). These are those two corridors, flown the other way
+   * as every line in this table is.
+   *
+   * THEY ARE 88 m RATHER THAN THE BOMBER'S 184, AND THAT IS AN INVARIANT
+   * RATHER THAN A PREFERENCE. `_buildRun` spreads `MAX_IMPACTS` 34 rounds over
+   * whatever span it is given (`step = span / (n - 1)`), so a 184 m line would
+   * be 5.6 m between impacts and `DAMAGE_EVERY` 4 would sample the blast every
+   * 22 m against a 5.5 m radius — a gun run with 11 m holes in it, which is
+   * exactly the "hazard the player cannot read" this file's own DAMAGE IS
+   * SAMPLED note is written to prevent. 88 m gives 2.67 m steps and a 10.7 m
+   * sample against a lethal band 11.0 m wide, which is the same continuous
+   * beaten zone CENTREWEST already has at 90 m.
+   *
+   * So they are the middle of each traverse: the same ground, the same
+   * clearances, half the length and the whole of the damage model intact.
+   */
+  { id: 'NORTHCROSS', name: 'THE NORTH TRAVERSE', from: [44, -76], to: [-44, -76] },
+  { id: 'SOUTHCROSS', name: 'THE SOUTH TRAVERSE', from: [-44, 96], to: [44, 96] },
 ];
 
 /**

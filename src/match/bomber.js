@@ -272,6 +272,36 @@ const PLAINS_RUNS = [
   { id: 'EASTFLANK', name: 'THE EAST FLANK', from: [124, 40], to: [124, -40], bombs: 6 },
   { id: 'CENTREWEST', name: 'WEST OF THE WORKS', from: [-58, -50], to: [-58, 40], bombs: 7 },
   { id: 'CENTREEAST', name: 'EAST OF THE WORKS', from: [58, 40], to: [58, -50], bombs: 7 },
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * …AND THE TWO THAT CROSS THE WHOLE MAP, WHICH ONLY THIS MAP HAS ROOM FOR
+   * ──────────────────────────────────────────────────────────────────────────
+   * Every line above runs in z — they are the six N-S corridors, because that
+   * is the axis the fight moves along. NOTHING CROSSED, and on a 350 m plain
+   * that is a horizon the player never has to watch: six aircraft a match, all
+   * six flying the same way.
+   *
+   * These two run in x, 184 m from side to side, and they are the reason the
+   * plain rather than the town gets them: AL-MARIYA is 114 m wide with a
+   * building row every 20 m, so a line across it is a line over roofs. Here it
+   * is 184 m of open grass and nine craters walking the full width of the map.
+   *
+   * THE Z VALUES ARE THE TWO GAPS THE WORKS LEAVE. `plains-tower.js` and
+   * `plains-fort.js` occupy |x| < 36 from z -58 to z +84 (@see `PLAINS_ROUTES`
+   * in tank.js, which measures the same hollow), so a line in x has to clear
+   * that block or it drops bombs on the tower roof — the exact failure
+   * `_reportGround` exists to catch. -76 is 18 m north of it and +96 is 12 m
+   * south of it, both on open ground.
+   *
+   * THE ENDS ARE PULLED IN TO ±92 for the clearance every other line in this
+   * table keeps: at ±104 the west end of SOUTHCROSS would be 16 m from B's
+   * centre, i.e. inside the 14 m capture circle plus nothing. At ±92 the
+   * nearest zone centre to any impact is 27 m (B from SOUTHCROSS's east end)
+   * and 37-38 m for the rest, which is the same "prices the approach, does not
+   * bomb the point" the six lines above are authored to.
+   */
+  { id: 'NORTHCROSS', name: 'THE NORTH TRAVERSE', from: [-92, -76], to: [92, -76], bombs: 9 },
+  { id: 'SOUTHCROSS', name: 'THE SOUTH TRAVERSE', from: [92, 96], to: [-92, 96], bombs: 9 },
 ];
 
 /**

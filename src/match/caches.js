@@ -386,85 +386,6 @@ export class Caches {
     }
 
     /**
-     * ════════════════════════════════════════════════════════════════════════
-     * THE POSTS A LEVEL PUBLISHED ON ITS DEMOLITION RECORDS
-     * ════════════════════════════════════════════════════════════════════════
-     * "管制塔はなんのためにあんの？？ 物資もないし 来る意味ないやん / 要塞もっと
-     *  軍事要塞にしろよ 物資豊富にしろ"
-     *
-     * The plain publishes `features: []` — measured from inside a live match,
-     * `caches: 0 bound, 0 proved bot-walkable`, so there was not one round,
-     * one frag, one gun, one med kit or one beacon socket on three hundred
-     * metres of it. The tower and the fortress could not put them in
-     * `world.features` because that array is written in `levels/plains.js`,
-     * which several people are inside; what they CAN publish is their own
-     * demolition record, which `publishWorks` mutates in place and hands
-     * straight to `world.demolitions`.
-     *
-     * THIS IS THE SAME MOVE THE CATHEDRAL BLOCK ABOVE MAKES, generalised: a
-     * place the level did not publish as a feature, taken from the one record
-     * it did publish. It names no map and no id — a `demolitions` entry with no
-     * `caches` (every one on the town) contributes nothing, and the loop is a
-     * no-op there.
-     *
-     * TWO FIELDS ARE NEW AND BOTH ARE LOAD-BEARING:
-     *
-     *   `perishable`  the post is dressed inside its structure's SHELL scope
-     *                 and goes with it. `update()` disables it the frame the
-     *                 record goes down, so a strike that takes the top off the
-     *                 tower does not leave a live pickup prompt hanging in the
-     *                 dust where the control room used to be.
-     *   `beacon`      false where a forward spawn may not be switched on.
-     *                 `_safeSpawn` drops the whole side onto a beacon through
-     *                 `_jitterOnto`, which raycasts down from `y + 3`; at the
-     *                 tower's player-only posts (21.2 m and 26 m) that lands a
-     *                 bot on a shaft slab `NavGrid` has no route off, and he is
-     *                 stranded for the rest of his life. Absent on every town
-     *                 cache, so nothing there changes.
-     */
-    this.workCaches = [];
-    {
-      const w = ctx.peek?.('world') ?? null;
-      const toWorld = typeof w?.levelToWorld === 'function' ? w.levelToWorld.bind(w) : null;
-      for (const d of w?.demolitions ?? []) {
-        for (const f of d.caches ?? []) {
-          if (!f || !KINDS.has(f.kind) && f.kind !== 'medic') continue;
-          const p = toWorld
-            ? toWorld(f.level.x, f.level.y, f.level.z, new THREE.Vector3())
-            : new THREE.Vector3(f.level.x, f.level.y, f.level.z);
-          const rec = {
-            id: f.id,
-            kind: f.kind,
-            building: d.id,
-            floor: 0,
-            indoor: !!f.indoor,
-            botReachable: !!f.botReachable,
-            position: p,
-            yaw: (f.yaw ?? 0) + (w.levelYaw ?? 0),
-            readyAt: 0,
-            weaponId: null,
-            label: '',
-            stand: null,
-            /** No beacon here. @see the note above. */
-            beacon: f.beacon !== false,
-            /** The record this post dies with, or null. @see `update`. */
-            work: f.perishable ? d : null,
-            disabled: false,
-          };
-          if (f.kind === 'weapon' && primaries.length) {
-            // The same round-robin, off the same counter, so a map with racks
-            // on both sides of it hands out different guns.
-            rec.weaponId = primaries[weaponSeen++ % primaries.length];
-            rec.label = weapons.states.get(rec.weaponId)?.def?.label ?? rec.weaponId;
-          }
-          if (f.kind === 'medic') { rec.label = 'MED KIT'; this.medicCount++; }
-          this.list.push(rec);
-          if (rec.work) this.workCaches.push(rec);
-        }
-      }
-    }
-
-    /**
      * THE BEACON. One per side, and the side is `team`. Preallocated whole: this
      * record is read inside `_safeSpawn`, which runs on a respawn and must not
      * allocate.
@@ -602,22 +523,8 @@ export class Caches {
     return Math.max(0, this.beacon.readyAt - now);
   }
 
-  /**
-   * Retire an expired beacon. Returns true on the frame it dies.
-   *
-   * …and follow the demolition records the level published posts on. `work` is
-   * the record itself, `work.down` is the flag `setDown` maintains, and the
-   * whole list is a handful of entries built once at init — no allocation, no
-   * search, and no second place that has to be told an act has fired. It is the
-   * same lifecycle `setCathedralRazed` gives the two crossing posts, expressed
-   * as data rather than as a method, because a level may publish any number of
-   * these and `match` may not know their ids.
-   */
+  /** Retire an expired beacon. Returns true on the frame it dies. */
   update(now) {
-    for (let i = 0; i < this.workCaches.length; i++) {
-      const c = this.workCaches[i];
-      c.disabled = !!c.work.down;
-    }
     if (!this.beacon.active || now < this.beacon.until) return false;
     this.beacon.active = false;
     return true;
@@ -925,15 +832,7 @@ export class Caches {
    * twenty-four) rather than wherever the player's capsule happened to be.
    */
   plantBeacon(c, team, yaw, now) {
-    /**
-     * `c.beacon === false` REFUSES, and it is the only new clause here. A
-     * beacon is a RESPAWN POINT: `_safeSpawn` sends the whole side to it and
-     * `_jitterOnto` raycasts down from `y + 3` onto whatever solid it finds, so
-     * a post a bot has no route away from is a man deleted from the match for
-     * the rest of his life. Absent on every cache `world.features` publishes,
-     * so this reads `undefined` on the town and changes nothing there.
-     */
-    if (!c || c.beacon === false || now < this.beacon.readyAt) return false;
+    if (!c || now < this.beacon.readyAt) return false;
     const b = this.beacon;
     b.active = true;
     b.team = team;

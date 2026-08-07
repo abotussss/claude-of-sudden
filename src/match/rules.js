@@ -2064,6 +2064,63 @@ export const MAP_RULES = {
      * (`PADS[].r0` is 16 in `plains.js`), so the whole circle is level ground.
      */
     captureRadius: 14,
+    /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * THE AIR WAR, PER MINUTE RATHER THAN PER ROUND
+     * ═══════════════════════════════════════════════════════════════════════
+     * 「もっと実際の戦争の現場みたいな感じにして」, and the counts are the argument.
+     *
+     * `bomberMaxPerRound` and `strafeMaxPerRound` are 3 apiece and were tuned
+     * against the TOWN'S 600 s round. NACHTFELD runs 1200 s (`matchTime`
+     * above), so the same numbers on this map are HALF THE RATE — measured as
+     * a rate the plain was getting 0.3 aircraft a minute of each against the
+     * town's 0.4, on a map three times the size where an event is more often
+     * far away to begin with.
+     *
+     * EIGHT IS THE CEILING, NOT A CHOICE. `Bomber._scheduleNext` and
+     * `Strafe._scheduleNext` both skip a line that has already `flown` this
+     * round, so the real cap is the size of the table — six corridors each,
+     * now eight since `PLAINS_RUNS` and `PLAINS_LINES` gained the two
+     * cross-map traverses. 8 in 1200 s is 0.4 a minute, i.e. EXACTLY the
+     * town's rate, reached by using the geography that exists rather than by
+     * flying the same corridor twice.
+     *
+     * IT CANNOT BECOME A SLIDESHOW and that is structural rather than tuned:
+     * `MatchSystem.init` puts the airstrike, the bomber and the strafe in each
+     * other's `coBusy`, so at most ONE aircraft is ever over the map. Sixteen
+     * sorties over twenty minutes with a hard mutual stand-down is a busy sky,
+     * not a queue.
+     */
+    bomberMaxPerRound: 8,
+    strafeMaxPerRound: 8,
+    /**
+     * …AND THE ONE PIECE OF SHELLING THAT CAN KILL YOU, ALSO PER ZONE.
+     *
+     * `_callZoneBombard` is the map's damaging artillery and it is the only
+     * one: ten seconds of `ui.airAlert`, a world reticle on every one of the
+     * five impact points, and a walk across the circle that starts when the
+     * countdown ends. That telegraph is why the answer to 「爆撃もあり」 is to let
+     * THIS fire more often rather than to add a second gun with its own
+     * vocabulary — a player who has learnt to read one incoming has learnt to
+     * read all of them. (The ambient shelling in `src/match/warfield.js` is on
+     * the mountain and carries no damage at all.)
+     *
+     * The rate is per-ZONE arithmetic. The town has two eligible points (A and
+     * B — D is `locked` and excluded) over 600 s at a 87.5 s mean gap, i.e.
+     * ~3.4 bombardments per point per match. NACHTFELD has FOUR eligible
+     * points (A, C, E, B) over 1200 s, so the town's own interval would give
+     * each of them 2.1 — a capture point on this map could be sat on for the
+     * whole match with nothing ever asking its occupant to move, which is the
+     * failure the rule exists to prevent. A 75 s mean gives 16 over the match
+     * and 4.0 per point, just over the town's.
+     *
+     * `zoneBombardShells`, `Radius`, `Damage` and above all `Lead` are
+     * DELIBERATELY UNTOUCHED. Making it more frequent is a change to how often
+     * you have to move; making it harder or shorter-fused would be a change to
+     * whether you can, and nothing here asked for that.
+     */
+    zoneBombardFirst: 75,
+    zoneBombardInterval: [58, 92],
   },
 };
 
