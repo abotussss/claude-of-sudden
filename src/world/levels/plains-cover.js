@@ -1224,6 +1224,22 @@ export function buildCover(A, groundY, isOpen, pads, ctx) {
     }));
   }
 
+  /**
+   * `?covertag` — where every piece actually stood up. Placement here is a
+   * SEARCH (it slides along the walk, then off it, and drops what will not fit),
+   * so the only way to point a camera at a berm or to say which crossing lost a
+   * station to a trench is to have the solver say where it put things. Off by
+   * default: fifty-one records is not a boot log.
+   */
+  try {
+    if (new URLSearchParams(globalThis.location?.search ?? '').has('covertag')) {
+      console.info('[world] nachtfeld cover sites: ' +
+        sites.map((s) => `${s.kind}@${s.x.toFixed(0)},${s.z.toFixed(0)}`).join(' '));
+      console.info('[world] nachtfeld smoke banks: ' +
+        chosen.map((s) => `${s.x.toFixed(0)},${s.z.toFixed(0)}`).join(' '));
+    }
+  } catch { /* no location outside a browser */ }
+
   console.info(
     `[world] nachtfeld cover: ${sites.length} stations on ${CROSSINGS.length} crossings — ` +
     `${counts.ruin} ruins, ${counts.wreck} wreck sites, ${counts.berm} berms, ${counts.emplace} emplacements · ` +
