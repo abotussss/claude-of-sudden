@@ -133,8 +133,33 @@ const BUS_FOR = {
  * measured, sixteen of twenty-four emitters — so all three of its voices sit
  * above everything, including a first-person gunshot. There are three of them,
  * once a match, and if they lose their slots the event is silent.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * 0.995 -> 1.3, BECAUSE THE PARAGRAPH ABOVE WAS NOT TRUE OF THE NUMBER BELOW
+ * ────────────────────────────────────────────────────────────────────────────
+ * "ABOVE EVERYTHING" WAS AN INTENTION, NOT AN ARITHMETIC FACT. `_onExplosion`
+ * plays on this same `weapons` bus at PRIORITY 1, and 1 > 0.995. So the one
+ * voice that is guaranteed to be filling the bus at the moment a cathedral
+ * comes down — because what brings it down is twenty heavy shells and a salvo —
+ * outranked the event itself. The set piece was bidding from below against its
+ * own barrage.
+ *
+ * WHAT THAT COST, MEASURED on a live cathedral collapse with `_collvoice.mjs`,
+ * field at its render cap of 24 and the weapons bus at 14 against a quota of 10:
+ * the victim score is `priority * 4 + secondsRemaining`, so among a bus full of
+ * priority-1 explosions the three CHEAPEST slots in the field were the three
+ * collapse voices themselves. The bell took the sub's slot ten milliseconds
+ * after the sub claimed it — `DETACH slot 14 owed 3.31s BY collapse/0.995` —
+ * and the sub is the voice `_playCollapse` ducks the mix and concusses the
+ * listener for. Three voices called, two audible, and the missing one was the
+ * floor of the whole event.
+ *
+ * 1.3 CLEARS 1.0 BY MORE THAN 0.25, which is the margin `acquire`'s own veto
+ * (`worst.priority > pri + 0.25`) works in: an explosion asking for a slot can
+ * no longer take one of these, and `SpatialField.PROTECTED_PRI` (1.2) stops
+ * them taking each other's. @see that constant for why the floor sits between.
  */
-const COLLAPSE_PRIORITY = 0.995;
+const COLLAPSE_PRIORITY = 1.3;
 
 /**
  * Kinds that go through `_playCollapse`, and what each is worth when the caller

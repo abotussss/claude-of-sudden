@@ -84,6 +84,79 @@ const BEHIND_LEVEL = 0.06;
  */
 const WALL_SLACK = 0.3;
 
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE PRIORITY AT WHICH A VOICE STOPS BEING A VICTIM OF ITS OWN PEERS
+ * ────────────────────────────────────────────────────────────────────────────
+ * `AudioSystem.COLLAPSE_PRIORITY` is 0.995 and its comment states the invariant
+ * this constant enforces: "There are three of them, once a match, and if they
+ * lose their slots the event is silent." The steal path did not honour it, and
+ * the reason is one the rest of this file has been bitten by five times — the
+ * guard was in the wrong place.
+ *
+ * `worst.priority > pri + 0.25` VETOES A VICTIM THAT IS MORE IMPORTANT BY A
+ * MARGIN. It says nothing about a peer. That slack is deliberate and correct
+ * for the case it was written for — "a footstep can evict a quieter footstep" —
+ * but the three cathedral voices are all at 0.995, so under it they are fair
+ * game FOR EACH OTHER. MEASURED on a live cathedral collapse with
+ * `_collvoice.mjs`, with the field at its render cap of 24:
+ *
+ *   acquire slot 9  gain 6.2   collapse_tear
+ *   acquire slot 14 gain 6.6   collapse_sub
+ *   DETACH  slot 14 gain 6.6   owed 3.31s  pri 0.995  BY collapse/weapons/0.995
+ *   acquire slot 14 gain 4.6   collapse_bell
+ *
+ * The bell took the sub's slot on the same millisecond the sub claimed it. The
+ * sub is the ONE voice of the three that `_playCollapse` ducks the mix and
+ * concusses the listener for, it is the entire bottom two octaves of the
+ * biggest event in the match, and it played for ten milliseconds of three and a
+ * third seconds. Three voices were called, two were audible — which is the
+ * failure mode a call-count probe cannot see and the reason this was measured
+ * at the emitter rather than at `play()`.
+ *
+ * WHY IT IS THE SUB THAT LOSES, EVERY TIME. The victim score is
+ * `priority * 4 + secondsRemaining`, i.e. "least important, closest to
+ * finishing". Among equals the second term decides alone, and the sub is by far
+ * the SHORTEST of the three (3.3 s against the tear's 7.7 and the bell's 8.9).
+ * So the ordering is not unlucky, it is systematic: the mix's floor is always
+ * the cheapest of the three to throw away.
+ *
+ * WHY A `continue` AND NOT A WIDER VETO. Skipping a protected slot as a
+ * CANDIDATE lets the requester go on and steal something genuinely cheap. The
+ * existing veto does the opposite — it picks the protected slot as `worst` and
+ * then aborts the whole acquire, so a full field drops a voice while an
+ * expendable slot sits next to it. This adds no drop; it redirects one.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * 1.2, AND THE FIRST NUMBER TRIED WAS 0.99 AND WAS WRONG
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE FLOOR HAS TO SIT ABOVE EVERY OTHER VOICE IN THE GAME AND BELOW THE SET
+ * PIECE, and 0.99 is above neither, because `_onExplosion` plays on this same
+ * bus AT PRIORITY 1 — a full stop above `COLLAPSE_PRIORITY`'s old 0.995. At
+ * 0.99 this rule protected the barrage from the cathedral: every weapons slot
+ * was skipped, `worst` came back null, and all THREE voices were refused
+ * outright. Measured, and it is in the dump `_collvoice.mjs` prints on a
+ * refusal — fourteen busy weapons emitters, every one of them `pri=1`.
+ *
+ * That dump is also what disproved the claim `COLLAPSE_PRIORITY`'s own comment
+ * has been making: "all three of its voices sit above everything, including a
+ * first-person gunshot". They did not. 0.995 is UNDER the one voice that is
+ * guaranteed to be filling this bus at the exact moment a cathedral comes down,
+ * because what brings it down is twenty heavy shells. So the ceiling was not a
+ * ceiling, and the set piece was competing from below with its own barrage.
+ * `COLLAPSE_PRIORITY` is now 1.3 and this floor is between the two.
+ *
+ * THE THREE NUMBERS, IN ORDER, ALL MEASURED RATHER THAN CHOSEN:
+ *   1.00  `_onExplosion`   — the highest priority any ordinary voice uses
+ *   0.99  `BattleLayer` tank gun, the next one down
+ *   1.20  THIS FLOOR       — above every ordinary voice, below the set piece
+ *   1.30  COLLAPSE_PRIORITY — and 1.3 > 1.0 + 0.25, so the pre-existing
+ *                             `worst.priority > pri + 0.25` veto now ALSO
+ *                             refuses to let an explosion take a collapse slot.
+ *                             The two guards agree instead of contradicting.
+ */
+const PROTECTED_PRI = 1.2;
+
 /** Reference distance for the attenuation curve, in metres. */
 const REF = 2.0;
 
@@ -863,6 +936,10 @@ export class SpatialField {
         if (overCap && e.free) continue;
         // Over quota: only cannibalise your own bus. @see _busCap
         if (overQuota && e.busName !== bus) continue;
+        // A set piece is not a victim of its own peers. @see PROTECTED_PRI —
+        // this is the line that stopped the cathedral's bell from taking the
+        // cathedral's sub off the field ten milliseconds after it started.
+        if (e.priority >= PROTECTED_PRI && e.priority >= pri) continue;
         const score = e.priority * 4 + Math.max(0, e.endTime - now);
         if (score < worstScore) { worstScore = score; worst = e; }
       }
