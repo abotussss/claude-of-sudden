@@ -308,6 +308,42 @@ const SPEED_RISE = 24;
 const SPEED_FALL = 7;
 
 /**
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHEN THE LEAN IS ALLOWED TO PLAY — 「前傾姿勢はあるけど移動速度がなんでMAXでは
+ * 知らないの？？」
+ * ════════════════════════════════════════════════════════════════════════════
+ * `_drive` picked the sprint clip on `this.sprinting && this.speed > 4.4`, and
+ * that 4.4 IS THE BUG THE PLAYER IS DESCRIBING. It is a LITERAL on a quantity
+ * that is per-weapon: `_sprintCeiling` is `SPRINT_SPEED × moveScale`-ish, i.e.
+ * 5.74 m/s for the belt gun and 6.97 for the machine pistol. So 4.4 was 77 % of
+ * one man's flat-out run and 63 % of another's, and BOTH of them threw the full
+ * forward-lean pose while still climbing. The pose said "flat out" and the legs
+ * were at two thirds. That is exactly what he is watching.
+ *
+ * THIS IS THE THIRD TIME A LITERAL HAS BEEN WRONG HERE for the same reason —
+ * `>= 6.45` excluded every carbine man from the travel histogram by eight ten-
+ * thousandths, then `6.4` excluded every AK man. The lesson was written down in
+ * `_sprintCeiling`'s own comment and then not applied to the clip that the
+ * player can actually SEE. It is applied here: the pose is a FRACTION OF THIS
+ * MAN'S OWN CEILING and there is no speed constant in `_drive` any more.
+ *
+ * AND IT IS LATCHED, which the literal never was. Speed is re-eased every frame
+ * (`SPEED_RISE`/`SPEED_FALL`) and crowd avoidance nudges it constantly, so a
+ * bare threshold makes the clip FLAP between `run` and `sprint` a few times a
+ * second on any man hovering near it — and `Animator.setState` cross-fades on
+ * every change, so a flapping clip is a visibly broken gait. `SPRINT_POSE` is
+ * where the lean starts and `SPRINT_POSE_DROP` is where it lets go; the gap is
+ * the hysteresis and it costs one boolean on the man.
+ *
+ * WHY 0.94 AND NOT 1.0: `speed` is the eased value and the ease asymptotes, so
+ * a man genuinely flat out sits a hair under his own ceiling essentially all
+ * the time. 0.94 is "he is running as hard as this gun lets him"; 1.0 would be
+ * a pose that never plays at all.
+ */
+const SPRINT_POSE = 0.94;
+const SPRINT_POSE_DROP = 0.86;
+
+/**
  * THE UPPER POST'S TWO NUMBERS. @see `Agent._runPost` and `StairMap`.
  *
  * `POST_PHASE_T` is the abandon clock on every phase of the climb and it is the
@@ -1898,6 +1934,8 @@ export class Agent {
      */
     this.sprinting = false;
     this._wasSprinting = false;
+    /** True while the forward-lean clip is playing. @see `SPRINT_POSE`. */
+    this._leaning = false;
     this.sprintFuel = SPRINT_FUEL;
     this._sprintArmed = true;
     this._ahead = 0;
@@ -4686,6 +4724,72 @@ export class Agent {
       this.crouch = false;
       this.wantFire = shootMoving;
       this.aimWeight = shootMoving ? 0.85 : 0.35;
+    } else if (!this.cover && this.objective && !this.sniper && !this.working && !this.post) {
+      /**
+       * ══════════════════════════════════════════════════════════════════════
+       * A MAN WITH NO COVER DOES NOT STAND IN THE OPEN — 「あと何で移動せずに撃つ
+       * の？？？滞留させるな 意味もなく」
+       * ══════════════════════════════════════════════════════════════════════
+       * MEASURED (`src/ai/volleycheck.mjs`, seeds 7 / 11, 150 s windows):
+       * of all COMBAT man-time,
+       *
+       *                       at cover, still   IN THE OPEN, still
+       *   town                     8.9 %              5.8 %
+       *   plains                   2.6 %             60.5 %
+       *
+       * SIXTY PER CENT of every engagement on the plain was a man standing
+       * still in open grass. Not holding an angle — he has no cover point at
+       * all — just stopped, because the branch below is reached by TWO
+       * different men and only one of them was ever thought about: the man who
+       * has arrived at a wall and is working it, and the man for whom
+       * `CoverMap.pick` returned nothing. `this.cover` is null for the second,
+       * so `atCover` is false, so `if (this.cover && !atCover)` is false, and
+       * he fell into the peek-and-shoot branch, which opens `desiredSpeed = 0`.
+       * A peek is a thing you do from behind something. He was behind nothing.
+       *
+       * THAT IS WHY IT IS A PLAINS NUMBER AND A TOWN ROUNDING ERROR. A street
+       * map is made of cover and `pick` nearly always answers; 「平原」 is a
+       * bowl of open grass where most of the map has no wall within reach, so
+       * on NACHTFELD the null-cover case is not the exception, it is the rule.
+       *
+       * WHAT HE DOES INSTEAD is what he was already doing before the contact:
+       * he keeps walking to the objective and he shoots on the way, on exactly
+       * the terms the moving-into-position branch above uses — `shootMoving`,
+       * the same 2.6-3.8 m/s shooting walk, the same cone that `_fireRound`
+       * opens with his own speed. Nothing new is invented here; the branch
+       * above is simply reached by the man it was always right for.
+       *
+       * AND HIS DESTINATION IS HIS ORDER, which is what keeps this from being
+       * the failure mode the objective policy is most afraid of. He cannot be
+       * walked off a capture point by this, because the point IS where it
+       * sends him — 「占領しにいけ」 and 「もっと動き回れ」 are the same line here.
+       *
+       * THE FOUR MEN IT DOES NOT APPLY TO, and each is a real exception rather
+       * than caution: the SNIPER (a bolt gun cycled at a jog is not a shot —
+       * the same carve `canFireMoving` already makes), a man who has cover
+       * (that is the branch below, unchanged), and a man `working` a charge or
+       * on an upper `post`, both of which are jobs with a place attached.
+       */
+      const armourOk = !armour || this.armourWorth === 1 || this.armourWorth === 3;
+      const shootMoving = armourOk && this.hasTarget && dist < this.weaponRange
+        && (this.targetVisible || (!armour && this.lastKnownAge < SUPPRESS_WINDOW));
+      this.crouch = false;
+      this.desiredSpeed = shootMoving ? 2.6 + tr.aggression * 1.2 : 4.3;
+      this.wantFire = shootMoving;
+      this.aimWeight = shootMoving ? 0.85 : 0.35;
+      /**
+       * ONE SOLVE ON THE EXISTING CADENCE, NOT ONE A FRAME. `repathTimer` is
+       * the same ration every other destination on this man goes through, and
+       * the A* budget it meters already fails a third of its solves — @see
+       * `NavGrid.findPath`'s budget note. A destination that is refused leaves
+       * `hasMoveTarget` false and he simply stands, which is the behaviour
+       * this branch replaces and therefore cannot be worse than.
+       */
+      if (this.repathTimer <= 0 && !this.pathPending
+        && (!this.hasMoveTarget || this.moveTarget.distanceToSquared(this.objective.position) > 3 * 3)) {
+        this.repathTimer = this.rng.range(0.9, 1.8);
+        this._goTo(this.objective.position);
+      }
     } else {
       this.desiredSpeed = 0;
       this.hasMoveTarget = false;
@@ -6571,11 +6675,18 @@ export class Agent {
     if (this.crouch) clip = moving ? 'crouchWalk' : 'crouchIdle';
     // THE SPRINT HAS ITS OWN CLIP. @see `SPRINT` in clips.js for why it has to.
     // Gated on the measured speed and not on the intent, so a man whose sprint
-    // was granted and then braked to a jog by traffic plays the jog.
-    else if (this.sprinting && this.speed > 4.4) clip = 'sprint';
+    // was granted and then braked to a jog by traffic plays the jog — and gated
+    // on a fraction of HIS OWN ceiling rather than on a literal, which is the
+    // whole of 「前傾姿勢はあるけど移動速度がMAXじゃない」. @see `SPRINT_POSE`.
+    else if (this.sprinting
+      && this.speed > this._sprintCeiling * (this._leaning ? SPRINT_POSE_DROP : SPRINT_POSE)) {
+      clip = 'sprint';
+    }
     else if (this.speed > 2.6) clip = 'run';
     else if (moving) clip = 'walk';
     else clip = this.health < 35 ? 'hurtIdle' : 'idle';
+    /** The latch the lean's hysteresis rides on. @see `SPRINT_POSE`. */
+    this._leaning = clip === 'sprint';
     this.clip = clip;
 
     const an = this.animator;
