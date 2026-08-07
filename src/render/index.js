@@ -1390,7 +1390,29 @@ export class RenderSystem {
       const e = this.lights[i];
       // If the owner animated the intensity since we last wrote it, adopt the
       // new value as the base rather than fighting them (flickering lamps).
-      if (e.applied !== undefined && e.light.intensity !== e.applied) {
+      //
+      // THE FIRST SIGHT OF A LIGHT COUNTS AS SUCH A CHANGE, and the missing
+      // `undefined` case here is what lit NACHTFELD with a full daylight sun.
+      // `addLight` caches `baseIntensity` at REGISTRATION; `sky` registers its
+      // moon in its own constructor, where it is still 0 because the hour has
+      // not been set yet, and `world` only calls `sky.setTimeOfDay(level.hour)`
+      // once the level is built. The moon came up to 0.129 — and then the first
+      // `_cullLights` skipped the adopt branch on `applied === undefined` and
+      // wrote the stale 0 straight back over it. From that frame on
+      // `light.intensity === e.applied === 0`, so the branch could never fire
+      // again and the moon was pinned off for the life of the process. With no
+      // foreign directional above 0.01, `_syncSun` then (correctly, given what
+      // it was shown) switched this renderer's own 4.3 fallback sun back on: a
+      // night map lit by a noon key, which is exactly the "bright daylight
+      // ground under a dark blue sky" two passes reported and could not place.
+      //
+      // The sun escaped this because `sky._applyLightIntensities` rewrites it
+      // EVERY frame for cloud occlusion; the moon is only written inside
+      // `_updateCelestial`, which runs on a time change and nowhere else. So
+      // this only ever bit a light whose owner sets it once — and it is a no-op
+      // wherever the cached base is still the live value, which is every light
+      // the town registers.
+      if (e.applied === undefined || e.light.intensity !== e.applied) {
         e.baseIntensity = e.light.intensity;
       }
       const d = e.light.position.distanceTo(camPos);
