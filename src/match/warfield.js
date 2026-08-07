@@ -174,13 +174,22 @@ const RIM_SPREAD = 7;
 
 /* ───────────────────────────────────────────────────── small-arms pacing ── */
 /**
- * HOW MANY MAY BE FIRING AT ONCE. Three is the number that makes the map feel
- * occupied without turning the night into a light show — measured by eye at 1,
- * 3 and 6: one reads as an incident, six reads as a screensaver, three reads as
- * a front. It is a hard cap taken in draw order, so a fourth engagement whose
- * timer comes up simply waits rather than queueing.
+ * HOW MANY MAY BE FIRING AT ONCE, AND IT IS TWO BUDGETS RATHER THAN ONE.
+ *
+ * Two on the field and two on the rim, taken in draw order, so an engagement
+ * whose timer comes up while its own budget is full simply waits a beat rather
+ * than queueing. Four at once makes the map feel occupied without turning the
+ * night into a light show — by eye at 1, 4 and 8: one reads as an incident,
+ * eight reads as a screensaver, four reads as a front.
+ *
+ * THEY ARE SEPARATE BECAUSE ONE POOL LETS THE MOUNTAIN EAT THE FIELD. The rim's
+ * gaps are shorter (it is further away and thinner, so it has to be more
+ * frequent to read at all), which means on a shared cap the five rim pairs win
+ * most of the slots most of the time — and the request was for fire ACROSS THE
+ * OPEN GROUND. The field's two slots cannot be taken from it.
  */
-const MAX_ACTIVE = 3;
+const MAX_FIELD = 2;
+const MAX_RIM = 2;
 /** Seconds an engagement is quiet, before and after a burst. */
 const FIELD_GAP = [10, 26];
 const RIM_GAP = [7, 19];
@@ -290,7 +299,8 @@ export class Warfield {
     /** The foot of the mountain, off `world.level.ridge`. @see `_shell`. */
     this._ridgeR0 = 0;
     this._guns = false;
-    this._active = 0;
+    this._onField = 0;
+    this._onRim = 0;
     this._cam = new THREE.Vector3();
     this._sp = new THREE.Vector3();
 
@@ -413,7 +423,8 @@ export class Warfield {
     this._gun.left = 0;
     this._gun.t = this.rng.range(6, 18);
     for (const e of this._pend) e.t = -1;
-    this._active = 0;
+    this._onField = 0;
+    this._onRim = 0;
     this.stats.rounds = 0;
     this.stats.shells = 0;
     this.stats.bursts = 0;
@@ -432,12 +443,16 @@ export class Warfield {
 
     this._drain(dt, fx);
 
-    let active = 0;
+    let onField = 0;
+    let onRim = 0;
     for (let i = 0; i < this.fights.length; i++) {
       const f = this.fights[i];
-      if (f.on) active++;
+      if (!f.on) continue;
+      if (f.kind === 'rim') onRim++;
+      else onField++;
     }
-    this._active = active;
+    this._onField = onField;
+    this._onRim = onRim;
 
     for (let i = 0; i < this.fights.length; i++) {
       this._step(this.fights[i], dt, live, fx);
@@ -460,7 +475,8 @@ export class Warfield {
       if (f.t > 0) return;
       // The cap is taken here, at the moment of starting, so a fourth
       // engagement waits a beat rather than joining and being thinned.
-      if (!live || this._active >= MAX_ACTIVE) {
+      const rim = f.kind === 'rim';
+      if (!live || (rim ? this._onRim >= MAX_RIM : this._onField >= MAX_FIELD)) {
         f.t = this.rng.range(1.4, 3.6);
         return;
       }
@@ -469,14 +485,16 @@ export class Warfield {
       f.acc = 0;
       f.side = this.rng.int(0, 1);
       f.swap = this.rng.range(SWAP[0], SWAP[1]);
-      this._active++;
+      if (rim) this._onRim++;
+      else this._onField++;
       this.stats.bursts++;
       return;
     }
     if (f.t <= 0) {
       f.on = false;
       f.t = this.rng.range(f.gap[0], f.gap[1]);
-      this._active--;
+      if (f.kind === 'rim') this._onRim--;
+      else this._onField--;
       return;
     }
 
@@ -635,6 +653,15 @@ export class Warfield {
       this._shell(g.x, g.z, g.scale, fx);
       g.x += g.dx;
       g.z += g.dz;
+      /**
+       * THE GAP IS TAKEN HERE, ON THE LAST SHELL OF THE WALK, and it was not:
+       * the branch below only counted down a timer that the end of a barrage
+       * left sitting at zero, so the next battery opened on the frame the last
+       * one stopped. MEASURED over 305 s of a real match that was 303 shells
+       * against the 75-85 the numbers describe — four times the intended rate,
+       * and continuous artillery is weather rather than an event.
+       */
+      if (g.left <= 0) g.t = this.rng.range(SHELL_GAP[0], SHELL_GAP[1]);
       return;
     }
     g.t -= dt;
