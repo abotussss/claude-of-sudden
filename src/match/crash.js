@@ -96,8 +96,18 @@ const PLOUGH = 5.0;
 const BURN_W = 24;
 /** Fire cells along the swathe. One every ~6 m of a 160 m plough. */
 const CELLS = 27;
-/** Flame tongues per cell. */
-const TONGUES = 7;
+/**
+ * Flame tongues per cell.
+ *
+ * 7 -> 16. Photographed at 7 (`CRASH-7-scar-close.png`) the scar was a scatter
+ * of individual pale triangles standing on grass — you could count them, which
+ * is the tell that they are objects rather than a fire. Fire is a CROWD: the
+ * tongues have to overlap so that what the eye resolves is the body of flame
+ * and not its members. 432 quads with no lighting, no depth write and an early
+ * `discard` is a rounding error next to the 1587 chunks the two demolitions
+ * already carry.
+ */
+const TONGUES = 16;
 /**
  * Seconds the ground keeps burning after the wreck stops.
  *
@@ -243,7 +253,7 @@ export class Crash {
     }
 
     this._buildAirframe();
-    this._buildFlames();
+    this._buildFlames(physics);
     this._park();
     ctx.scene.add(this.group);
     this.ready = true;
@@ -254,7 +264,9 @@ export class Crash {
         `${this._fall.toFixed(1)}s of approach at ${SPEED} m/s, ` +
         `impact (${this.impact.x.toFixed(0)}, ${this.impact.z.toFixed(0)}) y=${this.impact.y.toFixed(1)}, ` +
         `ploughs ${len.toFixed(0)} m over ${PLOUGH}s into ${n} fire cells ` +
-        `(${(n * TONGUES)} flames, ${BURN_W} m wide, burns ${BURN_S}s)`
+        `(${(n * TONGUES)} flames, ${BURN_W} m wide, burns ${BURN_S}s; ` +
+        `${this._lifted} of them sit more than 0.5 m off their own cell's height, ` +
+        'which is why each is probed for its own)'
     );
 
     /**
@@ -336,10 +348,10 @@ export class Crash {
 
   /**
    * ────────────────────────────────────────────────────────────────────────
-   * THE FIRE — one InstancedMesh, one uniform, no per-frame work
+   * THE FIRE — camera-facing billboards, one uniform, no per-frame work
    * ────────────────────────────────────────────────────────────────────────
-   * `CELLS * TONGUES` tapered boxes, every one of them placed at boot on a real
-   * ground height. The whole field lives on ONE `uT` uniform, exactly as
+   * `CELLS * TONGUES` quads, every one of them placed at boot on ITS OWN
+   * ground height. The whole field lives on one `uT` uniform, exactly as
    * `makeChunkMaterial`'s chunks do:
    *
    *   aFire.x  the second this tongue lights (the plough passing it)
@@ -347,61 +359,85 @@ export class Crash {
    *   aFire.z  its height in metres
    *   aFire.w  its flicker rate
    *
-   * The vertex shader scales it about its own base — a flame that shrank about
-   * its centre would sink into the ground — and the fragment shader takes it
-   * from white-hot at the base to smoke at the tip. It is unlit, additive and
-   * depth-write-off, which is what makes fifty overlapping tongues read as one
-   * body of flame rather than as fifty boxes.
+   * ────────────────────────────────────────────────────────────────────────
+   * WHY BILLBOARDS AND NOT CONES, WHICH IS WHAT THIS WAS FIRST
+   * ────────────────────────────────────────────────────────────────────────
+   * The first version extruded a five-sided `ConeGeometry` per tongue and it
+   * was photographed (`_nfcrashshot.mjs`, `CRASH-7-scar-close.png`): a hundred
+   * and eighty-nine WHITE PAPER CONES standing on a hillside. Additive blending
+   * on a solid cone gives it a hard silhouette and a flat interior, which is
+   * the exact opposite of fire — and no number in this repo would ever have
+   * caught it, which is the argument for the screenshot gate.
+   *
+   * A flame has no silhouette. So each tongue is now a quad built IN VIEW SPACE
+   * — the instance's origin is transformed to view space and the corners are
+   * offset there, so it always faces the camera and still grows from its own
+   * base — with the shape carried entirely by the fragment's alpha: a taper
+   * that closes to a point, a soft edge, and a body that goes transparent
+   * towards the tip so the tongues behind show through the ones in front.
    */
-  _buildFlames() {
+  _buildFlames(physics) {
     const n = CELLS * TONGUES;
-    const g = new THREE.ConeGeometry(0.5, 1.0, 5, 1, true);
+    /** A unit quad with its BASE on y=0, so scaling y is scaling the flame. */
+    const g = new THREE.PlaneGeometry(1, 1);
     g.translate(0, 0.5, 0);
     const geo = new THREE.InstancedBufferGeometry();
     geo.index = g.index;
     geo.attributes.position = g.attributes.position;
-    geo.attributes.normal = g.attributes.normal;
     geo.attributes.uv = g.attributes.uv;
     g.dispose();
 
     const fire = new Float32Array(n * 4);
-    const mtx = new THREE.InstancedBufferAttribute(new Float32Array(n * 16), 16);
-    const m = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const v = new THREE.Vector3();
-    const s = new THREE.Vector3();
+    /** x, y, z of the base and the tongue's own width. */
+    const at = new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4);
     let k = 0;
+    let lifted = 0;
     for (let c = 0; c < CELLS; c++) {
       for (let j = 0; j < TONGUES; j++, k++) {
         const a = this.rng.range(0, Math.PI * 2);
-        const r = Math.sqrt(this.rng.float()) * BURN_W * 0.5;
-        v.set(
-          this._cx[c] + Math.cos(a) * r,
-          this._cy[c] - 0.2,
-          this._cz[c] + Math.sin(a) * r
-        );
-        const w = this.rng.range(0.9, 2.4);
-        s.set(w, 1, w);
-        q.setFromAxisAngle(this._up, this.rng.range(0, Math.PI * 2));
-        m.compose(v, q, s);
-        m.toArray(mtx.array, k * 16);
+        /**
+         * `float()^1.6` RATHER THAN `sqrt(float())`. The square root spreads
+         * points evenly over the disc, which is right for scattering debris and
+         * wrong for a fire: it put as much flame on the cold outer edge of the
+         * swathe as on the line the wreck actually ploughed. This biases inward,
+         * so the scar has a bright spine and a ragged edge.
+         */
+        const r = Math.pow(this.rng.float(), 1.6) * BURN_W * 0.5;
+        const x = this._cx[c] + Math.cos(a) * r;
+        const z = this._cz[c] + Math.sin(a) * r;
+        /**
+         * ITS OWN GROUND, NOT ITS CELL'S. Measured on the first build: a tongue
+         * may sit 12 m from its cell's centre and this plain rolls, so taking
+         * the cell's height put the worst flame 1.53 m in the air and
+         * twenty-three of them more than a metre under the turf. `groundHeight`
+         * is a boot-time call and there are 189 of them, once.
+         */
+        const y = physics ? physics.groundHeight(x, z, 400) : this._cy[c];
+        if (Math.abs(y - this._cy[c]) > 0.5) lifted++;
+        at.array[k * 4 + 0] = x;
+        at.array[k * 4 + 1] = y - 0.25;
+        at.array[k * 4 + 2] = z;
+        /**
+          * HALF-WIDTH 0.26-0.8 m against a height of 1.8-5.5, i.e. a tongue
+          * three to ten times taller than it is wide. It was 0.7-2.1 against
+          * 1.4-4.6 — as wide as it was tall — and a flame that is as wide as it
+          * is tall is a traffic cone.
+          */
+        at.array[k * 4 + 3] = this.rng.range(0.26, 0.8);
         fire[k * 4 + 0] = this._ct[c] + this.rng.range(0, 0.5);
         fire[k * 4 + 1] = this.rng.range(0, 20);
-        fire[k * 4 + 2] = this.rng.range(1.6, 5.2);
+        fire[k * 4 + 2] = this.rng.range(1.8, 5.5);
         fire[k * 4 + 3] = this.rng.range(2.2, 4.6);
       }
     }
-    /**
-     * `aMat`, NOT `instanceMatrix`. This is a plain `Mesh` over an
-     * `InstancedBufferGeometry` rather than an `InstancedMesh`, so three does
-     * not define `USE_INSTANCING` and does not declare `instanceMatrix` for us —
-     * the shader below declares its own. Using three's reserved name for an
-     * attribute three is not managing is how that goes wrong quietly the first
-     * time somebody turns this into an `InstancedMesh`.
-     */
-    geo.setAttribute('aMat', mtx);
+    geo.setAttribute('aAt', at);
     geo.setAttribute('aFire', new THREE.InstancedBufferAttribute(fire, 4));
     geo.instanceCount = n;
+    geo.boundingSphere = new THREE.Sphere(
+      new THREE.Vector3((this._cx[0] + this._cx[CELLS - 1]) / 2, this._cy[0] + 4, (this._cz[0] + this._cz[CELLS - 1]) / 2),
+      this._len
+    );
+    this._lifted = lifted;
 
     this._fireU = { uT: { value: -1 }, uFade: { value: 1 } };
     const mat = new THREE.ShaderMaterial({
@@ -411,43 +447,66 @@ export class Crash {
       blending: THREE.AdditiveBlending,
       side: THREE.DoubleSide,
       vertexShader: `
-        attribute mat4 aMat;
-        attribute vec4 aFire;
+        attribute vec4 aAt;    // xyz base, w width
+        attribute vec4 aFire;  // x light-at, y phase, z height, w flicker
         uniform float uT;
-        varying float vY;
-        varying float vSeed;
+        varying vec2 vUv;
+        varying float vHot;
         void main() {
-          vSeed = aFire.y;
-          // Not lit yet: collapse it to nothing behind the camera's back.
+          vUv = uv;
           float on = step( aFire.x, uT );
           float age = max( 0.0, uT - aFire.x );
-          // Flicker in height and in width, out of phase with each other.
+          // Two out-of-phase sines: one body flicker, one faster tip flutter.
           float f = sin( age * aFire.w + aFire.y ) * 0.5 + sin( age * aFire.w * 2.7 + aFire.y * 1.7 ) * 0.5;
-          float grow = clamp( age * 1.6, 0.0, 1.0 );
-          float h = aFire.z * ( 0.72 + f * 0.28 ) * grow * on;
-          float wob = 1.0 + f * 0.12;
-          vec3 p = position;
-          vY = p.y;
-          // Scale about the BASE, and lean the tip downwind of its own phase.
-          p.xz *= wob;
-          p.y *= h;
-          p.x += sin( age * 0.9 + aFire.y ) * p.y * 0.16;
-          p.z += cos( age * 0.7 + aFire.y ) * p.y * 0.16;
-          vec4 wp = aMat * vec4( p, 1.0 );
-          gl_Position = projectionMatrix * modelViewMatrix * wp;
+          float grow = clamp( age * 1.9, 0.0, 1.0 );
+          float h = aFire.z * ( 0.68 + f * 0.32 ) * grow * on;
+          float w = aAt.w * ( 0.92 + f * 0.12 );
+          vHot = 0.55 + f * 0.45;
+          /**
+           * THE BILLBOARD, BUILT IN VIEW SPACE. The base goes through the model
+           * view once; the corners are then offset on the view axes, so the quad
+           * faces the camera from every bearing and still stands on its base.
+           */
+          vec4 base = modelViewMatrix * vec4( aAt.xyz, 1.0 );
+          // Lean the tip with its own phase — a flame is never plumb.
+          float lean = sin( age * 0.8 + aFire.y ) * 0.13;
+          base.x += position.x * w + position.y * h * lean;
+          base.y += position.y * h;
+          gl_Position = projectionMatrix * base;
         }`,
       fragmentShader: `
         uniform float uFade;
-        varying float vY;
-        varying float vSeed;
+        varying vec2 vUv;
+        varying float vHot;
         void main() {
-          // White at the root, orange through the body, smoke-dark at the tip.
-          float t = clamp( vY, 0.0, 1.0 );
-          vec3 c = mix( vec3( 1.0, 0.93, 0.72 ), vec3( 1.0, 0.42, 0.10 ), smoothstep( 0.0, 0.55, t ) );
-          c = mix( c, vec3( 0.28, 0.10, 0.05 ), smoothstep( 0.6, 1.0, t ) );
-          float a = ( 1.0 - t ) * 0.85 * uFade;
-          if ( a <= 0.002 ) discard;
-          gl_FragColor = vec4( c * ( 1.0 + ( 1.0 - t ) * 0.8 ), a );
+          float t = vUv.y;
+          /**
+           * THE SHAPE IS THE ALPHA, NOT THE MESH, and the falloff has to be
+           * SOFT ALL THE WAY OUT or the quad's own edge shows. The first pass
+           * used one smoothstep between two fractions of the taper -- a hard-ish
+           * shoulder -- and 189 of them read as pale triangles. This has no
+           * shoulder at all: bright on the spine, asymptotic at the edge, so the
+           * tongue has no outline to give it away.
+           *
+           * (No backticks in here. This comment lives inside a JS template
+           * literal and one backtick ends the shader.)
+           */
+          float taper = pow( 1.0 - t, 0.55 );
+          float d = abs( vUv.x - 0.5 ) * 2.0;
+          float body = pow( max( 0.0, 1.0 - d / max( taper, 1e-3 ) ), 2.2 );
+          float a = body * pow( 1.0 - t, 1.6 ) * uFade * vHot;
+          if ( a <= 0.004 ) discard;
+          /**
+           * SATURATED, WITH A SMALL WHITE CORE. Additive blending washes a pale
+           * colour straight out to white over the whole tongue; the white has
+           * to be confined to the spine of the root (high body, low t) so
+           * everything else stays orange.
+           */
+          float core = body * ( 1.0 - smoothstep( 0.0, 0.30, t ) );
+          vec3 c = mix( vec3( 1.0, 0.34, 0.05 ), vec3( 1.0, 0.66, 0.20 ), smoothstep( 0.0, 0.45, t ) );
+          c = mix( c, vec3( 0.50, 0.11, 0.03 ), smoothstep( 0.45, 1.0, t ) );
+          c += vec3( 0.55, 0.42, 0.24 ) * core;
+          gl_FragColor = vec4( c, a );
         }`,
     });
     mat.name = 'crash_fire';
@@ -513,9 +572,28 @@ export class Crash {
     const d = 1 - (1 - u) * (1 - u);
     out.set(
       this.impact.x + this._hx * this._len * d,
-      this.impact.y + 0.9,
+      this._groundAlong(d) + 0.9,
       this.impact.z + this._hz * this._len * d
     );
+  }
+
+  /**
+   * THE GROUND UNDER THE WRECK, `d` of the way along the scar.
+   *
+   * `this.impact.y + 0.9` was the whole of this and it was measured wrong
+   * (`_nfcrashshot.mjs`): the impact point's ground is 1.6 m and the far end of
+   * the plough is 3.8 m, so the hull finished the skid 2.2 m UNDER the turf —
+   * and a raycast could never have said so, because it carries no collision.
+   *
+   * The heights are already baked, one per fire cell, off `physics.groundHeight`
+   * at boot. This is a lerp between two of them and no probe at all.
+   */
+  _groundAlong(d) {
+    const n = CELLS;
+    const f = Math.max(0, Math.min(n - 1, d * (n - 1)));
+    const i = Math.min(n - 2, f | 0);
+    const k = f - i;
+    return this._cy[i] * (1 - k) + this._cy[i + 1] * k;
   }
 
   update(dt) {
