@@ -87,6 +87,7 @@ import { Airstrike, JET_LEAD } from './airstrike.js';
 import { Bomber } from './bomber.js';
 import { Strafe } from './strafe.js';
 import { Crash } from './crash.js';
+import { Warfield } from './warfield.js';
 import { Armour } from './tank.js';
 import { Drones } from './drone.js';
 import { AmmoDrops } from './ammo.js';
@@ -625,6 +626,28 @@ export class MatchSystem {
      * `MAP_TRACK` in `src/match/crash.js`.
      */
     this.crash = new Crash(ctx, { rng: this.rng.fork() }).build();
+    /**
+     * ─────────────────────────────────────────────────────────────────────
+     * THE WAR THE PLAYER IS NOT IN — 「そこらじゅうに銃撃や銃弾が飛び交い、爆撃もあり」
+     * ─────────────────────────────────────────────────────────────────────
+     * The sixth, and the only one that is not a weapon at all: ambient
+     * small-arms exchanges in the middle distance, the same on the unreachable
+     * mountain face, and artillery working over ground on the far side of it.
+     *
+     * IT IS IN NOBODY'S `coBusy` AND NOTHING IS IN ITS. The mutual stand-down
+     * exists so that two TELEGRAPHS never run at once — an inbound salvo and an
+     * inbound gun run are two things the player has to read and act on, and
+     * stacking them is how a warning stops being one. This has no telegraph
+     * because it has nothing to warn about: it emits no `explosion`, no damage
+     * and no HUD alert of any kind, so it can never compete with one. Standing
+     * it down during an airstrike would in fact be the wrong way round — a
+     * quiet map under an inbound is exactly the moment the war should still be
+     * going on somewhere else.
+     *
+     * A no-op on the town, which authors no engagements. @see
+     * `MAP_FIGHTS` in `src/match/warfield.js`.
+     */
+    this.warfield = new Warfield(ctx, { rng: this.rng.fork() }).build();
     this.air = [this.airstrike, this.bomber, this.strafe, this.tank];
     // Each stands down while EITHER of the other two has something in the air.
     this.airstrike.coBusy = [this.bomber, this.strafe];
@@ -1331,6 +1354,14 @@ export class MatchSystem {
     // grass. @see the note on `Crash.reset` for why this one DOES undo itself
     // where a `world.demolitions` record deliberately does not.
     this.crash?.reset();
+    /**
+     * …and every ambient exchange back to quiet, with its first burst re-drawn
+     * on the new clock. Without this a restart would begin with three
+     * firefights already in progress from the last one, which is the one thing
+     * a fresh round must not look like. It owns no geometry, so the whole reset
+     * is a timer per engagement. @see src/match/warfield.js.
+     */
+    this.warfield?.reset();
     /**
      * AND THE THIRTY GO BACK ON THE SHELF. The budget is per MATCH, so this is
      * the one call that makes "thirty a match" true across a restart: anything
@@ -3148,6 +3179,15 @@ export class MatchSystem {
      * has to finish stopping. @see `Crash.update`.
      */
     this.crash?.update(dt);
+    /**
+     * AND THE WAR GOING ON SOMEWHERE ELSE, in every phase for the same reason
+     * the five above run in every phase — an exchange that is under way when
+     * the whistle goes finishes rather than being cut off mid-burst. `live` is
+     * what stops a NEW one starting. It carries no damage, no event and no HUD
+     * alert, so unlike the five above it can be running while any of them is.
+     * @see src/match/warfield.js.
+     */
+    this.warfield?.update(dt, live);
     /**
      * The helicopter runs its own clock in every phase, exactly as the four
      * above do: a sortie that is in the air when a match ends still has to
@@ -6699,6 +6739,7 @@ export class MatchSystem {
     this.bomber?.dispose();
     this.strafe?.dispose();
     this.crash?.dispose();
+    this.warfield?.dispose();
     this.tank?.dispose();
     this.drones?.dispose();
     this.reinforce?.dispose();
