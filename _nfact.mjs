@@ -55,7 +55,7 @@ const browser = await chromium.launch({
 const page = await browser.newPage({ viewport: { width: 1000, height: 600 } });
 const errs = [];
 const logs = [];
-page.on('pageerror', (e) => errs.push(String(e.message)));
+page.on('pageerror', (e) => errs.push(String(e.stack ?? e.message)));
 page.on('console', (m) => {
   const s = m.text();
   if (/\[match\]|\[airstrike\]|\[world\] nachtfeld|\[bomber\]|\[strafe\]|\[tank\]/.test(s)) logs.push(s);

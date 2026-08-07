@@ -2716,8 +2716,11 @@ export class MatchSystem {
        * RATHER THAN A REGRESSION. The plain locks D behind the control tower
        * now (@see `PLAINS_ZONES` in sites.js), so it HAS an act, and the armour
        * goes back to being an act's consequence exactly as it is on the town —
-       * the `armour` beat of the FORTRESS act arms it. If that act ever drops
-       * (no `NF-FORT` record), the hulls stay in their pockets and
+       * the `armour` beat of the CONTROL TOWER act arms it, which is the act
+       * that opens D and therefore the act the hulls have somewhere new to
+       * drive to. (This note said FORTRESS while the sheet said tower; the
+       * sheet was right and is the one that runs.) If that act ever drops
+       * (no `NF-TOWER` record), the hulls stay in their pockets and
        * `_bakeActs` says so in one line at boot, which is the honest failure.
        * The town keeps this branch untouched, because on the town it is never
        * taken.
@@ -4859,10 +4862,19 @@ export class MatchSystem {
     audio?.play?.('strike_jet', a.rec.position, {
       level: 1.2, dur: s.lead, maxDist: 620, gain: 3.6, occlusion: 0.15,
     });
+    /**
+     * `find(...)[0]` THREW ON AN ACT WITH NO `raze` BEAT, and not every act has
+     * one: the crash brings down no `world.demolitions` record at all, so this
+     * line — inside `_beginAct`, i.e. on the fire frame of a scheduled event —
+     * was a `TypeError` waiting for the third act to be written. A log line may
+     * not be able to take the event down with it.
+     */
+    const raze = s.beats.find((b) => b[1] === 'raze');
     console.info(
       `[match] ACT ${s.id} "${s.name}" called at t=${t.toFixed(0)}s p=${p.toFixed(2)} — ` +
         `${s.lead}s warning, ${s.barrage.shells} rounds over ${s.barrage.span}s from ` +
-        `${s.barrage.open.toFixed(1)}s, structure down at +${(s.lead + s.beats.find((b) => b[1] === 'raze')[0]).toFixed(1)}s`
+        `${s.barrage.open.toFixed(1)}s, ` +
+        (raze ? `structure down at +${(s.lead + raze[0]).toFixed(1)}s` : 'no structure — this act is its own event')
     );
   }
 
@@ -4932,6 +4944,78 @@ export class MatchSystem {
           `[match] ACT ${s.id} STRUCTURE DOWN at +${this._nf.t.toFixed(1)}s ` +
             `(${down ? 'fired' : 'declined — already down'})`
         );
+        break;
+      }
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * THE MAGAZINE COOKS OFF — Act II's, and the reason it is not Act I's
+       * ────────────────────────────────────────────────────────────────────
+       * The last four rounds of the fortress's spiral are on the magazine's own
+       * 8 x 6 m roof (@see `siegeAim`), and this is what they set off two
+       * seconds before the crown comes down: ONE blast the size of the
+       * courtyard, at the fort's own centre, with the whole 26-round walk
+       * behind it as the fuse.
+       *
+       * IT IS NOT A BIGGER SHELL. It is a different beat — three times the
+       * radius of a barrage round, a light that carries to the far zones, and
+       * a shockwave ring on the courtyard floor — and the tower cannot have
+       * one: a shaft with a cab on it has nothing in it to go up.
+       *
+       * NOTHING IS COMPUTED HERE. `rec.position` and `rec.radius` are published
+       * at boot, `_blast` and `_blastPos` are the same two scratch objects
+       * every other blast on this map writes through, and the magnitudes are
+       * multiples of the act's own authored barrage.
+       */
+      case 'magazine': {
+        const at = this._nfPos.set(
+          a.rec.position.x,
+          a.rec.position.y + RULES.blastBurstHeight + 2.0,
+          a.rec.position.z
+        );
+        const p = this._blast;
+        p.position = this._blastPos.copy(at);
+        p.radius = s.barrage.radius * 3.0;
+        p.damage = s.barrage.damage * 1.6;
+        p.source = null;
+        this.ctx.events.emit('explosion', p);
+        const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
+        if (fx) {
+          fx.explosion?.({ position: at, radius: s.barrage.radius * 1.9 });
+          fx.scorch?.(at.x, a.rec.position.y - 0.3, at.z, s.barrage.radius * 1.8);
+          fx.hazeRing?.(at.x, a.rec.position.y + 1.2, at.z, 8.0, 46, 1.1, 3.0);
+          fx.haze?.(at.x, at.y + 6, at.z, 12, 22, 3.4, 1.6);
+          if (fx.lights) fx.lights.flash(at.x, at.y + 4, at.z, 1, 0.62, 0.26, 5200, 1.9, 3.4, 190, 6);
+        }
+        const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+        /**
+         * ──────────────────────────────────────────────────────────────────
+         * `strike_rubble` + `strike_tail`, AND NOT `collapse_sub`, WHICH CRASHED
+         * ──────────────────────────────────────────────────────────────────
+         * THE VOICE NAME IS NOT FREE. `AudioSystem.play` routes the three
+         * `COLLAPSE_KINDS` — `collapse_tear`, `collapse_sub`, `collapse_bell` —
+         * down `_playCollapse`, whose first statement is
+         * `this.field.distanceTo(...)`; `this.field` is null until the
+         * AudioContext has actually started, which needs a user gesture. So a
+         * `collapse_sub` from a scheduled event that fires before the player has
+         * clicked is an uncaught `TypeError` INSIDE THE MATCH UPDATE — measured,
+         * on the first run of this act:
+         *
+         *   TypeError: Cannot read properties of null (reading 'distanceTo')
+         *     at AudioSystem._playCollapse … at MatchSystem._actBeat
+         *
+         * The two below are on the ordinary `play` path, which is guarded, and
+         * they are the pair every other beat on both maps' sheets already uses.
+         * The unguarded null in `_playCollapse` is a real defect in
+         * `src/audio/index.js` and it is not this change's to fix.
+         */
+        audio?.play?.('strike_rubble', a.rec.position, {
+          level: 1.8, dur: 4.2, maxDist: 900, gain: 5.0, occlusion: 0.1,
+        });
+        audio?.play?.('strike_tail', a.rec.position, {
+          level: 1.4, dur: 3.0, maxDist: 700, gain: 3.2, occlusion: 0.15,
+        });
+        this.ui.airImpact(s.razeTitle);
+        console.info(`[match] ACT ${s.id} MAGAZINE at +${this._nf.t.toFixed(1)}s — ${p.radius.toFixed(0)} m blast`);
         break;
       }
       case 'aftermath': {

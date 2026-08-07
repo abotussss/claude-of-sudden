@@ -91,6 +91,32 @@ export const NF_GAP = 45;
 /* ────────────────────────────────────────────────────── the barrage shapes ── */
 
 /**
+ * ────────────────────────────────────────────────────────────────────────────
+ * HOW TALL IS IT — and the bug that made this a function instead of a field
+ * ────────────────────────────────────────────────────────────────────────────
+ * `rec.top` IS AN ABSOLUTE WORLD Y, NOT A HEIGHT. `publishWorks` fills it as
+ * `y(TOWER_H)`, i.e. the structure's own base plus its height, and the base is
+ * `rec.position.y`. Measured on the boot this note was written against:
+ *
+ *   NF-TOWER  position.y 9.80   top 41.70   → 31.90 m of structure
+ *   NF-FORT   position.y  3.20  top 11.40   →  8.20 m of structure
+ *
+ * `_actAim` adds `rec.position.y` to whatever an aim function writes, so an aim
+ * function that reaches for `rec.top` has added the base TWICE. The first
+ * version of `climbAim` did exactly that: it spread sixteen rounds over
+ * `rec.top - 1.5` = 40.2 m of offset above a base at 9.8, so the last round of
+ * the climb went off at y = 49.5 in open sky — the tower's own roof is at 43.7,
+ * measured by `airstrike` at bake ("NF-TOWER@43.7m"), so THREE of the sixteen
+ * rounds detonated ABOVE THE BUILDING and the walk never reached the cab.
+ *
+ * That is the same class of defect the file header is about — a number nobody
+ * re-measured — and the fix is to never let an aim function see `top` at all.
+ */
+function structH(rec) {
+  return Math.max(1, rec.top - rec.position.y);
+}
+
+/**
  * A CLIMB — the tower's.
  *
  * Four rounds on the apron first, on the compass points and OUTSIDE the podium,
@@ -121,7 +147,68 @@ function climbAim(i, n, rec, rng, out) {
   const r = (rec.radius * 0.52) * (1 - t) + Math.max(2.2, rec.halfW * 0.9) * t;
   out[0] = Math.cos(a) * r + rng.range(-1.1, 1.1);
   out[1] = Math.sin(a) * r + rng.range(-1.1, 1.1);
-  out[2] = 1.5 + t * (rec.top - 1.5) * 0.94;
+  // …AND THE CLIMB STOPS UNDER THE ROOF. @see `structH` for the 5.8 m of open
+  // sky the three top rounds used to go off in.
+  out[2] = 1.5 + t * (structH(rec) - 1.5) * 0.94;
+}
+
+/**
+ * A SIEGE — the fortress's, and it is deliberately nothing like the tower's.
+ *
+ * 「二つの同じイベントは一つのイベントを二回やっただけ」. The tower is a
+ * DECAPITATION: one vertical object, sixteen rounds up a shaft in ten seconds,
+ * and the building is gone before the walk is finished. A fortress cannot be
+ * decapitated — it is 72 m across, 8.2 m tall and most of it is the rampart,
+ * which is the AI's ground and is NOT in the scope that comes down. So its
+ * barrage is the opposite shape in every axis that matters:
+ *
+ *   the tower's         the fortress's
+ *   ─────────────────   ──────────────────────────────────────────────────────
+ *   vertical            FLAT. Every round is at deck height, so every round
+ *                       leaves a scorch (@see `SCORCH_CEIL`) and the courtyard
+ *                       is visibly worked over rather than lit up from above.
+ *   16 over 10 s        26 over 26 s. A round a second is a bombardment you sit
+ *                       under; sixteen in ten is a strike you flinch at.
+ *   outward-in x2       ONE SPIRAL, glacis to magazine, and it never doubles
+ *   (apron, then shaft) back. The beaten zone visibly CLOSES on the middle, so
+ *                       where it is going is legible from the fourth round.
+ *
+ * The last four rounds are on the magazine itself — `rec.halfW`/`halfD` is the
+ * magazine's own 8 x 6 m footprint and not the fort's, which is what makes the
+ * spiral's terminus a derived point rather than an authored one. That is what
+ * the `magazine` beat then cooks off.
+ */
+function siegeAim(i, n, rec, rng, out) {
+  /** The last rounds that are ON the magazine rather than walking toward it. */
+  const onMag = 4;
+  if (i >= n - onMag) {
+    const k = i - (n - onMag);
+    const a = k * 2.39996 + 0.6;
+    out[0] = Math.cos(a) * rec.halfW * 0.8 + rng.range(-0.6, 0.6);
+    out[1] = Math.sin(a) * rec.halfD * 0.8 + rng.range(-0.6, 0.6);
+    // Roof height rather than deck: the magazine's own roof is what is hit.
+    out[2] = structH(rec) * 0.62;
+    return;
+  }
+  const t = i / Math.max(1, n - onMag);
+  /**
+   * TWO TURNS, from the glacis to the magazine's own edge. `rec.radius` is
+   * R_OUT + BASTION = 36 m and the walk starts just OUTSIDE it, on the glacis,
+   * for `climbAim`'s reason: an opening round inside a standing curtain is a
+   * round the curtain hides.
+   */
+  const r = rec.radius * 1.06 * (1 - t) + Math.max(rec.halfW, rec.halfD) * 1.3 * t;
+  const a = t * Math.PI * 4 + 2.1;
+  out[0] = Math.cos(a) * r + rng.range(-1.6, 1.6);
+  out[1] = Math.sin(a) * r + rng.range(-1.6, 1.6);
+  /**
+   * Deck height, stepping up over the rampart and down into the courtyard —
+   * derived from where the round IS rather than from its index, so it tracks
+   * the wall it is crossing. `wall` peaks on the curtain (t ~ 0.4-0.6) and is 0
+   * on the glacis and in the courtyard.
+   */
+  const wall = Math.max(0, 1 - Math.abs(r - rec.radius * 0.86) / 7.0);
+  out[2] = 0.6 + wall * structH(rec) * 0.66;
 }
 
 /* ───────────────────────────────────────────────────────────────── the acts ── */
@@ -145,12 +232,39 @@ const TOWER_ACT = {
   id: 'NF-TOWER',
   name: 'THE CONTROL TOWER',
   /**
-   * 0.46. Late enough that the four permanent points have been traded for six
-   * or seven minutes and D means something when it opens; early enough that the
-   * point it opens has the rest of the match to be fought over. @see the
-   * measurement in the commit message and `_nfLog` in `MatchSystem`.
+   * ──────────────────────────────────────────────────────────────────────────
+   * 0.46 -> 0.40, AND THE ONLY REASON IS THE MEASUREMENT
+   * ──────────────────────────────────────────────────────────────────────────
+   * 「大イベントの発火時刻を実測し、後半3〜5分に寄せる」, and `rules.js` settled
+   * what that sentence means for this codebase: it is a question about SECONDS
+   * REMAINING, not about t, because a DOMINATION match ends on `scoreTarget`
+   * and never on `matchTime`. The town's cathedral is quoted there as buying
+   * 170-251 s of remaining match, and that is the bar.
+   *
+   * SO THE PLAIN'S OWN END WAS MEASURED FIRST (`_nftime.mjs`, acts disarmed so
+   * an open D does not change the scoring rate mid-curve, two seeds):
+   *
+   *   natural end   t = 456.2 s   and   t = 472.1 s   of a 1200 s clock
+   *
+   * — i.e. the 1200 s clock is not what ends this match either, and the
+   * "last 3-5 minutes" is the band T-180 s .. T-300 s. Against that curve:
+   *
+   *   p    t (s101/s202)   T-minus
+   *   0.40   216.7 / 215.1   T-240 / T-257   ◄── the tower
+   *   0.50   256.6 / 267.2   T-200 / T-205   ◄── the fortress
+   *   0.60   296.0 / 313.4   T-160 / T-159   ◄── the crash
+   *
+   * THREE ACTS CANNOT ALL SIT WHERE ONE CAN. The band is 120 s wide and an act
+   * plus its `NF_GAP` is 65-85 s, so the set SPANS the band rather than
+   * clustering inside it: the tower opens it at the five-minute mark and the
+   * crash is the last thing that happens before the endgame, which is the
+   * shape 「後半3〜5分に寄せる」 asks for and the only one that fits.
+   *
+   * 0.46 WAS NOT WRONG SO MUCH AS UNMEASURED — it lands at T-216/T-231, inside
+   * the band on its own. It moves because it is now the FIRST of three and the
+   * two behind it need the room. @see the measured firings in the commit.
    */
-  progress: 0.46,
+  progress: 0.40,
   lead: 10.0,
   /** Which of `PLAINS_RUNS` / `PLAINS_LINES` this act's aircraft fly. */
   run: 'CENTREWEST',
@@ -234,8 +348,102 @@ const TOWER_ACT = {
  */
 export const NF_ARMOUR_AFTER = 3.0;
 
+/**
+ * ACT II — THE FORTRESS
+ *
+ * A SIEGE, AND THE WHOLE POINT IS THAT IT IS NOT THE TOWER AGAIN. Two events
+ * that look the same are one event played twice, so every axis this act has in
+ * common with Act I has been pushed the other way:
+ *
+ *   ACT I  THE TOWER                    ACT II  THE FORTRESS
+ *   ─────────────────────────────────   ──────────────────────────────────────
+ *   24 s from siren to last beat        44 s. It is the long one.
+ *   an aeroplane opens it               THE GUNS open it, eight seconds before
+ *                                       the warning even expires, and the
+ *                                       aircraft arrive at the END.
+ *   the barrage climbs, the building    the barrage CLOSES, and the building
+ *   is gone on round three              goes on the LAST round — the walk is
+ *                                       the cause rather than the escort.
+ *   the strike kills it                 ITS OWN MAGAZINE kills it. @see the
+ *                                       `magazine` beat, which Act I has no
+ *                                       equivalent of and cannot have: the
+ *                                       tower is a shaft with a cab on it and
+ *                                       nothing in it to cook off.
+ *   west of the works (`CENTREWEST`)    east of them (`CENTREEAST`), so the two
+ *                                       acts are not even the same silhouette
+ *                                       on the same horizon.
+ *   consequence: D OPENS, armour rolls  consequence: the ENEMY REINFORCES the
+ *                                       ground it just lost the walls of.
+ *
+ * WHAT IS STILL STANDING AFTERWARDS, and here it is most of the building.
+ * `plains-fort.js` scopes the parapet, both gatehouses, the two north bastions
+ * and the magazine — the CROWN. The 6 m battered curtain under the walk is NOT
+ * in scope and does not move: it is the only high ground the bots have inside
+ * the wall, both ramps off the courtyard still land on it, and the gate
+ * passages are untouched. A man on the rampart when this fires is still on the
+ * rampart, standing behind a parapet that is now lying along the walk beside
+ * him. @see `buildFortRuin`.
+ */
+const FORT_ACT = {
+  id: 'NF-FORT',
+  name: 'THE FORTRESS',
+  /** T-200 s / T-205 s on the measured curve. @see `TOWER_ACT.progress`. */
+  progress: 0.50,
+  /** Four seconds longer than the tower's, because the guns open under it. */
+  lead: 14.0,
+  run: 'CENTREEAST',
+  title: 'THE FORTRESS IS UNDER BOMBARDMENT',
+  impactTitle: 'THE FORTRESS IS UNDER BOMBARDMENT',
+  warnLine: 'SECONDS · CLEAR THE COURTYARD',
+  razeTitle: 'THE MAGAZINE HAS GONE UP',
+  razeImpact: 'THE FORTRESS IS BROKEN',
+  afterTitle: 'THE FORTRESS IS BROKEN',
+  afterLine: 'THE WALLS ARE OPEN TO THE SKY',
+  openLine: 'CONTEST THE GAP',
+  barrage: {
+    shells: 26,
+    /**
+     * MINUS EIGHT. The guns are the telegraph here — the first four rounds walk
+     * the glacis while the warning strip is still counting down, which is the
+     * one thing the tower's sheet cannot do because its own opening rounds are
+     * three seconds of announcement rather than six of ranging fire.
+     */
+    open: -8.0,
+    span: 26.0,
+    radius: 11,
+    damage: 150,
+    aim: siegeAim,
+  },
+  beats: [
+    /** The heavy first and from the far side. `Bomber` is 2.4 s on screen. */
+    [-6.0, 'bomber'],
+    /**
+     * THE MAGAZINE. The spiral's last four rounds are ON it (@see `siegeAim`)
+     * and this is what they set off: one blast at the fort's own centre, the
+     * size of the whole courtyard, two seconds before the structure follows.
+     */
+    [12.0, 'magazine'],
+    /**
+     * …AND THE CROWN COMES OFF BEHIND IT. Two seconds, so the magazine reads as
+     * the CAUSE. Act I razes on the arrival beat with the barrage still walking
+     * up the shaft; this one razes at the end of its walk. Same method, opposite
+     * dramatic order, and that is the difference between two events and one.
+     */
+    [14.0, 'raze'],
+    /** The fighter through the smoke, AFTER. On the tower's sheet it is first. */
+    [17.0, 'strafe'],
+    [22.0, 'aftermath'],
+    /**
+     * NO `open` AND NO `armour` BEAT. D is already live and the hulls are
+     * already rolling — Act I owns both, and an act whose consequence has
+     * already happened is an act with no consequence. This one's is the drop.
+     */
+    [26.0, 'reinforce'],
+  ],
+};
+
 /** THE ACTS, IN ORDER. `MatchSystem` walks this list and never indexes it by id. */
-export const NF_ACTS = [TOWER_ACT];
+export const NF_ACTS = [TOWER_ACT, FORT_ACT];
 
 /**
  * The acts, per map. @see `forMap` in `src/match/geography.js` — `world.level.id`,
