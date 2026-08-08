@@ -124,6 +124,18 @@ for (const seed of SEEDS) {
       roundsMoving: 0, aimedMoving: 0,
       /* man-frames */
       alive: 0, contact: 0, contactFiring: 0,
+      /**
+       * MAN-SECONDS, AND THIS IS THE FIX FOR A DENOMINATOR THAT WAS WRONG.
+       *
+       * The first cut of this file divided rounds by a man-FRAME count and
+       * called the answer "per man-minute", which reported 1.4 against
+       * `_aimed.mjs`'s 94.7 for the identical run — a frame is not a second and
+       * at 60 fps the two differ by exactly that factor. Every rate this file
+       * prints now comes off THIS accumulator: `dt` added once per alive man
+       * per frame, i.e. real man-seconds, which is what `_aimed.mjs` measures
+       * and the only thing the two can be compared on.
+       */
+      manSecs: 0,
       /* the lean */
       leanFrames: 0, leanBelow: 0, leanFracSum: 0,
       sprintGranted: 0, travel: 0, travelCeil: 0, travelSlow: 0,
@@ -172,6 +184,7 @@ for (const seed of SEEDS) {
         const a = ai.agents[i];
         if (!a.alive) continue;
         S.alive++;
+        S.manSecs += dt;
 
         /* ---- the lean, against HIS OWN ceiling --------------------------- */
         const ceil = a._sprintCeiling;
@@ -232,10 +245,10 @@ await browser.close();
 const pc = (a, b) => (b > 0 ? `${((a / b) * 100).toFixed(1)} %` : '—');
 const sum = (k) => runs.reduce((s, r) => s + (r[k] ?? 0), 0);
 const sumA = (k) => runs.reduce((s, r) => r[k].map((v, i) => (s[i] ?? 0) + v), []);
-const manMin = runs.reduce((s, r) => s + (r.alive / Math.max(1, r.secs)) * (r.secs / 60), 0);
+const manMin = runs.reduce((s, r) => s + r.manSecs / 60, 0);
 
 for (const r of runs) {
-  const mmr = (r.alive / Math.max(1, r.secs)) * (r.secs / 60);
+  const mmr = r.manSecs / 60;
   console.log(`\n═══ seed ${r.seed} [${r.level}] — ${r.secs.toFixed(0)} s, ${mmr.toFixed(1)} man-min, err ${r.pageerrors}`);
   console.log(`ROUNDS  ${r.rounds}  (${(r.rounds / mmr).toFixed(1)}/man-min)   AIMED ${pc(r.aimed, r.rounds)}   ` +
     `MOVING ${pc(r.roundsMoving, r.rounds)}`);

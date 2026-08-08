@@ -813,20 +813,60 @@ const ARCHETYPE_MIX = {
  *
  * The bolt gun sets neither: it already carries `extra.weaponRange` [78, 30]
  * and its archetype IS its distance, so both would be overwritten a line later.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND THEY ALL WENT UP ×1.42 — 「距離あっても それおかしいよ」「撃つ量はみんな増やせ」
+ * ────────────────────────────────────────────────────────────────────────────
+ * `reach` was raised once already, for 「遠くにいても撃つようにして」, and the player
+ * has now said the same thing a second time with 「それおかしいよ」 on the end. So
+ * this is not a re-litigation of the first pass, it is the measurement the first
+ * pass did not have — `src/ai/volleycheck.mjs`, seeds 7 / 11, 150 s windows, the
+ * share of CONTACT TIME in which a man can SEE a live enemy, has a loaded gun,
+ * and the only thing between him and the trigger is the metres:
+ *
+ *          30-40 m   40-55 m   55-70 m   70-90 m   90-120 m   120 m+
+ *   town      0.7 %     1.2 %     1.9 %     3.2 %      0.0 %    0.0 %
+ *   plains    3.1 %     6.7 %     8.4 %    12.3 %     10.8 %    0.0 %
+ *
+ * ONE IN EIGHT OF EVERY LONG LOOK ON THE PLAIN ENDED IN A HELD TRIGGER, and the
+ * zeroes in the last column are worse than the twelves: past ~120 m nothing is
+ * REFUSED because nothing is ACQUIRED. `viewRange` is `weaponRange × 1.1`, so
+ * the two gates move together and a man simply never saw the other half of a
+ * map whose capture points are 154-314 m apart.
+ *
+ * ×1.42 ON EVERY GUN, WHICH IS THE 「個性を作ってもいいけど…みんな増やせ」 SHAPE
+ * EXACTLY: a common multiplier is a floor raised under the whole roster with
+ * every ratio between the guns preserved, so the machine pistol is still the
+ * shortest thing on the map and the belt gun still the longest, and no man's
+ * character is spent buying the range. At the mean skill (×0.965) that is
+ * 30.9 → 43.4 m for the machine pistol and 71.4 → 101.3 m for the belt gun.
+ *
+ * IT IS PERF-SAFE, AND THAT IS MEASURED RATHER THAN HOPED. `AiSystem`'s
+ * acquisition loop is `for (let k = 0; k < n && checks < 2; k++)` — at most TWO
+ * new sight rays per man per frame, round-robin on `_scanCursor`. Widening the
+ * range does not add rays, it makes the same two rays longer and lets more of
+ * them succeed. The cost is a longer BVH traversal, not a bigger loop.
+ *
+ * WHAT PAYS FOR IT is the thing that already pays for every other volume
+ * change on this file: `_fireRound` opens the cone with the man's own speed and
+ * with every round of the pull, and the cone is an ANGLE — so a round sent at
+ * 90 m scatters three times as wide on the ground as the same round at 30 m.
+ * Long fire is suppression and noise, which is 「銃声が鳴り響きまくる」, and it is
+ * not free accuracy. 「AIMは悪くてもいい」 is the standing permission.
  */
 const WEAPONS = {
-  carbine: { audio: 'rifle', rpm: 800, mag: 30, spares: 4, damage: 17, cone: 0.030, coneLow: 0.055, reload: 2.35, hold: 1.0, move: 1.00, reach: 62, want: 22 },
-  ak: { audio: 'ak', rpm: 600, mag: 30, spares: 3, damage: 21, cone: 0.034, coneLow: 0.062, reload: 2.75, hold: 0.85, move: 0.98, reach: 66, want: 26 },
-  smg: { audio: 'smg', rpm: 950, mag: 32, spares: 5, damage: 15, cone: 0.041, coneLow: 0.072, reload: 2.05, hold: 1.3, move: 1.06, reach: 40, want: 12 },
+  carbine: { audio: 'rifle', rpm: 800, mag: 30, spares: 4, damage: 17, cone: 0.030, coneLow: 0.055, reload: 2.35, hold: 1.0, move: 1.00, reach: 88, want: 22 },
+  ak: { audio: 'ak', rpm: 600, mag: 30, spares: 3, damage: 21, cone: 0.034, coneLow: 0.062, reload: 2.75, hold: 0.85, move: 0.98, reach: 94, want: 26 },
+  smg: { audio: 'smg', rpm: 950, mag: 32, spares: 5, damage: 15, cone: 0.041, coneLow: 0.072, reload: 2.05, hold: 1.3, move: 1.06, reach: 57, want: 12 },
   /**
    * THE BELT. `magSize` 100 is the whole character of it: this is the man who
    * does not stop, and he is the direct answer to "マガジンを使い切るくらい撃たない
    * のか". Two belts behind it rather than four magazines, and a 5.6 s tray
    * change during which he is worth nothing — the cost of holding it down.
    */
-  lmg: { audio: 'lmg', rpm: 750, mag: 100, spares: 2, damage: 17, cone: 0.047, coneLow: 0.082, reload: 5.6, hold: 2.4, move: 0.78, reach: 74, want: 30 },
-  mpistol: { audio: 'machinepistol', rpm: 1050, mag: 20, spares: 7, damage: 14, cone: 0.055, coneLow: 0.092, reload: 1.85, hold: 1.15, move: 1.08, reach: 32, want: 9 },
-  magnum: { audio: 'magnum', rpm: 170, mag: 6, spares: 8, damage: 42, cone: 0.019, coneLow: 0.040, reload: 3.4, hold: 0.35, move: 1.06, reach: 46, want: 16 },
+  lmg: { audio: 'lmg', rpm: 750, mag: 100, spares: 2, damage: 17, cone: 0.047, coneLow: 0.082, reload: 5.6, hold: 2.4, move: 0.78, reach: 105, want: 30 },
+  mpistol: { audio: 'machinepistol', rpm: 1050, mag: 20, spares: 7, damage: 14, cone: 0.055, coneLow: 0.092, reload: 1.85, hold: 1.15, move: 1.08, reach: 45, want: 9 },
+  magnum: { audio: 'magnum', rpm: 170, mag: 6, spares: 8, damage: 42, cone: 0.019, coneLow: 0.040, reload: 3.4, hold: 0.35, move: 1.06, reach: 65, want: 16 },
   /**
    * The bolt gun, and every dial on it is a trade rather than a tightening.
    * @see the block in the constructor that applies `extra` — the settle, the
@@ -835,7 +875,7 @@ const WEAPONS = {
   sniper: {
     audio: 'sniper', rpm: 55, mag: 5, spares: 6, damage: 55, cone: 0.0072, coneLow: 0.0135,
     reload: 3.1, hold: 0.3, move: 0.90,
-    extra: { settleTime: [2.05, -1.15], trackRate: [1.6, 2.2], aimWobble: [0.004, 0.012], weaponRange: [78, 30], viewRange: 96 },
+    extra: { settleTime: [2.05, -1.15], trackRate: [1.6, 2.2], aimWobble: [0.004, 0.012], weaponRange: [111, 43], viewRange: 136 },
   },
 };
 
