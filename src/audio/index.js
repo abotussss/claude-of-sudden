@@ -1654,14 +1654,37 @@ export class AudioSystem {
   }
 
   /**
-   * One coalesced burst of distant fire. Called only by `BattleLayer`, which
-   * owns the rate and the budget; this is the plumbing half.
+   * One coalesced burst of distant fire. `BattleLayer` owns the rate and the
+   * budget for the bots' own war; this is the plumbing half, and it is THE
+   * ENTRY POINT for anybody who wants this voice.
    *
    * `occlusion: 0` and a fixed OUTDOOR wetness, both for the same reason
    * `_distantVolley` uses them: fire from 90 m away comes over the rooftops
    * rather than through them, and it is outdoors by definition whatever room the
    * listener is standing in. It also spends no raycast, which matters at five
    * voices a second.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * WHY THIS IS THE ENTRY POINT AND `play('far', …)` IS NOT
+   * ──────────────────────────────────────────────────────────────────────────
+   * `far` has no row in `BUS_FOR`, so `play('far', …)` routes to `foley` at the
+   * default priority 0.5 with no `gain`, no `occlusion` and no `echoBoost` — it
+   * is the same voice with every decision in this method missing. `src/match/
+   * warfield.js` reached it that way and MEASURED (`_warvoice.mjs`, plains,
+   * 90 s, `_say` wrapped so its acquires can be told from the battle layer's):
+   *
+   *                     bus         gain   occ    distGain   median range
+   *   warfield          foley@0.5   1.00   0.503   0.01741      218 m
+   *   this method       weapons@0.3 3.39   0        0.10753      161 m
+   *
+   * -15.8 dB as measured, -15.2 dB corrected to one range: -11.4 of it the
+   * missing `farGain`, -3.2 the occlusion the field measured for a fight on an
+   * open plain with nothing in front of it. The ambient war is REQUIRED to be
+   * quieter than being shot at, and it was — by four times more than anybody
+   * authored, in the direction of inaudible.
+   *
+   * `maxDist` is a pass-through so a caller whose sources sit outside the bots'
+   * own 320 m band can say so; the default is the battle layer's and unchanged.
    */
   playFar(x, y, z, o) {
     // THE SAME NULL, THE SAME PATH. `gain:` below reads `this.field` while it is
@@ -1680,7 +1703,7 @@ export class AudioSystem {
       // stops a round binned at 229 m being thrown away here because the bin's
       // mean drifted; if they are ever edited apart, the band between them is a
       // silent ring around the player. @see FAR_MAX in src/audio/battle.js
-      maxDist: 340, occlusion: 0, echoBoost: WET_OUTDOOR,
+      maxDist: o.maxDist ?? 340, occlusion: 0, echoBoost: WET_OUTDOOR,
       // The level is a function of the range, because the attenuation curve is
       // nearly flat out here and a fixed gain would make 200 m as loud as 70.
       gain: farGain(this.field.distanceTo(x, y, z)),

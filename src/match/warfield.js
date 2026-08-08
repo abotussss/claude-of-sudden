@@ -31,7 +31,8 @@
  *
  *   1. NOTHING HERE EMITS DAMAGE. Not an `explosion` event, not a
  *      `damage:dealt`, not a `world.damageAt`, not a physics ray. The whole
- *      file's output is four `fx.far*` calls and one `audio.play`. There is no
+ *      file's output is four `fx.far*` calls, one `audio.playFar` and one
+ *      `audio.play('strike_tail', …)`. There is no
  *      code path from this module to anybody's health, which is a stronger
  *      statement than "the numbers are safe" — @see `_fire` and `_shell`.
  *
@@ -627,21 +628,66 @@ export class Warfield {
   /**
    * THE SOUND, THROUGH THE ONE VOICE THAT ALREADY EXISTS FOR IT.
    *
-   * `audio.play('far', …)` is `distantFire` — the coalesced several-rounds-on-
-   * one-emitter shape `src/audio/battle.js` built for exactly this, gunfire
-   * that has crossed a hundred metres of air. This file authors NO audio: it
-   * offers a position, a distance and a burst length to the existing one, at a
-   * rate throttled well under what the bots' own fire already puts through the
-   * same voice (`battle.js` measured ~1.6 far voices a second for the whole
-   * war; this adds at most ~1.2 with all three engagements audible).
+   * `audio.playFar` is `distantFire` — the coalesced several-rounds-on-one-
+   * emitter shape `src/audio/battle.js` built for exactly this, gunfire that has
+   * crossed a hundred metres of air. This file authors NO audio: it offers a
+   * position, a burst length and a level to the existing one, at a rate
+   * throttled well under what the bots' own fire already puts through the same
+   * voice (`battle.js` measured ~1.6 far voices a second for the whole war;
+   * this adds at most ~1.2 with all three engagements audible).
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * IT USED TO SAY `audio.play('far', …)` AND THAT IS NOT THE SAME VOICE.
+   * ──────────────────────────────────────────────────────────────────────────
+   * `far` has no row in the audio system's `BUS_FOR` table, so the generic
+   * `play()` routed it to the FOLEY bus at the default priority 0.5, and passed
+   * none of the four things `playFar` decides: the range trim, the occlusion
+   * override, the outdoor wetness and the bus. MEASURED on the plain over 90 s
+   * with `_say` wrapped, so these acquires can be told from the bots' own
+   * (`_warvoice.mjs`):
+   *
+   *                     bus          gain   occ     distGain   median range
+   *   this file, before foley@0.5    1.00   0.503    0.01741     218 m
+   *   the bots' own     weapons@0.3  3.39   0        0.10753     161 m
+   *
+   * -15.8 dB as measured, -15.2 dB once both are corrected to one range.
+   * -11.4 dB of that is the missing range trim (`gunRangeGain` is ~3.7x at
+   * 218 m and this was passing 1.0), and -3.2 dB is an OCCLUSION MEASUREMENT
+   * THAT SHOULD NEVER HAVE BEEN TAKEN: `occlusionAt` fires two rays at a point,
+   * and it declared half of these bursts half-buried — mean 0.503, 36 of 73
+   * over 0.5 — for fights on the open rim of a bowl with nothing between them
+   * and the player. Same defect the audio system's own `occHold` exists for.
+   *
+   * THAT MATTERS TO THIS FILE'S HARD CONSTRAINT rather than to its polish. The
+   * whole point of the ambient war is that the player can tell it from being
+   * shot at, and 「敵味方全ての銃声をもっと鳴らして」 is a standing complaint about the
+   * OTHER direction. Fire that is fifteen decibels under the real thing is not
+   * distinguishable-from, it is inaudible, which fails the requirement on the
+   * side that also fails the request.
+   *
+   * WHAT IS DELIBERATELY UNCHANGED: `level: 0.55 * gain`. That is the margin
+   * this file authored to keep ambient fire off the real thing, and it is the
+   * requirement itself — it must not be quietly repaid while fixing the routing.
+   * So the separation from a bot's far burst at the same range is now that
+   * margin and NOTHING ELSE: 0.55 is -5.2 dB, inside the voice, where it was
+   * written. It was -15.2, of which ten decibels were accidents.
+   *
+   * RE-MEASURED after the change, same probe, same map, same 90 s: the two
+   * voices now sit on the same bus at the same priority with the same range
+   * trim, 0.10062 against 0.10572 at `distGain` — -0.4 dB, i.e. the distance
+   * chain is identical and the only thing left between them is the 0.55.
+   *
+   * `maxDist: 520` is unchanged and is why it is passed rather than inherited:
+   * `playFar` defaults to the bots' own 340 m band, and the rim engagements sit
+   * at r 192-216 on a map the player can be 390 m across. The proximity ramp
+   * (`_audible`) is still what actually decides, and `CULL` is still 460.
    */
   _say(f, gain) {
     const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
     f.voice = this.rng.range(0.75, 1.5);
-    if (!audio || !audio.play) return;
+    if (!audio?.playFar) return;
     const from = f.side === 0;
-    this._sp.set(from ? f.ax : f.bx, from ? f.ay : f.by, from ? f.az : f.bz);
-    audio.play('far', this._sp, {
+    audio.playFar(from ? f.ax : f.bx, from ? f.ay : f.by, from ? f.az : f.bz, {
       rounds: 3 + this.rng.int(0, 3),
       spacing: this.rng.range(0.07, 0.13),
       level: 0.55 * gain,
