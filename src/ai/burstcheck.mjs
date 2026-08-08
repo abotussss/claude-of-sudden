@@ -128,6 +128,24 @@ for (const seed of SEEDS) {
       moving: 0,        // rounds sent above walking speed
       /** Man-seconds with a live contact, split by whether he was on his feet. */
       contactSecs: 0, contactMovingSecs: 0,
+      /**
+       * ──────────────────────────────────────────────────────────────────────
+       * AND WHAT LANDED, SPLIT THE SAME WAY
+       * ──────────────────────────────────────────────────────────────────────
+       * "Moving rounds are back to 38 a man-minute" is satisfiable by a build
+       * that sprays while walking and hits nothing, and that is the thing the
+       * standing 「弾を消費すればいいわけではない」 forbids. So `damage:dealt` is
+       * counted against the shooter's OWN SPEED AT THE INSTANT OF THE HIT —
+       * the same 2 m/s cut the rounds use — and the two hit rates are reported
+       * beside the two round counts. A plant that hits and a press that does
+       * not is a real answer; so is the reverse; a single total is neither.
+       *
+       * Both ends are filtered through the agent set for `_aimed.mjs`'s reason:
+       * the same event carries a hull's coaxial gun and the faces of its own
+       * damage proxies, and counting those measures how much armour is on the
+       * seed rather than this roster's marksmanship.
+       */
+      hitsMoving: 0, hitsStill: 0,
     };
     /** Open pull per agent id. */
     const open = new Map();
@@ -164,6 +182,17 @@ for (const seed of SEEDS) {
       });
       open.delete(id);
     };
+
+    const MEN = new WeakSet();
+    for (const a of ai.agents) MEN.add(a);
+    const onDmg = (ev) => {
+      if (!ev) return;
+      const src = ev.source;
+      if (!src || !MEN.has(src)) return;
+      if (!MEN.has(ev.target) && ev.target !== pl && ev.target !== 'player') return;
+      if ((src.speed ?? 0) > MOVING) S.hitsMoving++; else S.hitsStill++;
+    };
+    e.ctx.events.on('damage:dealt', onDmg);
 
     const fire0 = ai.onAgentFire.bind(ai);
     ai.onAgentFire = (a, o, d) => {
@@ -222,8 +251,20 @@ for (const seed of SEEDS) {
       const now = e.time.elapsed;
       for (let i = 0; i < ai.agents.length; i++) {
         const a = ai.agents[i];
+        MEN.add(a);
         if (!a.alive) {
-          closeOut(a.id, open.get(a.id));
+          /**
+           * THE BIGGEST BAR ON THE CHOPPED BOARD WAS AN UNNAMED ONE, AND IT IS
+           * THE ONE ANSWER NO TUNING CAN IMPROVE. A pull that stops because the
+           * man firing it was shot never reaches the ladder below — he is gone
+           * from `alive` before any frame can ask him why he is not shooting —
+           * so it closed as `?` and read as a mystery. It is 42 % of the town's
+           * chopped eyes-on pulls, and a burst ended by a bullet is a burst
+           * that worked.
+           */
+          const dst = open.get(a.id);
+          if (dst && dst.why === '?') dst.why = 'shooter killed';
+          closeOut(a.id, dst);
           closeContact(a.id, contact.get(a.id), now);
           continue;
         }
@@ -268,6 +309,7 @@ for (const seed of SEEDS) {
     for (const [id, st] of [...open]) closeOut(id, st);
     for (const [id, c] of [...contact]) closeContact(id, c, e.time.elapsed);
     ai.onAgentFire = fire0;
+    e.ctx.events.off?.('damage:dealt', onDmg);
     return S;
   }, { WARM, WINDOW });
 
@@ -342,6 +384,11 @@ for (const [label, ps] of [['EYES-ON a visible enemy', eyes], ['blind / last-kno
  */
 const eyesMoving = eyes.filter((p) => p.movingShare > 0.5);
 const eyesStill = eyes.filter((p) => p.movingShare <= 0.5);
+const hitsMov = runs.reduce((s, r) => s + (r.hitsMoving ?? 0), 0);
+const hitsStl = runs.reduce((s, r) => s + (r.hitsStill ?? 0), 0);
+console.log(`\nHIT RATE by the shooter's own feet: ` +
+  `ON FEET ${hitsMov}/${moving} = ${pc(hitsMov, moving)}   ` +
+  `PLANTED ${hitsStl}/${rounds - moving} = ${pc(hitsStl, rounds - moving)}`);
 console.log('\nEYES-ON pulls by whether he was on his feet:');
 for (const [label, ps] of [['ON HIS FEET (>2 m/s)', eyesMoving], ['planted', eyesStill]]) {
   if (!ps.length) { console.log(`  ${label.padEnd(21)} —`); continue; }
