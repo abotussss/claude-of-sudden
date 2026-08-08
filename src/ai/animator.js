@@ -297,12 +297,17 @@ export class Animator {
     // A sprinter's stride is LONGER than a runner's, so at the same ground speed
     // his cadence is lower — which is what makes the two read differently at a
     // distance. @see `SPRINT` in clips.js.
+    // An ADVANCE is a long flat pace, so its stride sits between the two: at
+    // the 3.8 m/s a firing man is given that is 2.2 a second rather than the
+    // walk's 2.7, which is the difference between advancing and scurrying.
+    // @see `ADVANCE` in clips.js.
     const strideHz =
       clip === 'sprint' ? Math.max(1.3, st.speed / 2.55)
         : clip === 'run' ? Math.max(1.1, st.speed / 2.05)
-          : clip === 'walk' ? Math.max(0.55, st.speed / 1.42)
-            : clip === 'crouchWalk' ? Math.max(0.4, st.speed / 0.95)
-              : 0.19; // idle breathing rate
+          : clip === 'advance' ? Math.max(0.75, st.speed / 1.72)
+            : clip === 'walk' ? Math.max(0.55, st.speed / 1.42)
+              : clip === 'crouchWalk' ? Math.max(0.4, st.speed / 0.95)
+                : 0.19; // idle breathing rate
     this.phase = (this.phase + dt * strideHz) % 1;
     if (this.blend < 1) this.blend = Math.min(1, this.blend + dt / 0.18);
     const ctx = this._clipCtx;

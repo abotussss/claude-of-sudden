@@ -257,6 +257,63 @@ const RUN = {
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
+ * AND SO IS AN ADVANCE — 「動きながらエイムができるようにして」
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE SHOOTING WALK WAS PLAYING THE RUN, AND THAT IS THE WHOLE COMPLAINT.
+ * `Agent._combat` gives a man who fires on the move `2.6 + aggression * 1.2`
+ * m/s — 2.6 to 3.8 — and `Agent._drive` picked the clip on `speed > 2.6`. The
+ * two numbers are the same number. So EVERY advancing shooter on the map, at
+ * every aggression above the floor, played `run`: `lean 13` with the torso
+ * pitched forward off the sights, `bob 0.042` and `bounce 1.6` under him, and
+ * `armSwing 9` — and the rifle is anchored to the RIGHT HAND, so nine degrees
+ * of arm swing is nine degrees of muzzle swing, every stride, while the aim
+ * additive at 0.85 tried to hold it on a man. That is not a soldier firing on
+ * the move. It is a soldier running with a rifle, and 「敵は動きながら撃ってい
+ * ない」 is what it looks like from outside even when the rounds are leaving.
+ *
+ * The precedent is directly below this comment and it is the same argument: a
+ * sprint was invisible until it had a POSE, because speed is the one thing a
+ * first-person player cannot judge. An advance is invisible for the same reason
+ * and wants the same remedy.
+ *
+ * Everything here is chosen to keep the weapon still while the legs work:
+ *
+ *   duty 0.54  BOTH FEET ARE DOWN FOR 8 % OF THE CYCLE and there is no float
+ *              phase anywhere in it. A man with both feet off the ground is not
+ *              aiming at anything, and the run's 0.34 duty is a 32 % float.
+ *   armSwing 1.5  against the run's 9 and the walk's 4. This is the term that
+ *              matters and it is nearly deleted: the firing hand carries the
+ *              weapon, so the weapon stops describing an arc and the aim IK is
+ *              holding a bore that is already pointed rather than fighting a
+ *              stride. The LEFT arm is on the handguard and moves with it.
+ *   lean 6     upright behind the stock, against the run's 13. `aimAdd` puts
+ *              its own weight forward on bent knees; a running lean on top of
+ *              that is a man doubled over.
+ *   bob / bounce  0.020 and 0.7, i.e. the walk's, not the run's. Vertical
+ *              travel under a sight is what makes fire on the move look wild,
+ *              and the cone already charges for the movement (@see the
+ *              `moving` term in `Agent._fireRound`) — it should not be charged
+ *              twice, once in the maths and once in the silhouette.
+ *   lift/tuck  0.17 / 0.055, between the two: he is picking his feet up over
+ *              ground, not strolling, and not high-kneeing either.
+ *
+ * The stride is 1.72 m per cycle (@see `Animator.update`) — longer than the
+ * walk's 1.42 and shorter than the run's 2.05 — so 3.8 m/s is 2.2 strides a
+ * second: a long flat purposeful pace rather than a scurry. `gait` is
+ * stride-locked, so the feet plant at any speed by construction and
+ * `src/ai/gaitcheck.mjs` is what says so rather than the eye.
+ */
+const ADVANCE = {
+  duty: 0.54, plantBias: 0.40, track: 0.086,
+  heelRoll: 0.15, heelPitch: 13, push: 0.30, pushPitch: 42,
+  lift: 0.17, tuck: 0.055,
+  sway: 0.014, bob: 0.020, bobBias: -0.032, bobSign: 1,
+  pelvisTilt: -1, pelvisYaw: 3.6, pelvisRoll: 2.6,
+  lean: 6, spineYaw: 2.2, armSwing: 1.5, bounce: 0.7, headRoll: 0.5,
+};
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
  * A SPRINT IS A POSE, NOT A NUMBER — 「またAIは全然走ってない」
  * ════════════════════════════════════════════════════════════════════════════
  * The sprint has been measured twice as working (+13.3 % on isolated transit,
@@ -312,6 +369,22 @@ export function run(P, ph, ctx) {
   // the head is the last thing that should move on a runner: counter the lean
   // so the eyes stay level and the helmet stops describing an arc
   P.d('Head', -4.5, 0, 0);
+}
+
+/**
+ * MOVING AND SHOOTING. @see `ADVANCE` for every number and the argument.
+ *
+ * The two `d` calls are the difference between a gait and a FIGHTING gait and
+ * they are both on the weapon side: the right forearm is folded in so the stock
+ * stays in the shoulder pocket across the stride instead of riding out of it,
+ * and the left elbow is tucked under the handguard. `aimAdd` then lands on a
+ * body that is already holding the rifle rather than one it has to drag up.
+ */
+export function advance(P, ph, ctx) {
+  gait(P, ph, ADVANCE, ctx);
+  P.d('Head', -2.0, 0, 0);
+  P.d('ForearmR', -8, 0, 0);
+  P.d('UpperArmL', 0, 0, -5);
 }
 
 /**
@@ -519,4 +592,4 @@ export function reloadAdd(P, t) {
   P.d('ForearmR', -6 * w, 0, 0);
 }
 
-export const CLIPS = { idle, walk, run, sprint, crouchWalk, crouchIdle, hurtIdle };
+export const CLIPS = { idle, walk, advance, run, sprint, crouchWalk, crouchIdle, hurtIdle };
