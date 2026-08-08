@@ -125,9 +125,23 @@
  *                 instead of whichever ones the scheduler's dice happened to
  *                 pick. @see the note where they are fired.
  *
- * Exit code 1 if anything floats — a solid mass standing on nothing, OR a drawn
- * instance hanging in clear sky. `?seed=N` pins the level dice, so a find is
- * reproducible: the seed of the boot is printed either way.
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND NONE OF THE ABOVE IS THE MAP — @see "THE THIRD HALF" AT THE FOOT
+ * ────────────────────────────────────────────────────────────────────────────
+ * Every region named above is a footprint somebody remembered to publish, and
+ * this gate reported "OK — every solid in the sweep is connected to the ground"
+ * on a build with a concrete slab, a kerb, nine oil drums, a pump post and a
+ * sign hanging 40 m in the air 14 m outside the nearest one. So there is now a
+ * third pass that is scoped to NOTHING: it bins every drawn triangle on the
+ * whole playable disc and asks the same support question of every column.
+ * `--disc=0` turns it off, `--disc=N` sets the radius. It is the pass that
+ * answers "is anything on this map standing on nothing"; the region passes
+ * answer "is this ruin sound", which is a different and narrower question.
+ *
+ * Exit code 1 if anything floats — a solid mass standing on nothing, a drawn
+ * instance hanging in clear sky, OR an orphan cluster anywhere on the disc.
+ * `?seed=N` pins the level dice, so a find is reproducible: the seed of the
+ * boot is printed either way.
  */
 import { chromium } from 'playwright';
 
@@ -1276,7 +1290,280 @@ const drawn = CHUNKS
     }, { CAIR })
   : null;
 
+/* -------------------------------------------------------------------------- */
+/* THE THIRD HALF: THE WHOLE DISC, NOT A LIST OF COLUMNS                       */
+/* -------------------------------------------------------------------------- */
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * THIS GATE SAID "OK" ABOUT A 129 m² CONCRETE SLAB HANGING 40 m IN THE AIR
+ * ────────────────────────────────────────────────────────────────────────────
+ * `--region=all` on NACHTFELD printed
+ *
+ *     swept NF-TOWER, NF-FORT — 2 columns
+ *     OK — every solid in the sweep is connected to the ground.
+ *
+ * on a build where `plains-fort.js` called `fuelBund(A, rng, BUND.x, y(0),
+ * BUND.z, …)` against a signature of `(cx, cz, gy)`. The bund was therefore
+ * built at cz = 3.243 and gy = 43.5: a concrete slab, its kerb, NINE OIL DRUMS,
+ * a pump post and a NO SMOKING board, 40 m up, with nothing whatever between
+ * y 4 and y 40. `physics.groundHeight(17.5, 3.25)` came back **44.54** against
+ * a real plain at 3.20, so it was not only a picture — `NavGrid` drops one ray
+ * per cell and keeps the first hit, and a tank has climbed this map's rubble
+ * into the sky before.
+ *
+ * IT MISSED IT BECAUSE OF WHAT IT WAS POINTED AT, not because of how it judges.
+ * Every region above is a FOOTPRINT — a cathedral, a demolition plot, a strike
+ * mound, a breach — and `world.demolitions` on this map publishes two: the
+ * tower and the fortress. The bund landed 14 m outside the fortress's own half
+ * extent, in the open, where no region reached. A gate that only looks where
+ * somebody remembered to point it is a gate that reports OK on open ground, and
+ * every report this session has quoted that OK.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * SO: NO LIST. THE WHOLE PLAYABLE DISC, AND `_nffloating.mjs` FOLDED IN
+ * ────────────────────────────────────────────────────────────────────────────
+ * `_nffloating.mjs` DID find it — 129 m², 39 m of clear air, the only genuine
+ * orphan inside r 172 — by binning every drawn world triangle into 2 m plan
+ * cells and 1 m height bins and walking each column down. That sweep is here
+ * now rather than in a third file, with one thing added that it did not have
+ * and that a gate needs:
+ *
+ *   A SUPPORT TEST, so a ROOF IS NOT A FLOATING SLAB. A pure column walk flags
+ *   every roof on the map — a 10 m room has 10 m of clear air under its ceiling
+ *   in every column that is not a wall — which is why the disc sweep could not
+ *   simply be switched on for the town. The collision half above already knows
+ *   the answer: a mass is held up when a NEIGHBOURING COLUMN carries solid
+ *   material from the ground up to its underside. So each flagged cluster is
+ *   asked whether ANY cell it covers, or any cell adjacent to one, has an
+ *   unbroken run of mass from the terrain up to within `--dtol` of the
+ *   cluster's own bottom. A roof's perimeter cells sit next to its walls and
+ *   pass; the bund's neighbours were open plain 40 m below and it fails.
+ *
+ * This half is TRIANGLES, not rays, so it sees mass whether or not it carries a
+ * proxy — the picture-only failure the drawn half above was written for — and
+ * it costs one traversal of the scene rather than 389 000 raycasts.
+ *
+ * `--disc=0` turns it off. `--disc=N` sets the radius (178 covers NACHTFELD's
+ * boundary at 176 and the rim rock behind it).
+ */
+/**
+ * THE SWEEP IS WIDER THAN THE JUDGEMENT, AND THAT IS NOT A DODGE.
+ *
+ * A mass is held by what is BESIDE it, so a sweep that stops at the boundary
+ * throws away the mountain face that half the rim rock is resting against and
+ * then reports the rim rock as floating. Measured: at `--disc=178` eleven
+ * clusters of `mountain_rock`/`scree` at r 155-178 came back orphaned purely
+ * because the face holding them was outside the window. So the disc is swept
+ * WIDE (250 m takes in the whole ridge and the crag apron) and FAILED ON only
+ * inside `--djudge` — 176 m, which is where `plains-rim.js` stops the player.
+ * Everything between the two is printed under the failures, never dropped: the
+ * back of the mountain is not the player's problem, and a gate that silently
+ * hides a category is the bug this file exists to stop.
+ */
+const DISC = args.disc === '0' || args.disc === false ? 0 : Number(args.disc ?? 250);
+/** Metres from the centre inside which an orphan is a failure, not a note. */
+const DJUDGE = Number(args.djudge ?? 176);
+/** Metres of clear air under a mass before it is a candidate. */
+const DGAP = Number(args.dgap ?? 6);
+/** Plan cell, metres. 2 m is `_nffloating`'s and is what found the bund. */
+const DCELL = Number(args.dcell ?? 2);
+/** m² of a cluster before it is worth failing on rather than noting. */
+const DMIN = Number(args.dmin ?? 4);
+/** Metres a neighbour's ground-connected mass may fall short and still hold. */
+const DTOL = Number(args.dtol ?? 2.0);
+
+const disc = DISC
+  ? await page.evaluate(([R, CELL, GAP, TOL]) => {
+      const e = window.__ENGINE__;
+      const w = e.ctx.peek('world');
+      const groundY = w.level?.groundY ?? (() => 0);
+      const chain = (o) => { const s = []; let c = o; while (c) { s.unshift(c.name || `<${c.type}>`); c = c.parent; } return s.join('/'); };
+      const root = e.scene.children.find((c) => c.name === 'world');
+      if (!root) return { error: 'no world root' };
+      root.updateMatrixWorld(true);
+
+      const YMIN = -20, YMAX = 100;                 // bin index 0 == y YMIN
+      const NY = YMAX - YMIN;
+      const NX = Math.ceil((R * 2) / CELL);
+      const col = new Map();
+      const P = { x: 0, y: 0, z: 0 };
+      const xf = (el, x, y, z) => {
+        P.x = el[0] * x + el[4] * y + el[8] * z + el[12];
+        P.y = el[1] * x + el[5] * y + el[9] * z + el[13];
+        P.z = el[2] * x + el[6] * y + el[10] * z + el[14];
+      };
+      const mul = (a, bm, out) => {
+        for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+          let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + r] * bm[c * 4 + k];
+          out[c * 4 + r] = s;
+        }
+        return out;
+      };
+      const cellOf = (x, z) => {
+        const i = Math.floor((x + R) / CELL), j = Math.floor((z + R) / CELL);
+        return i < 0 || j < 0 || i >= NX || j >= NX ? -1 : j * NX + i;
+      };
+      let tris = 0;
+      const collect = (obj, el, label) => {
+        const g = obj.geometry; const pa = g?.getAttribute('position'); if (!pa) return;
+        const idx = g.getIndex(); const n = idx ? idx.count : pa.count;
+        for (let i = 0; i < n; i += 3) {
+          const a = idx ? idx.getX(i) : i, b2 = idx ? idx.getX(i + 1) : i + 1, c = idx ? idx.getX(i + 2) : i + 2;
+          xf(el, pa.getX(a), pa.getY(a), pa.getZ(a)); const ax = P.x, ay = P.y, az = P.z;
+          xf(el, pa.getX(b2), pa.getY(b2), pa.getZ(b2)); const bx = P.x, by = P.y, bz = P.z;
+          xf(el, pa.getX(c), pa.getY(c), pa.getZ(c)); const cx = P.x, cy = P.y, cz = P.z;
+          const mx = (ax + bx + cx) / 3, mz = (az + bz + cz) / 3;
+          if (mx * mx + mz * mz > R * R) continue;
+          const k = cellOf(mx, mz); if (k < 0) continue;
+          tris++;
+          let r = col.get(k);
+          if (!r) col.set(k, (r = { bins: new Uint8Array(NY), area: new Float32Array(NY), lab: new Map() }));
+          const ux = bx - ax, uy = by - ay, uz = bz - az;
+          const wx = cx - ax, wy = cy - ay, wz = cz - az;
+          const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+          const A2 = 0.5 * Math.hypot(nx, ny, nz);
+          const y0 = Math.max(0, Math.floor(Math.min(ay, by, cy)) - YMIN);
+          const y1 = Math.min(NY - 1, Math.ceil(Math.max(ay, by, cy)) - YMIN);
+          for (let y = y0; y <= y1; y++) { r.bins[y] = 1; r.area[y] += A2 / (y1 - y0 + 1); }
+          const lb = Math.floor((ay + by + cy) / 3) - YMIN;
+          if (lb >= 0 && lb < NY) {
+            const key = `${label}@${lb}`;
+            r.lab.set(key, (r.lab.get(key) ?? 0) + A2);
+          }
+        }
+      };
+      root.traverse((o) => {
+        if (!o.visible) return;
+        for (let q = o; q; q = q.parent) if (!q.visible) return;
+        if (o.isInstancedMesh) {
+          const el = new Array(16); const im = o.instanceMatrix.array;
+          for (let i = 0; i < o.count; i++) collect(o, mul(o.matrixWorld.elements, im.slice(i * 16, i * 16 + 16), el), chain(o));
+        } else if (o.isMesh) collect(o, o.matrixWorld.elements, chain(o));
+      });
+
+      /**
+       * THE GROUND-CONNECTED CEILING OF EVERY COLUMN: how high solid material
+       * runs WITHOUT A BREAK from the terrain up. This is the whole support
+       * test — a wall's column reaches its own roof, so a roof beside it is
+       * held; open plain reaches the plain, so a slab 40 m over it is not.
+       */
+      const reach = new Map();
+      for (const [k, r] of col) {
+        const i = k % NX, j = Math.floor(k / NX);
+        const x = -R + i * CELL + CELL / 2, z = -R + j * CELL + CELL / 2;
+        const gb = Math.floor(groundY(x, z)) - YMIN;
+        let y = Math.max(0, Math.min(NY - 1, gb));
+        // step down to the first occupied bin at or under the ground, then up
+        while (y > 0 && !r.bins[y]) y--;
+        let top = y;
+        while (top + 1 < NY && r.bins[top + 1]) top++;
+        reach.set(k, top);
+      }
+
+      /* ---- flag every run with clear air under it ----------------------- */
+      const flags = [];
+      for (const [k, r] of col) {
+        const i = k % NX, j = Math.floor(k / NX);
+        const x = -R + i * CELL + CELL / 2, z = -R + j * CELL + CELL / 2;
+        const gb = Math.floor(groundY(x, z)) - YMIN;
+        let y = NY - 1;
+        while (y >= 0) {
+          if (!r.bins[y]) { y--; continue; }
+          const top = y;
+          while (y >= 0 && r.bins[y]) y--;
+          const bot = y + 1;
+          let below = y;
+          while (below >= 0 && !r.bins[below]) below--;
+          const under = Math.max(below >= 0 ? below : gb, gb);
+          const gap = bot - under;
+          if (gap >= GAP && bot > gb + GAP) {
+            let area = 0;
+            for (let q = bot; q <= top; q++) area += r.area[q];
+            const labs = [];
+            for (const [lk, la] of r.lab) {
+              const yy = Number(lk.split('@').pop());
+              if (yy >= bot && yy <= top) labs.push([lk.split('/').pop().split('@')[0], la]);
+            }
+            flags.push({ k, x, z, bot, top, gap, gy: groundY(x, z), m2: area, labs });
+          }
+        }
+      }
+
+      /* ---- cluster the flagged runs, then ask what holds each cluster --- */
+      const byKey = new Map();
+      for (const f of flags) byKey.set(`${f.k}|${f.bot}`, f);
+      const seen = new Set(); const islands = [];
+      for (const f of flags) {
+        const k0 = `${f.k}|${f.bot}`;
+        if (seen.has(k0)) continue;
+        const q = [f]; seen.add(k0);
+        const isl = {
+          cells: [], m2: 0, x0: 1e9, x1: -1e9, z0: 1e9, z1: -1e9,
+          bot: 1e9, top: -1e9, gap: 1e9, gy: f.gy, labs: new Map(),
+        };
+        while (q.length) {
+          const c = q.pop();
+          isl.cells.push(c.k); isl.m2 += c.m2;
+          isl.x0 = Math.min(isl.x0, c.x); isl.x1 = Math.max(isl.x1, c.x);
+          isl.z0 = Math.min(isl.z0, c.z); isl.z1 = Math.max(isl.z1, c.z);
+          isl.bot = Math.min(isl.bot, c.bot); isl.top = Math.max(isl.top, c.top);
+          isl.gap = Math.min(isl.gap, c.gap);
+          for (const [n2, a2] of c.labs) isl.labs.set(n2, (isl.labs.get(n2) ?? 0) + a2);
+          const ci = c.k % NX, cj = Math.floor(c.k / NX);
+          for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+            const ni = ci + di, nj = cj + dj;
+            if (ni < 0 || nj < 0 || ni >= NX || nj >= NX) continue;
+            const nk = nj * NX + ni;
+            for (let db = -3; db <= 3; db++) {
+              const kk = `${nk}|${c.bot + db}`;
+              if (byKey.has(kk) && !seen.has(kk)) { seen.add(kk); q.push(byKey.get(kk)); }
+            }
+          }
+        }
+        /**
+         * HELD FROM THE SIDE? Any cell of the cluster, or any of its eight
+         * neighbours, whose ground-connected mass comes up to within TOL of the
+         * cluster's underside. That is a wall under a roof, a pier under a
+         * bridge, a trunk under a canopy — and it is nothing at all under a
+         * fuel dump in the middle of a plain.
+         */
+        let held = null;
+        const want = isl.bot - Math.round(TOL);
+        outer:
+        for (const k of isl.cells) {
+          const ci = k % NX, cj = Math.floor(k / NX);
+          for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+            const ni = ci + di, nj = cj + dj;
+            if (ni < 0 || nj < 0 || ni >= NX || nj >= NX) continue;
+            const rr = reach.get(nj * NX + ni);
+            if (rr !== undefined && rr >= want) {
+              held = [-R + ni * CELL + CELL / 2, -R + nj * CELL + CELL / 2, rr + YMIN];
+              break outer;
+            }
+          }
+        }
+        islands.push({
+          n: isl.cells.length, m2: +isl.m2.toFixed(1),
+          bot: isl.bot + YMIN, top: isl.top + YMIN, gap: isl.gap, gy: +isl.gy.toFixed(1),
+          x0: isl.x0, x1: isl.x1, z0: isl.z0, z1: isl.z1,
+          held,
+          labs: [...isl.labs.entries()].sort((a, c) => c[1] - a[1]).slice(0, 4)
+            .map(([n2, a2]) => [n2, +a2.toFixed(1)]),
+        });
+      }
+      islands.sort((a, c) => c.m2 - a.m2);
+      return { cells: col.size, tris, flagged: flags.length, islands };
+    }, [DISC, DCELL, DGAP, DTOL])
+  : null;
+
 await browser.close();
+
+/** Where a cluster is, as a radius, so the judgement can be scoped to the play area. */
+const discR = (i) => Math.hypot((i.x0 + i.x1) / 2, (i.z0 + i.z1) / 2);
+/** Clusters over the disc with nothing under them and nothing beside them. */
+const discBad = (disc?.islands ?? []).filter((i) => !i.held && i.m2 >= DMIN && discR(i) <= DJUDGE);
+/** The same, out on the mountain where the player cannot go: printed, not failed. */
+const discOut = (disc?.islands ?? []).filter((i) => !i.held && i.m2 >= DMIN && discR(i) > DJUDGE);
 
 /** Groups whose drawn mass is genuinely hanging, rather than one stray chunk. */
 const drawnBad = (drawn?.rows ?? []).filter((r) => r.judge && r.n >= CMIN);
@@ -1292,7 +1579,7 @@ const drawnVoid = drawn?.unsettled?.length ?? 0;
 /* -------------------------------------------------------------------------- */
 
 if (args.json) {
-  console.log(JSON.stringify({ levelSeed, ...result, drawn }, null, 2));
+  console.log(JSON.stringify({ levelSeed, ...result, drawn, disc }, null, 2));
 } else {
   console.log(`\nFLOATCHECK  region=${REGION}  grid=${GRID}m  tol=${TOL}m  levelSeed=${levelSeed}`);
   console.log(`  ${url(REGION)}${FIRE ? `  --fire=${FIRE}` : ''}`);
@@ -1320,7 +1607,18 @@ if (args.json) {
       for (const a of result.audit) console.log(`    ${JSON.stringify(a)}`);
     }
     if (!result.floating.length) {
-      console.log('  OK — every solid in the sweep is connected to the ground.\n');
+      /**
+       * QUALIFIED, AND THE QUALIFICATION IS THE POINT. This sentence used to
+       * read "OK — every solid in the sweep is connected to the ground", and it
+       * was quoted all session as a whole-map pass on a build with a 129 m²
+       * slab hanging 40 m up 14 m outside the nearest region. The sweep is the
+       * regions; the map is the disc pass at the foot of this report.
+       */
+      console.log(
+        `  OK — inside the ${result.regions.length} swept region(s) (${result.regions.join(', ')}), ` +
+          'every solid is connected to the ground.\n' +
+          '     THIS IS NOT A STATEMENT ABOUT THE MAP. @see WHOLE DISC below.\n'
+      );
     } else {
       console.log(`\n  ${result.floating.length} FLOATING MASSES (${result.total} lattice cells):\n`);
       console.log(
@@ -1408,9 +1706,52 @@ if (args.json) {
       console.log('');
     }
   }
+  /* ---- and the whole disc, which is not scoped to anybody's footprint --- */
+  if (disc === null) {
+    console.log('  whole disc: not swept (--disc=0)');
+  } else if (disc.error) {
+    console.log(`  whole disc: ERROR ${disc.error}`);
+  } else {
+    const noted = disc.islands.filter((i) => !i.held && i.m2 < DMIN);
+    const held = disc.islands.filter((i) => i.held);
+    console.log(
+      `\n  WHOLE DISC — swept to r ${DISC} m, judged inside r ${DJUDGE} m. ` +
+        `${disc.cells} occupied ${DCELL} m plan cells over ${disc.tris} drawn triangles; ` +
+        `${disc.flagged} column runs stand ≥${DGAP} m clear of anything below them, in ` +
+        `${disc.islands.length} clusters. ${held.length} are held from the side (a wall under ` +
+        `a roof, a face under a ledge); ${discBad.length} are ORPHANS over ${DMIN} m² inside ` +
+        `the play area, ${discOut.length} outside it, ${noted.length} under the area threshold.`
+    );
+    const line = (i) =>
+      `    ${String(i.m2.toFixed(0)).padStart(7)} m²  ${String(i.n).padStart(4)} cells  ` +
+      `y ${String(i.bot).padStart(3)}–${String(i.top).padEnd(3)} (ground ${String(i.gy).padStart(6)}, ` +
+      `clear ${String(i.gap).padStart(3)} m)  x ${i.x0}..${i.x1}  z ${i.z0}..${i.z1}\n` +
+      `             ${i.labs.map(([n2, a2]) => `${n2} ${a2}`).join('  ')}` +
+      (i.held ? `\n             held by the column at (${i.held[0]}, ${i.held[1]}), solid from the ground to y ${i.held[2]}` : '');
+    if (discBad.length) {
+      console.log(`\n  ${discBad.length} MASS(ES) STANDING ON NOTHING ANYWHERE ON THE MAP:\n`);
+      for (const i of discBad.slice(0, 30)) console.log(line(i));
+      console.log('');
+    } else {
+      console.log(`  OK — nothing over ${DMIN} m² inside r ${DJUDGE} m is standing on nothing.`);
+    }
+    if (discOut.length) {
+      console.log(`\n  outside r ${DJUDGE} m — the mountain face and the back of the ridge, where`);
+      console.log('  the player cannot stand. REPORTED, NOT FAILED:\n');
+      for (const i of discOut.slice(0, 10)) console.log(line(i));
+      if (discOut.length > 10) console.log(`    … and ${discOut.length - 10} more`);
+      console.log('');
+    }
+    if (noted.length) {
+      console.log(`  under the ${DMIN} m² threshold, reported not failed (mountain spires and rim rock):`);
+      for (const i of noted.slice(0, 8)) console.log(line(i));
+      if (noted.length > 8) console.log(`    … and ${noted.length - 8} more`);
+      console.log('');
+    }
+  }
 }
 if (errs.length) {
   console.log(`  ${errs.length} PAGE ERROR(S):`);
   for (const s of errs.slice(0, 5)) console.log(`    ${s}`);
 }
-process.exit(result?.floating?.length || drawnBad.length || drawnVoid ? 1 : 0);
+process.exit(result?.floating?.length || drawnBad.length || drawnVoid || discBad.length ? 1 : 0);
