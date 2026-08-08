@@ -194,27 +194,37 @@ export const TRENCHES = [
 
   /* ---- the attack’s system, north ------------------------------------- */
   /**
-   * ONE CUT THAT IS TWO THINGS, and the corner between them is the junction
-   * this network could not otherwise have. It leaves the north base heading
-   * south-west out of the spawn cluster, runs 60 m back, turns through 90° on a
-   * 14 m radius and becomes the firing line: 100 m of parapet looking SOUTH at
-   * the control tower and zone D across the last fold of ground before them.
-   * A man goes from his spawn to a fire step on the centre of the map without
-   * standing up once.
-   */
-  /**
-   * THE CORNER IS AUTHORED AS AN ARC, NOT AS A VERTEX. Written as one 64° kink
-   * the smoothing pass could only round it to a 7.7 m radius and the module
-   * said so out loud — under `MIN_RADIUS` the inside of the bend folds through
-   * itself and the trench turns inside out for ten metres. The five points
-   * between (-30,-84) and (10,-60) are a 16 m arc, which is what the corner of
-   * a real communication trench looks like anyway.
+   * ────────────────────────────────────────────────────────────────────────
+   * THIS WAS GOING TO BE THE FIRING LINE, AND THE ARMOUR SAID NO
+   * ────────────────────────────────────────────────────────────────────────
+   * The plan was one cut that is two things: out of the north base, 60 m back,
+   * through 90° on a 16 m arc and then 100 m of parapet at z ≈ -60 looking
+   * SOUTH at the tower and zone D — a man from his spawn to a fire step on the
+   * centre of the map without standing up once.
+   *
+   * That arm is deleted, and the profile is why. Walked at 1 m against the
+   * baked routes, every metre from s = 60 to s = 118 is inside 6 m of a tank
+   * leg — RED-W→E, BLUE-W→E, RED-C→B and BLUE-C→E all sweep east-west through
+   * z ≈ -60, because that fold of ground is the natural approach to the centre
+   * for a hull for exactly the same reason it is the right place for a firing
+   * line. `--emit` wanted 96 m of vehicle crossing on a 137 m run. Five more
+   * sitings of it in that band, north-south so as to cross the fan rather than
+   * lie in it, each came back needing two or three crossings on 35 m.
+   *
+   * THE SHAPE OF THIS NETWORK IS DICTATED BY THE ARMOUR and it is worth saying
+   * plainly: thirty-six baked polylines fanning off six hubs to five zones
+   * cover the middle of this map, so the trenches live on the flanks and the
+   * approaches. The long continuous corners this file was built to allow are
+   * on WESTRIEGEL and OSTRIEGEL instead, where there is room for them.
+   *
+   * What survives here is the honest half — the communication trench. It leaves
+   * the north base's spawn cluster and runs 48 m west-south-west towards zone A
+   * and the NORDGRABEN system, and it stops at the one place RED-E→A crosses it.
    */
   {
-    id: 'NF-TRENCH-NF', name: 'NORDSTELLUNG', fireSide: -1,
-    why: 'north base → the firing line that faces the tower and zone D',
-    pts: [[-16, -124], [-25, -102], [-30, -84], [-29.8, -72.9], [-28.3, -68.3],
-      [-25.5, -64.4], [-21.7, -61.5], [-17.2, -59.8], [10, -60], [32, -58], [48, -62]],
+    id: 'NF-TRENCH-NF', name: 'NORDKEHLE', fireSide: -1,
+    why: 'the north base out to the west, towards zone A and NORDGRABEN',
+    pts: [[-16, -124], [-28, -108], [-40, -98], [-52, -94]],
   },
   /**
    * BASE-N → E WAS THE WORST CROSSING ON THE MAP — 76 m of continuous exposed
@@ -264,7 +274,7 @@ export const TRENCHES = [
   {
     id: 'NF-TRENCH-SF', name: 'SUDSTELLUNG', fireSide: 1,
     why: 'the defence’s line across the south base’s front, facing north at the fortress',
-    pts: [[-6, 113], [16, 112], [32, 108]],
+    pts: [[-6, 113], [16, 112], [28, 110]],
   },
   {
     id: 'NF-TRENCH-SW', name: 'SUDWESTSAPPE', fireSide: 1,
@@ -276,11 +286,18 @@ export const TRENCHES = [
     why: 'the mirror, out of the south-east towards zone B',
     pts: [[54, 72], [64, 68], [76, 68], [86, 73]],
   },
-  {
-    id: 'NF-TRENCH-CR', name: 'CRIEGEL', fireSide: 1,
-    why: 'the south-west spine: the fortress’s western approach up to zone C',
-    pts: [[-106, 42], [-94, 58], [-90, 74], [-96, 88], [-106, 96]],
-  },
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * AND THERE IS NO SOUTH-WEST SPINE EITHER, FOR THE SAME REASON AS THE WEST
+   * ────────────────────────────────────────────────────────────────────────
+   * A 63 m run from the fortress’s western approach up to zone C was authored,
+   * measured and deleted, along with six re-sitings of it. BLUE-C→C, BLUE-W:HUB,
+   * RED-E→C, BLUE-E→C and RED-W→B all fan through that quadrant, and
+   * `--emit` came back wanting 102 m of vehicle crossing on the 63 m line: not
+   * a trench with crossings in it, a set of crossings with trench between them.
+   * The south-west is held by SUDWESTSAPPE, C-STELLUNG and WESTRIEGEL’s north
+   * end instead, which is three runs that fit.
+   */
 
   /* ---- what each capture point has dug in front of itself -------------- */
   /**
@@ -334,15 +351,14 @@ export const TRENCHES = [
  * either file.
  */
 export const GRADE = [
-  [-29, -88, 8], [-1, -60, 8],       // NORDSTELLUNG × RED-E→A, RED-C→B
+  [-46, -96, 8],                     // NORDKEHLE    × RED-E→A
   [82, -100, 8],                     // OSTKEHLE     × RED-C→E, at its far end
   [-125, -84, 8], [-137, 42, 8],     // WESTRIEGEL   × BLUE-W→A, BLUE-W→C
   [132, 66, 8],                      // OSTRIEGEL    × RED-E→B
-  [32, 108, 8],                      // SUDSTELLUNG  × BLUE-C→B
   [-72, 46, 8],                      // SUDWESTSAPPE × BLUE-C→C
   [68, 68, 8],                       // SUDOSTSAPPE  × BLUE-E:HUB
-  [-93, 63, 8], [-98, 89, 8],        // CRIEGEL      × BLUE-W→B, BLUE-W:HUB
-  // A-, B-, C- and E-STELLUNG cross nothing: they are dug BEHIND their points,
+  // SUDSTELLUNG and A-, B-, C- and E-STELLUNG cross nothing: the four zone
+  // trenches are dug BEHIND their points,
   // which is where the armour is not. Nor does the first 64 m of OSTKEHLE —
   // BASE-N→E was the longest exposed walk on the plain AND is the one lane with
   // no tank leg lying along it, so the worst crossing gets the network's

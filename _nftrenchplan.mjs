@@ -37,7 +37,25 @@ const args = Object.fromEntries(process.argv.slice(2).map((a) => {
   const s = a.replace(/^--/, ''); const i = s.indexOf('=');
   return i < 0 ? [s, true] : [s.slice(0, i), s.slice(i + 1)];
 }));
-const CLEAR = Number(args.clear ?? 7);
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * `CLEAR` IS DERIVED, AND 7 WAS NOT
+ * ────────────────────────────────────────────────────────────────────────────
+ * What actually kills a leg is a hull sample standing IN a cut, and the cut is
+ * 1.5 m of floor plus a 0.85 m cheek = 2.35 m of ground either side of the
+ * axis. `_bakePath` may then slide a sample `LATERAL_MAX` = 3.0 m sideways off
+ * its authored line before it probes the ground under it. 2.35 + 3.0 = 5.35,
+ * and 5.5 is that with the rounding.
+ *
+ * 7 was a guess with margin on top of a guess, and it FAILED NINE BAYS THAT
+ * DROP NOTHING — including two on MITTELSAPPE, which has run 0.1 m off
+ * BLUE-E→A since it was dug and has never cost a leg. A gate that cries at
+ * ground truth gets ignored, which is worse than not having one.
+ *
+ * The authority is still the boot log: this is the design-time warning, and
+ * `[tank] … SPOKE DROPPED` is the measurement.
+ */
+const CLEAR = Number(args.clear ?? 5.5);
 const NEAR = Number(args.near ?? 6);
 const GAPR = Number(args.gapr ?? 7);
 
@@ -300,7 +318,16 @@ function gapsFor(poly) {
    */
   const circles = [];
   for (const r of out) {
-    const len = (r.length - 1) * (r.length > 1 ? Math.hypot(r[1][0] - r[0][0], r[1][1] - r[0][1]) : 1);
+    /**
+     * THE RUN'S LENGTH IS SUMMED, NOT ESTIMATED FROM ITS FIRST STEP. Taking the
+     * spacing off `r[0]`→`r[1]` looked equivalent and was not: the sampler
+     * emits both ends of every 1 m segment, so those two points are the SAME
+     * point, the spacing came out 0, every run came out 0 m long and every one
+     * of them got exactly one circle. A 58 m stretch of NORDSTELLUNG lying in a
+     * four-leg fan was reported as one 16 m vehicle crossing.
+     */
+    let len = 0;
+    for (let i = 1; i < r.length; i++) len += Math.hypot(r[i][0] - r[i - 1][0], r[i][1] - r[i - 1][1]);
     const k = Math.max(1, Math.ceil(len / (GAPR * 1.9)));
     for (let i = 0; i < k; i++) {
       const m = r[Math.min(r.length - 1, Math.round(((i + 0.5) / k) * (r.length - 1)))];
