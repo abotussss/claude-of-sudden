@@ -106,21 +106,61 @@ for (const seed of SEEDS) {
      */
     const gapFor = (a) => Math.max(0.30, 2.2 / Math.max(0.5, a.fireRate ?? 10));
 
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * WHAT COUNTS AS MOVING, AND WHY IT IS 2.0 AND NOT A FRACTION OF THE SPRINT
+     * ────────────────────────────────────────────────────────────────────────
+     * The shooting walk this file is trying to account for is authored as
+     * `2.6 + aggression * 1.2` — 2.6 to 3.8 m/s — and the ordinary travel walk
+     * is 4.3, so 2.0 separates "on his feet crossing ground" from "planted".
+     * It is deliberately NOT a share of `_sprintCeiling`: a man firing is never
+     * sprinting (the gate refuses it), so a sprint-relative threshold would
+     * classify every shooting walk on the map as standing still.
+     */
+    const MOVING = 2.0;
+
     const S = {
       level,
-      pulls: [],        // { n, eyesOn, weapon, dur, chopped, why }
+      pulls: [],        // { n, eyesOn, weapon, dur, chopped, why, movingShare }
+      contacts: [],     // { dur, rounds, movingShare, sawFire }
       rounds: 0, eyesOnRounds: 0,
       manSecs: 0, alive: 0,
       moving: 0,        // rounds sent above walking speed
+      /** Man-seconds with a live contact, split by whether he was on his feet. */
+      contactSecs: 0, contactMovingSecs: 0,
     };
     /** Open pull per agent id. */
     const open = new Map();
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * AND THE CONTACT EPISODE, WHICH IS THE THING A PULL LENGTH CANNOT SEE
+     * ────────────────────────────────────────────────────────────────────────
+     * 「移動しながら打てるでしょ」 is not answered by a rate and it is not answered
+     * by a pull length either. A moving man's problem was named exactly: his
+     * CONTACTS ARE BRIEF. So this opens an episode when `hasTarget` rises and
+     * closes it when it falls, and records how long it lasted, how many rounds
+     * went down it, and what share of it he spent on his feet. A change that
+     * "gives moving men longer contacts" has to move `dur` on the episodes
+     * whose `movingShare` is high, and nothing else is proof of it.
+     */
+    const contact = new Map();
+
+    const closeContact = (id, c, now) => {
+      if (!c) return;
+      contact.delete(id);
+      if (c.secs <= 0) return;
+      S.contacts.push({
+        dur: now - c.first, rounds: c.rounds,
+        movingShare: c.movingSecs / c.secs, sawFire: c.rounds > 0,
+      });
+    };
 
     const closeOut = (id, st) => {
       if (!st || st.n === 0) return;
       S.pulls.push({
         n: st.n, eyesOn: st.eyesOn, weapon: st.weapon,
         dur: st.last - st.first, chopped: st.burstLeft > 0, why: st.why ?? '?',
+        movingShare: st.movingRounds / st.n,
       });
       open.delete(id);
     };
@@ -129,19 +169,47 @@ for (const seed of SEEDS) {
     ai.onAgentFire = (a, o, d) => {
       const now = e.time.elapsed;
       const eyes = a.targetVisible === true && a.hasTarget === true;
+      const onFeet = a.speed > MOVING;
       S.rounds++;
       if (eyes) S.eyesOnRounds++;
-      if (a.speed > 2.0) S.moving++;
+      if (onFeet) S.moving++;
+      const c = contact.get(a.id);
+      if (c) c.rounds++;
       let st = open.get(a.id);
       if (st && now - st.last > gapFor(a)) { closeOut(a.id, st); st = undefined; }
       if (!st) {
-        st = { n: 0, eyesOn: eyes, weapon: a.weaponId, first: now, last: now, burstLeft: 0, why: '?' };
+        st = {
+          n: 0, eyesOn: eyes, weapon: a.weaponId, first: now, last: now,
+          burstLeft: 0, why: '?', movingRounds: 0,
+        };
         open.set(a.id, st);
       }
+      if (onFeet) st.movingRounds++;
       st.n++;
       st.last = now;
       // `burstLeft` AFTER this round: >0 at the end of the pull means chopped.
       st.burstLeft = a.burstLeft;
+      /**
+       * AND THE REASON IS RE-ARMED BY EVERY ROUND, WHICH IS THE WHOLE POINT.
+       *
+       * This file's own header says "the frame after the LAST round says by
+       * what", and until this line it recorded the frame after the FIRST one.
+       * A carbine at 800 rpm sends a round every 0.075 s and a frame is 0.017 s,
+       * so three frames in four INSIDE a perfectly healthy burst are "he owes
+       * rounds and did not send one" — the latch fired on the first of them and
+       * then held that answer for the rest of the pull.
+       *
+       * IT BIT `SUPPRESSED` HARDEST, because the ladder asks the state before it
+       * asks the trigger and SUPPRESSED IS NO LONGER A REFUSAL: a pinned man
+       * returns fire (@see the SUPPRESSED case in `agent.js`). So every pull
+       * fired FROM cover-under-fire was labelled "chopped by SUPPRESSED" on its
+       * second frame while the man went on shooting normally for another twenty
+       * rounds. The 35.0 % bar is partly that.
+       *
+       * Re-arming on each round makes the recorded answer the state in the gap
+       * that actually ended the pull, and nothing else.
+       */
+      st.why = '?';
       // a pull that ever had eyes on counts as an eyes-on pull
       if (eyes) st.eyesOn = true;
       a.__firedFrame = e.time.frame;
@@ -154,9 +222,23 @@ for (const seed of SEEDS) {
       const now = e.time.elapsed;
       for (let i = 0; i < ai.agents.length; i++) {
         const a = ai.agents[i];
-        if (!a.alive) { closeOut(a.id, open.get(a.id)); continue; }
+        if (!a.alive) {
+          closeOut(a.id, open.get(a.id));
+          closeContact(a.id, contact.get(a.id), now);
+          continue;
+        }
         S.alive++;
         S.manSecs += dt;
+        /* the contact episode — @see `contact` above */
+        if (a.hasTarget === true) {
+          let c = contact.get(a.id);
+          if (!c) { c = { first: now, secs: 0, movingSecs: 0, rounds: 0 }; contact.set(a.id, c); }
+          c.secs += dt;
+          S.contactSecs += dt;
+          if (a.speed > MOVING) { c.movingSecs += dt; S.contactMovingSecs += dt; }
+        } else {
+          closeContact(a.id, contact.get(a.id), now);
+        }
         const st = open.get(a.id);
         if (!st) continue;
         if (a.__firedFrame === e.time.frame) continue;
@@ -164,7 +246,14 @@ for (const seed of SEEDS) {
          * HE OWES ROUNDS AND DID NOT SEND ONE THIS FRAME. Why not — asked in
          * `_shoot`'s own order so the answer names the branch that returned.
          */
-        if (st.why === '?' && a.burstLeft > 0) {
+        /**
+         * `cooldown/other` IS NOT AN ANSWER, IT IS THE ABSENCE OF ONE — it is
+         * what every ordinary inter-round frame reads. So it never displaces a
+         * named reason, and a named reason arriving later in the same gap
+         * displaces IT. Between two named reasons the earlier wins: the first
+         * thing that stopped him is what stopped him.
+         */
+        if (a.burstLeft > 0 && (st.why === '?' || st.why === 'cooldown/other')) {
           st.why = a.animator?.reloading === true ? 'reloading'
             : a.ammo <= 0 ? 'magazine empty'
               : a.state === 'suppressed' ? 'SUPPRESSED'
@@ -177,6 +266,7 @@ for (const seed of SEEDS) {
       }
     }
     for (const [id, st] of [...open]) closeOut(id, st);
+    for (const [id, c] of [...contact]) closeContact(id, c, e.time.elapsed);
     ai.onAgentFire = fire0;
     return S;
   }, { WARM, WINDOW });
@@ -236,6 +326,53 @@ for (const [label, ps] of [['EYES-ON a visible enemy', eyes], ['blind / last-kno
   for (const [k, v] of Object.entries(why).sort((a, b) => b[1] - a[1])) {
     console.log(`    ${k.padEnd(18)} ${pc(v, chop.length).padStart(7)}`);
   }
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ON HIS FEET vs PLANTED — 「移動しながら打てるでしょ それもやっていない」
+ * ═══════════════════════════════════════════════════════════════════════════
+ * The absolute moving count in the headline says HOW MANY rounds a walking man
+ * sent and cannot say why there are not more of them. These two blocks can:
+ * a pull is MOVING if more than half its rounds left the barrel above 2 m/s,
+ * and a contact episode is a MOVING one if he spent more than half of it on his
+ * feet. If moving rounds are down because moving CONTACTS ARE SHORT, it shows
+ * here as a short `dur` on the moving episodes and nowhere else — and a fix
+ * that lengthens them has to move that number, not the headline rate.
+ */
+const eyesMoving = eyes.filter((p) => p.movingShare > 0.5);
+const eyesStill = eyes.filter((p) => p.movingShare <= 0.5);
+console.log('\nEYES-ON pulls by whether he was on his feet:');
+for (const [label, ps] of [['ON HIS FEET (>2 m/s)', eyesMoving], ['planted', eyesStill]]) {
+  if (!ps.length) { console.log(`  ${label.padEnd(21)} —`); continue; }
+  const n = ps.length;
+  const chop = ps.filter((p) => p.chopped);
+  console.log(`  ${label.padEnd(21)} ${String(n).padStart(5)} pulls (${pc(n, eyes.length)})  ` +
+    `median ${String(med(ps.map((p) => p.n))).padStart(3)} rounds  ` +
+    `mean dur ${(ps.reduce((s, p) => s + p.dur, 0) / n * 1000).toFixed(0).padStart(5)} ms  ` +
+    `chopped ${pc(chop.length, n)}`);
+  const why = Object.create(null);
+  for (const p of chop) why[p.why] = (why[p.why] ?? 0) + 1;
+  const top = Object.entries(why).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  console.log('      chop reasons: ' + (top.map(([k, v]) => `${k} ${pc(v, chop.length)}`).join('   ') || '—'));
+}
+
+const contacts = runs.flatMap((r) => r.contacts);
+const cMoving = contacts.filter((c) => c.movingShare > 0.5);
+const cStill = contacts.filter((c) => c.movingShare <= 0.5);
+const cSecs = runs.reduce((s, r) => s + r.contactSecs, 0);
+const cMovSecs = runs.reduce((s, r) => s + r.contactMovingSecs, 0);
+console.log(`\nCONTACT EPISODES (hasTarget up → down): ${contacts.length}, ` +
+  `${(cSecs / 60).toFixed(1)} man-min of contact, ` +
+  `${pc(cMovSecs, cSecs)} of it on his feet`);
+for (const [label, cs] of [['MOSTLY MOVING', cMoving], ['mostly planted', cStill]]) {
+  if (!cs.length) { console.log(`  ${label.padEnd(15)} —`); continue; }
+  const n = cs.length;
+  console.log(`  ${label.padEnd(15)} ${String(n).padStart(5)} (${pc(n, contacts.length)})  ` +
+    `median dur ${med(cs.map((c) => c.dur)).toFixed(2)} s  ` +
+    `mean dur ${(cs.reduce((s, c) => s + c.dur, 0) / n).toFixed(2)} s  ` +
+    `median rounds ${med(cs.map((c) => c.rounds))}  ` +
+    `silent ${pc(cs.filter((c) => !c.sawFire).length, n)}`);
 }
 
 console.log('\nper weapon (EYES-ON pulls):');
