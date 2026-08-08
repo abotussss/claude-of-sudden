@@ -1219,16 +1219,24 @@ const FLOOR_REACH = 300;
  * coarser than the gate that grades it.
  *
  * So: the centroid, the three corners and the three edge midpoints, each pulled
- * 12 % in so the ray cannot slip down a shared edge on floating-point luck. ANY
- * of the seven finding nothing makes the whole triangle floor, and the first one
+ * 5 % in so the ray cannot slip down a shared edge on floating-point luck — and
+ * only 5 %, because at 12 % the plain still came back with 2-8 single-cell
+ * pinpricks whose support was standing but stopped short of the corner. ANY of
+ * the seven finding nothing makes the whole triangle floor, and the first one
  * that does ends the test — which is why seven samples cost well under seven
- * times one: 329 721 up-facing faces on the plain take 527 653 rays, not
+ * times one: 329 721 up-facing faces on the plain take ~500 000 rays, not
  * 2 308 047, because the great majority are floor and their first ray says so.
+ *
+ * ERRING THIS WAY IS FREE. A sample that wrongly reports air KEEPS a triangle
+ * solid, and everything downstream of that is safe: the nav grid was baked with
+ * it solid, `stuckcheck` measured the map with it solid, and the instance it
+ * belongs to still stops being DRAWN when the shell lands. The other direction
+ * is the hole the player fell through.
  */
 const FLOOR_BARY = [
   [0.334, 0.333, 0.333],
-  [0.76, 0.12, 0.12], [0.12, 0.76, 0.12], [0.12, 0.12, 0.76],
-  [0.12, 0.44, 0.44], [0.44, 0.12, 0.44], [0.44, 0.44, 0.12],
+  [0.9, 0.05, 0.05], [0.05, 0.9, 0.05], [0.05, 0.05, 0.9],
+  [0.05, 0.475, 0.475], [0.475, 0.05, 0.475], [0.475, 0.475, 0.05],
 ];
 
 /**
