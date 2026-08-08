@@ -381,7 +381,7 @@ export const TRENCHES = [
    * a pocket will take a post even when it will not take a line.
    *
    * ────────────────────────────────────────────────────────────────────────
-   * SO THESE EIGHTEEN WERE SEARCHED FOR, NOT AUTHORED
+   * SO THESE SEVENTEEN WERE SEARCHED FOR, NOT AUTHORED
    * ────────────────────────────────────────────────────────────────────────
    * `node _nfsite.mjs` grows a run from every centre on a 4 m lattice on every
    * bearing at 15°, a metre at a time, allowed to TURN up to 1.2°/m — a
@@ -397,22 +397,36 @@ export const TRENCHES = [
    *
    * `--clear` IS 6.05 AND NOT THE GATE'S 5.5, WHICH COST FOUR POSTS AND IS
    * WORTH IT. Sited at 5.5 the search returned 426 m and `_nftrenchplan.mjs
-   * --emit` then wanted a vehicle crossing on eight of the eighteen — not
+   * --emit` then wanted a vehicle crossing on eight of them — not
    * because a leg would drop, but because `--emit` measures against `NEAR` = 6,
    * its own deliberately pessimistic proxy, and eight runs sat in the 0.5 m
    * band between the two numbers. A 14 m crossing in a 20 m post leaves 6 m,
    * under `MIN_BAY` 11.08, so the post would simply have vanished. Growing them
-   * at 6.05 instead puts every one of the eighteen clear of BOTH numbers, and
+   * at 6.05 instead puts every one of them clear of BOTH numbers, and
    * `--emit` now returns an empty list for all of them: `GRADE` below is
    * untouched by this whole block.
    *
-   * WHAT THAT BUYS, and the numbers are the tool's own:
-   *   within 25 m of a cut, whole disc      57.5 % -> 86.4 %
-   *   within 25 m of a cut, middle third    27.8 % -> 80.8 %
-   * for 416 m of new cut in eighteen posts, the closest of which clears every
-   * baked tank leg by 6.2 m. That is the part worth reading twice: the reason
-   * the middle was refused a 137 m line is the same reason it grants eighteen
-   * twenty-metre ones, and none of these needs a single vehicle crossing.
+   * WHAT THAT BUYS, MEASURED IN THE BUILT WORLD rather than in the tool — a
+   * 2 m lattice over the playable disc, a cell counted as cut where the
+   * collision surface stands over 0.8 m below `plainsY`, `node _nfcutmap.mjs`:
+   *
+   *   cut share, whole disc                 2.02 % ->  3.22 %
+   *   cut share, MIDDLE THIRD (r < 90)      0.20 % ->  2.30 %
+   *   within 25 m of a cut, whole disc      49.8 % -> 79.4 %
+   *   within 25 m of a cut, middle third    15.9 % -> 74.8 %
+   *   longest walk between objectives with no cut in reach   122 m -> 64 m
+   *   share of those walks with none in reach                 34 % -> 14 %
+   *   bays 25 -> 44, cut 627 m -> 999 m
+   *
+   * and `_nftrenchwalk.mjs`, which is the metric the last pass left behind —
+   * the eye-to-chest sightline along a walk that USES the network at no more
+   * than a 1.35x detour — moves mean lane 55 -> 50 m and worst continuous
+   * exposed run 74 -> 12 m, with five of the twelve crossings now choosing one
+   * of these posts as the route worth the detour.
+   *
+   * That is the part worth reading twice: the reason the middle was refused a
+   * 137 m line is the same reason it grants seventeen twenty-metre ones, and
+   * none of these needs a single vehicle crossing.
    *
    * `fireSide` is the side the fire step, the sandbags and the wire go on;
    * dugouts and sally ramps go on the other, which is the rear. NACHTFELD's
@@ -489,8 +503,17 @@ export const TRENCHES = [
   },
   {
     id: 'NF-WN-11', name: 'WN-11', fireSide: -1,
-    why: '35 m down the east flank inside OSTRIEGEL, on the B→D and E→D walks',
-    pts: [[100, -7], [101, 28]],
+    /**
+     * 34 m AND NOT 35, WHICH IS THE DIFFERENCE BETWEEN ONE BAY AND TWO. The
+     * walk that cuts a line into bays takes `ceil((len + TRAVERSE) / (BAY +
+     * TRAVERSE))` of them, so 35.01 m came out as TWO 13 m bays with a 9 m
+     * traverse between — two short fire bays where the ground will carry one
+     * full-length one, and neither over `SALLY_MIN`. A metre off the south end
+     * puts it under `BAY` 34 and it is a single 34 m bay with a sally ramp and
+     * a dugout in it.
+     */
+    why: '34 m down the east flank inside OSTRIEGEL, on the B→D and E→D walks',
+    pts: [[100, -7], [101, 27]],
   },
   {
     id: 'NF-WN-12', name: 'WN-12', fireSide: -1,
@@ -507,11 +530,32 @@ export const TRENCHES = [
     why: 'south-west of the fortress, covering the south base’s western sortie',
     pts: [[-32, 102], [-33, 125]],
   },
-  {
-    id: 'NF-WN-15', name: 'WN-15', fireSide: 1,
-    why: 'north-west, on the approach to zone A from the north base',
-    pts: [[-79, -92], [-82, -67]],
-  },
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THERE IS NO WN-15, AND THE REASON IS THE MOST USEFUL THING IN THIS BLOCK
+   * ────────────────────────────────────────────────────────────────────────
+   * The search's north-west post ran [[-79,-92],[-82,-67]] and cleared every
+   * baked leg by 6.1 m — and RED-C→D DROPPED at boot anyway: "pinch 2.5m at
+   * sample 39 (-56,-49)", forty metres from the nearest metre of it.
+   *
+   * A trench does not have to touch a tank lane to take it. `trenchKeepOut()`
+   * is fed into `inWorks`, `plainsOpen` answers with it, and
+   * `plains-cover.js` places every wreck and berm against that answer — so a
+   * cut dug anywhere moves the COVER, and cover is what pinches a hull. Both
+   * this post's north end and WN-01 sit within 4 m of the A→D crossing;
+   * `stations()`'s edge pass bounds a refused corridor at "the first open
+   * ground on each side", and with both of them refusing their stretch the
+   * first open ground left was (-56,-49) — which is where the A→D walk and
+   * RED-C→D lie on top of each other. Bisected: with either one of the two
+   * removed the leg bakes, with both it does not.
+   *
+   * WN-01 is the one that was kept. It is inside the middle third at r 43,
+   * it is the only cut on the west approach to zone D, and it buys 270
+   * coverage cells against this one's 95 out at r 110. The lesson is the
+   * general one: TWO POSTS ON THE SAME CROSSING IS ONE TOO MANY, and
+   * `_nfsite.mjs`'s separation rule cannot see it because the two are 40 m
+   * apart. The gate for it is the boot log and nothing else.
+   */
   {
     id: 'NF-WN-16', name: 'WN-16', fireSide: 1,
     why: 'the west flank between WESTRIEGEL and zone C',
