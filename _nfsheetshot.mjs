@@ -64,8 +64,22 @@ for (const [tx, tz] of TARGETS) {
       const cx = tx + Math.cos(a) * range, cz = tz + Math.sin(a) * range;
       const floor = (x, z) => { const h = ph.raycast(x, 300, z, 0, -1, 0, 400, ph.MASK.WORLD); return h.hit ? h.point.y : 0; };
       const cy = floor(cx, cz) + 1.62;
+      const V = e.camera.position.constructor;
+      /**
+       * TAKE THE CAMERA OFF THE PLAYER FIRST. `camera.position` set on its own
+       * lasts until the next frame, when the player system writes its own
+       * transform back over it — the first run of this probe photographed the
+       * rim from wherever the player was standing and labelled it a soil sheet.
+       * Same pattern as `src/dev/shots.js`: disable control, aim, teleport the
+       * capsule under the camera, aim again.
+       */
+      const pl = e.ctx.peek('player');
+      pl?.setControlEnabled?.(false);
       e.camera.position.set(cx, cy, cz);
-      e.camera.lookAt(new e.camera.position.constructor(tx, floor(tx, tz) + 0.35, tz));
+      e.camera.lookAt(new V(tx, floor(tx, tz) + 0.35, tz));
+      pl?.teleport?.(e.camera.position, e.camera.rotation);
+      e.camera.position.set(cx, cy, cz);
+      e.camera.lookAt(new V(tx, floor(tx, tz) + 0.35, tz));
       // nearest fire, and how bright it is here against the moon
       let best = null;
       for (const f of (w.level.fires ?? [])) {
@@ -76,7 +90,18 @@ for (const [tx, tz] of TARGETS) {
       }
       return { cam: [+cx.toFixed(1), +cy.toFixed(2), +cz.toFixed(1)], fire: best ? { id: best.id, d: +best.d.toFixed(1), i: best.i } : null };
     }, [tx, tz, range]);
-    await frames(40);
+    await frames(24);
+    // …and once more after the frames, so the last word on the transform is ours
+    await page.evaluate(([tx, tz, range]) => {
+      const e = window.__ENGINE__, ph = e.ctx.peek('physics');
+      const a = Math.atan2(tz, tx);
+      const cx = tx + Math.cos(a) * range, cz = tz + Math.sin(a) * range;
+      const floor = (x, z) => { const h = ph.raycast(x, 300, z, 0, -1, 0, 400, ph.MASK.WORLD); return h.hit ? h.point.y : 0; };
+      const V = e.camera.position.constructor;
+      e.camera.position.set(cx, floor(cx, cz) + 1.62, cz);
+      e.camera.lookAt(new V(tx, floor(tx, tz) + 0.35, tz));
+    }, [tx, tz, range]);
+    await frames(2);
     const name = `${TAG}-${tx}_${tz}-${range}m.png`;
     await page.screenshot({ path: `${OUT}/${name}` });
     console.log(`  ${name}  eye ${info.cam.join(',')}  nearest fire ${info.fire ? `${info.fire.id} at ${info.fire.d} m (${info.fire.i} cd)` : 'none'}`);
