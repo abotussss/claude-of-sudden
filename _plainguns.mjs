@@ -49,6 +49,7 @@ const errs = [];
 page.on('pageerror', (e) => errs.push(String(e.message)));
 if (args.nofloor) await page.addInitScript(() => { window.__NOFLOOR__ = true; });
 if (args.clamp) await page.addInitScript((n) => { window.__CLAMP__ = n; }, Number(args.clamp));
+if (args.whizzrate) await page.addInitScript((n) => { window.__WHIZZRATE__ = n; }, Number(args.whizzrate));
 await page.goto(URL, { waitUntil: 'domcontentloaded' });
 await page.waitForFunction('window.__READY__===true', null, { timeout: 300000 });
 
@@ -77,7 +78,7 @@ const boot = await page.evaluate((drive) => {
     farGains: [], farDists: [], shotGains: [], shotOcc: [],
     tracer: 0, whizzGeomPass: 0, whizzRateNo: 0, whizzPlayAt: 0, whizzOk: 0,
     whizzMiss: [],
-    peakField: 0, peakWeapons: 0, peakFar: 0,
+    peakField: 0, peakWeapons: 0, peakFar: 0, farCutAt: [],
     nearestEnemy: [], samples: [],
     teleports: 0,
   };
@@ -112,6 +113,12 @@ const boot = await page.evaluate((drive) => {
    * reaches the floor is decided by how loaded the machine was that minute —
    * measured, one pair of same-seed runs came out at pool 65 and pool 24.
    */
+  /**
+   * `--whizzrate=N` overrides `_rate.whizz` (shipped 2/s) at runtime, so the
+   * question "is 2 a second still right now that a burst is 39-79 rounds over
+   * 2-3 s" can be answered with two runs of one build instead of an opinion.
+   */
+  if (window.__WHIZZRATE__) a._rate.whizz = window.__WHIZZRATE__;
   if (window.__CLAMP__) {
     a.field.cap = window.__CLAMP__;
     a.field._trackRender = () => { a.field.cap = window.__CLAMP__; };
@@ -159,10 +166,14 @@ const boot = await page.evaluate((drive) => {
   const f = a.field;
   const ac = f.acquire.bind(f);
   const pre = new Array(f.emitters.length);
+  const preStart = new Float64Array(f.emitters.length);
+  const preSpan = new Float64Array(f.emitters.length);
   f.acquire = (spec) => {
     for (let i = 0; i < f.emitters.length; i++) {
       const em = f.emitters[i];
       pre[i] = em.free ? null : (em.kindTag ?? em.busName ?? '?');
+      preStart[i] = em.startAt ?? 0;
+      preSpan[i] = (em.endTime ?? 0) - (em.startAt ?? 0);
     }
     const before = f.stats.stolen;
     const em = ac(spec);
@@ -173,6 +184,28 @@ const boot = await page.evaluate((drive) => {
       const idx = f.emitters.indexOf(em);
       bump(M.stolenFrom, pre[idx] ?? '?');
       bump(M.stoleFor, key);
+      /**
+       * HOW FAR INTO ITS BURST THE VICTIM WAS. A far voice cut at 95 % is a
+       * tail nobody misses; one cut at 20 % is a burst that stops dead, and
+       * `Emitter.detach` disconnects a running signal rather than releasing
+       * it, so what that costs is a discontinuity and not merely brevity.
+       * Recorded BEFORE `acquire` overwrites the slot's timings.
+       */
+      if (pre[idx] === 'far' && preSpan[idx] > 0 && M.farCutAt.length < 2000) {
+        /**
+         * SIGNED, AND THE SIGN IS THE WHOLE POINT. `startAt` is `when`, which
+         * for a far voice is one propagation delay in the FUTURE (0.58 s at
+         * 200 m). A NEGATIVE number here means the slot was stolen while the
+         * burst was still in flight — the voice never made a sample and the
+         * `farVoices` counter is over-reporting what the player hears. A
+         * positive one is an honest truncation. Clamping it, as the first
+         * version of this probe did, hides exactly that distinction.
+         */
+        M.farCutAt.push({
+          into: +(f.actx.currentTime - preStart[idx]).toFixed(3),
+          dur: +preSpan[idx].toFixed(3),
+        });
+      }
     }
     // The real level this voice will be played at: distGain is scheduled in the
     // future (propagation delay), so read the arithmetic rather than `.value`.
@@ -291,6 +324,18 @@ const out = await page.evaluate((secs) => {
     H_whizz: {
       tracers: M.tracer, playAt: M.whizzPlayAt, rateRefused: M.whizzRateNo, acquired: M.whizzOk,
       missMed: med(M.whizzMiss.filter((m) => m >= 0)),
+      rate: a._rate.whizz,
+    },
+    I_farStolen: {
+      n: M.farCutAt.length,
+      /** Stolen BEFORE it started sounding: never made a sample. */
+      beforeItSounded: M.farCutAt.filter((v) => v.into <= 0).length,
+      /** Truncated mid-burst: a real cut, and the only case an ear can hear. */
+      truncated: M.farCutAt.filter((v) => v.into > 0).length,
+      intoMed: med(M.farCutAt.map((v) => v.into)),
+      intoMin: M.farCutAt.length ? Math.min(...M.farCutAt.map((v) => v.into)) : null,
+      durMed: med(M.farCutAt.map((v) => v.dur)),
+      truncatedFractionMed: med(M.farCutAt.filter((v) => v.into > 0).map((v) => +(v.into / v.dur).toFixed(3))),
     },
     audio: { errors: a.stats.errors, failed: !!a.failed, restarts: a.restarts },
   };
