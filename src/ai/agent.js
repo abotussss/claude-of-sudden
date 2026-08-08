@@ -2940,8 +2940,57 @@ export class Agent {
         break;
 
       case STATE.SUPPRESSED: {
-        this.crouch = true;
-        this.desiredSpeed = 0;
+        /**
+         * ══════════════════════════════════════════════════════════════════
+         * GOING TO GROUND WHERE THERE IS GROUND — 「滞留させるな 意味もなく」
+         * ══════════════════════════════════════════════════════════════════
+         * `crouch = true; desiredSpeed = 0` FIRED WHEREVER THE MAN HAPPENED TO
+         * BE STANDING, and that is the bug in one line. Read the entry test at
+         * the bottom of this switch: SUPPRESSED is reachable only from COMBAT
+         * and only with `this.cover` non-null — but `this.cover` is a cover
+         * point he has been ASSIGNED, not one he is standing in. The man this
+         * state is written for is behind a wall; the man it actually catches
+         * most often is the one WALKING TO that wall with rounds coming at him,
+         * and it stops him dead in the open, three metres short, crouched.
+         *
+         * That is not going to ground. Going to ground means getting into the
+         * thing; stopping in the beaten zone is the one place a soldier may not
+         * be. It is also 「意味もなく滞留」 exactly — he has somewhere to be, he
+         * has a path to it, and the state takes his legs away.
+         *
+         * MEASURED (`src/ai/burstcheck.mjs`, the new on-his-feet board): of
+         * every eyes-on pull a MOVING man was chopped out of, **SUPPRESSED is
+         * 100 %** — his speed goes to zero, the crouch takes another 58 % off
+         * whatever is left, and the pull he was walking and shooting is over.
+         * This is where 「移動しながら打てるでしょ それもやっていない」 is being lost,
+         * and it is the same line that answers 「滞留させるな」.
+         *
+         * SO THE STATE KEEPS ITS MEANING AND STOPS BEING A PLACE. In cover, he
+         * is exactly what he was: crouched, still, head down, returning fire on
+         * the terms below. Out of it and with a path in hand, he COMPLETES THE
+         * MOVE — at the shooting walk, not the travel walk, and still returning
+         * fire — and goes still the moment he is in.
+         *
+         * THIS IS NOT THE 61.8 % SWINGING BACK. That number was elite men
+         * CROUCHED AND FROZEN with a target in sight and the trigger down 17 %
+         * of the time, and it was cured by thresholds — which are untouched
+         * here, both of them, for everybody. Nothing about WHEN a man is
+         * suppressed moves in either direction. What moves is what he does with
+         * his feet during it, and only for the man who is not yet behind
+         * anything.
+         *
+         * `hasMoveTarget` IS THE GUARD AND IT IS LOAD-BEARING. A desired speed
+         * with no path is what `stuckcheck` counts as a wedged man — he wants
+         * to move and goes nowhere — so a suppressed man with nowhere to walk
+         * still stops, exactly as he does today. No new destination is asked
+         * for here and no A* is spent: he finishes the path `_combat` already
+         * gave him.
+         */
+        const sIn = this.cover !== null
+          && this.position.distanceTo(this.coverPos) < 0.85;
+        const sRun = !sIn && this.hasMoveTarget && !this.postClimbing;
+        this.crouch = !sRun;
+        this.desiredSpeed = sRun ? 2.6 + this.traits.aggression * 1.2 : 0;
         this.peeking = false;
         /**
          * ══════════════════════════════════════════════════════════════════
@@ -4735,6 +4784,72 @@ export class Agent {
           : 0,
       });
       this.repathTimer = this.rng.range(1.1, 2.2) + tr.patience * this.rng.range(1.2, 3.6);
+      /**
+       * ════════════════════════════════════════════════════════════════════
+       * HOLD THIS WALL, OR BOUND FORWARD — 「撃つときは止まるけどさらに移動して
+       * 撃つなどの判断をさせろ」
+       * ════════════════════════════════════════════════════════════════════
+       * THE OBJECTION IS THAT THERE IS ONLY ONE BEHAVIOUR, and read against the
+       * branch chain below that is exactly true. Whether a man plants or presses
+       * is settled by ONE STRUCTURAL FACT with no reason attached: has he
+       * arrived at the cover point he was handed? Not arrived — press, walk and
+       * shoot. Arrived — plant, `desiredSpeed = 0`, peek, shoot. A man at a wall
+       * sixty metres from a contact he can see behaves identically to a man at a
+       * wall eight metres from one. He never decides; he runs out of walking.
+       *
+       * SO THE DECISION GETS A REASON, AND THE REASON IS HIS OWN GUN. `want` is
+       * `traits.range` — where this man wants the fight, blended in
+       * `drawPersona` from his archetype AND his weapon's own `want` (@see
+       * `WEAPONS`), 9 m for a machine pistol and 44 for a marksman's rifle — and
+       * `maxRange` twelve lines above is already `max(22, want * 1.7)`, the far
+       * edge of the band `CoverMap` will score a position in. Outside that edge
+       * he is not holding an angle, he is watching one.
+       *
+       * So the DWELL — the timer that decides how long he is willing to stay
+       * put, and the single strongest lever on how static a bot looks — is cut
+       * to a quarter for a man whose fight is past his own edge. `stale` then
+       * comes round in about a second instead of up to twelve, the current point
+       * is excluded, `pick` names another, and the `toward` bias that already
+       * exists aims that bound at the CONTACT for the bold and at the objective
+       * for everybody else. He walks; the press branch below has him shooting
+       * while he walks. Inside his band nothing whatever changes and he holds
+       * exactly as long as he always did.
+       *
+       * IT IS TWO BEHAVIOURS OUT OF ONE MECHANISM AND IT INVENTS NOTHING — no
+       * new state, no new destination, no charge, no straight line at an enemy.
+       * Bounding from cover to cover with rounds going down IS fire and
+       * movement, and every safety term in `CoverMap.pick` still chooses the
+       * wall: the claim filter, `maxTravel`, the threat ceiling, the component
+       * test. What stops being free is sitting at a wall the weapon cannot
+       * reach from.
+       *
+       * IT IS HERE AND NOT AT `atCover` FOR A PERFORMANCE REASON THAT IS NOT
+       * NEGOTIABLE. Zeroing the dwell where the plant/press branch is chosen
+       * puts `stale` true on the following frame, every frame, and `pick` is a
+       * scored sweep of the cover set — a per-frame `CoverMap.pick` for every
+       * man out of band, on a 40 v 40 map. Scaling the dwell where the dwell is
+       * SET is throttled by construction: this block is already rationed by
+       * `repathTimer` and by `stale` itself.
+       *
+       * THE PERSONALITY DOES THE GATING FOR FREE. The threshold IS `want`, so a
+       * rusher bounds whenever the fight is past 22 m and a marksman not until
+       * 75 — two men leave the same doorway in opposite directions for the same
+       * reason they always did. The refusals are the ones about the man: he must
+       * SEE the contact (bounding at a memory is how you walk into a room), it
+       * must not be a hull, he must not be hurt, and he must not be under fire —
+       * a man being shot at moves to his cover, not past it, which is the other
+       * half of this pass (@see the SUPPRESSED case in `_think`). The sniper is
+       * carved out by name: his archetype IS the long shot and
+       * 「無闇に突撃させない」 is a standing order.
+       */
+      // `this.sniper` and not `isSniper`: the latter is "he is a sniper AND the
+      // grid can place him", which is the right test for a height bias and the
+      // wrong one for a standing order. A bolt gunner the grid has lost is
+      // still a bolt gunner.
+      const outOfBand = this.hasTarget && this.targetVisible && !armour
+        && !this.sniper && this.health > 50 && this.suppression < 0.6
+        && dist > Math.max(22, want * 1.7);
+      const bound = outOfBand ? 0.25 : 1;
       if (pick && pick !== this.cover) {
         this.cover = pick;
         this.coverPos.set(pick.x, pick.y, pick.z);
@@ -4744,11 +4859,14 @@ export class Agent {
          * looks — it is the timer that decides how often he is allowed to want to
          * be somewhere else — so it is the one that has to carry the personality.
          */
-        this.coverDwell = this.rng.range(1.5, 3.2) + tr.patience * this.rng.range(2.5, 7);
+        this.coverDwell =
+          (this.rng.range(1.5, 3.2) + tr.patience * this.rng.range(2.5, 7)) * bound;
         this._goTo(this.coverPos);
       } else if (stale) {
-        // Nothing better exists right now — do not ask again next frame.
-        this.coverDwell = this.rng.range(1.2, 2.8);
+        // Nothing better exists right now — do not ask again next frame. The
+        // bound scale applies here too, but the floor is what stops a man with
+        // nowhere better to go from asking twenty times a second.
+        this.coverDwell = Math.max(0.5, this.rng.range(1.2, 2.8) * bound);
       }
     }
 
@@ -4862,7 +4980,18 @@ export class Agent {
       this.desiredSpeed = shootMoving ? 2.6 + tr.aggression * 1.2 : 4.3;
       this.crouch = false;
       this.wantFire = shootMoving;
-      this.aimWeight = shootMoving ? 0.85 : 0.35;
+      /**
+       * AND HE IS AIMING WHILE HE DOES IT — 0.85 -> 1. `aimWeight` scales both
+       * `aimAdd` (the fighting stance) and the aim IK's correction angle, so
+       * 0.85 was a man carrying the rifle three-quarters of the way up and
+       * pointing it three-quarters of the way at somebody. A man at cover who
+       * leans out gets 1; a man walking forward shooting at the same target got
+       * less, for no reason on the board. The accuracy price for firing on the
+       * move is charged where it belongs and where it always was — the `moving`
+       * cone term in `_fireRound`, up to 1.5x — and it should not also be
+       * charged in the silhouette.  the `advance` clip in `_drive`.
+       */
+      this.aimWeight = shootMoving ? 1 : 0.35;
     } else if (!this.cover && this.objective && !this.sniper && !this.working && !this.post) {
       /**
        * ══════════════════════════════════════════════════════════════════════
@@ -4915,7 +5044,18 @@ export class Agent {
       this.crouch = false;
       this.desiredSpeed = shootMoving ? 2.6 + tr.aggression * 1.2 : 4.3;
       this.wantFire = shootMoving;
-      this.aimWeight = shootMoving ? 0.85 : 0.35;
+      /**
+       * AND HE IS AIMING WHILE HE DOES IT — 0.85 -> 1. `aimWeight` scales both
+       * `aimAdd` (the fighting stance) and the aim IK's correction angle, so
+       * 0.85 was a man carrying the rifle three-quarters of the way up and
+       * pointing it three-quarters of the way at somebody. A man at cover who
+       * leans out gets 1; a man walking forward shooting at the same target got
+       * less, for no reason on the board. The accuracy price for firing on the
+       * move is charged where it belongs and where it always was — the `moving`
+       * cone term in `_fireRound`, up to 1.5x — and it should not also be
+       * charged in the silhouette.  the `advance` clip in `_drive`.
+       */
+      this.aimWeight = shootMoving ? 1 : 0.35;
       /**
        * ONE SOLVE ON THE EXISTING CADENCE, NOT ONE A FRAME. `repathTimer` is
        * the same ration every other destination on this man goes through, and
@@ -6360,18 +6500,42 @@ export class Agent {
      *
      * So the trigger is a decision to START and not a decision to CONTINUE. A
      * man who has sent at least one round of the current pull keeps sending it
-     * until the pull is spent or the magazine is, and the three things that
-     * still stop him are the three that are about him rather than about a
-     * timer: the contact has gone stale entirely, he has been driven into
-     * SUPPRESSED, or the round is not running (`combatEnabled`, handled above).
+     * until the pull is spent or the magazine is, and the two things that still
+     * stop him are the two that are about him rather than about a timer: the
+     * contact has gone stale entirely, or the round is not running
+     * (`combatEnabled`, handled above).
+     *
+     * ────────────────────────────────────────────────────────────────────────
+     * AND `state !== SUPPRESSED` WAS THE THIRD, AND IT IS A LEFTOVER
+     * ────────────────────────────────────────────────────────────────────────
+     * It was written when SUPPRESSED MEANT `wantFire = false` — a man in it was
+     * a spectator by construction, so exempting him from the commitment was
+     * saying the same thing twice. That is no longer what the state does: a
+     * pinned man returns fire (@see the SUPPRESSED case in `_think`, and the
+     * 60.4 % that bought it), on the same range and freshness terms `_combat`
+     * uses. With the branch firing and this clause still standing, the ONE
+     * event that reliably chopped a pull was a man being shot at while shooting
+     * — which is the moment a firefight is supposed to get louder, not quieter.
+     *
+     * MEASURED (`src/ai/burstcheck.mjs` with the chop reason read at the right
+     * frame): SUPPRESSED is the largest named reason on the chopped board, and
+     * for pulls sent by a man ON HIS FEET it is **100 %** of them.
+     *
+     * Deleting it does not let anything through that COMBAT does not already
+     * let through. The two surviving clauses are the bound, and they are the
+     * same two for every state: he must have a contact or a last-known inside
+     * `SUPPRESS_WINDOW`, and he must have opened the pull himself. A man whose
+     * suppression has genuinely ended the fight loses `hasTarget` and the
+     * commitment dies with it, on the clause that was always doing that work.
      *
      * This is the literal sentence in the request, and it is bounded by the
      * same thing everything else here is: `_fireRound`'s bloom opens the cone
-     * with every round of the pull, so a committed pull is loud and wild.
+     * with every round of the pull, so a committed pull is loud and wild — and
+     * `_fireRound` multiplies the spread by `suppression` on top, so a pull
+     * committed from under fire is the wildest thing on the map.
      */
     const committed = this.burstLeft > 0 && this.burstFired > 0
-      && (this.hasTarget || this.lastKnownAge < SUPPRESS_WINDOW)
-      && this.state !== STATE.SUPPRESSED;
+      && (this.hasTarget || this.lastKnownAge < SUPPRESS_WINDOW);
     // …and the trigger itself is still a decision. @see the block above for why
     // this test moved down two branches rather than away.
     if (!this.wantFire && !committed) return;
@@ -6821,6 +6985,37 @@ export class Agent {
       && this.speed > this._sprintCeiling * (this._leaning ? SPRINT_POSE_DROP : SPRINT_POSE)) {
       clip = 'sprint';
     }
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * A MAN WHO IS SHOOTING DOES NOT PLAY THE RUN — 「動きながらエイムができる
+     * ようにして」「敵は動きながら撃っていない」
+     * ══════════════════════════════════════════════════════════════════════
+     * `speed > 2.6` AND THE SHOOTING WALK ARE THE SAME NUMBER. `_combat` hands
+     * a man firing on the move `2.6 + aggression * 1.2`, so every advancing
+     * shooter above the very bottom of the trait range cleared this test and
+     * played `run` — 13° of forward lean off his own sights, the bob and the
+     * bounce of a jog under him, and nine degrees of arm swing carrying the
+     * rifle with it, because the weapon is anchored to the right hand. The
+     * rounds were leaving; the man they left was animated as somebody running.
+     * From outside that is 「動きながら撃っていない」 whatever the counter says.
+     *
+     * So the clip asks what he is DOING and not only how fast he is going, and
+     * the answer for a man with a live contact and his trigger up is the
+     * advancing gait: no float phase, the weapon hand nearly still, upright
+     * behind the stock. @see `ADVANCE` in clips.js for every number.
+     *
+     * `wantFire || burstLeft > 0` IS THE TEST AND BOTH HALVES ARE NEEDED. The
+     * first is the man who means to shoot; the second is the man mid-pull whose
+     * `wantFire` flickered off for a frame — the same commitment `_shoot`
+     * respects, so the pose does not strobe between two gaits inside one burst.
+     * `hasTarget` keeps it off a man hosing nothing.
+     *
+     * IT DOES NOT TOUCH THE SPRINT AND CANNOT: the branch above owns that, a
+     * sprint is refused to a man who is firing, and `aimWeight` is 0.05 there.
+     * Nor does it touch the crouch, which is its own clip and its own posture.
+     */
+    else if (moving && this.hasTarget
+      && (this.wantFire || this.burstLeft > 0)) clip = 'advance';
     else if (this.speed > 2.6) clip = 'run';
     else if (moving) clip = 'walk';
     else clip = this.health < 35 ? 'hurtIdle' : 'idle';
