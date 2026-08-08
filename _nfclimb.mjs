@@ -41,12 +41,16 @@ const SHOTS = [
   // ── the tiers that were given a reason ───────────────────────────────────
   ['deck-P1-E', [16, -32], [0, 8, -32], 1.62],
   ['deck-P2-E', [10, -32], [0, 9, -32], 1.62],
-  ['room-inside', [0, -35.5], [0, 8.2, -28], 1.62],
-  ['room-door-N', [0, -40], [0, 8.6, -32], 1.62],
-  ['shaft-rack', [2.6, -34.4], [-1.5, 22.5, -31], 1.62],
-  ['cab-vantage', [3.4, -33.6], [0, 20, 10], 1.62],
+  ['room-inside', [-2.2, -34.6], [2.48, 10.3, -31.2], -11.56],
+  ['room-frag', [1.6, -29.2], [-2.48, 10.3, -32.8], -11.56],
+  ['room-door-N', [0, -39.6], [0, 11.4, -32], -11.56],
+  ['shaft-rack', [2.4, -32], [-3.6, 25.4, -32], -26.02],
+  ['cab-vantage', [-2.4, -33.4], [0, 29.5, -30], -30.94],
   // ── the fortress ─────────────────────────────────────────────────────────
-  ['fort-outside-N', [0, 8], [0, 8, 48], 1.62],
+  ['fort-outside-N', [0, 4], [0, 7, 26], 1.62],
+  ['fort-teeth-N', [10, 6], [4, 2.5, 14], 1.62],
+  ['fort-wire-NE', [38, 9], [30.6, 3.4, 17.3], 1.62],
+  ['fort-boom-N', [4, 6], [2, 3, 15], 1.62],
   ['fort-outside-NE', [34, 16], [4, 8, 46], 1.62],
   ['fort-gate-N', [0, 30], [0, 4, 52], 1.62],
   ['fort-yard', [0, 60], [0, 4, 44], 1.62],
@@ -85,6 +89,18 @@ for (const [tag, from, at, eye] of SHOTS) {
   const y = await page.evaluate(([f, a, eye]) => {
     const e = window.__ENGINE__, phys = e.ctx.peek('physics');
     const V3 = e.camera.position.constructor;
+    /**
+     * A NEGATIVE `eye` IS AN ABSOLUTE HEIGHT. Inside the tower's shaft the one
+     * downward ray finds the top storey's slab at 29 m, not the floor the
+     * camera is meant to stand on — the same 2.5 D limit the whole map is built
+     * against, arriving in the screenshot probe.
+     */
+    if (eye < 0) {
+      e.camera.position.set(f[0], -eye, f[1]);
+      e.camera.lookAt(new V3(a[0], a[1], a[2]));
+      e.ctx.peek('player')?.teleport?.(e.camera.position, e.camera.rotation);
+      return +(-eye).toFixed(2);
+    }
     const h = phys.raycast(f[0], 300, f[1], 0, -1, 0, 400, phys.MASK.WORLD);
     const y = (h.hit ? h.point.y : 0) + eye;
     e.camera.position.set(f[0], y, f[1]);
