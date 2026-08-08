@@ -356,6 +356,14 @@ const TOWN_ROUTES = [
  *      works grow, `_bakePath`'s span test cuts the leg and the boot log names
  *      the pinch — which is the whole reason the drop path prints a reason.
  *
+ *      AND IT IS NOT A D RULE, IT IS AN AXIS RULE, which is what cost this
+ *      table its one dropped spoke (@see BLUE-C's leg to E). Measured on the
+ *      x = 0 axis, the tower covers z -57.4…-6.6, D's own 16 m stand-off covers
+ *      -16…+16 and NF-FORT covers +12…+84 — three intervals that OVERLAP, so
+ *      the axis is continuously closed from z -57.4 to z +84 and NO spoke to
+ *      any destination may cross it between those two numbers. The two
+ *      crossings that exist are south of the tower and north of the fortress.
+ *
  * ────────────────────────────────────────────────────────────────────────────
  * WHAT THREE A SIDE DOES TO TRAFFIC, AND WHAT IS DONE ABOUT IT
  * ────────────────────────────────────────────────────────────────────────────
@@ -511,7 +519,46 @@ const PLAINS_ROUTES = [
        * only inside the circle.
        */
       { zone: 'D', points: [[-48, 32], [-42, 4], [-30, -2]] },
-      { zone: 'E', points: [[-48, 32], [-30, -14], [30, -70], [96, -84]] },
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * SOUTH OF THE TOWER, BECAUSE THERE IS NO LANE PAST IT — the one spoke
+       * this table lost, and the reason it could not be nudged
+       * ────────────────────────────────────────────────────────────────────
+       * It was `[[-48,32],[-30,-14],[30,-70],[96,-84]]` and it came back
+       * "SPOKE DROPPED — 72 m of route ends 156 m off the point (needs <= 34)
+       * — blocked by 2.7m of unremovable mass over 3 samples at (-12,-34)".
+       * That is the control tower: the `(-30,-14) -> (30,-70)` segment passes
+       * 7.31 m from `(0,-32)`, and the tower's apron reaches 25.4 m.
+       *
+       * The header's rule — no D spoke comes at the point down the x = 0 axis —
+       * was written for the three D spokes and never applied to this one, which
+       * is an E spoke that happens to cross the middle of the map. And it
+       * cannot be fixed by walking the crossing a few metres either way,
+       * because ON THE x = 0 AXIS THERE IS NO GAP TO WALK INTO:
+       *
+       *   the tower  (0,-32) r 25.4        z -57.4 … -6.6
+       *   D's stand-off, r 16 off (0,0)    z -16   … +16
+       *   NF-FORT    (0, 48) r 36          z +12   … +84
+       *
+       * Three overlapping intervals, so the axis is continuously occupied from
+       * z -57.4 to z +84 and the only crossings that exist are SOUTH of the
+       * tower or NORTH of the fortress. South is the one that goes to E.
+       *
+       * MEASURED with the engine's own baker against the built map
+       * (`_ptankleg.mjs`, which calls the live `Armour._bakePath`,
+       * `_trimToStandoff` and `_trimAtBlockers` off this tank's real hub rather
+       * than re-implementing them): 252.4 m over 204 samples, narrowest street
+       * 17.0 m, ends 6.2 m off E — inside the circle, so the hull counts for
+       * `captureBodies`. The widest spoke on this wheel, and it clears the
+       * tower by 36 m at its closest.
+       *
+       * RIGHT IN BOTH TOWER STATES, which is the requirement `_bakePath` cannot
+       * check for itself: it bakes once at boot and the tower is razed by the
+       * airstrike mid-match. A route that goes ROUND the footprint is unchanged
+       * when the footprint goes away; a route threaded through it would only
+       * have been drivable after the bombs.
+       */
+      { zone: 'E', points: [[-48, 32], [-44, -6], [-30, -60], [30, -88], [96, -84]] },
       { zone: 'A', points: [[-48, 32], [-72, -10], [-96, -62], [-112, -90]] },
     ],
   },
