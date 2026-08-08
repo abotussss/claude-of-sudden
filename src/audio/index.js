@@ -92,6 +92,81 @@ const WET_OUTDOOR = 0.12;
 const WET_INDOOR = 0.95;
 const GESTURES = ['pointerdown', 'mousedown', 'keydown', 'touchstart', 'wheel'];
 
+/* ---------------------------------------------------------------------- */
+/* THE CRACK-PAST                                                          */
+/* ---------------------------------------------------------------------- */
+/**
+ * A NEAR MISS IS THE PRIMARY WAY A PLAYER LEARNS HE IS UNDER FIRE, and it was
+ * inaudible. 「全然撃ってない 相手が」「相手のAIなんで撃ってこないの？」 has been reported
+ * four times, and the bots' volume has been raised twice in response — aimed
+ * rounds per man-minute went 48.0 -> 90.5 on the town. Rounds are demonstrably
+ * leaving barrels. None of them made a sound going past.
+ *
+ * MEASURED on a live town round before this block existed (`_gunchain.mjs`,
+ * 67 s at 1x): 390 `bullet:tracer` events reached `_onTracer`, 354 were refused
+ * by `_allow('whizz')` and **0 ever reached `_playAt`** — the whizz voice has
+ * existed in `weapons.js` this whole time with no reachable emitter at all.
+ *
+ * Two independent faults, both of the guard-in-the-wrong-place family this file
+ * has shipped six of:
+ *
+ *   1. `_onTracer` spent its rate token BEFORE testing whether the round came
+ *      anywhere near the listener — the identical bug `_onFire` documents and
+ *      fixed for `shot`. Every token in the match was spent by a tracer flying
+ *      down some other street, so the handful that did pass the player's head
+ *      arrived at an empty budget. The geometry test is now first and the token
+ *      is spent only on a round that has already qualified.
+ *   2. Even fixed, `bullet:tracer` is emitted for only one bot round in three
+ *      (`src/ai/index.js`: `(agent.id + agent.ammo) % 3 === 0`), so two thirds
+ *      of near misses could never make a sound whatever this file did.
+ *      `_maybeWhizz` therefore works off `bullet:impact`, which physics emits
+ *      for EVERY round, and reconstructs the flight line from `incident` — the
+ *      unit direction of travel that `PhysicsSystem.emitImpact` already puts on
+ *      the payload. No line outside `src/audio/` is needed for full coverage.
+ *
+ * THE LOAD ANSWER, because a crack on every near miss at the new volume could
+ * be a lot of voices. Three gates in front of the voice, cheapest first:
+ * a dot product decides the round even came past us, a proximity gate keeps
+ * only what passed inside `WHIZZ_MAX_MISS`, and only then is a rate token spent
+ * — which also coalesces, because a round that penetrates three walls emits
+ * three entry impacts in the same millisecond and they collapse into one crack.
+ */
+/**
+ * Closest approach, in metres, inside which a passing round cracks. Matches the
+ * 5 m `_onTracer` has always used.
+ */
+const WHIZZ_MAX_MISS = 5;
+/**
+ * ...and OUTSIDE which it must pass to be a miss at all. `src/ai/index.js`
+ * scores anything within 0.42 m of the player as a HIT, so a closer "miss" is
+ * either a round that wounded him — which has its own sound — or the player's
+ * own muzzle, which sits about 0.3 m from his ear. Not a tuned number: it is
+ * the hit radius the rest of the game already uses, plus a rounding margin.
+ */
+const WHIZZ_MIN_MISS = 0.45;
+/**
+ * How far back up its own flight line a round may have passed us, metres. The
+ * crack has to be roughly simultaneous with the pass; at 850 m/s even the full
+ * 40 m is 47 ms of skew, which is inaudible. It also bounds the search so a
+ * round that passed the player and then flew the length of the map before
+ * stopping does not crack in his ear a quarter of a second late.
+ */
+const WHIZZ_BACKTRACK = 40;
+/**
+ * A crack-past outranks a footstep and an impact (0.55) and is deliberately
+ * BELOW the near gunshot it belongs to (0.95 falling with distance), so it can
+ * never steal a slot from the shot that produced it. Nowhere near
+ * `PROTECTED_PRI` 1.2 — a whizz must not be able to touch a collapse voice.
+ */
+const WHIZZ_PRIORITY = 0.7;
+/**
+ * Your own round cannot crack past your own head. The payload carries no
+ * shooter, so first-person fire is latched and the crack is suppressed for one
+ * round's flight time — 120 ms is 100 m at 850 m/s, past `_onFire`'s own 60 m
+ * near-shot horizon.
+ */
+const OWN_FIRE_WHIZZ_LOCKOUT = 0.12;
+
 /** Names other subsystems already use, mapped onto our voices. */
 const UI_ALIAS = {
   hit_flesh: 'hitmarker', hit: 'hitmarker', hit_head: 'headshot', headshot: 'headshot',
@@ -370,10 +445,53 @@ export class AudioSystem {
      * slots, so the near path fits inside its own quota with room left for the
      * distant layer, the tank and every explosion in the game.
      */
-    this._rate = { shot: 10, impact: 5, step: 4, shell: 2, whizz: 2, reload: 4, bodyfall: 2 };
+    /**
+     * `shot` 10 -> 16 A SECOND — 「敵味方全ての銃声をもっと鳴らして」.
+     *
+     * The 10 above was set when the near path had just been given its first
+     * budget, and it was measured against a bot war less than half the size of
+     * the present one: aimed rounds per man-minute have since gone 48.0 -> 90.5
+     * on the town and 87.2 -> 116.4 on the plain. The budget did not move with
+     * them, so the gate went from rationing a wall of fire to being the wall.
+     *
+     * MEASURED on a live town round at 1x (`_gunchain.mjs`, 68.6 s), with the
+     * near path otherwise untouched:
+     *
+     *   offered inside 60 m        370
+     *   DENIED by `_allow('shot')` 236   (64 %)
+     *   played                     134
+     *   refused by the field         1
+     *   dropped by the field         1
+     *
+     * Two thirds of the gunfire the player was close enough to hear was thrown
+     * away by the rate limit while the POOL sat with headroom and refused
+     * essentially nothing — peak 51 of 72 emitters, weapons holding 188 slots
+     * over the run against a quota of 32 at full cap. The shortage was never
+     * the pool; the near path has simply not been allowed to spend what it was
+     * given. Rounds are not bursty at 10/s because the limiter is a strict
+     * minimum interval with no burst allowance, so a six-round burst arriving
+     * in 300 ms was audible as two shots.
+     *
+     * 16 is chosen against the quota rather than by ear, and it is deliberately
+     * short of what the denial count alone would justify. At the ~0.9 s mean
+     * voice life this file already measures, 16/s is about 14 concurrent slots
+     * against the weapons quota of 32 at full cap — comfortable — and the
+     * ceiling is the FLOOR cap, where `_busCap` gives weapons only 10. Going to
+     * 20 would put the steady state above that floor quota and make the near
+     * path start cannibalising itself exactly when the render thread is already
+     * behind, which is the failure this budget was created to stop.
+     * @see SpatialField._busCap, and the 60 m cull in `_onFire` that runs first.
+     */
+    this._rate = { shot: 16, impact: 5, step: 4, shell: 2, whizz: 2, reload: 4, bodyfall: 2 };
     this._rateNext = { shot: 0, impact: 0, step: 0, shell: 0, whizz: 0, reload: 0, bodyfall: 0 };
     this._lastBarkTime = -99;
     this._lastEnemyFire = -99;
+    /**
+     * When the local player last pulled his own trigger, on the audio clock. A
+     * round of his own must never crack past his own head, and `bullet:impact`
+     * carries no shooter to tell them apart. @see OWN_FIRE_WHIZZ_LOCKOUT
+     */
+    this._lastOwnFire = -99;
 
     this._health = 100;
     this._heartTimer = 0;
@@ -1796,6 +1914,9 @@ export class AudioSystem {
       const wet = this._wetness(this._space);
       this._playDry('shot', { profile, firstPerson: true, echoBoost: wet }, 'weapons', 1);
       this.mixer.duck(0.55, 0.1);
+      // Latched so the round this shot is about to produce cannot crack past
+      // the ear that fired it. @see OWN_FIRE_WHIZZ_LOCKOUT
+      this._lastOwnFire = this.actx.currentTime;
     } else {
       /**
        * REMOTE GUNFIRE IS BUDGETED, and this is the one event type that was not.
@@ -1983,24 +2104,79 @@ export class AudioSystem {
   _onImpact(p) {
     if (!this.running || !p) return;
     if (p.exit) return;                       // only the entry side gets a sound
-    if (!this._allow('impact')) return;
     const pt = p.point;
     if (!pt) return;
+    /**
+     * THE CRACK-PAST IS TESTED FIRST AND PAYS FROM ITS OWN BUDGET.
+     *
+     * It used to sit at the bottom of this method behind `_allow('impact')`,
+     * so a round that passed the player's head was silent whenever the impact
+     * budget — five a second, shared with every round landing anywhere on the
+     * map — happened to be spent. The near miss is the more important of the
+     * two events by a wide margin and it is not the impact's dependant.
+     *
+     * It also used to measure the wrong thing entirely: `dist < 6` was the
+     * distance to the IMPACT POINT, so a round passing a metre from the ear and
+     * burying itself in a wall forty metres behind never qualified, while a
+     * round that missed by thirty metres and happened to strike a wall nearby
+     * did. The pass is a property of the TRAJECTORY. @see _maybeWhizz
+     */
+    this._maybeWhizz(pt, p.incident);
+    if (!this._allow('impact')) return;
     const dist = this.field.distanceTo(pt.x, pt.y, pt.z);
     if (dist > 90) return;
     this._playAt('impact', pt.x, pt.y, pt.z, {
       surface: p.surface ?? 'concrete',
       energy: clamp((p.damage ?? 30) / 34, 0.35, 1.5),
     }, 'foley', 0.55);
-    // The round cracking past you is a separate sound from the impact itself.
-    if (dist < 6) {
-      this._playAt('whizz', pt.x, pt.y, pt.z, { miss: dist, noDelay: true }, 'foley', 0.7);
-    }
+  }
+
+  /**
+   * DID THIS ROUND CRACK PAST THE LISTENER? @see the WHIZZ_* block.
+   *
+   * `pt` is where the round stopped and `inc` is the unit direction it was
+   * travelling (`bullet:impact.incident`), so walking back up `-inc` from `pt`
+   * replays the flight. `s` is metres back along it to the point of closest
+   * approach; a negative `s` means the round was moving away from us and never
+   * came past at all, which is the cheap rejection that runs before anything
+   * else. Everything here is scalar arithmetic on the payload — no rays, no
+   * allocation, no `occlusionAt`.
+   *
+   * @param {{x:number,y:number,z:number}} pt   where the round stopped
+   * @param {{x:number,y:number,z:number}} inc  unit direction of travel
+   */
+  _maybeWhizz(pt, inc) {
+    if (!inc) return;
+    // Your own round cannot crack past your own head. @see OWN_FIRE_WHIZZ_LOCKOUT
+    if (this.actx.currentTime - this._lastOwnFire < OWN_FIRE_WHIZZ_LOCKOUT) return;
+    const lp = this.field.listenerPos;
+    const px = pt.x - lp.x, py = pt.y - lp.y, pz = pt.z - lp.z;
+    const s = px * inc.x + py * inc.y + pz * inc.z;
+    if (s <= 0 || s > WHIZZ_BACKTRACK) return;      // never came past, or came past too long ago
+    const cx = pt.x - inc.x * s, cy = pt.y - inc.y * s, cz = pt.z - inc.z * s;
+    const miss = Math.hypot(cx - lp.x, cy - lp.y, cz - lp.z);
+    if (miss < WHIZZ_MIN_MISS || miss > WHIZZ_MAX_MISS) return;
+    // Only now is a token spent — on a round that has already qualified.
+    if (!this._allow('whizz')) return;
+    this._playAt('whizz', cx, cy, cz, { miss, noDelay: true }, 'foley', WHIZZ_PRIORITY);
   }
 
   _onTracer(p) {
     if (!this.running || !p?.from || !p?.to) return;
-    if (!this._allow('whizz')) return;
+    /**
+     * THE CULL COMES FIRST — the same reordering `_onFire` documents for
+     * `shot`, for the same reason and with the same shape of measurement
+     * behind it. `_allow('whizz')` used to stand HERE, above the geometry, so
+     * every tracer on the map spent a token whether or not it came near the
+     * listener. MEASURED over 67 s of a live town round at 1x: 390 tracers
+     * offered, 354 refused by the rate limit, and **not one** ever reached
+     * `_playAt` — the two-a-second budget was entirely consumed by rounds
+     * flying down other streets, and this file's only crack-past emitter had
+     * therefore never made a sound in a match.
+     *
+     * The token is now spent below, on a round already known to have passed
+     * within `WHIZZ_MAX_MISS`.
+     */
     // Closest approach of the trajectory to the listener.
     const lp = this.field.listenerPos;
     const ax = p.from.x, ay = p.from.y, az = p.from.z;
@@ -2010,10 +2186,20 @@ export class AudioSystem {
     const t = clamp(((lp.x - ax) * dx + (lp.y - ay) * dy + (lp.z - az) * dz) / len2, 0, 1);
     const cx = ax + dx * t, cy = ay + dy * t, cz = az + dz * t;
     const miss = Math.hypot(lp.x - cx, lp.y - cy, lp.z - cz);
-    if (miss > 5) return;
+    if (miss > WHIZZ_MAX_MISS || miss < WHIZZ_MIN_MISS) return;
     if (Math.hypot(lp.x - ax, lp.y - ay, lp.z - az) < 3) return; // our own muzzle
+    /**
+     * The token, now that the round is known to have qualified — and it is the
+     * SAME bucket `_maybeWhizz` draws from, which is what stops a tracer round
+     * from cracking twice. One round in three is both a `bullet:tracer` and a
+     * `bullet:impact`; the second of the two arrives in the same millisecond
+     * and is refused, so the pair coalesces into one crack for free. This path
+     * still earns its keep for a round that hits nothing at all and therefore
+     * never produces an impact to reconstruct.
+     */
+    if (!this._allow('whizz')) return;
     const flight = (Math.sqrt(len2) * t) / (p.speed ?? 850);
-    this._playAt('whizz', cx, cy, cz, { miss, noDelay: true, extraDelay: flight }, 'foley', 0.75);
+    this._playAt('whizz', cx, cy, cz, { miss, noDelay: true, extraDelay: flight }, 'foley', WHIZZ_PRIORITY);
   }
 
   _onExplosion(p) {
