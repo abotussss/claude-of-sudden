@@ -2182,7 +2182,49 @@ export class Agent {
      * same — it just stops being permanent.
      */
     this.suppression = Math.max(0, this.suppression - dt * 1.25);
+    /**
+     * ════════════════════════════════════════════════════════════════════════
+     * A MAN WHO IS NOT SHOOTING DOES NOT BANK ROUNDS — 「なんで１、２発だけ撃つのを
+     * 数回するの？？ なぜ敵に向かって連射しないの？？？」
+     * ════════════════════════════════════════════════════════════════════════
+     * THIS LINE IS THE WAVEFORM BUG, AND IT IS WHY FIVE PASSES OF RAISING THE
+     * VOLUME DID NOT ANSWER THE COMPLAINT. `fireCooldown` means "seconds until
+     * the next round may leave the barrel", and it was decremented here EVERY
+     * FRAME WITH NO FLOOR — including the vast majority of frames in which the
+     * man is not firing at all. A rifleman who has been walking for five
+     * seconds arrives at his next contact with `fireCooldown === -5`.
+     *
+     * `_shoot` then drains the cooldown in a LOOP (@see the `while` there, and
+     * it is correct — it is what fixed a 3600 rpm frame-rate ceiling). Handed
+     * five seconds of banked credit, that loop pays it all back at once: up to
+     * its hard limit of TWELVE ROUNDS IN A SINGLE FRAME. One frame is 17 ms, so
+     * twelve rounds leave the barrel inside one animation frame and one audio
+     * event, and then the man is genuinely on cooldown for the best part of a
+     * second while the debt clears.
+     *
+     * WHAT THE PLAYER SEES IS EXACTLY WHAT HE DESCRIBED: a blip, a silence, a
+     * blip. The rounds ARE going downrange — which is precisely why every rate
+     * this repo has ever reported looked healthy while he kept saying 敵が撃たない.
+     * We were measuring the integral. He was watching the waveform.
+     *
+     * MEASURED (`src/ai/burstcheck.mjs`, plains, seed 7, 150 s at scale 1): a
+     * blind pull's mean DURATION was **33 ms for 3.3 rounds** — a hundred
+     * rounds a second, which is five times the fastest weapon on the map and
+     * flatly impossible at any authored `fireRate`. That number is this line.
+     *
+     * THE FLOOR IS ONE FRAME, NOT ZERO, and the distinction is load-bearing in
+     * both directions. Zero would quantise every weapon's rate to the frame
+     * boundary and would re-open the ceiling the loop exists to fix — at
+     * `time.scale` 10 a headless harness renders at 12 fps and one round per
+     * frame IS the rate of fire (`_sixaudit.mjs` reported 1.7 rounds/man-min
+     * that way, and every one of those rounds was that bug). `-dt` says the
+     * honest thing instead: a man may be at most ONE FRAME overdue, never more,
+     * whatever a frame happens to be worth. Sub-frame remainder inside a pull
+     * is preserved, scaled time still drains properly, and idle time banks
+     * nothing.
+     */
     this.fireCooldown -= dt;
+    if (this.fireCooldown < -dt) this.fireCooldown = -dt;
     this.burstCooldown -= dt;
     this.grenadeCooldown -= dt;
     this.flashCooldown -= dt;
