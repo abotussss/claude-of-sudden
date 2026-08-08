@@ -132,10 +132,18 @@ const L = townScaled;
  * puts its impacts on a roof, where they do nothing to anybody. From the 3 m
  * roof-height sweep quoted in that file,
  *
- *      west lane   x -45..-30      running in z
- *      mid street  x  -6..+12      running in z
- *      east lane   x +36..+45      running in z
- *      cross st.   z +15..+21      running in x, the full width of the map
+ *      west lane   L(-36.3)..L(-30.3)   running in z, 9.0 m across
+ *      mid street  L(-13.0)..L(-11.0) and L(11.0)..L(14.7), either side of
+ *                                       the cathedral standing in it
+ *      east lane   L( 30.7)..L( 36.3)   running in z, 8.5 m across
+ *      cross st.   L( 24.7)..L( 31.3)   running in x, the full width of the map
+ *
+ * …AND THAT TABLE IS THE RE-MEASUREMENT, NOT THE ORIGINAL. The original was in
+ * WORLD space and predated `widenX`, and it is what put ALANE and BLANE on a
+ * rooftop for as long as the gate has been complaining about them. It is in
+ * LEVEL space now, because the town is yawed 33.7° and a world-space sweep
+ * crosses every street diagonally — which is what a table quoted in world x
+ * cannot say. @see the note on ALANE/BLANE below and `_decksweep.mjs`.
  *
  * so every line below shares an axis value with a bomber run that has already
  * been measured onto the deck. `_buildRun` re-checks anyway and prints every
@@ -157,10 +165,19 @@ const TOWN_LINES = [
   { id: 'MAIN', name: 'MAIN STREET', from: L(-4.0, 11.0), to: L(-4.0, 27.5) },
   // the full width of the cross street, east to west. The long one.
   { id: 'CROSS', name: 'CROSS STREET', from: L(22.67, 12.0), to: L(-22.67, 12.0) },
+  /**
+   * THE TWO LANES, RE-AUTHORED WITH THE BOMBER'S. These were `L(-24.0)` and
+   * `L(27.33)` and `_reportGround` has been printing "9/12 impacts land more
+   * than 3 m over the outdoor deck — the run is over a permanent rooftop" every
+   * boot since `widenX` moved both building rows 9 authored units outward and
+   * left the lines standing where the row now is. The measurement, the new
+   * centres and why the east one is not simply +9 are all in the note on
+   * `ALANE`/`BLANE` in `PLAINS_RUNS`' neighbour, `TOWN_RUNS` (bomber.js).
+   */
   // west lane, south to north — the last open stretch before site A
-  { id: 'ALANE', name: 'A LANE', from: L(-24.0, 2.67), to: L(-24.0, 20.0) },
+  { id: 'ALANE', name: 'A LANE', from: L(-33.33, 2.67), to: L(-33.33, 20.0) },
   // east lane, the same for site B
-  { id: 'BLANE', name: 'B LANE', from: L(27.33, 2.67), to: L(27.33, 18.67) },
+  { id: 'BLANE', name: 'B LANE', from: L(33.5, 2.67), to: L(33.5, 18.67) },
 ];
 
 /**

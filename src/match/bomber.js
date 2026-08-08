@@ -161,10 +161,18 @@ const L = townScaled;
  *
  * The map's open ground, from a 3 m roof-height sweep of the level:
  *
- *      west lane   x -45..-30      running in z
- *      mid street  x  -6..+12      running in z
- *      east lane   x +36..+45      running in z
- *      cross st.   z +15..+21      running in x, the full width of the map
+ *      west lane   L(-36.3)..L(-30.3)   running in z, 9.0 m across
+ *      mid street  L(-13.0)..L(-11.0) and L(11.0)..L(14.7), either side of
+ *                                       the cathedral standing in it
+ *      east lane   L( 30.7)..L( 36.3)   running in z, 8.5 m across
+ *      cross st.   L( 24.7)..L( 31.3)   running in x, the full width of the map
+ *
+ * …AND THAT TABLE IS THE RE-MEASUREMENT, NOT THE ORIGINAL. The original was in
+ * WORLD space and predated `widenX`, and it is what put ALANE and BLANE on a
+ * rooftop for as long as the gate has been complaining about them. It is in
+ * LEVEL space now, because the town is yawed 33.7° and a world-space sweep
+ * crosses every street diagonally — which is what a table quoted in world x
+ * cannot say. @see the note on ALANE/BLANE below and `_decksweep.mjs`.
  *      north st.   z +39..+45      running in x
  *
  *   MAIN   down the mid street both branches walk out of spawn.
@@ -177,8 +185,45 @@ const L = townScaled;
 const TOWN_RUNS = [
   { id: 'MAIN', name: 'MAIN STREET', from: L(-4.0, 26.67), to: L(-4.0, 12.0), bombs: 5 },
   { id: 'CROSS', name: 'CROSS STREET', from: L(-22.67, 12.0), to: L(22.67, 12.0), bombs: 8 },
-  { id: 'ALANE', name: 'A LANE', from: L(-24.0, 20.0), to: L(-24.0, 2.67), bombs: 5 },
-  { id: 'BLANE', name: 'B LANE', from: L(27.33, 18.67), to: L(27.33, 2.67), bombs: 5 },
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE TWO LANES, RE-AUTHORED — they were on the roof, and said so every boot
+   * ──────────────────────────────────────────────────────────────────────────
+   * These two were at `L(-24.0)` and `L(27.33)`, and `_reportGround` has been
+   * printing the consequence since `widenX` landed:
+   *
+   *     [bomber] ALANE: 4/5 bombs land more than 3 m over the outdoor deck
+   *              (6.5 m up) on ground that is there in EVERY state of this map
+   *              — the run is over a permanent rooftop, not over a street.
+   *     [bomber] BLANE: 4/5 … (9.5, 8.1, 9.5, 9.5 m up)
+   *
+   * THE GATE WAS RIGHT AND THE TABLE WAS STALE. `widenX` (@see `geography.js`)
+   * translated everything outside the old kerb line outward by 9 authored
+   * units — both building rows, both lanes and both courtyards — and the two
+   * lane lines did not move with them, so each ended up 9 units INSIDE its own
+   * lane, which is to say on the roof of the row between the lane and the mid
+   * street. The header's quoted sweep ("west lane x -45..-30") is older than
+   * that transform and was describing a town that no longer exists.
+   *
+   * RE-MEASURED LIVE (`_decksweep.mjs`, in LEVEL space — the town is yawed
+   * 33.7°, so a world-space sweep crosses every street diagonally and finds
+   * nothing), over the exact z span these lines run:
+   *
+   *     west lane   L(-36.3) .. L(-30.3)   9.0 m wide, worst 1.57 m over deck
+   *     mid street  L(-13.0) .. L(-11.0)   and L(11.0) .. L(14.7), either side
+   *                                        of the cathedral
+   *     east lane   L( 30.7) .. L( 36.3)   8.5 m wide, worst 1.57 m over deck
+   *
+   * so the centres are L(-33.33) and L(33.50). The west one is the old number
+   * plus exactly the 9 units `widenX` moved it; the east one is NOT (33.50, not
+   * 36.33), because AL-MARIYA is not symmetric and the measurement is the
+   * authority rather than the arithmetic.
+   *
+   * The z spans, the bomb counts and the directions are untouched: what was
+   * wrong with these lines was which strip of ground they were over.
+   */
+  { id: 'ALANE', name: 'A LANE', from: L(-33.33, 20.0), to: L(-33.33, 2.67), bombs: 5 },
+  { id: 'BLANE', name: 'B LANE', from: L(33.5, 18.67), to: L(33.5, 2.67), bombs: 5 },
 ];
 
 /**
