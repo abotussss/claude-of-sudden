@@ -37,8 +37,8 @@ const SHOTS = [
   ['C-outward', -128, null, 86, -152, 6.0, 102],
   ['E-outward', 128, null, -86, 152, 6.0, -102],
   ['A-outside-view', -100, null, -88, -140, 8.0, -118],
-  ['E-fallen-pylon', 92, null, -146, 110, 3.0, -140],
-  ['A-generator', -104, null, -120, -97, 4.0, -126],
+  ['E-fallen-pylon', 66, null, -130, 88, 2.0, -146],
+  ['A-generator', -86, null, -114, -97, 3.0, -126],
 ];
 
 const b = await chromium.launch({ headless: true, args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--mute-audio'] });
