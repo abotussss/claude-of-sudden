@@ -1452,11 +1452,18 @@ const CSS = `
   margin-top: calc(var(--u) * 1.6); font-size: calc(9.5px * var(--k));
   letter-spacing:.14em; color: var(--ink-3); text-shadow: var(--sh-o1);
 }
+/* The header row is segmented to match .ow-sb-subs — same count, same gap, same
+   flex share — so K and D sit over every column of numbers, not just the first.
+   With one sub-column this is one segment and renders as it always did. */
 .ow-sb-team {
-  display:flex; align-items:baseline; gap: calc(var(--u) * 2);
+  display:flex; gap: calc(var(--u) * 3);
   font-size: calc(11px * var(--k)); letter-spacing:.24em;
   padding-bottom: calc(var(--u) * 1.2); border-bottom: 1px solid var(--hair-2);
   margin-bottom: calc(var(--u) * 1.2);
+}
+.ow-sb-teamseg {
+  flex:1 1 0; min-width:0;
+  display:flex; align-items:baseline; gap: calc(var(--u) * 2);
 }
 .ow-sb-team .n { flex:1 1 auto; }
 /* Alive over total for the side — the same fact the pip strip draws in marks,

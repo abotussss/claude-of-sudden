@@ -573,22 +573,28 @@ export class Scoreboard {
     const cols = el('div', 'ow-sb-cols', panel);
     this.heads = [];
     this.counts = [];
+    this.headRows = [];
+    this.segs = [[], []];
     this.subWraps = [];
     this.subCols = [[], []];
     this.rows = [[], []];
     this.more = [];
     for (let c = 0; c < 2; c++) {
-      // One side. The team header spans the side's sub-columns rather than
-      // repeating over each of them — "RED" twice would read as four teams.
+      // One side. The team NAME is written once — "RED" over each of a side's
+      // sub-columns would read as four teams — but the header row is segmented
+      // to match them, so K and D sit over every column of numbers they label.
       const side = el('div', 'ow-sb-side', cols);
+      const head = el('div', 'ow-sb-team', side);
+      this.headRows.push(head);
       // Team name on the left, K and D lined up over the columns they label —
       // two bare numbers with no header is the classic unreadable scoreboard.
-      const head = el('div', 'ow-sb-team', side);
-      this.heads.push(el('span', 'n', head, c ? 'BLUE' : 'RED'));
+      const seg = el('div', 'ow-sb-teamseg', head);
+      this.segs[c].push(seg);
+      this.heads.push(el('span', 'n', seg, c ? 'BLUE' : 'RED'));
       /** Alive over total, the same fact the pip strip states in marks. */
-      this.counts.push(el('span', 'c', head, ''));
-      el('span', 'k', head, 'K');
-      el('span', 'd', head, 'D');
+      this.counts.push(el('span', 'c', seg, ''));
+      el('span', 'k', seg, 'K');
+      el('span', 'd', seg, 'D');
       this.subWraps.push(el('div', 'ow-sb-subs', side));
       const more = el('div', 'ow-sb-more', side, '');
       setStyle(more, 'display', 'none');
@@ -613,17 +619,32 @@ export class Scoreboard {
     while (rows.length < draw) {
       const i = rows.length;
       const sc = (i / ROWS_PER_COL) | 0;
-      while (this.subCols[c].length <= sc)
+      while (this.subCols[c].length <= sc) {
+        const j = this.subCols[c].length;
         this.subCols[c].push(el('div', 'ow-sb-col', this.subWraps[c]));
+        // A matching header segment, so the second column of numbers is
+        // labelled too. The name is not repeated; only K and D are.
+        if (j > 0) {
+          const seg = el('div', 'ow-sb-teamseg', this.headRows[c]);
+          el('span', 'n', seg, '');
+          el('span', 'k', seg, 'K');
+          el('span', 'd', seg, 'D');
+          this.segs[c].push(seg);
+        }
+      }
       const row = el('div', 'ow-sb-row', this.subCols[c][sc]);
       row._n = el('span', 'n', row, '');
       row._k = el('span', 'k', row, '0');
       row._d = el('span', 'd', row, '0');
       rows.push(row);
     }
-    // A sub-column emptied by a smaller roster must not keep its flex share.
-    for (let i = 0; i < this.subCols[c].length; i++)
-      setStyle(this.subCols[c][i], 'display', i * ROWS_PER_COL < draw ? '' : 'none');
+    // A sub-column emptied by a smaller roster must not keep its flex share,
+    // and its header segment goes with it or K and D float over nothing.
+    for (let i = 0; i < this.subCols[c].length; i++) {
+      const on = i * ROWS_PER_COL < draw ? '' : 'none';
+      setStyle(this.subCols[c][i], 'display', on);
+      setStyle(this.segs[c][i], 'display', on);
+    }
     const hidden = n - draw;
     setStyle(this.more[c], 'display', hidden > 0 ? '' : 'none');
     if (hidden > 0) setText(this.more[c], `+${hidden} NOT SHOWN — FEWEST KILLS OF ${n}`);
