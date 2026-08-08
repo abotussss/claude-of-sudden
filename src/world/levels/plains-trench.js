@@ -152,8 +152,23 @@ const MIN_BAY = ENTRY * 2 + 2.4;
  * the top of the cheek, 4.25 at a dugout) inside the hole at the pessimistic
  * end, and `STRIP_R` 10 covers the optimistic one with 2.3 m to spare.
  */
-const CUT_R = 5.6;
-const STRIP_R = 10.0;
+/**
+ * 8.5 AND 11.5, RAISED FROM 5.6 AND 10.0 BY THE SALLY RAMPS.
+ *
+ * A 3.18 m quad's vertices stand up to 2.4 m outside its own centroid, so a
+ * centroid test at `CUT_R` leaves a hole whose real edge is anywhere in
+ * [CUT_R - 2.4, CUT_R + 2.4]. Everything in the ordinary section is back at
+ * grade by 4.75 m, so 5.6 was ample for it — but a SALLY RAMP is below grade
+ * all the way out to HALF + DEPTH/RAMP_GRADE = 5.84 m, which is past the
+ * pessimistic edge. Measured: the ramps climbed cleanly to d = 4.0 and then
+ * went FLAT, because the ray was hitting surviving terrain sitting 0.70 m above
+ * the ramp it was supposed to be walking up. Five of the network's ways out.
+ *
+ * 8.5 puts the pessimistic edge at 6.1, clear of the ramp's 5.84, and `STRIP_R`
+ * 11.5 covers the optimistic 10.9 with 0.6 m to spare.
+ */
+const CUT_R = 8.5;
+const STRIP_R = 11.5;
 /**
  * How far past each end of a bay the strip runs on at zero depth, so it covers
  * the terrain hole's ragged edge. @see the note in `stripMesh` — this number
@@ -569,8 +584,9 @@ for (const spec of TRENCHES) {
       }
     }
   }
+  console.info(`[world] trench separation: closest two lines are ${worst.toFixed(1)} m apart (${who})`);
   if (worst < MIN_SEP) {
-    console.warn(`[world] trenches ${who} come within ${worst.toFixed(1)} m — under MIN_SEP ${MIN_SEP}, their strips overlap`);
+    console.warn(`[world] trenches ${who} come within ${worst.toFixed(1)} m — under MIN_SEP ${MIN_SEP}, their cut sections overlap`);
   }
 })();
 
@@ -665,10 +681,39 @@ export function inCorridor(x, z, r = CUT_R) {
 /** Published so `plains.js` can keep its scatter and its cover out of the cut. */
 export function trenchKeepOut() {
   const out = [];
+  /**
+   * …AND A WIDER CIRCLE OVER EVERY SALLY RAMP. The ramp reaches `HALF` +
+   * 4.34 m out across the berm, which is a metre past the radius below, so a
+   * boulder scattered on the parapet there stands ON the way out. Measured, not
+   * imagined: `_nftrap.mjs` found five of them before this circle existed.
+   */
+  for (const e of trenchExits()) {
+    if (e.kind !== 'sally') continue;
+    const mid = HALF + DEPTH / RAMP_GRADE * 0.5;
+    out.push({ x: e.x + e.dx * mid, z: e.z + e.dz * mid, r: DEPTH / RAMP_GRADE * 0.5 + 2.6 });
+  }
   for (const b of BAYS) {
     const n = Math.ceil((b.s1 - b.s0) / 4);
     for (let i = 0; i <= n; i++) {
       const p = at(b.L, b.s0 + ((b.s1 - b.s0) * i) / n);
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * 5.75, AND IT WAS TRIED AT 5.0 AND PUT BACK
+       * ────────────────────────────────────────────────────────────────────
+       * `plains.js` feeds these circles into `inWorks`, which `plainsOpen`
+       * answers with, which `plains-cover.js` places cover against — so every
+       * metre of this radius is a metre of crossing that may not have a wreck
+       * stood on it, and going from 3 lines to 14 made that a measurable cost
+       * on `_plaincross`.
+       *
+       * Shrinking it to the parapet's toe gave a little of that back and cost
+       * something worse: `_nftrap.mjs` walked the sally ramps and found 0.48 -
+       * 0.70 m steps four metres up them. The ramp is a straight `RAMP_GRADE`
+       * slope, so those are `rock_a`s scattered just outside the new radius
+       * with a metre and a half of overhang, sitting on the ONE WAY OUT of the
+       * bay. A trench you cannot leave is a worse bug than a crossing with less
+       * cover on it, so this is the number it always was.
+       */
       out.push({ x: p.x, z: p.z, r: HALF + WALL_W + BERM_W + 1.0 });
     }
   }
@@ -688,6 +733,53 @@ export function trenchLines() {
     for (let s = 0; s <= L.total; s += 1) { const p = at(L, s); pts.push([p.x, p.z]); }
     return { id: spec.id, name: spec.name, legacy: LEGACY.has(spec.id), total: L.total, pts };
   });
+}
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * EVERY WAY OUT OF EVERY BAY, published so it can be WALKED rather than assumed
+ * ────────────────────────────────────────────────────────────────────────────
+ * A 63° cheek is a wall by design, so the only ground that leaves a trench is a
+ * ramped mouth or a sally ramp — and until `_nftrap.mjs` nobody had ever checked
+ * that a man who gets in can get out. `Agent._measureDrops` measures the fall
+ * and not the return.
+ *
+ * Each entry is a point ON THE FLOOR and the direction that leads up, so the
+ * probe can march the real collision surface out along it and report the
+ * largest single rise. A mouth's ramp runs from the bay end inwards over
+ * `ENTRY`, so the walk starts at `s0 + ENTRY` and heads back out along the line;
+ * a sally ramp starts at the floor and heads out across it, on the rear side.
+ */
+export function trenchExits() {
+  const out = [];
+  for (const b of BAYS) {
+    /**
+     * THE WALK STOPS AT THE TOP OF THE RAMP AND NOT A METRE FURTHER. Run out
+     * two metres past it and the probe measures the neighbourhood instead of
+     * the trench: MITTELSAPPE's north mouth reported a 1.5 m step, which is the
+     * FORTRESS, 32 m from its centre and perfectly allowed to be there. The
+     * question this exists to answer is "can a man get out of the cut", and the
+     * cut ends where the ramp does.
+     */
+    for (const [s, dir] of [[b.s0 + ENTRY, -1], [b.s1 - ENTRY, 1]]) {
+      const p = at(b.L, s);
+      out.push({
+        id: `${b.spec.name} mouth`, kind: 'mouth',
+        x: p.x, z: p.z, dx: p.tx * dir, dz: p.tz * dir, run: ENTRY + 0.4,
+      });
+    }
+    for (const e of exitsOf(b)) {
+      if (e.kind !== 'sally') continue;
+      const p = at(b.L, e.s);
+      const sd = -b.spec.fireSide;
+      out.push({
+        id: `${b.spec.name} sally`, kind: 'sally',
+        x: p.x, z: p.z, dx: p.nx * sd, dz: p.nz * sd,
+        run: HALF + DEPTH / RAMP_GRADE + 0.4,
+      });
+    }
+  }
+  return out;
 }
 
 /** Published for `_nftrenchplan.mjs`, which gates these against the tank table. */
@@ -867,7 +959,7 @@ function stripMesh(A, bay, groundY, index) {
    * is a depth fight visible from 200 m. A centimetre per line, cycled, is
    * under the 3 cm lip this strip already stands proud of the terrain by.
    */
-  const over = 0.03 + (index % 5) * 0.01;
+  const over = 0.03 + (index % 7) * 0.008;
 
   const pos = new Float32Array(rows * cols * 3);
   let w = 0;
@@ -998,12 +1090,35 @@ function dressBay(A, rng, bay, groundY) {
     }
 
     // ---- the fire step, on the side that faces the enemy --------------------
-    {
+    /**
+     * ────────────────────────────────────────────────────────────────────────
+     * ITS COLLISION IS YAWED NOW, AND IT STOPS SHORT OF THE MOUTHS
+     * ────────────────────────────────────────────────────────────────────────
+     * `A.box(...)` was called without its `ry` argument, so the proxy for a
+     * 0.85 x 2.0 m step was AXIS-ALIGNED whatever bearing the trench ran on —
+     * the same defect `props.js` records for the market stall ("a stall the
+     * dressing had yawed and scaled had its collision standing somewhere
+     * slightly else"). On three straight lines it was nearly harmless. On
+     * fourteen curved ones the box's corners reach 1.09 m from its centre
+     * against a true half-width of 0.43, so a sliver of 0.45 m step stood
+     * across the middle of the floor and, worse, across the RAMPED MOUTHS.
+     *
+     * `_nftrap.mjs` walked every way out and found it: a clean 0.38-gradient
+     * ramp with one 0.625 m spike at 1.25 m and the profile resuming behind it.
+     * Thirteen of the network's mouths had one. That is a lip on the only way
+     * out of a 2 m deep hole.
+     *
+     * So the proxy carries `yaw`, and the step is not built at all until the
+     * cut is at 0.85 of full depth — 3.7 m in from each mouth, which leaves the
+     * whole ramp clear and loses nothing, because a fire step you have to
+     * crouch behind is not a fire step.
+     */
+    if (depth > DEPTH * 0.85) {
       const e = at(L, s, sd * (HALF - STEP_W / 2));
       A.add('dirt', BOX(A), LL(IDENT, e.x, floor + STEP_H / 2, e.z, yaw, STEP_W, STEP_H, len), {
         masks: [0.3, 0.7, 0.45],
       });
-      A.box('dirt', e.x, floor + STEP_H / 2, e.z, STEP_W, STEP_H, len);
+      A.box('dirt', e.x, floor + STEP_H / 2, e.z, STEP_W, STEP_H, len, yaw);
       if (i % 2 === 0) {
         A.add('wood_prop_dark', BOX_FINE(A), LL(IDENT, e.x, floor + STEP_H + 0.03, e.z, yaw,
           STEP_W * 0.92, 0.06, len * 0.9), { masks: [0.85, 0.7, 0.3] });
