@@ -199,6 +199,73 @@ const GATE_W = 5.2;
 const GATE_H = 2.8;
 /** How far a bastion projects past the trace on its chamfer. */
 const BASTION = 4.0;
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE STATION IS SET BACK FROM ITS PAD, AND THAT NUMBER IS THE MAP BOUNDARY
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「平原ちゃんと物理的に範囲外に行けないようにして」 — and the first cut of this file
+ * reopened it. `boundcheck` on the finished tree: 115 282 m² of void, 64/64
+ * bearings ending outside the map, two crossings, BOTH on zone A's redoubt at
+ * floor y 3.61 in `concrete`. The flood's own walk, traced cell by cell
+ * (`_nfpath.mjs`), is eight words long:
+ *
+ *     ramp -> walk -> out along the rampart to r 177.3, 3.61 m up
+ *     [-145.6, -102.4]  r 178.0   y 4.77  dirt   <- MANTLE 1.16 m, on to the
+ *                                                   crest of the rim's clip wall
+ *     [-146.4, -103.2]  r 179.1   y -1.03 dirt   <- STEP OFF 5.80 m, outside
+ *
+ * `MOVE.mantle.maxHeight` is 1.85 and the step-off limit is 6.0, so both moves
+ * are legal and the whole plateau behind the mountain opens.
+ *
+ * THE RIM IS NOT AT FAULT AND MUST NOT BE CHANGED TO FIX THIS. Read the head of
+ * `plains-rim.js`: its wall is `RISE` = 5.6 m over the HIGHEST GROUND A MAN CAN
+ * BE STANDING ON AGAINST IT, and 5.6 is three times the mantle precisely so that
+ * standing on something does not defeat it. It is 0.62 m thick because a
+ * boundary thicker than `cell - 0.63` is one `boundcheck` walks through the
+ * middle of, and it is on `LAYER.CLIP` because zones here are 154-314 m apart
+ * and a barrier that stopped bullets would be worse than the hole. Every one of
+ * those three numbers is load-bearing and none of them can absorb a rampart:
+ * what defeated it was a man standing 4.4 m above the terrain beside it, which
+ * is not a case "the highest ground" was ever measured over.
+ *
+ * SO THE FIX IS HORIZONTAL, NOT VERTICAL, and deliberately so. Height margins
+ * here are all marginal — the crest at A measures 4.5-4.8 m against a walk at
+ * 3.61, and shrinking that gap past 1.85 m would mean cutting `WALK_Y` to about
+ * 1.7 and the fortress with it. Distance is not marginal: the crest only exists
+ * in the 0.62 m band at r 178.0-178.6, `boundcheck`'s diagonal mantle reach is
+ * `MOVE.mantle.reach` 1.05 m, and its step is one 0.8 m cell. Keep every
+ * walkable surface this file builds more than 2 m short of that band and the
+ * crest is unreachable AT ANY HEIGHT — which is a property that survives the
+ * terrain moving, survives zone B (whose identical redoubt is 0.5 m lower and
+ * escaped by luck rather than by design), and survives the next pad somebody
+ * adds. MEASURED after: the outermost walkable cell of the station is r 175.9,
+ * 2.1 m short of the nearest crest cell.
+ *
+ * `INSET` is how that is bought. The whole station — trace, gates, ramps,
+ * parapet, bastions, masts and generator — is one object slid `INSET` metres
+ * back along its own -Z, i.e. toward the middle of the map. It comes out of the
+ * courtyard's own slack and nothing else: `R_IN` is 15.6 against a 14 m capture
+ * circle, so 1.3 m of set-back still leaves the whole circle standing on level
+ * courtyard with 0.3 m to spare, which is the property `R_IN` was chosen for
+ * and the floor on how far this can go. THE PAD IS NOT MOVED and the capture
+ * point is not moved; only the masonry round it is.
+ */
+const INSET = 1.3;
+/**
+ * WHICH CHAMFERS CARRY A BASTION — and the two that no longer do are the two
+ * that pointed at the cliff.
+ *
+ * A bastion is 4 m of projection, and at a pad 157.3 m out on a 176 m disc the
+ * two OUTBOARD ones put their far corners at r 180.9 — three metres past the rim
+ * wall, on the mountain flank, which is where `_nfbelt.mjs` found built concrete
+ * on 42 of 720 bearings. They also had nothing to do: the file's own argument
+ * for the shape is that "a fortification with square corners has four bearings
+ * it cannot shoot along", and the two bearings these covered are the cliff face
+ * 2 m behind them. The four flats and the two inboard chamfers still enfilade
+ * every approach that exists. Edges 0 and 6 are the chamfers on the -Z side;
+ * @see `octagon`.
+ */
+const BASTION_EDGES = [0, 6];
 /** Where the coil pylons stand, and how tall. Inside the 34 m field, outside the wall. */
 const COIL_R = 26;
 const COIL_H = 12.5;
@@ -315,9 +382,16 @@ function empStation(A, groundY, pad, seed) {
   const len = Math.hypot(pad.x, pad.z) || 1;
   const yaw = Math.atan2(pad.x / len, pad.z / len);
   const P = placer(pad, yaw);
+  /**
+   * THE STATION'S OWN ORIGIN, `INSET` metres inboard of the pad's. EVERYTHING
+   * this function places goes through `Q` and nothing goes through `P` — the
+   * fort, the masts and the generator set are one installation and sliding half
+   * of it would leave a mast standing in a rampart. @see `INSET`.
+   */
+  const Q = (lx, lz) => P(lx, lz - INSET);
 
-  const outer = octagon(R_OUT, CUT).map(([x, z]) => P(x, z));
-  const inner = octagon(R_IN, CUT * (R_IN / R_OUT)).map(([x, z]) => P(x, z));
+  const outer = octagon(R_OUT, CUT).map(([x, z]) => Q(x, z));
+  const inner = octagon(R_IN, CUT * (R_IN / R_OUT)).map(([x, z]) => Q(x, z));
   const quads = ring(outer, inner);
   /** Edges 3 and 7 are the flats normal to local Z: the gates. @see `octagon`. */
   const GATES = [3, 7];
@@ -339,12 +413,13 @@ function empStation(A, groundY, pad, seed) {
     volumes.push(gate(A, groundY, q, y, yaw));
   }
 
-  // ── the four bastions, on the chamfers ──────────────────────────────────
+  // ── the bastions, on the two inboard chamfers ───────────────────────────
   // Their tops are at WALK_Y too, so a bastion is MORE WALK rather than a second
   // surface over one: the nested-annulus rule holds across the join, and a
   // fortification with square corners has four bearings it cannot shoot along,
-  // which is the reason the shape was invented.
-  for (const i of [0, 2, 4, 6]) {
+  // which is the reason the shape was invented. @see `BASTION_EDGES` for why the
+  // two that faced the map edge are gone.
+  for (const i of BASTION_EDGES) {
     const e = edgeInfo(outer, i);
     const a = outer[i], b = outer[(i + 1) % outer.length];
     prism(A, 'concrete', [
@@ -370,12 +445,27 @@ function empStation(A, groundY, pad, seed) {
   }
 
   // ── what the field is FOR ───────────────────────────────────────────────
+  // On the station's own diagonals, through `Q`: `P(sin a·R, cos a·R)` and
+  // `pad + (sin(a+yaw), cos(a+yaw))·R` are the same point, so this is the same
+  // ring the first cut drew, moved with the rest of the installation.
   for (let k = 0; k < 4; k++) {
-    const a = yaw + Math.PI / 4 + k * (Math.PI / 2);
-    const px = pad.x + Math.sin(a) * COIL_R, pz = pad.z + Math.cos(a) * COIL_R;
-    coilPylon(A, groundY, px, pz, groundY(px, pz), a);
+    const a = Math.PI / 4 + k * (Math.PI / 2);
+    const [px, pz] = Q(Math.sin(a) * COIL_R, Math.cos(a) * COIL_R);
+    coilPylon(A, groundY, px, pz, groundY(px, pz), yaw + a);
   }
-  const set = P(0, COIL_R);
+  /**
+   * THE GENERATOR SET IS ON THE FLANK, NOT OUT THE BACK, and that is the second
+   * half of the boundary fix rather than a dressing choice. At `Q(0, COIL_R)` it
+   * stood at r 183.3 — five metres OUTSIDE the rim wall, a 10.4 x 6.8 m block of
+   * concrete and a live point light sitting on the mountain flank behind the
+   * cliff, where no player can reach it and every player can see it. It is also
+   * thick enough that `boundcheck`'s surface test walks the inside of it
+   * (@see the header of `tools/boundcheck.mjs`), so it was a hole in the gate as
+   * well as a hole in the fiction. Local -X puts it at r 158.9, clear of the
+   * rampart by 4.8 m, between the two -X masts it feeds, and well inside the
+   * 34 m field it powers.
+   */
+  const set = Q(-(COIL_R + 4), 0);
   generatorSet(A, set[0], set[1], groundY(set[0], set[1]), yaw);
 
   return volumes;
@@ -474,8 +564,11 @@ function parapet(A, rng, outer, y) {
   const box = BOX(A);
   for (let i = 0; i < outer.length; i++) {
     const e = edgeInfo(outer, i);
-    // the chamfers carry a bastion, so their parapet stands BASTION further out
-    const push = (i % 2 === 0) ? BASTION : 0;
+    // a chamfer that carries a bastion has its parapet BASTION further out; one
+    // that does not is a plain rampart edge and the parapet sits on the trace.
+    // Reading this off `BASTION_EDGES` rather than off `i % 2` is what stops the
+    // two dropped bastions leaving a parapet floating 4 m out over nothing.
+    const push = BASTION_EDGES.includes(i) ? BASTION : 0;
     const mx = e.mx + e.nx * push, mz = e.mz + e.nz * push;
     const bays = Math.max(3, Math.round(e.len / 2.6));
     for (let b = 0; b < bays; b++) {
@@ -813,7 +906,17 @@ function pylonLine(A, groundY, pad, seed) {
     const [x1, z1] = at(stations[i + 1]);
     catenary(A, x0, groundY(x0, z0) + PYLON_H - 4.2, z0, x1, groundY(x1, z1) + PYLON_H - 4.2, z1, a);
   }
-  const [fx, fz] = at(-96);
+  /**
+   * THE FALLEN ONE STOPS AT -72, AND THE FIRST CUT'S -96 WAS OUTSIDE THE MAP.
+   * The line runs TANGENTIALLY from a pad 154.2 m out, so a station at `s` sits
+   * at `hypot(154.2, s)`: -96 is r 181.6, past the rim wall at 178, with a
+   * walkable deck 2.9 m up on the mountain flank — `_nfbelt.mjs` found it at
+   * bearing 289.5°. -72 puts the mass at r 170.1 and its high end, which is the
+   * only part of it a man stands on at height, at r 174.5 — 3.8 m short of the
+   * crest band and out of mantle reach of it. It is also still 14 m clear of the
+   * last standing tower, so the line still reads as four up and one down.
+   */
+  const [fx, fz] = at(-72);
   fallenPylon(A, rng, fx, fz, groundY, a);
 }
 
