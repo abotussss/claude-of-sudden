@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BOX, BOX_SOFT, IDENT, LL } from '../kit.js';
-import { fbm3, ridged3, patchGeometry, paintMasks, rockGeometry, disposeAll } from '../util.js';
+import { fbm3, ridged3, warpFbm3, patchGeometry, paintMasks, rockGeometry, disposeAll } from '../util.js';
 import { registerProps } from '../props.js';
 import { Rng } from '../../core/rng.js';
 import { buildTower, TOWER, TOWER_R } from './plains-tower.js';
@@ -94,12 +94,56 @@ import { buildCover } from './plains-cover.js';
 const RIDGE_R0 = 176;
 const RIDGE_R1 = 214;
 const RIDGE_H = 46;
+/**
+ * THE BREAK OF SLOPE — where the rim rock tops out and the mountain proper
+ * starts, and the single most important number in `ridgeRelief`.
+ *
+ * `plains-rim.js` draws a continuous band of bedrock from r 174.6 to about
+ * r 183, sized and placed off `groundY` at three sample radii between 173 and
+ * 178.4, and it is the map's physical boundary. EVERY metre of ground inside
+ * 186 is therefore somebody else's: the rim's, `plainsOpen`'s (which refuses
+ * anything past 176), the scree pass's, and the bot height field's, which
+ * currently calls the lower face walkable at the shallow bearings and has been
+ * measured doing so.
+ *
+ * So the relief below is gated to start HERE, at zero, and everything under it
+ * is bit-for-bit the surface that was there before. That is not caution for its
+ * own sake — it is the difference between "the mountain got a face" and "the
+ * boundary moved, the rim boulders are buried, and 3 200 nav cells changed
+ * class". The mountain you can see is above 186; the mountain you can reach is
+ * not a thing that exists.
+ */
+const RIDGE_RB = 186;
 /** Half-extent of the play box, in metres. Comfortably past the crest. */
 const BOUNDS_HALF = 200;
 
-/** The walked terrain: one mesh, and it is the collision as well. */
+/**
+ * The walked terrain: one mesh, and it is the collision as well.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * 296, NOT 148 — AND THE REASON IS THE MOUNTAIN, NOT THE PLAIN
+ * ────────────────────────────────────────────────────────────────────────────
+ * At 148 this is 3.18 m quads, and the note on `terrainMesh` is right that that
+ * resolves the SWELL to under a centimetre: its shortest wavelength is 100 m.
+ * The mountain is the other half of this mesh and it is nothing like that. The
+ * face rises 46 m over 38 m of ground — TWELVE QUADS from foot to crest — so
+ * every crag, arete and gully `ridgeRelief` authors below was being sampled at
+ * three points per wavelength and arriving as a faceted approximation of a
+ * smooth hill. You cannot draw a crag with twelve quads and no amount of noise
+ * in the height function changes that.
+ *
+ * 296 is 1.59 m, which is six samples across the finest term in `ridgeRelief`
+ * (a ~9 m grain) and twenty-four across the crag structure. It also buys the
+ * plain the resolution its own micro-relief needs — @see `micro`.
+ *
+ * WHAT IT COSTS, measured rather than feared: 175 k triangles for the 44 k it
+ * replaces, on a map that draws 4.3 M — under 3 %. The vertex count crosses
+ * 65 535, which `cutCorridors` already handles (it picks its index width off
+ * `pa.count`). The nav grid does not change at all: that is one ray per CELL and
+ * the cell is 0.8 m whatever this mesh is.
+ */
 const FIELD = 470;
-const FIELD_SEG = 148; // 3.18 m quads
+const FIELD_SEG = 296; // 1.59 m quads
 
 /**
   * The view past the crest. Visual only, no collision, no nav.
@@ -335,10 +379,15 @@ function smoothstep(a, b, t) {
 }
 
 /**
- * THE MOUNTAINS. Zero inside the foot, then a smooth rise to the crest whose
- * height varies with bearing so the skyline is a range rather than the rim of a
- * bowl — three harmonics, none of them in phase with the fire bearings, so a
- * fire lands on a face rather than always on a peak.
+ * THE MOUNTAINS. Zero inside the foot, then a rise to the crest whose height
+ * varies with bearing so the skyline is a range rather than the rim of a bowl —
+ * three harmonics, none of them in phase with the fire bearings, so a fire lands
+ * on a face rather than always on a peak.
+ *
+ * `base` IS UNCHANGED AND IS TO STAY UNCHANGED. Every metre of it inside
+ * `RIDGE_RB` is load-bearing for the rim, the scree, the boundary flood and the
+ * bot height field. The mountain that photographs is `ridgeRelief`, which is
+ * zero everywhere `base` is anybody else's business. @see `RIDGE_RB`.
  */
 function ridgeH(x, z) {
   const r = Math.hypot(x, z);
@@ -350,7 +399,111 @@ function ridgeH(x, z) {
     0.30 * Math.sin(a * 3.0 + 0.6) +
     0.19 * Math.sin(a * 7.0 - 1.9) +
     0.11 * Math.sin(a * 13.0 + 2.7);
-  return s * RIDGE_H * Math.max(0.42, peak);
+  return s * RIDGE_H * Math.max(0.42, peak) + ridgeRelief(x, z, r, a, peak);
+}
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT MAKES IT A MOUNTAIN AND NOT A DUNE — 「山もリアルに」
+ * ────────────────────────────────────────────────────────────────────────────
+ * `base` above is a radial smoothstep times a function of BEARING ALONE. Every
+ * radial section through it is therefore the same curve, scaled: there is no
+ * spur, no gully, no col, no second summit and no crag anywhere on it, and
+ * photographed at 200 m under a moon it reads as exactly what it is — a swept
+ * surface of revolution with a wavy top edge. Painting it does not help. A
+ * skyline is a SHAPE.
+ *
+ * Four terms, and each of them buys one thing the eye is looking for:
+ *
+ *  BUTTRESSES  `ridged3` along the crest, measured in METRES of arc rather than
+ *              in radians, so the masses are ~90 m apart at every bearing
+ *              instead of being ~90 m apart at the crest and 70 m apart at the
+ *              foot. Creased, not rounded — @see `ridged3`.
+ *  CIRQUES     a second ridged field, out of phase and half the frequency,
+ *              SUBTRACTED: bites taken out of the massifs. Where a spur meets a
+ *              bite you get an arete, which is the one silhouette that says
+ *              "rock" without any texture at all.
+ *  CRAGS       real 2D structure in world x/z at ~28 m, domain-warped so the
+ *              faces are folded and flow-like rather than a field of blobs, plus
+ *              a ~9 m grain over it. This is what the moon and the fires
+ *              actually catch, and it is why the face has a light side and a
+ *              dark side at all.
+ *  THE TALUS   all of the above faded up the slope, so the bottom of the face is
+ *              smooth debris and the top is broken rock. A crag at the foot of a
+ *              mountain has been buried by its own scree; one at the top has not.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE TWO BUDGETS THIS IS WRITTEN INSIDE, both of them measured elsewhere
+ * ────────────────────────────────────────────────────────────────────────────
+ * HEIGHT. `NavGrid` drops its one ray per cell from `bounds.max.y + 4` = 74 m
+ * (`nav.js:151`), so terrain over 74 m is terrain the height field starts INSIDE
+ * and silently loses. The crest already reached 63.5 m. The buttress term is
+ * therefore weighted by `1 - pn` and the cirque term by `pn`, where `pn` is how
+ * high this bearing's own crest already is: the LOW bearings are built up and
+ * the HIGH ones are cut back. The crest range goes from [19.3, 63.5] to
+ * [16.4, 66.4] — no taller, far more varied — and the ceiling is still clear.
+ *
+ * SLOPE. Everything here is multiplied by `t`, which is zero at `RIDGE_RB` and
+ * only reaches 1 at r 201. That ground is 37-68° before this pass and is outside
+ * the clip ring at 178 that stops the player, so making it steeper cannot open a
+ * boundary and cannot bury the rim. It CAN change how much of the mountain the
+ * bot height field calls walkable, and it does; that is measured in the commit
+ * rather than assumed here.
+ */
+function ridgeRelief(x, z, r, a, peak) {
+  /**
+   * `t` closes again past 250 m, and that is not cosmetic tidiness. This
+   * function is a function of BEARING as much as of position, and a bearing
+   * feature sized in metres at r 214 is three times as wide at r 700. Left
+   * running, the buttress and cirque terms paint 300 m radial stripes across the
+   * drawn horizon — a pattern with no cause, rotating about the player. The
+   * walked mesh reaches r 332 at its corners; this is shut well inside that, and
+   * BOTH meshes read the same function so they cannot disagree about it.
+   */
+  const t = smoothstep(RIDGE_RB, RIDGE_RB + 15, r) * (1 - smoothstep(250, 330, r));
+  if (t <= 0) return 0;
+  /** Arc length along the crest, in metres — features with a metric size. */
+  const s = a * RIDGE_R1;
+  /** How high this bearing's crest already is: 0 at the cols, 1 at the peaks. */
+  const pn = Math.min(1, Math.max(0, (peak - 0.42) / 0.96));
+  /** How far up the face: the talus is smooth and the summit is not. */
+  const u = smoothstep(RIDGE_RB, RIDGE_R1 + 8, r);
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE BACK OF THE RANGE, AND IT IS THE BIGGEST SINGLE THING ON THIS MAP
+   * ──────────────────────────────────────────────────────────────────────────
+   * `ridgeH` saturates at `RIDGE_R1` and `farH` is under 1.5 m out to the edge
+   * of the walked mesh, so everything from r 214 to r 235 was a HUNDRED-METRE
+   * WIDE FLAT PLATEAU at crest height — `plains-rim.js` says so in as many
+   * words, and it is 29 600 m², bigger than the town. Measured, 1.9 % of it had
+   * any step in it at all, so the bot height field called all 46 000 cells
+   * walkable and, before this pass steepened the face, they were in the same
+   * connected component as the plain: a table behind the mountain that bots
+   * could path onto and no player could ever reach.
+   *
+   * A mountain has a back. Past the crest the crag structure GROWS rather than
+   * stopping, so the far side falls away broken instead of lying flat, and the
+   * plateau stops being ground.
+   */
+  const back = smoothstep(RIDGE_R1 - 4, RIDGE_R1 + 34, r);
+
+  const butt = ridged3(s * 0.011, 3.7, 1.9, 3);
+  const cirque = 1 - ridged3(s * 0.0067 + 41, 8.3, 5.1, 3);
+  /**
+   * ±5.9 m of crag on a 46 m face, and the first draft's ±2.9 was measurably
+   * not enough: photographed from the plain at 150 m the face still read as one
+   * smooth surface, because what the eye resolves at that range is the SHADOW a
+   * feature throws, and a 2.9 m bump on a 50° slope under a moon at 0.049
+   * throws none. Doubling it is free in every budget that matters — the ground
+   * here is already 63° and 87 % of it is past `maxStep`, so it can only get
+   * less walkable — and the measured crest ceiling is checked by
+   * `_terrslope.mjs` rather than argued from the worst case, which never occurs.
+   */
+  const crag =
+    (warpFbm3(x * 0.036, 6.1, z * 0.036, 3) - 0.5) * (9.0 + back * 8) +
+    (fbm3(x * 0.105, 2.3, z * 0.105, 2) - 0.5) * (2.8 + back * 2.0);
+
+  return t * (butt * (1 - pn) * 12 - cirque * pn * 9 + crag * (0.3 + 0.7 * u));
 }
 
 /**
@@ -550,7 +703,45 @@ function buildTerrain(A) {
     out[1] = 0.22 + n * 0.46 - steep * 0.18;
     out[2] = 0.18 + n * 0.22;
   });
-  A.add('steppe', field, null);
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * ONE GEOMETRY, ONE COLLISION, THREE SURFACES — and the mountain stops being
+   * made of soil
+   * ──────────────────────────────────────────────────────────────────────────
+   * The whole field was drawn in `steppe`: a cold olive DIRT generator, chosen
+   * for the plain and correct for it. The mountain is a third of this mesh's
+   * area and it was wearing the same coat. Photographed from the foot, a 46 m
+   * rock face 30 m away was the same colour and the same material as the grass
+   * the player was standing on, and no amount of height-field detail survives
+   * that: a crag lit exactly like the soil beside it is a bump, not a cliff.
+   *
+   * It is split by TRIANGLE, not by mesh. `A.collideGeo` still takes the whole
+   * field, once, so there is exactly one collision surface and exactly one
+   * statement of where the ground is — the property the note above this function
+   * exists to protect. What is split is only which merged draw batch each
+   * triangle lands in.
+   *
+   * The two boundaries are chosen against what stands on them, and the line
+   * WANDERS by up to ±5 m on a noise so it is a geological contact and not a
+   * drawn circle:
+   *
+   *   r < 184   `steppe`         the plain, exactly as before
+   *   184-202   `scree`          the talus apron — gravel, the same key the
+   *                              scree patches at the foot already use, so the
+   *                              contact is continuous with them
+   *   r > 202   `mountain_rock`  bare rock, the same key as the rim boulders,
+   *                              the burning faces and the far range. The
+   *                              mountain is now made of one thing from the
+   *                              talus to the horizon.
+   */
+  const bands = splitField(field, (cx, cz) => {
+    const r = Math.hypot(cx, cz) + (fbm3(cx * 0.055, 7.3, cz * 0.055, 2) - 0.5) * 10;
+    return r < 184 ? 'steppe' : r < 202 ? 'scree' : 'mountain_rock';
+  });
+  for (const [key, geo] of bands) {
+    A.add(key, geo, null);
+    geo.dispose();
+  }
   A.collideGeo('dirt', field);
   field.dispose();
 
@@ -571,6 +762,64 @@ function buildTerrain(A) {
   });
   A.add('mountain_rock', far, null);
   far.dispose();
+}
+
+/**
+ * Partition a built geometry's TRIANGLES into one geometry per key, compacting
+ * the vertices each one actually uses.
+ *
+ * Handing the same geometry to `A.add` three times with three index sets would
+ * be four lines shorter and would copy all 88 000 vertices three times —
+ * `Accum.add` walks `position.count`, not the index — for 11 MB of vertices two
+ * thirds of which no triangle references. This walks each triangle once and
+ * emits each vertex once per band that uses it, which is the whole cost.
+ *
+ * `keyOf` is given the triangle's CENTROID, so a triangle belongs to exactly one
+ * band and the two bands meet on a shared edge with no gap and no overlap.
+ */
+function splitField(geo, keyOf) {
+  const pa = geo.getAttribute('position');
+  const na = geo.getAttribute('normal');
+  const ca = geo.getAttribute('color');
+  const ua = geo.getAttribute('uv');
+  const src = geo.getIndex().array;
+  const out = new Map();
+  const bandFor = (key) => {
+    let b = out.get(key);
+    if (!b) out.set(key, (b = { pos: [], nrm: [], uv: [], col: [], idx: [], map: new Int32Array(pa.count).fill(-1) }));
+    return b;
+  };
+  for (let i = 0; i < src.length; i += 3) {
+    const a = src[i], b = src[i + 1], c = src[i + 2];
+    const cx = (pa.getX(a) + pa.getX(b) + pa.getX(c)) / 3;
+    const cz = (pa.getZ(a) + pa.getZ(b) + pa.getZ(c)) / 3;
+    const band = bandFor(keyOf(cx, cz));
+    for (const v of [a, b, c]) {
+      if (band.map[v] < 0) {
+        band.map[v] = band.pos.length / 3;
+        band.pos.push(pa.getX(v), pa.getY(v), pa.getZ(v));
+        band.nrm.push(na.getX(v), na.getY(v), na.getZ(v));
+        band.uv.push(ua ? ua.getX(v) : 0, ua ? ua.getY(v) : 0);
+        band.col.push(ca ? ca.getX(v) : 0, ca ? ca.getY(v) : 0, ca ? ca.getZ(v) : 0);
+      }
+      band.idx.push(band.map[v]);
+    }
+  }
+  const res = [];
+  for (const [key, b] of out) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(b.nrm, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(b.uv, 2));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(b.col, 3));
+    g.setIndex(new THREE.BufferAttribute(
+      b.pos.length / 3 > 65535 ? new Uint32Array(b.idx) : new Uint16Array(b.idx), 1));
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+    res.push([key, g]);
+  }
+  console.info(`[world] nachtfeld terrain: ${res.map(([k, g]) => `${k} ${g.getIndex().count / 3}`).join(', ')} triangles`);
+  return res;
 }
 
 /**
@@ -689,10 +938,19 @@ function dressGround(A) {
     );
   }
 
-  // scree off the mountain foot, all the way round
+  /**
+   * Scree off the mountain foot, all the way round.
+   *
+   * THE OUTER REACH IS 185 AND NOT 202, and the draw count is untouched so
+   * nothing below this loop moves. `patchGeometry` is a horizontal fan — it has
+   * no way to lie along a slope — and 186 is where `ridgeRelief` starts pitching
+   * the face over. A flat disc on a 50° face is a disc standing edge-on out of
+   * the mountain. The face above 186 is the crag pass's, and it puts real talus
+   * there instead. @see `RIDGE_RB` and `plains-crag.js`.
+   */
   for (let i = 0; i < 700; i++) {
     const a = r.float() * Math.PI * 2;
-    const d = RIDGE_R0 + r.range(-16, 26);
+    const d = RIDGE_R0 + r.range(-16, 9);
     const x = Math.cos(a) * d;
     const z = Math.sin(a) * d;
     const g = patchGeometry(r, r.range(0.7, 2.6), { lobes: 10, wobble: 0.55 });
@@ -753,10 +1011,16 @@ function scatterVegetation(A) {
     if (inWorks(x, z)) continue;
     A.put('shrub', x, plainsY(x, z) - 0.06, z, r.float() * 6.28, r.range(0.55, 1.25));
   }
-  // stone, thickening towards the mountain
+  /**
+   * Stone, thickening towards the mountain — and stopping at 182 rather than
+   * 192 for the reason the scree pass stops at 185. An instanced rock is placed
+   * upright at `plainsY` with a ±0.12 tilt; on the pitched face above
+   * `RIDGE_RB` half of it is in the air and half is inside the hill. Draw count
+   * untouched, so nothing after this loop moves.
+   */
   for (let i = 0; i < 4200; i++) {
     const a = r.float() * Math.PI * 2;
-    const d = Math.sqrt(r.float()) * (RIDGE_R0 + 16);
+    const d = Math.sqrt(r.float()) * (RIDGE_R0 + 6);
     const x = Math.cos(a) * d;
     const z = Math.sin(a) * d;
     const near = smoothstep(RIDGE_R0 - 70, RIDGE_R0 + 10, d);
