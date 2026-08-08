@@ -548,41 +548,251 @@ function flight(A, rng, key, x0, z0, y0, x1, z1, y1, w, opts = {}) {
       x0 - ux * (0.5 + k * 0.42), y0 + 0.05, z0 - uz * (0.5 + k * 0.42), yaw,
       w * (0.72 - k * 0.16), 0.03, 0.13));
   }
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * AND THE FLIGHT ITSELF, AS A LINE OF LIGHT — `opts.marks`
+   * ────────────────────────────────────────────────────────────────────────
+   * The chevron is 1.1 m of emission on the ground and it is legible at eight
+   * metres (`shots/nfapproach-before/west-stair-foot.png`) and at nothing
+   * further, because there is nothing to see from a bearing that is not square
+   * on to it. A stud on the head of every fifth tread, both stringers, draws
+   * TWO CONVERGING DOTTED LINES 8.4 m long at 21° — and a raked line of lights
+   * on an otherwise black mass is a stair from any bearing and any range. It is
+   * also what a real stair in a blackout is marked with.
+   *
+   * Every fifth tread is 2.0 m of spacing at `TREAD` 0.40, which stays a line
+   * of separate lights at 30 m rather than becoming one bar. Nine studs a
+   * flight; 0.09 m cubes sunk into the top of the stringer, so there is nothing
+   * standing proud of anything anybody walks on.
+   */
+  if (opts.marks) {
+    for (let i = 2; i < steps; i += 5) {
+      const top = y0 + (i + 1) * riser;
+      const cx = x0 + ux * (i + 0.5) * tread;
+      const cz = z0 + uz * (i + 0.5) * tread;
+      for (const s of [-1, 1]) {
+        A.add('ember', BOX_FINE(A), LL(IDENT,
+          cx + Math.cos(yaw) * s * (w / 2 + 0.13), top + 0.31, cz - Math.sin(yaw) * s * (w / 2 + 0.13),
+          yaw, 0.1, 0.09, 0.1));
+      }
+    }
+  }
   return { run, grade: riser / tread, steps, tread, riser, yaw };
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHAT SAYS "THE WAY IN IS HERE" FROM A HUNDRED METRES
+ * ════════════════════════════════════════════════════════════════════════════
+ * 「入る場所がわからない」 is a legibility problem before it is a geometry one,
+ * and the measurement that settles it is a photograph rather than a plan: at
+ * 40 m off the north face, at 21:40, THE WHOLE TOWER IS BLACK — one HUD marker
+ * and no edge, no door, no opening (`shots/nfapproach-before/from-northbase-40m
+ * .png`). Nothing on 38 m of concrete emits anything below the beacon at the
+ * masthead, and the beacon says where the tower is, not how to get into it.
+ *
+ * Everything here is EMISSION and not one of it is a light. `world`'s punctual
+ * count forces every material's program cache key on this renderer, so six new
+ * lamps would recompile the map; an `ember` box is free and is what the stair
+ * chevrons already are — and the note in the previous pass says those are
+ * exactly the parts that still carry in the dark. So: more of the thing that
+ * works, in the places a man is looking.
+ *
+ *   TWO PYLONS at the foot, 3.2 m, one either side, each with a full-height
+ *   strip on both of its along-the-approach faces — a lit gateway you can see
+ *   past the corner of the podium and from any bearing in the half-plane.
+ *   A BOARD on the podium face beside the foot, with a chevron on it pointing
+ *   at the stair: the thing that reads from the middle distance, where the
+ *   pylons are two dots and the tower is a mass.
+ *
+ * The pylons are 0.6 m clear of the flight's 3.6 m width on each side, so the
+ * stair keeps every centimetre of its clear width — props in a doorway is five
+ * separate shipped bugs on this repo and a lit one is still a prop. Nothing
+ * spans OVER the foot: an overhead member across a route ground bots walk is
+ * the one thing `NavGrid` cannot be told to ignore, and a portal lintel is not
+ * worth the island.
+ */
+function stairMarks(A, c, y) {
+  const box = BOX(A);
+  const yaw = Math.atan2(c.tx, c.tz);
+  /** (u, v) in the face's own frame — u out along the normal, v along it. */
+  const P = (u, v) => [TOWER.x + c.nx * u + c.tx * v, TOWER.z + c.nz * u + c.tz * v];
+
+  // ---- the two pylons flanking the foot -----------------------------------
+  /**
+   * ONE PYLON, AND IT IS OUTBOARD, BECAUSE THERE IS NO INBOARD. The flight's
+   * centreline stands at u 22.95 and its inner edge at 21.15 — 0.15 m off a
+   * podium face at u 21. A second pylon "flanking" the foot on the inside was
+   * authored, built, and photographed: it is 0.45 m INSIDE three metres of
+   * concrete, drawn nowhere and colliding with the mass it is buried in. What
+   * pairs with the pylon is the board on the face opposite it, and that is the
+   * gateway — a lit post on the open side, a lit sign on the wall side.
+   */
+  const vF = -RUN1 / 2 - 1.35;
+  {
+    const [px, pz] = P(OUT1 + FLIGHT_W / 2 + 0.55, vF);
+    /**
+     * THE POST IS PALE AND IT HAS BANDS ON IT, and that is not decoration. The
+     * first cut of this stood a `concrete_dark` post under a 2.5 m strip of
+     * emission, and at 32 m the post was invisible and the strip was a slab of
+     * orange light hanging in the air with nothing under it — which is the
+     * shape of the complaint about this map's graphics, not the answer to it.
+     * A light on a night map has to have a thing holding it up.
+     */
+    A.add('concrete', box, LL(IDENT, px, y(1.55), pz, yaw, 0.34, 3.1, 0.34),
+      { masks: [0.2, 0.25, 0.9] });
+    A.box('concrete', px, y(1.55), pz, 0.34, 3.1, 0.34, yaw);
+    for (let k = 0; k < 3; k++) {
+      A.add('concrete_dark', BOX_SOFT(A), LL(IDENT, px, y(0.55 + k * 0.85), pz, yaw, 0.38, 0.26, 0.38),
+        { masks: [0.85, 0.3, 0.05] });
+    }
+    // the strip down each face that looks along the approach, and the head lamp
+    for (const f of [-1, 1]) {
+      A.add('ember', BOX_SOFT(A), LL(IDENT,
+        px + c.tx * f * 0.18, y(1.6), pz + c.tz * f * 0.18, yaw, 0.1, 1.85, 0.035));
+    }
+    A.add('ember', BOX_SOFT(A), LL(IDENT, px, y(3.02), pz, yaw, 0.26, 0.14, 0.26));
+    // a hood over the lamp, so the pylon has a shape and not only a glow
+    A.add('metal_dark', BOX_THIN(A), LL(IDENT, px, y(3.16), pz, yaw, 0.48, 0.1, 0.48),
+      { masks: [0.8, 0.5, 0.15] });
+  }
+
+  /**
+   * ---- the board on the podium face, beside the foot ----------------------
+   * Flat against the face and 0.14 m proud of it, which is nothing to walk into
+   * and nothing for `_scatterblock` to find: its lowest edge is at 1.55 m.
+   */
+  const [bx, bz] = P(P1_R + 0.07, -RUN1 / 2 + 0.9);
+  A.add('metal_dark', box, LL(IDENT, bx, y(2.15), bz, yaw, 0.14, 1.3, 2.6),
+    { masks: [0.85, 0.5, 0.1] });
+  // the chevron on it, pointing up the flight
+  for (let k = 0; k < 3; k++) {
+    const [cx, cz] = P(P1_R + 0.15, -RUN1 / 2 + 0.9 + (k - 1) * 0.62);
+    A.add('ember', BOX_SOFT(A), LL(IDENT, cx, y(2.15), cz, yaw,
+      0.05, 1.02 - k * 0.16, 0.17));
+  }
+  // …and a bar under it, so the board reads as a sign and not as a window
+  const [ux2, uz2] = P(P1_R + 0.12, -RUN1 / 2 + 0.9);
+  A.add('ember', BOX_SOFT(A), LL(IDENT, ux2, y(1.52), uz2, yaw, 0.05, 0.09, 2.3));
 }
 
 // ─────────────────────────────────────────────────────────────────── podium ──
 /**
- * WHERE THE TWO CLIMBS STAND, resolved once so the parapet gates, the deck
- * furniture keep-out and the flights themselves cannot drift apart.
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHERE THE CLIMBS STAND — AND WHY THERE ARE THREE OF THEM NOW
+ * ════════════════════════════════════════════════════════════════════════════
+ * 「管制塔も入る場所がわからないし、階段の設置も修正されていない」, said while
+ * playing, with the two-flight rebuild already in the build he was playing. So
+ * the thing to establish was not whether the stairs work — eleven bots use them
+ * — but what a man SEES on the way in. Measured, from a standing eye at 1.62 m:
  *
- * `s` is the side (+1 east, -1 west). `zHead` is where the first flight tops
- * out and the second one starts — z -27.8 on the east, -36.2 on the west, i.e.
- * half a run either side of the tower's own z, which is as far as the outboard
- * flight can be pushed and still sit inside `TOWER_R`. The whole climb on one
- * side is on one line: x runs inward from 24.75 to 11.4 and z never changes.
+ *   FROM ZONE D, 32 m AWAY, LOOKING AT THE TOWER: a blank battered wall 28 m
+ *   wide and 3.2 m tall, with two floating HUD markers over it and no stair,
+ *   no door and no opening anywhere in the frame.
+ *   (`shots/nfapproach-before/D-centre-look-tower.png`)
+ *
+ * And that is not a lighting accident, it is the plan. Both climbs stood on the
+ * ±X faces, and the podium is a 21 m octagon: the sightline from D's centre
+ * (0, 0) to the WEST stair's foot (-22.95, -27.79) passes 20.4 m from the
+ * tower's axis and the one to the EAST foot passes 20.6 m — both inside 21 m of
+ * solid concrete. NEITHER STAIR IS VISIBLE FROM THE CAPTURE POINT THE TOWER
+ * EXISTS TO OVERLOOK, and the arithmetic says so before the camera does.
+ *
+ * From the north base's bearing it is worse but for a different reason: at 40 m
+ * off the north face the whole tower is a black mass with nothing on it at all
+ * (`from-northbase-40m.png`). The ember chevrons at a stair foot are bright and
+ * they read — at eight metres. They are 1.1 m of emission on a 38 m building.
+ *
+ * SO: A THIRD CLIMB, ON THE FACE THAT LOOKS AT ZONE D, and every climb signed
+ * at a distance. @see `stairMarks`.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * ONE CLIMB, DESCRIBED ONCE, IN THE FACE'S OWN FRAME
+ * ────────────────────────────────────────────────────────────────────────────
+ * A climb is now a unit outward normal `n` and its tangent `t = (-nz, nx)`, and
+ * every part of it is written in (u, v) — u out along the face's normal, v
+ * along the face. The south climb is then the east climb turned through ninety
+ * degrees and nothing else, which matters for two separate reasons:
+ *
+ *   the octagon has 90° symmetry, so the parapet gate, the flat it is cut in
+ *   and the deck edge it arrives at are all the same pieces in the same places;
+ *   and BOTH FLIGHTS STAY ON A CARDINAL AXIS, which is the whole of why a 0.40 m
+ *   tread is legal here — @see the note on `TREAD`. A climb on a chamfer would
+ *   put the run at 45° to the lattice, where one diagonal cell step is 1.131 m
+ *   of run and 0.43 m of rise against `maxStep` 0.45. That is a 4 % margin on
+ *   the one number this whole staircase is built around, and it is why the
+ *   third climb is on a flat and not on the corner that faces D squarely.
+ *
+ *   u = OUT  (22.95) the outboard flight's centreline, 1.95 m clear of the face
+ *   v = ±RUN1/2      the head and the foot, half a run either side of centre
+ *
+ * The foot of each opens on a different bearing: EAST opens north (the north
+ * base's), WEST opens south, SOUTH opens east (the south base's, and D's).
  */
 const RUN1 = P1_TOP / RAMP_GRADE;
 const RUN2 = (P2_TOP - P1_TOP) / RAMP_GRADE;
-const CLIMBS = [1, -1].map((s) => ({
-  s,
-  /** the outboard flight's centreline in x, just clear of the P1 face */
-  fx: s * (P1_R + FLIGHT_W / 2 + 0.15),
-  /** where both flights meet the deck */
-  zHead: TOWER.z + s * (RUN1 / 2),
-  /** the first flight's foot: NORTH on the east side, SOUTH on the west */
-  zFoot: TOWER.z - s * (RUN1 / 2),
-}));
+const OUT1 = P1_R + FLIGHT_W / 2 + 0.15;
+const climb = (nx, nz, opts = {}) => {
+  const tx = -nz, tz = nx;
+  const P = (u, v) => [TOWER.x + nx * u + tx * v, TOWER.z + nz * u + tz * v];
+  return {
+    nx, nz, tx, tz,
+    /** the ground flight, outboard of the P1 face and parallel to it */
+    foot: P(OUT1, -RUN1 / 2),
+    head: P(OUT1, RUN1 / 2),
+    /** the radial flight over the P1 deck, from the parapet gate up to P2 */
+    up0: P(P2_R + RUN2 - 0.6, RUN1 / 2),
+    up1: P(P2_R - 0.6, RUN1 / 2),
+    /** where each parapet is cut. Only the tangential component is used. */
+    gate1: P(P1_R, RUN1 / 2),
+    gate2: P(P2_R, RUN1 / 2),
+    /**
+     * THE CHEEK WALL IS THE ONE PIECE THE SOUTH CLIMB DOES NOT GET. On the ±X
+     * climbs it stands one flight-width further out and covers a man on the
+     * stair from the flank — but "further out" on the south climb is the side
+     * zone D is on, so the wall would stand between the capture point and the
+     * only stair that can be seen from it. The complaint is that the way in
+     * cannot be found; a 3.6 m wall across it is the complaint.
+     */
+    cheek: opts.cheek !== false,
+  };
+};
+/**
+ * ONE PER CARDINAL FACE, and the fourth is the one the attack walks into for
+ * the first minute of every round. Measured from the north base's bearing at
+ * 40 m: nothing. The east climb's foot does open north, but the north base is
+ * at x -14 and the foot is at x +22.95, so from due north it is thirty degrees
+ * off the axis and behind the corner of a 21 m octagon; the west climb's foot
+ * is on the far side of the podium entirely.
+ *
+ * The previous pass's own note says four ramps all round the outside "reads as
+ * a car park", and it was right about what it was looking at: four smooth
+ * wedges at one gradient with nothing on them and no sign at any of them. Four
+ * STAIRS, each with a nosed tread, a raked handrail, a lit pylon pair, a signed
+ * board and a gate in the parapet at its head is the opposite argument — the
+ * building tells you where its doors are from every side, which is the entire
+ * complaint. What it is NOT is four ways round the same corner: each foot
+ * opens on its own bearing, so the four of them cover the compass.
+ */
+const CLIMBS = [
+  climb(1, 0),    // east  — the foot opens NORTH
+  climb(-1, 0),   // west  — the foot opens SOUTH
+  climb(0, 1, { cheek: false }), // south — the face zone D looks at; foot opens EAST
+  climb(0, -1),   // north — the attack's approach; foot opens WEST, at their base
+];
 
 /** Is (x, z) on or beside a flight? Keeps deck dressing out of the climb. */
 function onClimb(x, z, margin = 1.1) {
   for (const c of CLIMBS) {
-    // flight I, outboard, running in z
-    if (Math.abs(x - c.fx) < FLIGHT_W / 2 + 1.0 + margin &&
-        Math.abs(z - TOWER.z) < RUN1 / 2 + 1.4 + margin) return true;
-    // flight II, radial, running in x
-    if (Math.abs(z - c.zHead) < FLIGHT_W / 2 + margin &&
-        (x - TOWER.x) * c.s > P2_R - 2.4 && (x - TOWER.x) * c.s < P1_R + 1.6) return true;
+    const dx = x - TOWER.x, dz = z - TOWER.z;
+    const u = dx * c.nx + dz * c.nz;
+    const v = dx * c.tx + dz * c.tz;
+    // flight I, outboard, running along the face
+    if (Math.abs(u - OUT1) < FLIGHT_W / 2 + 1.0 + margin &&
+        Math.abs(v) < RUN1 / 2 + 1.4 + margin) return true;
+    // flight II, radial, running inward
+    if (Math.abs(v - RUN1 / 2) < FLIGHT_W / 2 + margin &&
+        u > P2_R - 2.4 && u < P1_R + 1.6) return true;
   }
   return false;
 }
@@ -632,17 +842,20 @@ function buildPodium(A, rng, y, groundY, lights) {
    * cover along its whole length AND a thing you can see the way up through
    * from anywhere on the deck. @see `parapetRun`'s `gap`.
    */
+  /** The climb whose face this edge is, by the edge's own outward normal. */
+  const climbOn = (e) => CLIMBS.find((k) =>
+    Math.abs(e.nx - k.nx) < 0.05 && Math.abs(e.nz - k.nz) < 0.05);
   for (let i = 0; i < P1.length; i++) {
     const e = edgeInfo(P1, i);
-    const c = CLIMBS.find((k) => Math.abs(e.nx - k.s) < 0.05);
+    const c = climbOn(e);
     parapetRun(A, rng, e, y(P1_TOP), 1.16, i % 2 === 0,
-      c ? { gap: { x: c.fx, z: c.zHead, w: 5.4 } } : null);
+      c ? { gap: { x: c.gate1[0], z: c.gate1[1], w: 5.4 } } : null);
   }
   for (let i = 0; i < P2.length; i++) {
     const e = edgeInfo(P2, i);
-    const c = CLIMBS.find((k) => Math.abs(e.nx - k.s) < 0.05);
+    const c = climbOn(e);
     parapetRun(A, rng, e, y(P2_TOP), 1.1, i % 2 === 1,
-      c ? { gap: { x: c.s * P2_R, z: c.zHead, w: 4.6 } } : null);
+      c ? { gap: { x: c.gate2[0], z: c.gate2[1], w: 4.6 } } : null);
   }
 
   /**
@@ -652,24 +865,30 @@ function buildPodium(A, rng, y, groundY, lights) {
    * the bottom of a stair.
    */
   for (const c of CLIMBS) {
-    // flight I — outboard of the ±X face, climbing toward the tower's own z
-    flight(A, rng, 'concrete', c.fx, c.zFoot, y(0), c.fx, c.zHead, y(P1_TOP), FLIGHT_W,
-      { fillKey: 'concrete_dark', baseY: y(-0.55) });
+    // flight I — outboard of the podium face, climbing along it
+    flight(A, rng, 'concrete', c.foot[0], c.foot[1], y(0), c.head[0], c.head[1], y(P1_TOP), FLIGHT_W,
+      { fillKey: 'concrete_dark', baseY: y(-0.55), marks: true });
     /**
      * The cheek wall on the outside of the climb, so it is a cutting and not a
      * plank: a man on the stair is covered from the flank he is climbing away
-     * from. It is held to ±(run/2 + 1.2) in z because `TOWER_R` is 25.4 and its
-     * face stands at 24.75 — `plains.js` keeps the plain's scatter out of a
-     * circle of exactly that radius, and widening it would move several thousand
-     * stones and tufts on somebody else's map.
+     * from. It is held to ±(run/2 + 1.2) along the face because `TOWER_R` is
+     * 25.4 and its face stands at 24.75 — `plains.js` keeps the plain's scatter
+     * out of a circle of exactly that radius, and widening it would move several
+     * thousand stones and tufts on somebody else's map.
      */
-    wallRun(A, rng, 'concrete_dark', c.s * (P1_R + FLIGHT_W + 0.15), TOWER.z - (RUN1 / 2 + 1.2),
-      c.s * (P1_R + FLIGHT_W + 0.15), TOWER.z + (RUN1 / 2 + 1.2),
-      { y0: y(-0.4), y1: y(P1_TOP - 0.2), t: 0.55, batter: 0.05, nx: c.s, nz: 0, course: 0.7 });
-    // flight II — radial, inward, on the same line, 2.6 m past the first's head
-    flight(A, rng, 'concrete', TOWER.x + c.s * (P2_R + RUN2 - 0.6), c.zHead, y(P1_TOP),
-      TOWER.x + c.s * (P2_R - 0.6), c.zHead, y(P2_TOP), FLIGHT_W,
+    if (c.cheek) {
+      const w = P1_R + FLIGHT_W + 0.15;
+      const l = RUN1 / 2 + 1.2;
+      wallRun(A, rng, 'concrete_dark',
+        TOWER.x + c.nx * w - c.tx * l, TOWER.z + c.nz * w - c.tz * l,
+        TOWER.x + c.nx * w + c.tx * l, TOWER.z + c.nz * w + c.tz * l,
+        { y0: y(-0.4), y1: y(P1_TOP - 0.2), t: 0.55, batter: 0.05, nx: c.nx, nz: c.nz, course: 0.7 });
+    }
+    // flight II — radial, inward, 2.6 m past the first's head
+    flight(A, rng, 'concrete', c.up0[0], c.up0[1], y(P1_TOP), c.up1[0], c.up1[1], y(P2_TOP), FLIGHT_W,
       { fillKey: 'concrete_dark', baseY: y(P1_TOP - 0.45) });
+    // …and what says, from three hundred metres, that any of this is here
+    stairMarks(A, c, y);
   }
 
   /**
@@ -785,6 +1004,17 @@ function parapetRun(A, rng, e, yTop, h, slit, opts = null) {
         { masks: [0.8, 0.3, 0.05] });
       // and the lamp-less marker that says which way this hole goes
       A.add('ember', BOX_FINE(A), LL(IDENT, jx - e.nx * 0.3, yTop + h * 1.2, jz - e.nz * 0.3, e.yaw, 0.06, 0.5, 0.09));
+      /**
+       * …AND THE SAME MARKER ON THE OUTSIDE OF THE JAMB, which is the half of
+       * it that was missing. The one above faces INBOARD: it tells a man
+       * already on the deck where the way down is, and is invisible to the man
+       * on the plain who is the one asking. This one is on the outward face,
+       * so the head of every climb is two lit posts on the deck edge — the
+       * mark that survives being seen from an oblique bearing at 150 m, when
+       * the stair studs have foreshortened into one another.
+       */
+      A.add('ember', BOX_SOFT(A), LL(IDENT, jx + e.nx * 0.34, yTop + h * 0.86, jz + e.nz * 0.34,
+        e.yaw, 0.05, h * 1.3, 0.11));
     }
     return;
   }
@@ -966,6 +1196,22 @@ function doorSurround(A, rng, e, y) {
   // the concrete threshold, worn by everything that has been dragged over it
   A.add('concrete_dark', BOX_SOFT(A), LL(IDENT, e.mx, y(ROOM_Y - 0.05), e.mz, e.yaw,
     SH_WALL + 0.5, 0.14, DOOR_W + 0.3), { masks: [0.95, 0.45, 0.05] });
+  /**
+   * THE DOOR IS LIT FROM THE JAMB. 「入る場所がわからない」 is about the door as
+   * much as the stair: the room has two bulbs in it, but from the P2 gallery
+   * a 2.1 m hole in a black wall at night is a slightly darker patch of black.
+   * A strip down each jamb and one across the head is the shape of the opening
+   * drawn in light, and it costs no light slot — @see `stairMarks`. It also
+   * marks the door from the AIR and from the P1 deck below, which is where the
+   * two bot posts on this tower stand.
+   */
+  for (const s of [-1, 1]) {
+    A.add('ember', BOX_SOFT(A), LL(IDENT,
+      e.mx + e.nx * 0.5 + e.tx * s * (DOOR_W / 2 + 0.05), y(ROOM_Y + DOOR_H / 2 - 0.05),
+      e.mz + e.nz * 0.5 + e.tz * s * (DOOR_W / 2 + 0.05), e.yaw, 0.06, DOOR_H - 0.3, 0.09));
+  }
+  A.add('ember', BOX_SOFT(A), LL(IDENT, e.mx + e.nx * 0.5, y(ROOM_Y + DOOR_H + 0.02), e.mz + e.nz * 0.5,
+    e.yaw, 0.06, 0.09, DOOR_W + 0.1));
 }
 
 /**
