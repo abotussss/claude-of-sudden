@@ -3,9 +3,10 @@ import { BOX, BOX_FINE, BOX_SOFT, BOX_THIN, PANE, IDENT, LL } from '../kit.js';
 import { fbm3, rockGeometry, patchGeometry } from '../util.js';
 import { Rng } from '../../core/rng.js';
 import {
-  RAMP_GRADE, octagon, edgeInfo, prism, wallRun, ramp, interiorVolume,
+  RAMP_GRADE, octagon, edgeInfo, prism, wallRun, interiorVolume,
   debrisField, drawDebris, fallenMember, ladder, handrail, practical, embrasure,
 } from './plains-works.js';
+import { post, dressPost } from './plains-stores.js';
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -100,8 +101,72 @@ const ROOF_Y = 25.8;
 const CAB_R = 8.6, CAB_CUT = 2.4, CAB_TOP = 31.0;
 const MAST_TOP = 38.5;
 
-/** Total footprint radius including the two external ramps — @see `apron`. */
+/** Total footprint radius including the two external flights — @see `apron`. */
 export const TOWER_R = 25.4;
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE STAIRCASE — 「タワーの階段の設置の仕方悪すぎる」
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHAT WAS WRONG WITH IT, looked at from the ground rather than from the plan:
+ *
+ *   1. THE CLIMB WAS AN L WITH NO SIGN ON IT. The two ground ramps were on the
+ *      ±X flats and the two ramps up to P2 were on the ±Z flats — ninety degrees
+ *      apart. You came up the east ramp, arrived at (23, -27.8), and the next
+ *      flight was twenty-four metres away round the corner of a deck with a
+ *      chest-high parapet and fourteen stacks of crates on it. Nothing at the
+ *      head of the first flight pointed at the second one, and from the deck you
+ *      could not see it.
+ *   2. AND THE SECOND FLIGHT HAD A WALL ACROSS ITS FOOT. Both P1→P2 ramps stood
+ *      on x = 0 with their bottom landings at z -11.65 and -52.35; P1's ±Z flats
+ *      carry a 1.16 m parapet whose inner face is at z -11.46 and -52.54. The
+ *      parapet ran straight over both landings. The +Z one is solid for its whole
+ *      28 m; the -Z one is the embrasure variant, so the only thing between a man
+ *      and the way up was a 0.62 m slot he could see through and not walk through.
+ *   3. FOUR SEPARATE RAMPS AT ONE GRADIENT, ALL ROUND THE OUTSIDE, IS A CAR PARK.
+ *      Photographed from half way up (`shots/nfclimb-before/stair-mid-E.png`) the
+ *      east ramp is a smooth concrete chute between a cheek wall and a podium
+ *      face with the sky at the end of it and nothing to say what it is for.
+ *
+ * WHAT IT IS NOW: TWO complete climbs, one per side, each a straight line.
+ *
+ *      ground ── flight I (alongside the ±X face) ── head on the tower's own
+ *      centreline ── the parapet's stair gate ── flight II (radial, inward)
+ *      ── P2 gallery ── the control room's door on that same face.
+ *
+ * The east climb's foot opens NORTH (at the base's bearing) and the west
+ * climb's opens SOUTH (at zone D's), so each of the two directions men actually
+ * arrive from is met by the bottom of a stair instead of by 3.2 m of battered
+ * concrete. The two flights of a climb are collinear and 2.6 m apart: from the
+ * head of the first the second is dead ahead.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * AND THEY ARE STAIRS NOW, NOT RAMPS — 0.40 m OF TREAD, AND THAT IS THE TRICK
+ * ────────────────────────────────────────────────────────────────────────────
+ * `plains-works.js` chose ramps over stairs for a stated reason: "a stair tread
+ * does not connect", `NavGrid.maxStep` is 0.45 m across an 0.8 m cell, and a
+ * normal 0.19 / 0.28 stair rises 0.54 m per cell — over the step, so the flight
+ * is a wall to the height field and the deck above it is an island. That is the
+ * town's disease (36 820 walkable cells above 2.5 m in 2 113 components, ZERO
+ * joined to the ground) and it is not worth a nicer-looking staircase.
+ *
+ * A stair whose TREAD DIVIDES THE CELL EXACTLY does connect, and the arithmetic
+ * is not delicate. `NavGrid` samples one point per 0.8 m cell; at `TREAD` 0.40 m
+ * every cell along a flight is exactly TWO treads from its neighbour, so the
+ * sampled difference is exactly two risers WHATEVER the lattice phase is —
+ * there is no worst case to be unlucky with, which is what a tread of 0.28 or
+ * 0.35 would have left. Both flights are authored on a cardinal axis, which is
+ * what makes "two treads along the run" and "two cells along the grid" the same
+ * distance.
+ *
+ * The gradient is unchanged at `RAMP_GRADE` 0.38, so a riser is 0.152 m and a
+ * cell-to-cell rise is 0.304 m against `maxStep` 0.45 and against the 0.42 m
+ * stance step the character controller lifts a grounded move by. Both margins
+ * are ~30 %. Measured after the change — @see the component counts in the
+ * commit; the plain's biggest component and its stranded count did not move.
+ */
+const FLIGHT_W = 3.6;
+const TREAD = 0.40;
 
 /**
  * The four traces, TRANSLATED ONTO THE TOWER'S CENTRE at module load.
@@ -134,6 +199,97 @@ const DOORS = [
   { ax: 1, az: 0, yaw: -Math.PI / 2 },
 ];
 const DOOR_CLEAR = 2.6;
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHY ANYBODY WOULD CLIMB IT — 「管制塔はなんのためにあんの？？ 物資もないし」
+ * ════════════════════════════════════════════════════════════════════════════
+ * The honest answer before this table was: no reason at all, and not as a
+ * matter of taste. `plains.js` returns `features: []`, so `world.features` was
+ * empty, so `MatchSystem`'s `new Caches(ctx, world.features, …)` bound nothing.
+ * Measured from inside a live match on the plain (`_nftier.mjs`):
+ *
+ *     caches: 0 bound, 0 proved bot-walkable
+ *     {"ammo":0,"weapon":0,"grenade":0,"vantage":0,"medic":0}
+ *
+ * Not one round, one frag, one gun, one med kit or one beacon socket on three
+ * hundred metres of map. So the tower was a view, and a view is not a reason.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * EVERY REWARD HERE IS ONE THE GAME ALREADY HAS. NOTHING NEW WAS INVENTED.
+ * ────────────────────────────────────────────────────────────────────────────
+ *   `ammo`     `weapons.scavenge` for the player, `ai.resupply` for a bot.
+ *   `grenade`  the ONLY source of frags inside a life other than dying.
+ *   `weapon`   HOLD F swaps your primary for the one on the rack, fixed for the
+ *              whole match — "I know where the bolt gun is" is the thing that
+ *              makes a building worth crossing a map for (`caches.js`).
+ *   `vantage`  a firing position that hands over rounds, which is what a firing
+ *              position is actually short of.
+ *   `medic`    +50 HP, either side, `RULES.medicHeal`.
+ *   …and ANY of them takes a BEACON on a TAP of the same key: a 60 s forward
+ *   spawn for your side. Holding the tower is a forward spawn 32 m off the
+ *   capture point, and that is the reward verticality is actually worth here.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE LADDER OF REWARDS FOLLOWS THE LADDER OF EFFORT, AND WHO CAN CLIMB IT
+ * ────────────────────────────────────────────────────────────────────────────
+ *   3.2 m  P1 deck      a dressing station and a resupply — BOT-REACHABLE, so
+ *                       the fight over the tower happens on the tower.
+ *   6.6 m  P2 gallery   a nest overlooking zone D, with rounds. BOT.
+ *   6.74 m control room a resupply and the map's only frag stack, INDOORS and
+ *                       bot-reachable through `world.interiorVolumes` — which
+ *                       is the whole "屋内戦闘" argument `caches.js` measured on
+ *                       the town (3 of 29 men had ever gone inside; 23 do now).
+ *   21.2 m shaft storey THE WEAPON RACK. Player only, and it is meant to be:
+ *                       four storeys of stair is the price of the second gun.
+ *   26 m   the cab      rounds at the best sightline on the map, for the man
+ *                       who carried that gun up.
+ *
+ * `x`/`z` are OFFSETS from `TOWER`, `h` is height above the pad datum, so the
+ * table reads against the section drawing at the top of this file. The two
+ * player-only posts refuse a beacon — @see `plains-stores.js`, which has the
+ * measurement of what `_jitterOnto` does with one planted at 26 m.
+ */
+const STORES = [
+  { id: 'NF-TOWER-P1-med', kind: 'medic', x: 0, z: -15.2, h: P1_TOP, yaw: 0 },
+  { id: 'NF-TOWER-P1-ammo', kind: 'ammo', x: 0, z: 15.2, h: P1_TOP, yaw: Math.PI },
+  { id: 'NF-TOWER-P2-nest', kind: 'vantage', x: 0, z: 9.4, h: P2_TOP, yaw: Math.PI },
+  { id: 'NF-TOWER-ROOM-ammo', kind: 'ammo', x: 2.48, z: 0.77, h: ROOM_Y, yaw: -1.87, perishable: true },
+  { id: 'NF-TOWER-ROOM-frag', kind: 'grenade', x: -2.48, z: -0.77, h: ROOM_Y, yaw: 1.27, perishable: true },
+  {
+    id: 'NF-TOWER-RACK', kind: 'weapon', x: -3.55, z: 0, h: FLOORS[3], yaw: Math.PI / 2,
+    perishable: true, botReachable: false, beacon: false,
+  },
+  {
+    id: 'NF-TOWER-CAB', kind: 'vantage', x: 0, z: 2.4, h: ROOF_Y + 0.32, yaw: Math.PI,
+    perishable: true, botReachable: false, beacon: false, clip: true,
+  },
+];
+
+/**
+ * Is (x, z) close enough to a store post on level `h` to foul it? Every
+ * scatter pass that runs over a deck or a room asks this before it puts
+ * anything down. A crate dressed onto a supply post is the doorway bug in a
+ * different coat: the thing the player is meant to walk up to and hold F on
+ * ends up behind a barrel, and nothing in the boot log says so.
+ */
+function nearStore(x, z, h, r = 2.6) {
+  for (const s of STORES) {
+    if (Math.abs(s.h - h) > 0.6) continue;
+    if ((x - TOWER.x - s.x) ** 2 + (z - TOWER.z - s.z) ** 2 < r * r) return true;
+  }
+  return false;
+}
+
+/** Build and dress the posts standing on level `h`. Returns nothing. */
+function buildStores(A, rng, y, h) {
+  for (const s of STORES) {
+    if (Math.abs(s.h - h) > 0.6) continue;
+    if (s.clip) A.clipProps = true;
+    dressPost(A, rng, s.kind, TOWER.x + s.x, y(s.h), TOWER.z + s.z, s.yaw, { clip: s.clip });
+    if (s.clip) A.clipProps = false;
+  }
+}
 
 // ──────────────────────────────────────────────────────────────────── build ──
 /**
@@ -212,6 +368,17 @@ export function buildTower(A, groundY) {
        * of `fracture` and took the whole match system down with it.
        */
       mass: towerMass(y),
+      /**
+       * WHAT IS IN IT, published on the one record `world` carries for this
+       * structure. `publishWorks` mutates and returns THIS object, so the list
+       * arrives at `world.demolitions[*].caches` intact and `src/match/caches.js`
+       * reads it with one generic loop. @see the header of `plains-stores.js`
+       * for why it rides here and not on `world.features`.
+       */
+      caches: STORES.map((s) => post(
+        s.id, s.kind, TOWER.x + s.x, y(s.h), TOWER.z + s.z, s.yaw,
+        { botReachable: s.botReachable, perishable: s.perishable, beacon: s.beacon }
+      )),
     },
     lights,
   };
@@ -248,7 +415,178 @@ function towerMass(y) {
   return parts;
 }
 
+// ──────────────────────────────────────────────────────────────────── stair ──
+/**
+ * ONE FLIGHT. Treads, stringers, handrails and the embankment under it.
+ *
+ * The walked surface IS the treads and the collision IS the treads — one
+ * statement, so the height field and the capsule cannot disagree about where
+ * the stair is, which is the same rule `plains-works.ramp` was written under.
+ * The number of treads is forced to `run / TREAD` so the 0.40 m that makes this
+ * legal cannot be rounded away by an awkward run. @see the note on `TREAD`.
+ *
+ * THE SIDES ARE COVERED BY STRINGERS rather than left as the ends of twenty-one
+ * boxes: adjacent treads have coincident side faces and a merged opaque batch
+ * z-fights across them. A stringer is also what a concrete stair actually has.
+ */
+function flight(A, rng, key, x0, z0, y0, x1, z1, y1, w, opts = {}) {
+  const dx = x1 - x0;
+  const dz = z1 - z0;
+  const run = Math.hypot(dx, dz);
+  const ux = dx / run;
+  const uz = dz / run;
+  const yaw = Math.atan2(dx, dz);
+  const rise = y1 - y0;
+  const steps = Math.max(2, Math.round(run / TREAD));
+  const tread = run / steps;
+  const riser = rise / steps;
+  const pitch = Math.atan2(rise, run);
+  const surface = opts.surface ?? A.surfaceOf(key);
+  const baseY = opts.baseY ?? Math.min(y0, y1) - 0.45;
+  const box = BOX(A);
+
+  // the embankment, in coarse blocks — the stair is cast on made ground, not
+  // hung in the air. It stops 0.3 m under the treads so nothing pokes through.
+  const fills = Math.max(3, Math.round(run / 1.4));
+  for (let i = 0; i < fills; i++) {
+    const t = (i + 0.5) / fills;
+    const top = y0 + rise * t - 0.34;
+    if (top <= baseY) continue;
+    const fx = x0 + dx * t;
+    const fz = z0 + dz * t;
+    A.add(opts.fillKey ?? key, box, LL(IDENT, fx, (baseY + top) / 2, fz, yaw, w - 0.05, top - baseY, run / fills + 0.02),
+      { masks: [0.2 + rng.float() * 0.3, 0.4 + rng.float() * 0.3, 0.35] });
+    A.box(surface, fx, (baseY + top) / 2, fz, w - 0.05, top - baseY, run / fills, yaw);
+  }
+
+  for (let i = 0; i < steps; i++) {
+    const top = y0 + (i + 1) * riser;
+    // each tread overlaps the one below it, so there is never a seam a ray or a
+    // capsule can fall into between two of them
+    const bot = y0 + i * riser - 0.36;
+    const cx = x0 + ux * (i + 0.5) * tread;
+    const cz = z0 + uz * (i + 0.5) * tread;
+    A.add(key, box, LL(IDENT, cx, (bot + top) / 2, cz, yaw, w, top - bot, tread + 0.008), {
+      paint: (px, py, pz, nx, ny, nz, out) => {
+        const n = fbm3(px * 0.55, py * 0.55, pz * 0.55, 2);
+        // the broom finish across the tread, and the grit that has collected
+        // against the riser behind it — the detail that has to hold at 0.5 m
+        const across = Math.abs((((px * Math.cos(yaw) - pz * Math.sin(yaw)) * 5.5) % 1) - 0.5);
+        const up = ny > 0.7;
+        out[0] = Math.min(1, 0.3 + n * 0.36 + (up ? (1 - across) * 0.22 : 0));
+        out[1] = Math.min(1, 0.32 + n * 0.42 + (up ? 0 : 0.2));
+        out[2] = Math.min(1, 0.14 + n * 0.22 + (up ? 0 : 0.3));
+      },
+    });
+    A.box(surface, cx, (bot + top) / 2, cz, w, top - bot, tread, yaw);
+    /**
+     * THE NOSING. A hard dark lip along the front edge of every tread — 5 cm
+     * proud and 2.5 cm deep, so it is far under any step limit and cannot be a
+     * lattice of two-hundred obstacles. It is also the only thing that makes a
+     * flight read as a flight in raking moonlight: without it a stair at 21° is
+     * a smooth grey slope again, which is what the old ramps looked like.
+     */
+    A.add('concrete_dark', BOX_FINE(A), LL(IDENT,
+      cx + ux * (tread / 2 - 0.025), top - 0.021, cz + uz * (tread / 2 - 0.025), yaw,
+      w - 0.14, 0.042, 0.05), { masks: [0.85, 0.28, 0.04] });
+    // every fourth riser carries a cast number-plate, worn back to the metal
+    if (i % 4 === 2) {
+      A.add('metal_rust', BOX_THIN(A), LL(IDENT,
+        cx + ux * (tread / 2) + Math.cos(yaw) * (w / 2 - 0.34), top - riser * 0.55,
+        cz + uz * (tread / 2) - Math.sin(yaw) * (w / 2 - 0.34), yaw, 0.14, 0.08, 0.02),
+        { masks: [0.9, 0.75, 0.1] });
+    }
+  }
+
+  // the stringers: a raked slab down each side, standing proud of the treads
+  const mid = [(x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2];
+  const slabLen = Math.hypot(run, rise) + 0.5;
+  for (const s of [-1, 1]) {
+    const sx = Math.cos(yaw) * s * (w / 2 + 0.13);
+    const sz = -Math.sin(yaw) * s * (w / 2 + 0.13);
+    A.add(opts.kerbKey ?? 'concrete_dark', box,
+      LL(IDENT, mid[0] + sx, mid[1] - 0.02, mid[2] + sz, yaw, 0.28, 0.72, slabLen, -pitch),
+      { masks: [0.62, 0.36, 0.12] });
+    A.box(surface, mid[0] + sx, mid[1] - 0.02, mid[2] + sz, 0.28, 0.72, slabLen, yaw, -pitch);
+    /**
+     * THE HANDRAIL IS RAKED, which is why `plains-works.handrail` is not used
+     * for it: that one lays a level run at one height, and a level rail over a
+     * pitched flight is a pipe that starts at the knee and ends over the head.
+     * Two raked runs on posts set on the stringer, exactly as a real one is.
+     */
+    if (opts.rail !== false) {
+      for (const rh of [1.02, 0.56]) {
+        A.add('metal_rust', BOX_THIN(A),
+          LL(IDENT, mid[0] + sx, mid[1] + rh + 0.34, mid[2] + sz, yaw, 0.055, 0.055, slabLen, -pitch),
+          { masks: [0.85, 0.5, 0] });
+      }
+      const posts = Math.max(3, Math.round(run / 1.9));
+      for (let k = 0; k <= posts; k++) {
+        const t = k / posts;
+        A.add('metal_rust', BOX_THIN(A),
+          LL(IDENT, x0 + dx * t + sx, y0 + rise * t + 0.86, z0 + dz * t + sz, yaw, 0.06, 1.04, 0.06),
+          { masks: [0.9, 0.55, 0] });
+      }
+    }
+  }
+
+  // the landings, flat, at each end's own height and overlapping the flight
+  for (const [lx, lz, ly, dir] of [[x0, z0, y0, -1], [x1, z1, y1, 1]]) {
+    const ox = ux * dir * 0.65;
+    const oz = uz * dir * 0.65;
+    A.add(key, box, LL(IDENT, lx + ox, ly - 0.18, lz + oz, yaw, w, 0.36, 1.6), { masks: [0.5, 0.35, 0.12] });
+    A.box(surface, lx + ox, ly - 0.18, lz + oz, w, 0.36, 1.6, yaw);
+  }
+  /**
+   * THE CHEVRON AT THE FOOT. Emissive, on the ground, pointing up the flight.
+   * It is a REAL light source in the render's terms and no light slot at all —
+   * `world`'s punctual-light count is what forces every material's program
+   * cache key, so the way to sign a stair on a night map is emission, not lamps.
+   */
+  for (let k = 0; k < 3; k++) {
+    A.add('ember', BOX_SOFT(A), LL(IDENT,
+      x0 - ux * (0.5 + k * 0.42), y0 + 0.05, z0 - uz * (0.5 + k * 0.42), yaw,
+      w * (0.72 - k * 0.16), 0.03, 0.13));
+  }
+  return { run, grade: riser / tread, steps, tread, riser, yaw };
+}
+
 // ─────────────────────────────────────────────────────────────────── podium ──
+/**
+ * WHERE THE TWO CLIMBS STAND, resolved once so the parapet gates, the deck
+ * furniture keep-out and the flights themselves cannot drift apart.
+ *
+ * `s` is the side (+1 east, -1 west). `zHead` is where the first flight tops
+ * out and the second one starts — z -27.8 on the east, -36.2 on the west, i.e.
+ * half a run either side of the tower's own z, which is as far as the outboard
+ * flight can be pushed and still sit inside `TOWER_R`. The whole climb on one
+ * side is on one line: x runs inward from 24.75 to 11.4 and z never changes.
+ */
+const RUN1 = P1_TOP / RAMP_GRADE;
+const RUN2 = (P2_TOP - P1_TOP) / RAMP_GRADE;
+const CLIMBS = [1, -1].map((s) => ({
+  s,
+  /** the outboard flight's centreline in x, just clear of the P1 face */
+  fx: s * (P1_R + FLIGHT_W / 2 + 0.15),
+  /** where both flights meet the deck */
+  zHead: TOWER.z + s * (RUN1 / 2),
+  /** the first flight's foot: NORTH on the east side, SOUTH on the west */
+  zFoot: TOWER.z - s * (RUN1 / 2),
+}));
+
+/** Is (x, z) on or beside a flight? Keeps deck dressing out of the climb. */
+function onClimb(x, z, margin = 1.1) {
+  for (const c of CLIMBS) {
+    // flight I, outboard, running in z
+    if (Math.abs(x - c.fx) < FLIGHT_W / 2 + 1.0 + margin &&
+        Math.abs(z - TOWER.z) < RUN1 / 2 + 1.4 + margin) return true;
+    // flight II, radial, running in x
+    if (Math.abs(z - c.zHead) < FLIGHT_W / 2 + margin &&
+        (x - TOWER.x) * c.s > P2_R - 2.4 && (x - TOWER.x) * c.s < P1_R + 1.6) return true;
+  }
+  return false;
+}
+
 function buildPodium(A, rng, y, groundY, lights) {
   const box = BOX(A);
 
@@ -286,46 +624,52 @@ function buildPodium(A, rng, y, groundY, lights) {
    * through them — cover you can shoot over standing and be behind crouched,
    * which is the only reason to walk up here at all.
    *
-   * The ±X faces of P1 are LEFT OPEN: that is where the two ground ramps arrive,
-   * and a parapet across a ramp head is a wall the bot height field cannot see
-   * through (`NavGrid._sealCrossings` would shut the cells and the climb would
-   * be measured and then thrown away).
+   * EVERY EDGE IS NOW WALLED AND THE CIRCULATION IS A GATE IN IT. The ±X flats
+   * of P1 used to carry no parapet at all — twenty-eight metres of open deck
+   * edge on each side, because that was where the ramps arrived — and the ±Z
+   * flats of P2 were open for the same reason. A run that is skipped whole is a
+   * platform you walk off in the dark; a run with a five-metre gate in it is
+   * cover along its whole length AND a thing you can see the way up through
+   * from anywhere on the deck. @see `parapetRun`'s `gap`.
    */
   for (let i = 0; i < P1.length; i++) {
     const e = edgeInfo(P1, i);
-    if (Math.abs(e.nx) > 0.9) continue; // ±X flats: ramp heads
-    parapetRun(A, rng, e, y(P1_TOP), 1.16, i % 2 === 0);
+    const c = CLIMBS.find((k) => Math.abs(e.nx - k.s) < 0.05);
+    parapetRun(A, rng, e, y(P1_TOP), 1.16, i % 2 === 0,
+      c ? { gap: { x: c.fx, z: c.zHead, w: 5.4 } } : null);
   }
   for (let i = 0; i < P2.length; i++) {
     const e = edgeInfo(P2, i);
-    if (Math.abs(e.nz) > 0.9) continue; // ±Z flats: the two radial ramp heads
-    parapetRun(A, rng, e, y(P2_TOP), 1.1, i % 2 === 1);
+    const c = CLIMBS.find((k) => Math.abs(e.nx - k.s) < 0.05);
+    parapetRun(A, rng, e, y(P2_TOP), 1.1, i % 2 === 1,
+      c ? { gap: { x: c.s * P2_R, z: c.zHead, w: 4.6 } } : null);
   }
 
   /**
-   * THE FOUR RAMPS, and they are the tower's whole circulation. Two from the
-   * plain onto P1, laid TANGENTIALLY against the ±X flats so the footprint stays
-   * inside zone D's flattened pad; two radially across the P1 deck onto P2.
-   * Every one is at `RAMP_GRADE`, which the header explains and `tools/navcheck`
-   * proves.
+   * THE TWO CLIMBS. @see the long note on `TREAD` — each is one straight line
+   * from the plain to the gallery outside the control room's door, and the two
+   * of them open in opposite directions so both approach bearings are met by
+   * the bottom of a stair.
    */
-  const rampW = 3.6;
-  const run1 = P1_TOP / RAMP_GRADE; // 8.42 m
-  for (const s of [-1, 1]) {
-    const rx = s * (P1_R + rampW / 2 + 0.15);
-    ramp(A, rng, 'concrete', rx, TOWER.z - s * run1 / 2, y(0), rx, TOWER.z + s * run1 / 2, y(P1_TOP),
-      rampW, { fillKey: 'concrete_dark', baseY: y(-0.5) });
-    // the cheek wall on the outside of the climb, so it is a cutting and not a
-    // plank: a man on the ramp is covered from the flank he is climbing away from
-    wallRun(A, rng, 'concrete_dark', s * (P1_R + rampW + 0.15), TOWER.z - s * (run1 / 2 + 1.2),
-      s * (P1_R + rampW + 0.15), TOWER.z + s * (run1 / 2 + 1.2),
-      { y0: y(-0.4), y1: y(P1_TOP - 0.2), t: 0.55, batter: 0.05, nx: s, nz: 0, course: 0.7 });
-  }
-  const run2 = (P2_TOP - P1_TOP) / RAMP_GRADE; // 8.95 m
-  for (const s of [-1, 1]) {
-    ramp(A, rng, 'concrete', TOWER.x, TOWER.z + s * (P2_R + run2 - 0.6), y(P1_TOP),
-      TOWER.x, TOWER.z + s * (P2_R - 0.6), y(P2_TOP), rampW,
-      { fillKey: 'concrete_dark', baseY: y(P1_TOP - 0.4) });
+  for (const c of CLIMBS) {
+    // flight I — outboard of the ±X face, climbing toward the tower's own z
+    flight(A, rng, 'concrete', c.fx, c.zFoot, y(0), c.fx, c.zHead, y(P1_TOP), FLIGHT_W,
+      { fillKey: 'concrete_dark', baseY: y(-0.55) });
+    /**
+     * The cheek wall on the outside of the climb, so it is a cutting and not a
+     * plank: a man on the stair is covered from the flank he is climbing away
+     * from. It is held to ±(run/2 + 1.2) in z because `TOWER_R` is 25.4 and its
+     * face stands at 24.75 — `plains.js` keeps the plain's scatter out of a
+     * circle of exactly that radius, and widening it would move several thousand
+     * stones and tufts on somebody else's map.
+     */
+    wallRun(A, rng, 'concrete_dark', c.s * (P1_R + FLIGHT_W + 0.15), TOWER.z - (RUN1 / 2 + 1.2),
+      c.s * (P1_R + FLIGHT_W + 0.15), TOWER.z + (RUN1 / 2 + 1.2),
+      { y0: y(-0.4), y1: y(P1_TOP - 0.2), t: 0.55, batter: 0.05, nx: c.s, nz: 0, course: 0.7 });
+    // flight II — radial, inward, on the same line, 2.6 m past the first's head
+    flight(A, rng, 'concrete', TOWER.x + c.s * (P2_R + RUN2 - 0.6), c.zHead, y(P1_TOP),
+      TOWER.x + c.s * (P2_R - 0.6), c.zHead, y(P2_TOP), FLIGHT_W,
+      { fillKey: 'concrete_dark', baseY: y(P1_TOP - 0.45) });
   }
 
   /**
@@ -396,12 +740,54 @@ function faceDetail(A, rng, pts, y0, y1, y, opts = {}) {
   }
 }
 
-/** A parapet run with an embrasure in the middle of the longer bays. */
-function parapetRun(A, rng, e, yTop, h, slit) {
+/**
+ * A parapet run with an embrasure in the middle of the longer bays, and —
+ * `opts.gap` — a STAIR GATE cut through it where a climb arrives.
+ *
+ * The gate is a real opening with a jamb pier either side and a lintel over it,
+ * not an absence of wall: `NavGrid._sealCrossings` shuts a cell whose crossing
+ * is blocked at 0.45 m, so the clear width has to be honest, and a man looking
+ * along the deck has to be able to SEE that the way down is there.
+ */
+function parapetRun(A, rng, e, yTop, h, slit, opts = null) {
   const box = BOX(A);
   const t = 0.44;
   const ix = e.mx - e.nx * (t / 2 + 0.02);
   const iz = e.mz - e.nz * (t / 2 + 0.02);
+  if (opts?.gap) {
+    /**
+     * Where along this edge the gate is, as an offset from its middle: the
+     * projection of the gate's world point onto the edge's own tangent. Derived
+     * rather than authored, so moving a flight moves its gate with it.
+     */
+    const off = (opts.gap.x - e.mx) * e.tx + (opts.gap.z - e.mz) * e.tz;
+    const gw = opts.gap.w;
+    for (const s of [-1, 1]) {
+      const a = s < 0 ? -e.len / 2 : off + gw / 2;
+      const b = s < 0 ? off - gw / 2 : e.len / 2;
+      const seg = b - a;
+      if (seg < 0.4) continue;
+      const cx = ix + e.tx * ((a + b) / 2);
+      const cz = iz + e.tz * ((a + b) / 2);
+      A.add('concrete', box, LL(IDENT, cx, yTop + h / 2, cz, e.yaw, t, h, seg),
+        { masks: [0.4 + rng.float() * 0.3, 0.3, 0.12] });
+      A.box('concrete', cx, yTop + h / 2, cz, t, h, seg, e.yaw);
+      A.add('concrete_dark', BOX_SOFT(A), LL(IDENT, cx, yTop + h + 0.06, cz, e.yaw, t + 0.16, 0.12, seg),
+        { masks: [0.75, 0.3, 0.05] });
+      // the jamb: a taller pier on the gate side of each stub, so the opening
+      // reads as a gateway from the far end of the deck
+      const jx = ix + e.tx * (off + s * (gw / 2 + 0.28));
+      const jz = iz + e.tz * (off + s * (gw / 2 + 0.28));
+      A.add('concrete', box, LL(IDENT, jx, yTop + h * 0.78, jz, e.yaw, t + 0.34, h * 1.56, 0.56),
+        { masks: [0.5, 0.35, 0.15] });
+      A.box('concrete', jx, yTop + h * 0.78, jz, t + 0.34, h * 1.56, 0.56, e.yaw);
+      A.add('concrete_dark', BOX_SOFT(A), LL(IDENT, jx, yTop + h * 1.56 + 0.08, jz, e.yaw, t + 0.5, 0.16, 0.72),
+        { masks: [0.8, 0.3, 0.05] });
+      // and the lamp-less marker that says which way this hole goes
+      A.add('ember', BOX_FINE(A), LL(IDENT, jx - e.nx * 0.3, yTop + h * 1.2, jz - e.nz * 0.3, e.yaw, 0.06, 0.5, 0.09));
+    }
+    return;
+  }
   if (slit && e.len > 6) {
     // two stubs and a firing slit between them
     const gap = 1.5;
@@ -452,7 +838,14 @@ function deckWear(A, rng, rI, rO, yTop) {
   }
 }
 
-/** Ammunition, cable and plant on the two decks. */
+/**
+ * Ammunition, cable and plant on the two decks.
+ *
+ * EVERY DRAW IS TAKEN BEFORE ANYTHING IS SKIPPED, and the keep-out is
+ * `onClimb`. A crate stacked in the head of a flight is the doorway bug this
+ * repo has shipped five times, wearing a different hat: the old ramps had no
+ * keep-out at all and the deck dressing could and did land on them.
+ */
 function deckFurniture(A, rng, y, lights) {
   const put = (id, px, pz, yy, ry, s) => A.put(id, px, yy, pz, ry, s ?? 1);
   // P1: revetments of ordnance boxes against the parapet, and a generator set
@@ -461,9 +854,10 @@ function deckFurniture(A, rng, y, lights) {
     const d = rng.range(13.5, 19.4);
     const px = TOWER.x + Math.cos(a) * d;
     const pz = TOWER.z + Math.sin(a) * d;
-    if (Math.abs(px - TOWER.x) > P1_R - 1.6 || Math.abs(pz - TOWER.z) > P1_R - 1.6) continue;
     const ry = rng.float() * 6.28;
     const stack = rng.int(1, 3);
+    if (Math.abs(px - TOWER.x) > P1_R - 1.6 || Math.abs(pz - TOWER.z) > P1_R - 1.6) continue;
+    if (onClimb(px, pz) || nearStore(px, pz, P1_TOP)) continue;
     for (let k = 0; k < stack; k++) {
       put(rng.float() < 0.5 ? 'crate_c' : 'crate_a', px + rng.range(-0.1, 0.1),
         pz + rng.range(-0.1, 0.1), y(P1_TOP) + 0.02 + k * 0.56, ry + rng.range(-0.1, 0.1));
@@ -472,8 +866,12 @@ function deckFurniture(A, rng, y, lights) {
   for (let i = 0; i < 9; i++) {
     const a = rng.float() * Math.PI * 2;
     const d = rng.range(13.2, 19.0);
-    put(rng.float() < 0.55 ? 'barrel_rust' : 'barrel_blue',
-      TOWER.x + Math.cos(a) * d, TOWER.z + Math.sin(a) * d, y(P1_TOP) + 0.02, rng.float() * 6.28);
+    const px = TOWER.x + Math.cos(a) * d;
+    const pz = TOWER.z + Math.sin(a) * d;
+    const id = rng.float() < 0.55 ? 'barrel_rust' : 'barrel_blue';
+    const ry = rng.float() * 6.28;
+    if (onClimb(px, pz) || nearStore(px, pz, P1_TOP)) continue;
+    put(id, px, pz, y(P1_TOP) + 0.02, ry);
   }
   // the generator that keeps the beacon alight, and the conduit off it
   {
@@ -493,10 +891,23 @@ function deckFurniture(A, rng, y, lights) {
   for (let i = 0; i < 8; i++) {
     const a = rng.float() * Math.PI * 2;
     const d = rng.range(8.2, 11.2);
-    put(rng.pick(['crate_b', 'box_card_a', 'jerry_can', 'bucket']),
-      TOWER.x + Math.cos(a) * d, TOWER.z + Math.sin(a) * d, y(P2_TOP) + 0.02, rng.float() * 6.28);
+    const px = TOWER.x + Math.cos(a) * d;
+    const pz = TOWER.z + Math.sin(a) * d;
+    const id = rng.pick(['crate_b', 'box_card_a', 'jerry_can', 'bucket']);
+    const ry = rng.float() * 6.28;
+    if (onClimb(px, pz, 0.6) || nearStore(px, pz, P2_TOP)) continue;
+    put(id, px, pz, y(P2_TOP) + 0.02, ry);
   }
   lights.push(practical(A, TOWER.x + 8.6, y(P2_TOP) + 2.5, TOWER.z - 2.4, 0xffb066, 14, 18, { s: 0.2 }));
+
+  /**
+   * …AND THE STORES, LAST ON EACH DECK. After the scatter rather than before it
+   * because the scatter is what has to give way: `nearStore` is consulted by
+   * every loop above, so a post is a hole in the litter rather than a thing
+   * buried under it.
+   */
+  buildStores(A, rng, y, P1_TOP);
+  buildStores(A, rng, y, P2_TOP);
 }
 
 // ──────────────────────────────────────────────────────────────────── shaft ──
@@ -705,10 +1116,22 @@ function controlRoom(A, rng, y) {
     for (const [qx, qz] of [[-3.1, -3.1], [3.1, -3.1], [-3.1, 3.1], [3.1, 3.1]]) {
       if (Math.hypot(px - TOWER.x - qx, pz - TOWER.z - qz) < 0.85 + r) { ok = false; break; }
     }
+    // …and off the two supply posts, by the same edge-not-centre measure
+    if (nearStore(px, pz, ROOM_Y, 1.9 + r)) ok = false;
     if (!ok) continue;
     A.put(id, px, y(ROOM_Y) + 0.02, pz, rng.float() * 6.28, s);
     placed++;
   }
+
+  /**
+   * THE TWO POSTS THIS ROOM EXISTS FOR. They flank the plotting table along its
+   * own long axis, which is the one line in here with no pier, no rack and no
+   * door on it — 2.4 m from the table's edge, 2.4 m from the nearest pier and
+   * 4.1 m from the nearest doorway, so `Caches.prove` has open floor to snap a
+   * bot's standing cell onto and the man at the keyboard is never holding F
+   * through a crate.
+   */
+  buildStores(A, rng, y, ROOM_Y);
 
   // two bulbs, because an unlit room at 21:40 is a black hole with a door in it
   practical(A, TOWER.x - 2.2, y(ROOM_Y + 3.4), TOWER.z + 1.4, 0xffc07a, 11, 14, { s: 0.14 });
@@ -762,9 +1185,19 @@ function shaftInterior(A, rng, y) {
     for (let i = 0; i < 5; i++) {
       const px = TOWER.x + (rng.float() < 0.5 ? -1 : 1) * rng.range(2.2, inR - 0.8);
       const pz = TOWER.z + rng.range(-inR + 0.8, inR - 0.8);
-      A.put(rng.pick(['crate_b', 'box_card_b', 'jerry_can', 'sandbag_b']), px, y(fy) + 0.02, pz,
-        rng.float() * 6.28, rng.range(0.9, 1.1));
+      const id = rng.pick(['crate_b', 'box_card_b', 'jerry_can', 'sandbag_b']);
+      const ry = rng.float() * 6.28;
+      const sc = rng.range(0.9, 1.1);
+      if (nearStore(px, pz, fy, 2.2)) continue;
+      A.put(id, px, y(fy) + 0.02, pz, ry, sc);
     }
+    /**
+     * …AND ON ONE OF THEM, THE RACK. Four storeys of stair is the price of the
+     * map's second primary weapon, and that price is the point — it is the one
+     * reward on this tower a bot can never take, because `NavGrid` is a height
+     * field and an internal staircase is zero waypoints. @see `STORES`.
+     */
+    buildStores(A, rng, y, fy);
     if (f < FLOORS.length) {
       practical(A, TOWER.x + rng.range(-2, 2), y(fy + 3.2), TOWER.z + rng.range(-2, 2), 0xffc07a, 7, 11, { s: 0.12 });
     }
@@ -829,6 +1262,17 @@ function buildCab(A, rng, y, lights) {
       -a, 1.5, 0.05, 0.5), { masks: [0.2, 0.3, 0] });
   }
   lights.push(practical(A, TOWER.x, y(cf + 2.4), TOWER.z, 0xffd7a0, 26, 26, { s: 0.24 }));
+
+  /**
+   * THE CAB POST, AND IT IS DRESSED `clip` FOR THE REASON THE ROOF ARRAY IS.
+   * Every piece of this cab is on `LAYER.CLIP`, which `MASK.WORLD` does not
+   * contain — and `NavGrid.build` drops ONE ray per cell under that same mask
+   * and keeps the FIRST hit. A `STATIC` ordnance box standing on a CLIP floor
+   * at 29.3 m is a walkable island in the sky and a `_floatcheck` failure, which
+   * is exactly what the four roof props were before `clipProps` was put round
+   * them. So the whole post goes on the same layer as the floor it stands on.
+   */
+  buildStores(A, rng, y, ROOF_Y + 0.32);
 
   // ---- the cab roof, the dishes and the mast ------------------------------
   prism(A, 'concrete_dark', CAB, y(CAB_TOP - 0.34), y(CAB_TOP), { surface: 'concrete', clip: true });
