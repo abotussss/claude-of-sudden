@@ -80,6 +80,19 @@ const until = (secs) => p.evaluate((secs) => new Promise((r) => {
 }), secs);
 
 /**
+ * …AND WAITING FOR THE SETTLE IS A DIFFERENT QUESTION FROM WAITING FOR A TIME.
+ * `site.t` STOPS at `SETTLE_AT` 6.5 — `_bakeSettled` freezes it — so `until(9)`
+ * never resolves and the run hangs forever with nine razed frames still to
+ * take. The settle has its own flag and that is what to wait on.
+ */
+const settled = () => p.evaluate(() => new Promise((r) => {
+  const s = window.__ENGINE__.ctx.peek('match').airstrike.sites.find((k) => k.id === 'NF-TOWER');
+  let n = 0;
+  const t = () => (s.baked || ++n > 4000 ? r(!!s.baked) : requestAnimationFrame(t));
+  requestAnimationFrame(t);
+}));
+
+/**
  * Stand at (x,z) with the eye `eye` m over whatever is under it, looking at `at`.
  *
  * `from` is where the floor ray STARTS, and it has to be an argument. Inside the
@@ -169,7 +182,7 @@ await wait(60);
 await p.evaluate(() => window.__ENGINE__.ctx.peek('match').airstrike.callDemolition('NF-TOWER'));
 await shotT('06-during-inside-early', 'THE ACT, from where the man in the control room is standing', 0.5);
 await shotT('07-during-inside-late', 'THE ACT, same man, same spot', 2.0);
-await until(30);   // let this one settle, then set up the outside pair
+await settled();   // let this one settle, then set up the outside pair
 await p.evaluate(() => {
   const m = window.__ENGINE__.ctx.peek('match');
   const s = m.airstrike.sites.find((k) => k.id === 'NF-TOWER');
@@ -184,7 +197,7 @@ await wait(60);
 await p.evaluate(() => window.__ENGINE__.ctx.peek('match').airstrike.callDemolition('NF-TOWER'));
 await shotT('08-during-from-86m-early', 'THE ACT, from 86 m south-east', 1.2);
 await shotT('09-during-from-86m-late', 'THE ACT, from 86 m south-east', 3.2);
-await until(9.0);  // past SETTLE_AT 6.5 s
+await settled();   // `site.t` stops at SETTLE_AT; the flag is the truth
 await freeze(true);
 
 /* ------------------------------------------------------------------- razed -- */
