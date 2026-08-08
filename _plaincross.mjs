@@ -74,6 +74,7 @@ if (level !== 'plains') { console.error('NOT THE PLAIN — aborting.'); await b.
 const out = await page.evaluate(() => {
   const e = window.__ENGINE__;
   const ph = e.ctx.peek('physics');
+  const wld = e.ctx.peek('world');
   const MASK = ph.MASK.WORLD;
   const EYE = 1.62;
   const STEP = 2.0;
@@ -99,6 +100,36 @@ const out = await page.evaluate(() => {
     const h = ph.raycast(x, 300, z, 0, -1, 0, 400, MASK);
     return h.hit ? h.point.y : null;
   };
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * A MAN CANNOT STAND ON THE COVER, AND THE FIRST TWO CUTS OF THIS FILE PUT
+   * HIM THERE
+   * ────────────────────────────────────────────────────────────────────────
+   * The downward ray finds the top of whatever is at (x, z) — and where a berm
+   * is standing ON the route, which is the whole object of `plains-cover.js`,
+   * that is the CREST of the berm. Both the observer and the target man were
+   * then floated to 2.2 m up and given a clean view over everything, so the
+   * metric reported a route as MORE exposed the better it was covered.
+   *
+   * Measured, and it is not a rounding error: putting one berm on the C -> D
+   * lane took that route from 2 % exposed to 50 % and its run from 2 m to 46 m,
+   * with mass ADDED and nothing else changed. The same artefact is why BASE-N
+   * -> A reads 79 m of lane bare and 105 m with three pieces of cover on it.
+   *
+   * `world.groundHeight` is the level's own analytic floor — `plainsY` — and on
+   * bare ground it agrees with the collision ray to about two centimetres
+   * (measured: -1.96 vs -1.98, -4.77 vs -4.79). So where the ray comes back
+   * more than `MASS` over it, there is MASS there: the walker is not standing on
+   * it, he is walking round it, and the sightline down the route is stopped by
+   * it. That is what `mass` marks, and it is used twice — those samples are not
+   * observer positions, and they terminate a ray.
+   *
+   * Only mass ABOVE the plain counts. A trench section reads far BELOW it, and a
+   * man in a cut is genuinely standing there and genuinely lower than the line,
+   * which the existing arithmetic already handles correctly.
+   */
+  const MASS = 0.6;
+  const terrainAt = (x, z) => (wld.groundHeight ? wld.groundHeight(x, z) : null);
   /**
    * ────────────────────────────────────────────────────────────────────────
    * A HORIZONTAL RAY IS NOT A SIGHTLINE, AND THE FIRST CUT OF THIS FILE USED
@@ -131,6 +162,8 @@ const out = await page.evaluate(() => {
       if (j < 0 || j >= prof.length) return d;
       const p = prof[j];
       if (!p) return d;
+      // mass standing on the route: he is not on top of it, he is behind it
+      if (p.mass) return d;
       const dx = p.x - x, dy = p.g + CHEST - y, dz = p.z - z;
       const len = Math.hypot(dx, dy, dz);
       const h = ph.raycast(x, y, z, dx / len, dy / len, dz / len, len - 0.15, MASK);
@@ -149,14 +182,16 @@ const out = await page.evaluate(() => {
     for (let s = 0; s <= L + 1e-6; s += STEP) {
       const x = ax + tx * s, z = az + tz * s;
       const g = groundAt(x, z);
-      prof.push(g === null ? null : { x, z, g, s });
+      const t = terrainAt(x, z);
+      prof.push(g === null ? null : { x, z, g, s, mass: t !== null && g - t > MASS });
     }
     // Skip the pads themselves at each end: the capture circle is not the walk.
     const s0 = 18, s1 = L - 18;
     const samples = [];
     for (let i = 0; i < prof.length; i++) {
       const p = prof[i];
-      if (!p || p.s < s0 || p.s > s1) continue;
+      // …and he is not an observer from up there either. @see `MASS`.
+      if (!p || p.mass || p.s < s0 || p.s > s1) continue;
       const s = p.s, x = p.x, z = p.z, g = p.g;
       const y = g + EYE;
       const fwd = seen(x, y, z, i, 1, prof, CAP);
@@ -181,8 +216,13 @@ const out = await page.evaluate(() => {
     const exposed = samples.filter((v) => v.lane > OPEN).length / n;
     const covered = samples.filter((v) => v.near < NEAR).length / n;
     // the longest continuous exposed stretch, in metres
-    let run = 0, cur = 0;
+    let run = 0, cur = 0, prev = null;
     for (const v of samples) {
+      // A BREAK IN THE CHAIN ENDS THE RUN. Samples are dropped where mass is
+      // standing on the route (@see `MASS`), and walking round a burnt lorry is
+      // the most emphatic possible end to a stretch of open ground.
+      if (prev !== null && v.s - prev > STEP + 1e-6) cur = 0;
+      prev = v.s;
       if (v.lane > OPEN) { cur += STEP; if (cur > run) run = cur; } else cur = 0;
     }
     const mean = (f) => samples.reduce((a, v) => a + f(v), 0) / n;
