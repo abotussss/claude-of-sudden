@@ -55,6 +55,10 @@
  *   p.health  p.maxHealth  p.healthFraction  p.lowHealth  p.dead
  *   p.suppression  p.damageIndicators
  *   p.applyDamage(amount, fromVector3, opts)   p.heal(a)   p.addSuppression(a)
+ *   p.onNearMiss(miss)        CALLED BY `ai` AND `tank`, not by us: the closest
+ *                             approach in metres of an enemy round that came
+ *                             past without wounding you. Flinch + suppression.
+ *                             @see the note on the method.
  *   p.lastDamage      { at, amount, type, source, kind, label, team, from }
  *                     WHAT LAST HURT YOU, written at the one funnel every wound
  *                     goes through and readable the instant `player:death`
@@ -200,6 +204,12 @@ export class PlayerSystem {
     };
     /** Set by a listener immediately before it calls `applyDamage`. */
     this._pending = null;
+    /**
+     * The last round that passed close enough to be for you. @see onNearMiss —
+     * `at` is what makes a burst read as one event, `count`/`miss` are published
+     * through `stats` so a probe can count what the player was made to feel.
+     */
+    this._nearMiss = { at: -1000, miss: 0, count: 0 };
 
     this._tmp = new THREE.Vector3();
     /** Last emitted discrete state, compared field-wise so no string is built. */
@@ -222,6 +232,12 @@ export class PlayerSystem {
     this.movement = new Movement(ctx, this);
     this.rig = new CameraRig(ctx);
     this.health = new Health(ctx, this.rig);
+    /**
+     * Forked, never drawn from `ctx.rng` directly: the shared stream lays the
+     * map out and a draw taken from it at runtime would move everything the
+     * world builds after us. @see onNearMiss, its only consumer.
+     */
+    this._rng = ctx.rng.fork();
 
     // ---- spawn -----------------------------------------------------------
     const spawn = this._resolveSpawn();
@@ -607,6 +623,81 @@ export class PlayerSystem {
     this.health.addSuppression(HEALTH.suppression.perNearMiss * (1 - d / R));
   }
 
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * A ROUND THAT WAS FOR YOU — 「全然撃ってない 相手が」
+   * ══════════════════════════════════════════════════════════════════════════
+   * Called by `src/ai/index.js` (`_testPlayerHit`) and `src/match/tank.js` with
+   * the CLOSEST APPROACH, in metres, of an enemy round to the player's chest,
+   * for every round that passed between the hit radius and 1.6 m without
+   * wounding him. Until now it was declared nowhere and both call sites are
+   * written `player.onNearMiss?.(miss)`, so the optional call swallowed the
+   * whole feed in silence.
+   *
+   * IT IS NOT THE SAME EVENT `_onBulletImpact` ABOVE HANDLES, and the two were
+   * measured side by side before this was written — `_nmprobe.mjs`, 116 s on the
+   * plain, 40 v 40, standing in the fire lane with the nearest enemy averaging
+   * 81 m:
+   *
+   *   this feed      16 calls, 0.14/s — every one of them a round FROM THE ENEMY
+   *                  whose TRAJECTORY came inside 1.6 m of the chest (ten of the
+   *                  sixteen inside 0.7 m). Where the round eventually stopped is
+   *                  irrelevant to it. 1006 enemy rounds came past in that time;
+   *                  these are the sixteen that nearly connected.
+   *   _onBulletImpact  164 impacts stopped within 3.2 m of the eye, 131 of them
+   *                  past the forward-cone gate — 1.1/s. It cannot tell whose
+   *                  round it was, and with forty team-mates firing past your
+   *                  shoulder the great majority of that traffic is not enemy
+   *                  fire at all. It is also blind the other way: 185 rounds
+   *                  passed inside 1.6 m of the eye in the same 116 s and stopped
+   *                  further than 3.2 m away, where it never sees them.
+   *
+   * So one is "something landed near me" and this one is "somebody shot at ME
+   * and nearly had me". They are wired to different feelings on purpose: the
+   * impact path only feeds the suppression pool, which ramps breath sway over
+   * seconds; this one is a discrete FLINCH, because a round passing your ear is
+   * an instant, not a mood. It spends that flinch on the RECOIL springs and not
+   * on `addTrauma` — measured, @see HEALTH.nearMiss, where a near-miss-sized
+   * trauma turned out to sit under the breathing sway and be worth nothing.
+   *
+   * NO DIRECTION IS AVAILABLE and none is invented: both callers pass a bare
+   * scalar, so the lateral half of the flick takes its sign from `ctx.rng` and
+   * the flinch is symmetric. If a caller ever passes the shooter's position
+   * this becomes a directional duck for one line's work — it is named in the
+   * handover rather than stubbed in here, because an argument nothing sends is
+   * the same silent nothing `onNearMiss` itself was.
+   *
+   * Deliberately NOT done here: no sound. `src/audio/index.js` already
+   * reconstructs the same geometry from `bullet:impact`/`bullet:tracer` and
+   * cracks a whizz out to 5 m; a second voice from here would double it.
+   *
+   * @param {number} miss  closest approach to the chest, metres
+   */
+  onNearMiss(miss) {
+    if (!this.rig || !this.health || this.health.dead) return;
+    if (!(miss >= 0)) return;
+    const N = HEALTH.nearMiss;
+    // 1 at the hit radius, `floor` at the callers' outer gate. The callers own
+    // that band; clamping rather than trusting it costs nothing.
+    const w = clamp01((N.gate - miss) / (N.gate - N.inner));
+    const r = this._nearMiss;
+    const now = this.ctx.time.elapsed;
+    /**
+     * A coax burst is ONE thing happening to you, not five. Rounds arriving
+     * inside `gap` of the last still register — the springs keep stacking, so a
+     * burst that walks across you builds — they just do not each buy a full
+     * flick.
+     */
+    const s = now - r.at < N.gap ? N.burstScale : 1;
+    r.at = now;
+    r.miss = miss;
+    r.count++;
+    const k = (N.floor + (1 - N.floor) * w) * s;
+    const side = this._rng.float() < 0.5 ? -1 : 1;
+    this.rig.addRecoil(N.pitch * k, N.yaw * k * side, N.roll * k * side, 0);
+    this.health.addSuppression(N.suppress * k);
+  }
+
   /* ==================================================================== */
   /* public API                                                           */
   /* ==================================================================== */
@@ -919,6 +1010,10 @@ export class PlayerSystem {
       fov: this.rig.fov,
       health: this.health.value,
       suppression: this.health.suppression,
+      trauma: this.rig.trauma,
+      nearMisses: this._nearMiss.count,
+      lastNearMiss: this._nearMiss.miss,
+      lastNearMissAt: this._nearMiss.at,
     };
   }
 

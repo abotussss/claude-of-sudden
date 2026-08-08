@@ -296,6 +296,67 @@ export const HEALTH = {
     shakeScale: 0.28,
   },
 
+  /**
+   * A ROUND THAT WAS FOR YOU — `PlayerSystem.onNearMiss`.
+   *
+   * `src/ai/index.js` and `src/match/tank.js` both solve the closest approach of
+   * every ENEMY round to the player's chest and hand over anything that passed
+   * between the hit radius and 1.6 m. Those two numbers are theirs, not ours;
+   * `gate` and `inner` only restate them so the closeness weight has the same
+   * ends as the band the callers actually deliver.
+   *
+   * MEASURED on the plain, 40 v 40, 116 s standing in the fire lane
+   * (`_nmprobe.mjs`): 1006 enemy rounds came past, 16 of them inside the 1.6 m
+   * band. So this is RARE — one every seven seconds at the sharp end, and none
+   * at all if you stay behind the hill — and it is therefore tuned as
+   * punctuation rather than as a pool. `suppression.perNearMiss` above is the
+   * pool: it runs ~1.1/s off impacts that STOPPED near the eye and cannot tell
+   * an enemy's round from a team-mate's.
+   */
+  nearMiss: {
+    /** The callers' band. @see src/ai/index.js `_testPlayerHit`. */
+    gate: 1.6,
+    inner: 0.42,
+    /**
+     * A COHERENT FLICK, NOT SHAKE, AND THE CHANNEL WAS CHOSEN BY MEASUREMENT.
+     * The rig was driven at 120 Hz from rest (`_nmshake.mjs`) and the peak angle
+     * the view reaches was read off:
+     *
+     *   breathing sway alone, the floor that is always there   0.226°
+     *   addTrauma(0.34)                                        0.237°  ← nothing
+     *   addTrauma(0.60)                                        0.519°
+     *   addRecoil(0.45°, 0.30°, 0.70°)                         0.479°
+     *   a 21-damage round that HIT you                         1.552°
+     *
+     * Shake goes as trauma², so a near-miss-sized trauma is INVISIBLE under the
+     * breathing floor — the first draft of this spent 0.34 there and measured
+     * 0.011° over the control. Trauma only clears the floor at ~0.6, which is
+     * most of the 0..1 clamp an explosion has to share, so two near misses in a
+     * second would read as a blast. The recoil springs are coherent, recentre on
+     * their own, and are the channel a round that hits you already uses; a
+     * quarter of that impulse is legible at a fifth of the cost.
+     *
+     * Radians. Peak view angle: 0.50° at `inner`, 0.27° at `gate`.
+     */
+    pitch: 0.5 * DEG,
+    yaw: 0.34 * DEG,
+    roll: 0.8 * DEG,
+    /**
+     * Floor of the closeness weight. 0.55 rather than something smaller because
+     * below about half of the above the flick sinks back under the breathing
+     * floor and the outer half of the band would be a no-op again.
+     */
+    floor: 0.55,
+    /** Suppression at `inner`; lifts breath sway for about half a second. */
+    suppress: 0.3,
+    /**
+     * A coax burst is ONE thing happening to you, not five. Rounds arriving
+     * inside `gap` of the last still register, at `burstScale` of the jolt.
+     */
+    gap: 0.12,
+    burstScale: 0.4,
+  },
+
   /** Low-health screen treatment (desaturate + vignette + heartbeat). */
   effect: {
     desaturate: 0.62,
