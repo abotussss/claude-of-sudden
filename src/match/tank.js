@@ -1169,6 +1169,70 @@ const RAZE_UP = 6.0;
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
+ * 「たまに穴があって次元のはざまに落とされる」 — THE FLOOR IS NOT DRESSING
+ * ────────────────────────────────────────────────────────────────────────────
+ * Every eraser in this file — the plough's piles, the raze atlas, the block
+ * atlas — guarded the ground with a RISE TEST against a single road datum:
+ * `yhi <= q.riseY` for the pile, `yhi <= b.y + 0.12` for the block. That datum
+ * is the height of the road AT ONE POINT (the pile's centre, the block's
+ * centre), and it is the reason a hole opens on the plain and never in the
+ * town: the town's carriageway is flat, so one datum describes the whole box,
+ * and the plain's is not. Ground half a metre into a pile box on a 6 % slope is
+ * already above the centre's `riseY` and is taken as if it were a sandbag.
+ *
+ * The raze atlas had no rise test at all. Its two rules are that a triangle be
+ * SMALL and NEAR an instance, and the note over `_buildRazeAtlas` justifies the
+ * size rule with "a merged wall's triangles are metres long". SO IS NO PART OF
+ * THIS MAP'S GROUND. Measured on the built plain: `collide_dirt` is 323 218
+ * triangles and 311 497 of them are 1.0–1.5 m across — the terrain sheet is
+ * finer than `RAZE_TRI`, not coarser — so 128 235 pieces of floor were bound to
+ * whatever prop happened to stand within `RAZE_BIND` of them, and a shell
+ * landing in the field took the field away. 29 362 of 608 181 sample points
+ * (4.8 %) had no triangle left under them after 420 match seconds.
+ *
+ * So the datum goes, and the question is asked of the geometry instead: IS
+ * THERE ANYTHING UNDER THIS TRIANGLE? A face with solid under it can be taken —
+ * a man who walks off it lands on whatever held it up. A face with NOTHING
+ * under it is the last thing between him and the void, whatever it is made of
+ * and whatever is standing on it, and no eraser may bind it. That is the rise
+ * test's intent, stated so that it follows the terrain, the trench floor, the
+ * works platform and the fort deck for free, because it never mentions them.
+ *
+ * It is downward `raycastAny` over each face at BOOT, into `_floorTri`, and
+ * every eraser reads the array. Nothing is computed on the frame a shell fires.
+ */
+/** |ny| above which a face is something a man could stand on. cos 70°. */
+const FLOOR_UP = 0.34;
+/** The support ray starts this far under the triangle's LOWEST vertex, so it
+ *  cannot hit the triangle it is asking about. */
+const FLOOR_DROP = 0.05;
+/** …and looks this far down. Nothing below this is a floor either. */
+const FLOOR_REACH = 300;
+/**
+ * WHERE THE SUPPORT IS ASKED FOR, in barycentric weights. A SINGLE RAY AT THE
+ * CENTROID IS NOT ENOUGH, and the measurement that says so is the residue: with
+ * one sample the plain came back from a 420 s match with 86 cells still missing
+ * in 25 pockets up to 1.6 x 3.2 m, and `_zzsupport.mjs` attributed almost all of
+ * them to a triangle whose support WAS STILL STANDING — a slab under the middle
+ * of a face that does not reach its corners. `_nfvoid.mjs` samples the map on a
+ * 0.4 m grid; a support test that samples one point of a 1.5 m triangle is
+ * coarser than the gate that grades it.
+ *
+ * So: the centroid, the three corners and the three edge midpoints, each pulled
+ * 12 % in so the ray cannot slip down a shared edge on floating-point luck. ANY
+ * of the seven finding nothing makes the whole triangle floor, and the first one
+ * that does ends the test — which is why seven samples cost well under seven
+ * times one: 329 721 up-facing faces on the plain take 527 653 rays, not
+ * 2 308 047, because the great majority are floor and their first ray says so.
+ */
+const FLOOR_BARY = [
+  [0.334, 0.333, 0.333],
+  [0.76, 0.12, 0.12], [0.12, 0.76, 0.12], [0.12, 0.12, 0.76],
+  [0.12, 0.44, 0.44], [0.44, 0.12, 0.44], [0.44, 0.44, 0.12],
+];
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
  * 「戦車自体はもっと敵に打たれたり補足したらすぐ打ち返してね」 — THE CREW ANSWERS AT ONCE
  * ────────────────────────────────────────────────────────────────────────────
  * WHAT THE DELAY ACTUALLY WAS, ADDED UP RATHER THAN GUESSED AT. Between a round
@@ -1547,6 +1611,18 @@ export class Armour {
       console.warn('[tank] prop index failed — the plough is disabled', err);
     }
     /**
+     * BEFORE EVERY ERASER, because all three read it and none of them may bind
+     * a piece of floor. @see the note over `FLOOR_UP`. A failure here leaves
+     * `_floorTri` null and every eraser falls back to the rise tests it always
+     * had, which is the behaviour this shipped with rather than an open hole.
+     */
+    try {
+      this._buildFloorMask(physics);
+    } catch (err) {
+      console.warn('[tank] floor mask failed — the erasers fall back to their road datums', err);
+      this._floorTri = null;
+    }
+    /**
      * BEFORE the hulls, because the routes are baked against it: `_ploughableAt`
      * asks `_blockAt` whether a 3.4 m pier is mass the hull can take off, and
      * `_trimAtBlockers` cuts a leg at anything it cannot. @see
@@ -1587,6 +1663,8 @@ export class Armour {
     props = null;
     this._ploughClaimed = null;
     this._propGrid = null;
+    // Nothing binds after boot, and it is 366 KB on the plain.
+    this._floorTri = null;
     if (this.tanks.length) ctx.scene.add(this.group);
 
     ctx.events.on('explosion', this._onExplosion);
@@ -2874,6 +2952,11 @@ export class Armour {
       // A triangle belongs to exactly one eraser. @see the `claimed` note above
       // — two owners means whichever restores second writes a zero back.
       if (this._blockTri?.[t]) continue;
+      // It stands on nothing, so it is what everything else stands on. The
+      // `riseY` test below is kept and is not enough on its own: `riseY` is the
+      // road at the pile's CENTRE and the plain slopes through the box.
+      // @see `_buildFloorMask`.
+      if (this._floorTri?.[t]) continue;
       for (let b = 0; b < bin.length; b++) {
         const k = bin[b];
         const q = tank.plough[k];
@@ -3168,6 +3251,14 @@ export class Armour {
       // Claimed by a free-standing block already. @see `_buildBlockAtlas`, and
       // the `_ploughClaimed` note above for why one owner per triangle.
       if (this._blockTri?.[t]) continue;
+      /**
+       * IT IS THE GROUND THE PROP IS STANDING ON. This is the rise test the
+       * plough always had and this atlas never did, and it is the whole of the
+       * 「次元のはざま」 bug: the plain's terrain sheet is 1.0–1.5 m across, well
+       * under `RAZE_TRI`, so every prop in the field bound the field under it
+       * and a shell took it away. @see `_buildFloorMask`.
+       */
+      if (this._floorTri?.[t]) continue;
       const o = t * 9;
       const x0 = pos[o], y0 = pos[o + 1], z0 = pos[o + 2];
       const x1 = pos[o + 3], y1 = pos[o + 4], z1 = pos[o + 5];
@@ -3284,6 +3375,91 @@ export class Armour {
       rec.fired = false;
     }
     a.fired.length = 0;
+  }
+
+  /* ====================================================================== */
+  /* THE FLOOR: WHAT NO ERASER MAY TOUCH                                     */
+  /* ====================================================================== */
+
+  /**
+   * ONE BIT PER STATIC TRIANGLE: is this the last thing between a man and the
+   * void? @see the note over `FLOOR_UP` for why the rise tests it replaces
+   * could not answer that on sloping ground.
+   *
+   * A triangle is FLOOR when it faces up enough to stand on AND there is no
+   * other solid triangle beneath it. The ray starts `FLOOR_DROP` under its
+   * LOWEST vertex, so the whole triangle is behind the origin and it cannot
+   * answer with itself, and it asks the same BVH under the same mask the
+   * character controller sweeps — `MASK.CHARACTER`, not `MASK.WORLD`, because a
+   * dynamic collider is floor to `physics.raycast` and air to the player, which
+   * is the second of the three ways `_nfhole.mjs` let this through.
+   *
+   * TWO DELIBERATE CONSERVATISMS, both of which keep collision rather than
+   * remove it, which is the safe direction for a nav grid baked at boot:
+   *
+   *   A BOX RESTING ON THE GROUND has its underside flush with the ground, so
+   *   the ray starts BELOW the ground and reports nothing. Its underside is
+   *   therefore kept while its sides and top are taken — a face flush with the
+   *   floor, which is not a wedge, not a step and not a wall.
+   *
+   *   MASS STACKED ON MASS is judged against the map as BUILT. If a prop stands
+   *   on a prop, the upper one's floor is the lower one and it binds; both can
+   *   then come off together. That is the airstrike's own staleness class, and
+   *   `_floatcheck.mjs` is the gate for it.
+   *
+   * Triangles that are not in `MASK.CHARACTER` to begin with — the shoot-only
+   * boxes, the clip volumes — are nobody's floor and are never marked.
+   */
+  _buildFloorMask(physics) {
+    this._floorTri = null;
+    const sw = physics?.staticWorld;
+    const pos = sw?.pos;
+    const n = sw?.triCount ?? 0;
+    if (!pos || !n || !sw.mask) return;
+    const t0 = performance.now();
+    const CH = physics.MASK.CHARACTER;
+    const floor = new Uint8Array(n);
+    let marked = 0;
+    let asked = 0;
+    let rays = 0;
+    for (let t = 0; t < n; t++) {
+      if ((sw.mask[t] & CH) === 0) continue;
+      const o = t * 9;
+      const x0 = pos[o], y0 = pos[o + 1], z0 = pos[o + 2];
+      const x1 = pos[o + 3], y1 = pos[o + 4], z1 = pos[o + 5];
+      const x2 = pos[o + 6], y2 = pos[o + 7], z2 = pos[o + 8];
+      // |ny| of the un-normalised cross product, against the triangle's own
+      // area: the BVH does not promise a winding (8008 of the plain's dirt
+      // triangles come back wound the other way) and a face that stands on
+      // nothing is floor whichever side of it is up.
+      const ax = x1 - x0, ay = y1 - y0, az = z1 - z0;
+      const bx = x2 - x0, by = y2 - y0, bz = z2 - z0;
+      const nx = ay * bz - az * by;
+      const ny = az * bx - ax * bz;
+      const nz = ax * by - ay * bx;
+      const L = Math.hypot(nx, ny, nz);
+      if (!(L > 0) || Math.abs(ny) / L <= FLOOR_UP) continue;
+      const lo = Math.min(y0, y1, y2) - FLOOR_DROP;
+      let held = true;
+      for (let s = 0; s < FLOOR_BARY.length; s++) {
+        const w = FLOOR_BARY[s];
+        rays++;
+        if (sw.raycastAny(x0 * w[0] + x1 * w[1] + x2 * w[2], lo, z0 * w[0] + z1 * w[1] + z2 * w[2],
+          0, -1, 0, FLOOR_REACH, CH)) continue;
+        held = false;
+        break;
+      }
+      asked++;
+      if (held) continue;
+      floor[t] = 1;
+      marked++;
+    }
+    this._floorTri = floor;
+    console.info(
+      `[tank] floor mask: ${marked} of ${n} static triangles are unsupported somewhere over ` +
+        `their own face and are unerasable (${asked} up-facing faces asked, ${rays} rays), ` +
+        `in ${(performance.now() - t0).toFixed(0)}ms`
+    );
   }
 
   /* ====================================================================== */
@@ -3568,8 +3744,12 @@ export class Armour {
         if (zlo < b.minZ || zhi > b.maxZ) continue;
         if (ylo < b.minY || yhi > b.maxY) continue;
         // It lies flat on the carriageway: it IS the road, not the block, and
-        // a hole in the road is how men fall out of the level.
+        // a hole in the road is how men fall out of the level. `b.y` is the
+        // road at the block's CENTRE, which is one datum for a box the plain
+        // slopes through, so the geometric test stands beside it rather than
+        // instead of it. @see `_buildFloorMask`.
         if (yhi <= b.y + 0.12) continue;
+        if (this._floorTri?.[t]) continue;
         cTris[b.ix].push(t);
         mark[t] = 1;
         break;
