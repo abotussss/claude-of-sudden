@@ -122,7 +122,7 @@
 import * as THREE from 'three';
 import { RULES } from './rules.js';
 import { chunkGeometry, clamp, makeChunkMaterial, mergeGeometries } from './airstrike.js';
-import { forMap, townScaled } from './geography.js';
+import { forMap, townScaled, PLAINS } from './geography.js';
 
 /** The town's 1.5x, stated once in `geography.js` and aliased to the name the
  *  table below already uses. The plain's tables need no transform at all. */
@@ -315,7 +315,16 @@ const PLAINS_RUNS = [
   { id: 'SOUTHFAN', name: 'THE SOUTH FAN', from: [80, 112], to: [-10, 112], bombs: 7 },
   { id: 'WESTFLANK', name: 'THE WEST FLANK', from: [-124, -40], to: [-124, 40], bombs: 6 },
   { id: 'EASTFLANK', name: 'THE EAST FLANK', from: [124, 40], to: [124, -40], bombs: 6 },
-  { id: 'CENTREWEST', name: 'WEST OF THE WORKS', from: [-58, -50], to: [-58, 40], bombs: 7 },
+  /**
+   * CENTREWEST MOVED -58 -> -47, ON A RE-MEASUREMENT. The fieldworks that have
+   * gone in beside the tower since this line was authored put one of its seven
+   * bombs 3.6 m over the outdoor deck and `_reportGround` said so every boot.
+   * Swept live in level space (`_decksweep.mjs`, x -56..-40 over this line's own
+   * z span): x -49.5..-44.0 is 5.5 m wide with a worst of 0.35 m, against a
+   * corridor at -58 that no longer exists. CENTREEAST is NOT moved to match —
+   * it measures clear at +58 and the works are not symmetric.
+   */
+  { id: 'CENTREWEST', name: 'WEST OF THE WORKS', from: [-47, -50], to: [-47, 40], bombs: 7 },
   { id: 'CENTREEAST', name: 'EAST OF THE WORKS', from: [58, 40], to: [58, -50], bombs: 7 },
   /**
    * ──────────────────────────────────────────────────────────────────────────
@@ -348,6 +357,181 @@ const PLAINS_RUNS = [
   { id: 'NORTHCROSS', name: 'THE NORTH TRAVERSE', from: [-92, -76], to: [92, -76], bombs: 9 },
   { id: 'SOUTHCROSS', name: 'THE SOUTH TRAVERSE', from: [92, 96], to: [-92, 96], bombs: 9 },
 ];
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * …AND THE LINES NOBODY AUTHORED — 「ランダムに広範囲に一列爆撃にして それを定期的に」
+ * ════════════════════════════════════════════════════════════════════════════
+ * 「空爆は占領サイトに落とすのではなくそれ以外の平原にランダムに広範囲に一列爆撃に
+ *  して それを定期的に起こす / 占領サイトへの直接はダメ / ただし破壊オブジェ＋占領
+ *  サイトの場所には落としてもいい」
+ *
+ * Five requirements, and this table is the first four of them:
+ *
+ *   一列爆撃      a STICK walking a line, which is what this whole file is
+ *   ランダムに     the line is drawn rather than authored
+ *   広範囲に      anywhere on the 350 m plain, not on six fixed corridors
+ *   定期的に      through the match — @see `bomberMaxPerRound` in rules.js
+ *   占領サイトへの直接はダメ   no impact inside a capture circle, ever
+ *
+ * The fifth — 「破壊オブジェ＋占領サイトの場所には落としてもいい」 — is what keeps
+ * the two NACHTFELD acts legal, and it needs no code here: `NF-TOWER` and
+ * `NF-FORT` are `world.demolitions` records at zone D, they are fired by
+ * `Airstrike.callDemolition` off `MAP_ACTS`, and nothing below touches them.
+ * This table does NOT take the exception for itself. It could — D is a
+ * structure and a capture point at the same time — but a randomised line is
+ * not a scored act, and a bomb that lands on the point by chance is
+ * indistinguishable to the man standing on it from the rule being broken.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * RANDOM AT BOOT, DRAWN AT FIRE TIME. NOTHING IS SOLVED WHEN IT FIRES.
+ * ────────────────────────────────────────────────────────────────────────────
+ * This is the one constraint that decides the shape. A bomber run is a baked
+ * object — the impact heights, the release points, the closed-form timeline,
+ * 40 chunks of crater debris per bomb with their delays and their settled
+ * poses — and none of that can be solved in the frame the aeroplane launches
+ * (@see the header). So "random" means A POOL OF RANDOM LINES BAKED AT BOOT
+ * and a draw over the pool at fire time, which is exactly what `_scheduleNext`
+ * already does over the authored ones. `count` lines cost `count * bombs * 40`
+ * chunks and about a millisecond each of bake.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * EVERY CANDIDATE IS PROVED AGAINST THE REAL GROUND, AND THAT IS THE POINT
+ * ────────────────────────────────────────────────────────────────────────────
+ * The reason this file's plains table has never been randomised before is the
+ * failure at the top of `src/match/airstrike.js`: `_findRoof` accepts any plane
+ * at 3 m, NACHTFELD's swell crosses 3 m over most of its northern half, and
+ * importing the town's anchors built 2 682 chunks of masonry hanging in a
+ * field. A randomised line over undulating ground with a fortress, a control
+ * tower, fourteen trench lines and a growing field of wrecks on it is that
+ * hazard again, and an authored table at least gets read by a human once.
+ *
+ * So `plainsOpenRuns` DOES NOT AUTHOR AND THEN WARN. It probes every impact
+ * point of every candidate with the same two calls `_reportGround` uses —
+ * `physics.groundHeight` for what is actually there, `world.groundHeight` for
+ * the outdoor deck — and REJECTS the whole line if any point stands more than
+ * `ROOF_Y` over the deck. Measured against the deck and never against zero,
+ * which is the fix `ROOF_Y`'s own note records and which this must not regress.
+ * That is a stronger guarantee than the authored lines have: it holds no
+ * matter what anybody builds on this map tomorrow, because it is a measurement
+ * of the map as it stands at boot rather than a number somebody wrote down.
+ */
+const PLAINS_OPEN = {
+  /** How many candidate lines to bake. @see the pool note above. */
+  count: 14,
+  /** Metres of ground one stick walks. 「広範囲に」 is this and `count` together. */
+  len: [96, 168],
+  /** Bombs in the stick, so spacing lands at 12-24 m — the authored table's. */
+  bombs: [7, 10],
+  /**
+   * Metres from the map centre an endpoint may reach. `RIDGE_R0` is 176 and
+   * the rim boundary stands just inside it; 154 keeps the whole line, its
+   * blast radius and its debris on ground a man can actually be standing on.
+   */
+  reach: 154,
+  /**
+   * Metres of clear air between any impact and the EDGE of a capture circle.
+   * `captureRadius` is 14 on this map and `bomberRadius` is 9, so 24 m of
+   * margin puts the nearest lethal ring 15 m outside the circle: a man on the
+   * point is never in the blast, and a man who has just stepped off it is not
+   * either. 「占領サイトへの直接はダメ」 is not a near-miss rule.
+   */
+  clear: 24,
+  /** …and the same from a base pad, so nobody is bombed in his own spawn. */
+  spawnClear: 46,
+  /** Metres between the midpoints of two accepted lines — spread, not a cluster. */
+  apart: 44,
+  /** Draws before the generator gives up and ships what it has. */
+  tries: 1600,
+};
+/** The town authors its four and randomises none: @see `TOWN_RUNS`. */
+const MAP_OPEN = { town: null, plains: PLAINS_OPEN };
+
+/**
+ * Draw `spec.count` open-ground lines that no capture circle, no base pad and
+ * no standing structure intersects.
+ *
+ * @param {object} spec    `PLAINS_OPEN`
+ * @param {object} rng     a fork — this must not disturb anybody else's stream
+ * @param {object} world   for `levelToWorld` and the analytic deck
+ * @param {object} physics for what is ACTUALLY standing at a point
+ * @param {Array}  zones   the RESOLVED capture points, `{ position, radius }`
+ * @returns {Array} run specs in the same shape as the authored table
+ */
+export function plainsOpenRuns(spec, rng, world, physics, zones) {
+  const out = [];
+  const mid = [];
+  const p = new THREE.Vector3();
+  /**
+   * THE ZONES ARE THE RESOLVED ONES, NOT A COPY OF THE TABLE. `sites.js`
+   * authors a centre and `ensureReachable` MOVES it when the point it names is
+   * not standable — up to 35 m on this map's own history — so a keep-out
+   * measured off the authored number is a keep-out around where the point used
+   * to be. `match` hands these in from `allZones`.
+   */
+  const keep = [];
+  for (const z of zones ?? []) {
+    if (!z?.position) continue;
+    keep.push([z.position.x, z.position.z, (z.radius ?? 14) + spec.clear]);
+  }
+  keep.push([PLAINS.BASE_N[0], PLAINS.BASE_N[1], spec.spawnClear]);
+  keep.push([PLAINS.BASE_S[0], PLAINS.BASE_S[1], spec.spawnClear]);
+
+  const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+
+  for (let t = 0; t < spec.tries && out.length < spec.count; t++) {
+    // Uniform over the disc: sqrt, or every line starts near the middle.
+    const a0 = rng.float() * Math.PI * 2;
+    const r0 = Math.sqrt(rng.float()) * spec.reach;
+    const ax = Math.cos(a0) * r0;
+    const az = Math.sin(a0) * r0;
+    const head = rng.float() * Math.PI * 2;
+    const len = rng.range(spec.len[0], spec.len[1]);
+    const bx = ax + Math.cos(head) * len;
+    const bz = az + Math.sin(head) * len;
+    if (Math.hypot(bx, bz) > spec.reach) continue;
+
+    const mx = (ax + bx) * 0.5;
+    const mz = (az + bz) * 0.5;
+    let crowded = false;
+    for (const m of mid) if (Math.hypot(mx - m[0], mz - m[1]) < spec.apart) { crowded = true; break; }
+    if (crowded) continue;
+
+    const n = rng.int(spec.bombs[0], spec.bombs[1]);
+    let ok = true;
+    for (let i = 0; i < n && ok; i++) {
+      const u = i / (n - 1);
+      const x = ax + (bx - ax) * u;
+      const z = az + (bz - az) * u;
+      for (const k of keep) {
+        if (Math.hypot(x - k[0], z - k[1]) < k[2]) { ok = false; break; }
+      }
+      if (!ok) break;
+      /**
+       * AND IS ANYTHING STANDING HERE? The rooftop gate, applied as an
+       * ACCEPTANCE test rather than as a warning. @see the note above.
+       */
+      world.levelToWorld(x, 0, z, p);
+      const deck = world.groundHeight(p.x, p.z);
+      const h = physics.groundHeight(p.x, p.z, 60);
+      if (Number.isFinite(h) && h - deck > ROOF_Y) ok = false;
+    }
+    if (!ok) continue;
+
+    const bearing = (Math.atan2(bx - ax, -(bz - az)) * 180) / Math.PI;
+    const c = COMPASS[(((Math.round(bearing / 22.5) % 16) + 16) % 16)];
+    mid.push([mx, mz]);
+    out.push({
+      id: `OPEN-${out.length + 1}`,
+      name: `OPEN GROUND — ${c}`,
+      from: [ax, az],
+      to: [bx, bz],
+      bombs: n,
+      open: true,
+    });
+  }
+  return out;
+}
 
 /**
  * THE RUNS, PER MAP. @see `forMap` in `src/match/geography.js` —
@@ -491,6 +675,17 @@ export class Bomber {
     this.rng = opts.rng ?? ctx.rng.fork();
     this.enabled = true;
     this.runs = [];
+    /**
+     * THE RESOLVED CAPTURE POINTS, for the randomised open-ground lines to keep
+     * out of. `match` hands these in from `allZones` for the same reason it
+     * hands them to `Airstrike`: `match` owns the layout, `ensureReachable`
+     * MOVES a point that is not standable, and a keep-out measured off the
+     * authored table is a keep-out around where the point used to be.
+     * @see `plainsOpenRuns`.
+     */
+    this.zones = opts.zones ?? null;
+    /** How many of `runs` were drawn rather than authored, for the boot line. */
+    this._openN = 0;
     /** How many lines THIS MAP authored, so the boot fraction is honest. */
     this._runN = 0;
     this.ready = false;
@@ -609,7 +804,24 @@ export class Bomber {
      * `_buildBombs` sizes its InstancedMesh off the longest stick in the table.
      * @see `MAP_RUNS`.
      */
-    const specs = forMap(MAP_RUNS, world, 'bomber runs');
+    const authored = forMap(MAP_RUNS, world, 'bomber runs');
+    /**
+     * …PLUS THE ONES NOBODY AUTHORED. Drawn here, BEFORE `_buildBombs`, because
+     * that sizes its InstancedMesh off the longest stick in the table and a
+     * stick it has never seen would overrun the bay. @see `plainsOpenRuns`.
+     */
+    const openSpec = forMap(MAP_OPEN, world, 'open-ground bombing');
+    const open = openSpec
+      ? plainsOpenRuns(openSpec, this.rng.fork(), world, physics, this.zones)
+      : [];
+    this._openN = open.length;
+    if (openSpec && open.length < openSpec.count) {
+      console.warn(
+        `[bomber] open-ground lines: ${open.length}/${openSpec.count} drawn in ${openSpec.tries} tries — ` +
+          'the plain has less clear ground than the generator assumes'
+      );
+    }
+    const specs = authored.concat(open);
     this._runN = specs.length;
 
     this._buildAircraft();
@@ -632,7 +844,8 @@ export class Bomber {
     let chunks = 0;
     for (const r of this.runs) chunks += r.chunkCount;
     console.info(
-      `[bomber] ${this.runs.length}/${this._runN} runs baked in ${this.buildMs.toFixed(0)}ms — ` +
+      `[bomber] ${this.runs.length}/${this._runN} runs baked in ${this.buildMs.toFixed(0)}ms ` +
+        `(${this._openN} drawn over open ground, clear of every capture circle) — ` +
         `${chunks} debris chunks, ` +
         this.runs
           .map((r) => `${r.id}:${r.bombs.length}x${r.spacing.toFixed(1)}m/${r.duration.toFixed(1)}s`)

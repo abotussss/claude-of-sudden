@@ -592,7 +592,16 @@ export class MatchSystem {
     const navZones = this.allZones.map((z) => ({ id: z.id, position: z.position, radius: z.radius }));
     this.airstrike = new Airstrike(ctx, { rng: this.rng.fork(), routes: navRoutes, zones: navZones }).build();
     if (patcher) for (const site of this.airstrike.sites) for (const m of site.materials) patcher.patch(m);
-    this.bomber = new Bomber(ctx, { rng: this.rng.fork() }).build();
+    /**
+     * THE SAME CIRCLES GO TO THE BOMBER, and for a stronger reason than the
+     * airstrike's: 「空爆は占領サイトに落とすのではなくそれ以外の平原にランダムに広範囲に
+     * 一列爆撃にして」「占領サイトへの直接はダメ」. `Bomber` draws a pool of open-ground
+     * lines at boot and every impact of every candidate is rejected if it falls
+     * inside a capture circle plus its margin — so the rule is enforced against
+     * the RESOLVED positions, the ones `ensureReachable` may have moved, rather
+     * than against the authored table. @see `plainsOpenRuns`.
+     */
+    this.bomber = new Bomber(ctx, { rng: this.rng.fork(), zones: navZones }).build();
     this.strafe = new Strafe(ctx, { rng: this.rng.fork() }).build();
     /**
      * THE ARMOUR — "そんで戦車イベントを早く追加しろ 総力上げて".

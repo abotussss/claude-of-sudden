@@ -2091,8 +2091,26 @@ export const MAP_RULES = {
      * sorties over twenty minutes with a hard mutual stand-down is a busy sky,
      * not a queue.
      */
-    bomberMaxPerRound: 8,
+    bomberMaxPerRound: 14,
     strafeMaxPerRound: 8,
+    /**
+     * …AND THE BOMBER GOES TO 14 BECAUSE THE LINE BOMBARDMENT IS NOW THE POINT.
+     * 「それを定期的に起こす」 — periodically, through the match, not once as an
+     * event. `bomberInterval` is [52, 84] s and the match is 1200 s, so the
+     * ceiling on OPPORTUNITIES is about seventeen; 14 is that, less the ones
+     * the mutual `coBusy` stand-down spends on a strafing run or an act. It
+     * works out at a stick of bombs walking somewhere on the plain about every
+     * eighty seconds.
+     *
+     * IT CANNOT STACK. `MatchSystem.init` puts the airstrike, the bomber and
+     * the strafe in each other's `coBusy`, so at most ONE aircraft is ever over
+     * the map and two telegraphs never run at once. 14 + 8 sorties over twenty
+     * minutes with a hard stand-down between them is a busy sky, not a queue.
+     *
+     * AND THERE ARE 22 LINES TO SPEND THEM ON — 8 authored corridors plus 14
+     * drawn over open ground — so `_scheduleNext`'s "never fly the same line
+     * twice in a round" rule is not what limits it, and no two of the fourteen
+     * are the same aeroplane on the same heading. @see `plainsOpenRuns`.
     /**
      * …AND THE ONE PIECE OF SHELLING THAT CAN KILL YOU, ALSO PER ZONE.
      *

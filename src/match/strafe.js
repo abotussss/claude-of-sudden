@@ -206,7 +206,15 @@ const PLAINS_LINES = [
   { id: 'SOUTHFAN', name: 'THE SOUTH FAN', from: [-10, 112], to: [80, 112] },
   { id: 'WESTFLANK', name: 'THE WEST FLANK', from: [-124, 40], to: [-124, -40] },
   { id: 'EASTFLANK', name: 'THE EAST FLANK', from: [124, -40], to: [124, 40] },
-  { id: 'CENTREWEST', name: 'WEST OF THE WORKS', from: [-58, 40], to: [-58, -50] },
+  /**
+   * MOVED -58 -> -47 WITH THE BOMBER RUN IT SHARES A CORRIDOR WITH. This line
+   * still measured clear at -58 — 34 impacts at 2.7 m spacing can step over a
+   * 3 m obstruction that a 7-bomb stick lands on — but the invariant this table
+   * is built on is that every line shares an axis value with a bomber run that
+   * has been measured onto the deck, and leaving it behind would quietly break
+   * that. @see the note on `CENTREWEST` in `PLAINS_RUNS` (bomber.js).
+   */
+  { id: 'CENTREWEST', name: 'WEST OF THE WORKS', from: [-47, 40], to: [-47, -50] },
   { id: 'CENTREEAST', name: 'EAST OF THE WORKS', from: [58, -50], to: [58, 40] },
   /**
    * ──────────────────────────────────────────────────────────────────────────
