@@ -11,6 +11,7 @@ import { buildRim } from './plains-rim.js';
 import { buildCrags } from './plains-crag.js';
 import { buildGroundDetail } from './plains-ground.js';
 import { buildCover } from './plains-cover.js';
+import { buildSites } from './plains-sites.js';
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -1461,6 +1462,16 @@ export const PLAINS = {
      * moves.
      */
     buildGroundDetail(A, plainsY, plainsOpen, PADS);
+    /**
+     * …AND WHAT STANDS ON THE OTHER FOUR CAPTURE POINTS — 「占領サイトはもっと
+     * 特徴的にしろ」 and 「ENPドームのところは要塞にしろ コンパクトな要塞」. A compact
+     * redoubt inside each EMP field at A and B, the tank farm at C, the pylon
+     * line at E; D keeps its tower and its fortress and is not touched. @see
+     * `plains-sites.js`. Own fixed-seed streams, LAST, so nothing above moves —
+     * and it returns the gate `interiorVolume`s, without which each courtyard is
+     * an island with a capture point inside it.
+     */
+    volumes.push(...buildSites(A, plainsY, PADS));
     this._works = works;
 
     return {
