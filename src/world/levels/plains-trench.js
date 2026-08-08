@@ -346,6 +346,187 @@ export const TRENCHES = [
     why: 'zone C’s fire trench, dug behind the point',
     pts: [[-138, 94], [-132, 106], [-122, 114]],
   },
+
+  /* ---- DIE WIDERSTANDSNESTER — the middle of the map ------------------- */
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * 「塹壕は？塹壕が至る所にないですね？」 — and he was right, and it was measured
+   * ══════════════════════════════════════════════════════════════════════════
+   * Everything above this line is a RING. Sampled on a 2 m lattice against the
+   * plain's own analytic height field, the fourteen lines above cut 2.02 % of
+   * the playable disc and 0.20 % OF THE MIDDLE THIRD — eleven cells inside
+   * r 90, all of them MITTELSAPPE's. A man walking B→D crossed 112 m with no
+   * cut within reach of him; E→D, 118 m; BASE-S→C, 122 m. The trenches were
+   * all round the edge and the fight is in the middle, so he never met one.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * WHY THE MIDDLE WAS EMPTY, AND WHY THAT WAS THE RIGHT DIAGNOSIS OF THE
+   * WRONG PROBLEM
+   * ────────────────────────────────────────────────────────────────────────
+   * @see the NORDKEHLE note above: the pass that built this network tried to
+   * put LONG LINES through the centre and the armour refused them. Thirty-six
+   * baked legs fan off six hubs to five zones, so a 137 m firing line at
+   * z ≈ -60 came back from `--emit` wanting 96 m of vehicle crossing, and a
+   * 63 m run up to zone C wanted 102. Eleven re-sitings between them were no
+   * better. That measurement was correct and the conclusion drawn from it —
+   * "the trenches live on the flanks" — is what the user has now complained
+   * about twice.
+   *
+   * THE FAULT WAS IN THE SHAPE ASKED FOR, NOT IN THE GROUND. A trench system
+   * is not obliged to be a continuous line, and a real one is not: a defence in
+   * depth is a SCATTER OF SECTION POSTS sited in the ground between the
+   * approaches, each a fire bay long, each holding the piece of field it can
+   * see. That shape fits where a line does not, because the free space between
+   * thirty-six radial legs is a set of pockets twenty to sixty metres long, and
+   * a pocket will take a post even when it will not take a line.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * SO THESE EIGHTEEN WERE SEARCHED FOR, NOT AUTHORED
+   * ────────────────────────────────────────────────────────────────────────
+   * `node _nfsite.mjs` grows a run from every centre on a 4 m lattice on every
+   * bearing at 15°, a metre at a time, allowed to TURN up to 1.2°/m — a
+   * curvature radius of 47.7 m, four times `MIN_RADIUS` — and always toward
+   * whichever heading puts the most air between the cut and the nearest tank
+   * leg. A metre is legal only where `plainsOpen(x, z, 9)` holds (9 m is the
+   * `CUT_R` 8.5 hole plus margin, so nothing is dug into the tower, the
+   * fortress, a spawn claim or the rim) AND the nearest baked leg is over
+   * `--clear` away AND every other cut on the map is over 18 m away. Then it
+   * picks a set of them greedily for COVERAGE — how much of the plain ends up
+   * within 25 m of some cut — counting a cell inside r 90 double, because the
+   * middle is the complaint.
+   *
+   * `--clear` IS 6.05 AND NOT THE GATE'S 5.5, WHICH COST FOUR POSTS AND IS
+   * WORTH IT. Sited at 5.5 the search returned 426 m and `_nftrenchplan.mjs
+   * --emit` then wanted a vehicle crossing on eight of the eighteen — not
+   * because a leg would drop, but because `--emit` measures against `NEAR` = 6,
+   * its own deliberately pessimistic proxy, and eight runs sat in the 0.5 m
+   * band between the two numbers. A 14 m crossing in a 20 m post leaves 6 m,
+   * under `MIN_BAY` 11.08, so the post would simply have vanished. Growing them
+   * at 6.05 instead puts every one of the eighteen clear of BOTH numbers, and
+   * `--emit` now returns an empty list for all of them: `GRADE` below is
+   * untouched by this whole block.
+   *
+   * WHAT THAT BUYS, and the numbers are the tool's own:
+   *   within 25 m of a cut, whole disc      57.5 % -> 86.4 %
+   *   within 25 m of a cut, middle third    27.8 % -> 80.8 %
+   * for 416 m of new cut in eighteen posts, the closest of which clears every
+   * baked tank leg by 6.2 m. That is the part worth reading twice: the reason
+   * the middle was refused a 137 m line is the same reason it grants eighteen
+   * twenty-metre ones, and none of these needs a single vehicle crossing.
+   *
+   * `fireSide` is the side the fire step, the sandbags and the wire go on;
+   * dugouts and sally ramps go on the other, which is the rear. NACHTFELD's
+   * front runs east-west, so a post is fought toward the ENEMY'S SPAWN — the
+   * defence's at (14,150) for a post north of the middle, the attack's at
+   * (-14,-150) for one south of it. Tested first on "does the normal point
+   * south", which is undefined for a run that itself lies north-south and
+   * picked a side off the sign of a one-metre rounding.
+   */
+  {
+    id: 'NF-WN-01', name: 'WN-01', fireSide: 1,
+    why: '40 m west of the tower: the west approach to zone D, which had none',
+    pts: [[-38, -37], [-36, -17]],
+  },
+  {
+    id: 'NF-WN-02', name: 'WN-02', fireSide: 1,
+    why: '34 m across the east-centre — the E→D walk crossed 118 m with no cut in reach',
+    pts: [[78, -42], [66, -30], [50, -23]],
+  },
+  {
+    id: 'NF-WN-03', name: 'WN-03', fireSide: -1,
+    why: 'the north-east centre, on BASE-N→D and BASE-N→E',
+    pts: [[31, -61], [41, -42]],
+  },
+  {
+    id: 'NF-WN-04', name: 'WN-04', fireSide: 1,
+    why: 'east of zone D, across the lane from zone E to the centre',
+    pts: [[78, -13], [63, 1]],
+  },
+  {
+    id: 'NF-WN-05', name: 'WN-05', fireSide: 1,
+    why: 'the west-centre hollow, on the C→D and A→D approaches',
+    pts: [[-68, 12], [-59, 30]],
+  },
+  {
+    id: 'NF-WN-06', name: 'WN-06', fireSide: -1,
+    why: 'the fortress’s eastern approach, facing the attack',
+    pts: [[58, 31], [52, 52]],
+  },
+  /**
+   * WHAT SURVIVES OF NORDSTELLUNG. The deleted firing line ran 137 m along
+   * z ≈ -60 and lay IN the east-west fan; twenty-two metres of it at z ≈ -72,
+   * west of centre, sits in the pocket between RED-C→D and RED-W→E and clears
+   * both by 6.0 m. A fire bay in the right place beats a line in the wrong one.
+   */
+  {
+    id: 'NF-WN-07', name: 'WN-07', fireSide: -1,
+    why: 'north of the tower at z ≈ -72 — the ground NORDSTELLUNG wanted, at bay length',
+    pts: [[-37, -73], [-17, -71]],
+  },
+  {
+    id: 'NF-WN-08', name: 'WN-08', fireSide: -1,
+    why: 'north-centre, between the north base and zone E',
+    pts: [[12, -90], [32, -82]],
+  },
+  {
+    id: 'NF-WN-09', name: 'WN-09', fireSide: 1,
+    why: 'south-centre-east, between the fortress and zone B',
+    pts: [[32, 88], [51, 94]],
+  },
+  {
+    id: 'NF-WN-10', name: 'WN-10', fireSide: 1,
+    /**
+     * TRIMMED 3 m OFF ITS WEST END, AND `--check` IS WHY. At 23 m this post was
+     * over `SALLY_MIN` 22, so it got a sally ramp at its middle — and a sally
+     * ramp is the one place a cut is NOT a wall: it is a `RAMP_GRADE` slope a
+     * hull whose line crosses it drives straight down. BLUE-W→B passes 7.1 m
+     * off that ramp, under the gate's `CLEAR + 2`. Twenty metres is under
+     * `SALLY_MIN`, so the post keeps its two ramped mouths, loses the ramp the
+     * armour could have used, and `_nftrap.mjs` still finds both ways out.
+     */
+    why: 'the south-west, on BASE-S→C — 122 m of dry walk, the worst on the map',
+    pts: [[-75, 67], [-56, 74]],
+  },
+  {
+    id: 'NF-WN-11', name: 'WN-11', fireSide: -1,
+    why: '35 m down the east flank inside OSTRIEGEL, on the B→D and E→D walks',
+    pts: [[100, -7], [101, 28]],
+  },
+  {
+    id: 'NF-WN-12', name: 'WN-12', fireSide: -1,
+    why: 'zone E’s shoulder, on the E→D walk',
+    pts: [[81, -69], [93, -53]],
+  },
+  {
+    id: 'NF-WN-13', name: 'WN-13', fireSide: 1,
+    why: 'the west shoulder inside WESTRIEGEL, on the A→D walk',
+    pts: [[-100, -33], [-108, -14]],
+  },
+  {
+    id: 'NF-WN-14', name: 'WN-14', fireSide: 1,
+    why: 'south-west of the fortress, covering the south base’s western sortie',
+    pts: [[-32, 102], [-33, 125]],
+  },
+  {
+    id: 'NF-WN-15', name: 'WN-15', fireSide: 1,
+    why: 'north-west, on the approach to zone A from the north base',
+    pts: [[-79, -92], [-82, -67]],
+  },
+  {
+    id: 'NF-WN-16', name: 'WN-16', fireSide: 1,
+    why: 'the west flank between WESTRIEGEL and zone C',
+    pts: [[-110, 36], [-97, 52]],
+  },
+  {
+    id: 'NF-WN-17', name: 'WN-17', fireSide: -1,
+    why: 'the east flank between OSTRIEGEL and zone B',
+    pts: [[121, 36], [111, 43], [99, 48]],
+  },
+  {
+    id: 'NF-WN-18', name: 'WN-18', fireSide: -1,
+    why: 'the south-west, joining C-STELLUNG’s ground to the south base’s approach',
+    pts: [[-50, 92], [-70, 109]],
+  },
 ];
 
 /**
