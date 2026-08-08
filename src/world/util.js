@@ -691,7 +691,36 @@ export function polyPrism(pts, height, opts = {}) {
   return geo;
 }
 
-/** Flat irregular patch on the XZ plane — sand drifts, oil stains, render patches. */
+/**
+ * Flat irregular patch on the XZ plane — sand drifts, oil stains, render patches.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE FAN IS WOUND SO ITS FRONT FACE POINTS UP, AND IT WAS NOT
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「塹壕に入ると天井みたいな黒い壁が出てくる そう言うのが至る所にある」.
+ *
+ * The rim runs anticlockwise in (x, z) — vertex `i` is at `(cos t, sin t)` for
+ * `t = 2πi/lobes` — so the fan `(centre, i, i+1)` has
+ * `cross(v_i - v_0, v_{i+1} - v_0)` pointing at NEGATIVE Y, and three.js takes
+ * exactly that cross product as a triangle's facing (`computeVertexNormals`
+ * builds `(C-B)×(A-B)`, which is the same vector). Every patch this function has
+ * ever returned was therefore INSIDE OUT, and the normal attribute three lines
+ * up says `(0, 1, 0)` — the declared intent and the winding disagreed.
+ *
+ * Nobody saw it from above, because that is the half that vanishes: at
+ * `side: FrontSide` a patch seen from above is a BACK face and is culled, so a
+ * decal simply did not draw and the ground looked like ground without it. What
+ * it does do is draw from BELOW. Measured on NACHTFELD, whose 350 m disc carries
+ * several thousand of these plus `domeGeometry`'s soil sheets: standing on the
+ * floor of a trench, six of the thirteen lines had a flat unlit sheet 0.06-2.32 m
+ * over a standing man's eye, 27-40 m across, with every normal pointing down.
+ * A ceiling, in a trench, everywhere on the map.
+ *
+ * So each triangle is emitted `(0, i+1, i)`. Nothing else moves: the vertices,
+ * the normals, the UVs, the bounding volumes and — this is the one that matters
+ * on a shared stream — the number of `rng` draws are all bit-for-bit what they
+ * were, so not one prop on either map shifts.
+ */
 export function patchGeometry(rng, radius, opts = {}) {
   const { lobes = 9, wobble = 0.45, sag = 0.0 } = opts;
   const pos = [];
@@ -710,7 +739,8 @@ export function patchGeometry(rng, radius, opts = {}) {
     nrm.push(0, 1, 0);
     uv.push(Math.cos(t), Math.sin(t));
   }
-  for (let i = 0; i < lobes; i++) idx.push(0, 1 + i, 1 + ((i + 1) % lobes));
+  // front face UP — @see the note above this function
+  for (let i = 0; i < lobes; i++) idx.push(0, 1 + ((i + 1) % lobes), 1 + i);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
@@ -802,13 +832,33 @@ export function domeGeometry(rng, radius, height, opts = {}) {
       uv.push(0.5 + ct * v * 0.5, 0.5 + st * v * 0.5);
     }
   }
-  for (let i = 0; i < lobes; i++) idx.push(0, 1 + i, 1 + ((i + 1) % lobes));
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * WOUND FRONT-FACE-UP, AND IT WAS NOT — @see the same note on `patchGeometry`
+   * ──────────────────────────────────────────────────────────────────────────
+   * The rim runs anticlockwise in (x, z), so `(centre, i, i+1)` and
+   * `(inner i, outer i, inner i+1)` both cross to NEGATIVE Y. That is worse here
+   * than on a flat patch, because this one calls `computeVertexNormals` at the
+   * bottom: the whole point of the function is that "the relief is lit rather
+   * than drawn", and it was computing the lighting normals of a sheet turned
+   * upside down. Measured, 60 of 60 triangles and every one of their normals
+   * pointed at the ground.
+   *
+   * What that cost, on NACHTFELD: 1 100 soil sheets and 1 600 wind scars laid
+   * over the open plain contributed NOTHING to the picture from above (culled),
+   * and became a black unlit lid 27-40 m across the moment the camera dropped
+   * below the surface — a trench floor, a ramp, a sally mouth, a crater.
+   *
+   * Each triangle is emitted reversed. No vertex, normal, UV or `rng` draw
+   * changes, so nothing placed off this stream moves.
+   */
+  for (let i = 0; i < lobes; i++) idx.push(0, 1 + ((i + 1) % lobes), 1 + i);
   for (let j = 1; j < rings; j++) {
     const a0 = 1 + (j - 1) * lobes;
     const b0 = 1 + j * lobes;
     for (let i = 0; i < lobes; i++) {
       const i1 = (i + 1) % lobes;
-      idx.push(a0 + i, b0 + i, a0 + i1, a0 + i1, b0 + i, b0 + i1);
+      idx.push(a0 + i, a0 + i1, b0 + i, a0 + i1, b0 + i1, b0 + i);
     }
   }
   const g = new THREE.BufferGeometry();
