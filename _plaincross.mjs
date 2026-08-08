@@ -89,6 +89,29 @@ const out = await page.evaluate(() => {
     'BASE-N': [-14, -150], 'BASE-S': [14, 150],
     A: [-118, -104], B: [118, 104], C: [-128, 86], E: [128, -86], D: [0, 0],
   };
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THESE ARE STRAIGHT LINES, AND ON ONE WALK THAT IS THE WRONG LINE
+   * ────────────────────────────────────────────────────────────────────────
+   * Every route below is the straight line between two pads, which is the walk
+   * everywhere the ground gives you no reason to take another one. BASE-N -> E
+   * is the exception and it is worth stating here rather than being rediscovered
+   * every time the table is read.
+   *
+   * NORDGRABEN is dug ALONG that walk. `_nflane.mjs` measures it: `isOpen`
+   * refuses the centreline from 30 m to 108 m, and 6-10 m to the left of it
+   * there is a cut 1.6-1.7 m deep — over a standing man — running from 36 m to
+   * 96 m, so about 60 of the 78 refused metres have a covered route beside them
+   * (there is at least one break, around 60-66 m). The trench IS the walk there.
+   *
+   * So this file will keep reporting that route at ~110 m of lane and ~70 % of
+   * it exposed however much cover is stood on the plain, because it is walking
+   * the surface line six metres to the right of the trench. That number is not
+   * `plains-cover.js` failing to cover the route and it is not a reason to build
+   * across a trench corridor: it is this probe measuring a line nobody has to
+   * take. Measured from inside the cut the same walk is 71 m of lane, a 12 m
+   * run and 44 % under the crest.
+   */
   const ROUTES = [
     ['BASE-N', 'A'], ['BASE-N', 'D'], ['BASE-N', 'E'],
     ['BASE-S', 'B'], ['BASE-S', 'D'], ['BASE-S', 'C'],

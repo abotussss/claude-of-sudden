@@ -21,6 +21,19 @@ await p.goto(args.url ?? 'http://127.0.0.1:4604/?map=plains', { waitUntil: 'domc
 await p.waitForFunction('window.__READY__===true', null, { timeout: 300000 });
 const out = await p.evaluate(({ route }) => {
   const w = window.__ENGINE__.ctx.peek('world');
+  const ph = window.__ENGINE__.ctx.peek('physics');
+  /**
+   * How far the real floor sits BELOW the analytic plain. `plainsY` does not
+   * know about the trenches — the terrain mesh has the corridors cut out of it
+   * and `plains-trench.stripMesh` lays the section in — so collision minus
+   * analytic IS the depth of the cut, and a run of it along a walk is a covered
+   * route that the straight-line probe cannot see.
+   */
+  const depth = (x, z) => {
+    const h = ph.raycast(x, 300, z, 0, -1, 0, 400, ph.MASK.WORLD);
+    if (!h.hit) return 0;
+    return (w.groundHeight ? w.groundHeight(x, z) : 0) - h.point.y;
+  };
   const P = {
     'BASE-N': [-14, -150], 'BASE-S': [14, 150],
     A: [-118, -104], B: [118, 104], C: [-128, 86], E: [128, -86], D: [0, 0],
@@ -33,15 +46,22 @@ const out = await p.evaluate(({ route }) => {
   const rows = [];
   for (let s = 12; s <= L - 12; s += 6) {
     let line = '';
+    let cut = '';
+    let deepest = 0, deepAt = 0;
     for (let o = -16; o <= 16; o += 2) {
       const x = ax + tx * s + nx * o, z = az + tz * s + nz * o;
       line += w.isOpen(x, z, 4.5) ? '.' : '#';
+      const d = depth(x, z);
+      if (d > deepest) { deepest = d; deepAt = o; }
+      // a man is hidden standing in anything over 1.7 m, crouched over 1.1
+      cut += d > 1.7 ? 'X' : d > 1.1 ? 'x' : d > 0.5 ? '-' : '.';
     }
-    rows.push(`${String(Math.round(s)).padStart(4)} ${line}`);
+    rows.push(`${String(Math.round(s)).padStart(4)} ${line}   ${cut}  ${deepest > 0.5
+      ? `deepest ${deepest.toFixed(1)}m at ${deepAt > 0 ? '+' : ''}${deepAt}` : ''}`);
   }
   return { L: Math.round(L), rows };
 }, { route: args.route ?? 'BASE-N,E' });
 console.log(`route ${args.route ?? 'BASE-N,E'}  len=${out.L}   ('.' = isOpen(margin 4.5), columns are -16..+16 m across the walk)`);
-console.log('   s -16            0            +16');
+console.log('   s   isOpen(4.5m margin)      depth of cut (X>1.7m  x>1.1m  ->0.5m)');
 for (const r of out.rows) console.log(r);
 await b.close();

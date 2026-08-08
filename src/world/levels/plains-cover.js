@@ -534,6 +534,24 @@ function stations(rng, pads, isOpen) {
      * — which on BASE-N -> A is most of its length, because NORDGRABEN is dug
      * within four metres of that walk and `isOpen` refuses the whole corridor —
      * does it give up and take the flank.
+     *
+     * AND ON ONE WALK THE FLANK IS THE RIGHT ANSWER, WHICH IS WORTH SAYING SO
+     * THAT NOBODY "FIXES" IT. BASE-N -> E measures ~70 % exposed after
+     * everything in this file has run and it is the last route that does. That
+     * is not a hole in the placement. `_nflane.mjs` on that walk: `isOpen`
+     * refuses the centreline from 30 m to 108 m, and 6-10 m to its left is a
+     * cut 1.6-1.7 m deep running 36 m to 96 m — a covered route beside 60 of
+     * the 78 refused metres, which is what a trench dug ALONG a walk is.
+     * `_plaincross.mjs` measures the straight line between the pads, so on that
+     * one route it is measuring the surface beside the trench rather than the
+     * walk. From inside the cut the same crossing is 71 m of lane and a 12 m
+     * run.
+     *
+     * Both tempting answers are wrong: building a revetment across NORDGRABEN,
+     * and widening the search until a berm lands twenty metres off the route so
+     * `covered` improves while `lane` does not move. What happens instead is
+     * that the lane is bounded at the first open ground on each side — @see the
+     * edge pass — and the corridor is left to the trench.
      */
     const tryAt = (s, kind, slack) => {
       const r = KIND_R[kind];
