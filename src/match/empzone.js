@@ -272,9 +272,38 @@ const FIELD_FS = /* glsl */ `
     // shell has to get out of his way at.
     a = mix(a, 0.13 + lat * 0.20 + fine * 0.09 + sweep * 0.09, uGround);
 
+    // ══════════════════════════════════════════════════════════════════════
+    // AND IT IS NOT A LID — 「天井みたいな意味のわからないグラフィックが至る所」
+    // ══════════════════════════════════════════════════════════════════════
+    // Measured over the whole plain: of everything a player can have DRAWN
+    // OVERHEAD and not explain, 84 % is these two shells — 2 835 m² at B and
+    // 2 754 m² at A, 34 m of hemisphere resident from boot. Standing at A's
+    // centre and looking level they are 18.4 % of the frame, which is the field
+    // and is the point; looking UP they are a green wireframe ceiling over the
+    // entire sky, which is nothing and is the complaint.
+    //
+    // The elevation of the fragment ABOVE THE CAMERA'S OWN HORIZON is the one
+    // quantity that separates those two. Under ~15° it is the wall you walk at,
+    // over ~37° it is the roof you cannot walk to. So the roof goes, and only
+    // the roof, and only for the man who is close enough for it to be over him:
+    // prox is 0 at the rim and inward and 1 past 2.6 r, so at a hundred metres
+    // the dome is still a whole dome and still the long-range read the header
+    // spends its rim budget on. The GROUND BAND is excused entirely, because it
+    // is the mark that tells a man standing inside where the edge is.
+    //
+    // WHAT THIS MUST NOT DO is make the field invisible from outside — "an
+    // invisible region that eats your kit" is the failure this file was written
+    // against. It cannot: the fourteen rim posts stand at ground level and are
+    // therefore at ~0° from any eye outside, the band is not faded at all, and
+    // past 2.6 r nothing here applies.
+    vec3 D = vW - cameraPosition;
+    float elev = D.y / max(0.001, length(D));
+    float lid = 1.0 - smoothstep(0.26, 0.60, elev);
+
     float uFar = mix(1.0, 0.34, smoothstep(90.0, 300.0, d));
     float uNear = smoothstep(0.5, 4.0, d);
     a *= uFar * mix(uNear * mix(0.5, 1.0, prox), 1.0, uGround);
+    a *= mix(mix(lid, 1.0, prox), 1.0, uGround);
 
     // AND THE BAND IS EXCUSED THE FRESNEL IN THE COLOUR TOO, which was the other
     // half of the same oversight: the alpha above already excludes it, but the
