@@ -1168,12 +1168,88 @@ function buildShaft(A, rng, y) {
 
   faceDetail(A, rng, SH, P2_TOP, ROOF_Y, y, { batter: 0 });
   shaftFaces(A, rng, y);
+  shaftLining(A, rng, y);
   controlRoom(A, rng, y);
   shaftInterior(A, rng, y);
 
   // the roof deck over the shaft, under the cab: a real slab with a hatch
   A.add('concrete_dark', box, LL(IDENT, TOWER.x, y(ROOF_Y - 0.2), TOWER.z, 0, SH_R * 2, 0.4, SH_R * 2),
     { masks: [0.55, 0.4, 0.2] });
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE INSIDE FACE OF THE SHAFT — 「壁が透過されるバグもあるぞ？」
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHAT WAS ACTUALLY WRONG, and it is not a hole. Measured with a ray per screen
+ * cell from a standing eye in the control room at (3.6, -32), looking at the
+ * south wall six metres away (`_nftowersee.mjs`): ZERO per cent of the frame
+ * reaches the sky and every cell hits a triangle inside 20 m — while the
+ * PHOTOGRAPH of the same pose is panels of night sky between the piers with the
+ * far mountains, the fires and B's EMP dome legible through them.
+ *
+ * Both are true. `buildShaft` draws the shaft as `prism(A, 'concrete', SH, …)`,
+ * which is a CLOSED SOLID with its faces pointing OUTWARD, and then hollows it
+ * for collision only — `{ collide: false }` plus one `A.box` per edge. The
+ * material is `side: FrontSide`, so from inside the room every one of those
+ * faces is a back face and the GPU throws it away. The shaft has no inside.
+ * That is the same fault, on a wall instead of on the ground, as the winding
+ * that made every `patchGeometry` sheet on this map invisible from above.
+ *
+ * So the fix is to DRAW THE INSIDE, and it is drawn-only: no `A.box`, no
+ * `A.clipBox`, not one byte of collision moves and `NavGrid` cannot see it.
+ * Panels sit flush on the inner face of the wall the collision already
+ * describes, and they are cut where the wall is cut — round the four doorways
+ * on the ground storey and round the slit window on every storey above, so the
+ * openings read from inside exactly as they read from outside. Anything else
+ * would trade a wall you can see through for a window you cannot.
+ */
+function shaftLining(A, rng, y) {
+  const box = BOX(A);
+  /** Thin, and flush with the inner face of the wall `buildShaft` collides. */
+  const T = 0.1;
+  const off = SH_WALL / 2 - T / 2;
+  /** One panel, in the face's own frame: `cv` along the edge, `w` long. */
+  const panel = (e, cy, h, cv, w) => {
+    if (h <= 0.03 || w <= 0.03) return;
+    A.add('concrete_dark', box, LL(IDENT,
+      e.mx - e.nx * off + e.tx * cv, y(cy), e.mz - e.nz * off + e.tz * cv,
+      e.yaw, T, h, w), { masks: [0.32, 0.5, 0.55] });
+  };
+  /** A full-width band, with the doorway cut out of it if it crosses one. */
+  const band = (e, y0, y1, doorway) => {
+    if (y1 - y0 <= 0.03) return;
+    const head = ROOM_Y + DOOR_H;
+    if (!doorway || y0 >= head) { panel(e, (y0 + y1) / 2, y1 - y0, 0, e.len); return; }
+    const seg = (e.len - DOOR_W) / 2;
+    const lo = Math.min(y1, head);
+    for (const s of [-1, 1]) panel(e, (y0 + lo) / 2, lo - y0, s * (DOOR_W / 2 + seg / 2), seg);
+    if (y1 > head) panel(e, (head + y1) / 2, y1 - head, 0, e.len);
+  };
+  for (let i = 0; i < SH.length; i++) {
+    const e = edgeInfo(SH, i);
+    const isDoor = DOORS.some((d) => Math.abs(e.nx - d.ax) < 0.05 && Math.abs(e.nz - d.az) < 0.05);
+    /**
+     * The slits, taken from `shaftFaces` rather than restated: same storeys,
+     * same 1.35 m of pane, same width. A reveal 0.15 m proud of the opening on
+     * each side is what makes it read as a hole in a thickness.
+     */
+    const slits = [];
+    if (e.len >= 3) {
+      for (let f = 1; f < FLOORS.length; f++) {
+        const wy = FLOORS[f] + 1.35;
+        slits.push([wy - 0.82, wy + 0.82, Math.min(1.5, e.len - 1.6) + 0.5]);
+      }
+    }
+    let y0 = ROOM_Y;
+    for (const [s0, s1, sw] of slits) {
+      band(e, y0, s0, isDoor);
+      const cheek = (e.len - sw) / 2;
+      for (const s of [-1, 1]) panel(e, (s0 + s1) / 2, s1 - s0, s * (sw / 2 + cheek / 2), cheek);
+      y0 = s1;
+    }
+    band(e, y0, ROOF_Y, isDoor && !slits.length);
+  }
 }
 
 /** The jamb, the head and the steel of one of the room's four doors. */
@@ -1389,44 +1465,110 @@ function controlRoom(A, rng, y) {
  * height field with one floor per cell cannot hold a staircase, so these exist
  * for the man at the keyboard, for the silhouette and for the fight on the way
  * down. Each slab leaves a well, and each well has the flight that serves it.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * A STAIRCASE INTO A CEILING — 「階段治ってないけど？？」, THIRD TIME OF ASKING
+ * ────────────────────────────────────────────────────────────────────────────
+ * The two rebuilds before this one were both about the OUTSIDE climbs, and the
+ * outside climbs are fine: photographed at a standing eye from the bottom step
+ * to the gallery door, all four of them arrive where they say they do
+ * (`shots/towerclimb/`). What he was standing in is this one, and it was
+ * genuinely a stair into a soffit — photographed mid-flight between the control
+ * room and storey 1, the frame is flat concrete from edge to edge.
+ *
+ * WHY, in one line: ONE straight flight per storey, every storey's flight in
+ * the SAME 2.7 x 6.6 m plan slot, and every step drawn as a box from the FLOOR
+ * up to its tread. So the flight above is a solid mass whose underside is flat
+ * at the floor it stands on, sitting directly over the flight below — and the
+ * two of them meet at the same end, because a straight flight that reverses
+ * direction has nowhere else to turn. Measured on the old build: head clearance
+ * over the top 4.9 m of every flight is under 1.8 m and reaches ZERO at the
+ * final tread. The nav arithmetic the header spends a page on was never the
+ * problem; the section was.
+ *
+ * WHAT IT IS NOW: A DOG-LEG, which is what a tower stair actually is. The well
+ * is widened to hold two half-flights SIDE BY SIDE, they climb opposite ways
+ * with a half-landing between them, and the near end of the well is closed to
+ * make the arrival landing that joins one storey's top to the next one's foot.
+ * Minimum head clearance is then half a storey everywhere — 2.43 m against the
+ * 4.86 m rise — because the mass above any point on a half-flight is the SAME
+ * half-flight one storey up, and that is half a storey higher by construction.
+ *
+ * NOTHING ABOVE THE CONTROL ROOM IS BOT GROUND and none of this changes that:
+ * `NavGrid` drops one ray per cell from the sky and finds the cab. The audience
+ * is the man at the keyboard, which is exactly who complained.
  */
+/** The well, in the tower's own frame. Two half-flights wide. */
+const WELL_X = 2.6;
+const WELL_Z0 = -2.6, WELL_Z1 = 3.5;
+/** Where the half-landing starts, so each half-flight runs WELL_Z0..LAND_Z. */
+const LAND_Z = 2.0;
+/** One half-flight: its centre off the axis, and its width. */
+const FLIGHT_XO = 1.28, FLIGHT_XW = 2.3;
+
 function shaftInterior(A, rng, y) {
   const box = BOX(A);
   const inR = SH_R - SH_WALL / 2;
   for (let f = 1; f < FLOORS.length + 1; f++) {
     const fy = f < FLOORS.length ? FLOORS[f] : ROOF_Y;
     const prev = FLOORS[f - 1];
-    // the slab, in three pieces so a 2.6 x 6.4 m well is left open
-    const wellW = 2.7;
-    const side = (inR * 2 - wellW) / 2;
-    A.add('floor_concrete', box, LL(IDENT, TOWER.x - inR + side / 2, y(fy - 0.14), TOWER.z, 0,
-      side, 0.28, inR * 2), { masks: [0.4, 0.4, 0.3] });
-    A.box('concrete', TOWER.x - inR + side / 2, y(fy - 0.14), TOWER.z, side, 0.28, inR * 2);
-    A.add('floor_concrete', box, LL(IDENT, TOWER.x + inR - side / 2, y(fy - 0.14), TOWER.z, 0,
-      side, 0.28, inR * 2), { masks: [0.4, 0.4, 0.3] });
-    A.box('concrete', TOWER.x + inR - side / 2, y(fy - 0.14), TOWER.z, side, 0.28, inR * 2);
-    const endD = (inR * 2 - 7.0) / 2;
+    /**
+     * THE SLAB, IN FOUR PIECES ROUND A WELL WIDE ENOUGH FOR TWO — @see the note
+     * on `WELL_X` above. The near end (z < WELL_Z0) is the ARRIVAL LANDING: it
+     * is the piece flight B tops out onto and the piece the next storey's
+     * flight A starts from, so the two half-flights are joined by real floor
+     * and not by the hole they used to share.
+     */
+    const side = inR - WELL_X;
     for (const s of [-1, 1]) {
-      A.add('floor_concrete', box, LL(IDENT, TOWER.x, y(fy - 0.14), TOWER.z + s * (inR - endD / 2), 0,
-        wellW, 0.28, endD), { masks: [0.4, 0.4, 0.3] });
-      A.box('concrete', TOWER.x, y(fy - 0.14), TOWER.z + s * (inR - endD / 2), wellW, 0.28, endD);
+      A.add('floor_concrete', box, LL(IDENT, TOWER.x + s * (inR - side / 2), y(fy - 0.14), TOWER.z, 0,
+        side, 0.28, inR * 2), { masks: [0.4, 0.4, 0.3] });
+      A.box('concrete', TOWER.x + s * (inR - side / 2), y(fy - 0.14), TOWER.z, side, 0.28, inR * 2);
     }
-    // the flight: alternating direction so the well is used both ways
-    const dir = f % 2 ? 1 : -1;
+    for (const [z0, z1] of [[-inR, WELL_Z0], [WELL_Z1, inR]]) {
+      A.add('floor_concrete', box, LL(IDENT, TOWER.x, y(fy - 0.14), TOWER.z + (z0 + z1) / 2, 0,
+        WELL_X * 2, 0.28, z1 - z0), { masks: [0.4, 0.4, 0.3] });
+      A.box('concrete', TOWER.x, y(fy - 0.14), TOWER.z + (z0 + z1) / 2, WELL_X * 2, 0.28, z1 - z0);
+    }
+
+    /**
+     * THE TWO HALF-FLIGHTS AND THE HALF-LANDING. `A` climbs +Z on the west half
+     * of the well, the landing turns you through 180°, `B` climbs -Z on the
+     * east half and arrives on the landing slab above. Every storey is the same
+     * pair, so the climb is one continuous dog-leg from the control room to the
+     * roof deck and every turn is on a floor rather than in mid-air.
+     */
     const rise = fy - prev;
-    const steps = Math.round(rise / 0.19);
-    const run = 6.6 / steps;
-    for (let i = 0; i < steps; i++) {
-      const top = prev + (i + 1) * (rise / steps);
-      const sz = TOWER.z + dir * (-3.3 + (i + 0.5) * run);
-      A.add('concrete_dark', box, LL(IDENT, TOWER.x, y((prev + top) / 2), sz, 0,
-        wellW - 0.25, top - prev, run), { masks: [0.65, 0.35, 0.2] });
-      A.box('concrete', TOWER.x, y(prev + (i + 0.5) * (rise / steps)), sz, wellW - 0.25, rise / steps, run);
-      A.add('concrete', BOX_FINE(A), LL(IDENT, TOWER.x, y(top - 0.03), sz - dir * (run / 2 - 0.03), 0,
-        wellW - 0.28, 0.06, 0.05), { masks: [0.9, 0.25, 0.05] });
+    const mid = prev + rise / 2;
+    const runZ = LAND_Z - WELL_Z0;
+    for (const leg of [0, 1]) {
+      const b0 = leg ? mid : prev, b1 = leg ? fy : mid;
+      const xo = leg ? FLIGHT_XO : -FLIGHT_XO;
+      const dir = leg ? -1 : 1;
+      const steps = Math.max(4, Math.round((b1 - b0) / 0.185));
+      const run = runZ / steps;
+      const z0 = leg ? LAND_Z : WELL_Z0;
+      for (let i = 0; i < steps; i++) {
+        const top = b0 + (i + 1) * ((b1 - b0) / steps);
+        const sz = TOWER.z + z0 + dir * (i + 0.5) * run;
+        A.add('concrete_dark', box, LL(IDENT, TOWER.x + xo, y((b0 + top) / 2), sz, 0,
+          FLIGHT_XW, top - b0, run), { masks: [0.65, 0.35, 0.2] });
+        A.box('concrete', TOWER.x + xo, y(b0 + (i + 0.5) * ((b1 - b0) / steps)), sz,
+          FLIGHT_XW, (b1 - b0) / steps, run);
+        A.add('concrete', BOX_FINE(A), LL(IDENT, TOWER.x + xo, y(top - 0.03),
+          sz + dir * (run / 2 - 0.03), 0, FLIGHT_XW - 0.03, 0.06, 0.05), { masks: [0.9, 0.25, 0.05] });
+      }
     }
-    handrail(A, 'metal_rust', TOWER.x + wellW / 2 - 0.1, TOWER.z - 3.4,
-      TOWER.x + wellW / 2 - 0.1, TOWER.z + 3.4, y(fy - 0.14), { h: 1.05 });
+    // the half-landing at the turn, full width of the well
+    A.add('floor_concrete', box, LL(IDENT, TOWER.x, y(mid - 0.14), TOWER.z + (LAND_Z + WELL_Z1) / 2, 0,
+      WELL_X * 2, 0.28, WELL_Z1 - LAND_Z), { masks: [0.4, 0.4, 0.3] });
+    A.box('concrete', TOWER.x, y(mid - 0.14), TOWER.z + (LAND_Z + WELL_Z1) / 2,
+      WELL_X * 2, 0.28, WELL_Z1 - LAND_Z);
+    // the rail down the open side of each half-flight and round the well
+    handrail(A, 'metal_rust', TOWER.x, TOWER.z + WELL_Z0, TOWER.x, TOWER.z + WELL_Z1,
+      y(fy - 0.14), { h: 1.05 });
+    handrail(A, 'metal_rust', TOWER.x - WELL_X, TOWER.z + WELL_Z0, TOWER.x + WELL_X, TOWER.z + WELL_Z0,
+      y(fy - 0.14), { h: 1.05 });
     // a storey's worth of stores and a bulb
     for (let i = 0; i < 5; i++) {
       const px = TOWER.x + (rng.float() < 0.5 ? -1 : 1) * rng.range(2.2, inR - 0.8);
@@ -1435,6 +1577,10 @@ function shaftInterior(A, rng, y) {
       const ry = rng.float() * 6.28;
       const sc = rng.range(0.9, 1.1);
       if (nearStore(px, pz, fy, 2.2)) continue;
+      // NOT OVER THE WELL. It is 5.2 m wide now, so the old 2.2 m stand-off
+      // from the axis no longer clears it and a crate would hang in the stair.
+      if (Math.abs(px - TOWER.x) < WELL_X + 0.6 &&
+          pz - TOWER.z > WELL_Z0 - 0.6 && pz - TOWER.z < WELL_Z1 + 0.6) continue;
       A.put(id, px, y(fy) + 0.02, pz, ry, sc);
     }
     /**
