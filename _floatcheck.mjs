@@ -1416,14 +1416,43 @@ const disc = DISC
           if (mx * mx + mz * mz > R * R) continue;
           const k = cellOf(mx, mz); if (k < 0) continue;
           tris++;
-          let r = col.get(k);
-          if (!r) col.set(k, (r = { bins: new Uint8Array(NY), area: new Float32Array(NY), lab: new Map() }));
           const ux = bx - ax, uy = by - ay, uz = bz - az;
           const wx = cx - ax, wy = cy - ay, wz = cz - az;
           const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
           const A2 = 0.5 * Math.hypot(nx, ny, nz);
           const y0 = Math.max(0, Math.floor(Math.min(ay, by, cy)) - YMIN);
           const y1 = Math.min(NY - 1, Math.ceil(Math.max(ay, by, cy)) - YMIN);
+          /**
+           * OCCUPANCY OVER THE TRIANGLE'S WHOLE PLAN FOOTPRINT, not just under
+           * its centroid — and that distinction is a false positive of 731 m²
+           * on the town. `world_interior_shell` draws a room's ceiling as one or
+           * two large triangles; binned at the centroid, the whole ceiling
+           * landed in ONE cell in the middle of the room, so the support test
+           * looked at that cell's eight neighbours, found open floor 9 m below,
+           * and called a ceiling a floating slab. The walls holding it up were
+           * five cells away. Marking every cell the triangle covers puts the
+           * ceiling next to its own walls, which is what it is.
+           *
+           * AREA STAYS ON THE CENTROID so a big triangle is not counted once
+           * per cell — the m² column is a size, not an occupancy.
+           */
+          const i0 = Math.max(0, Math.floor((Math.min(ax, bx, cx) + R) / CELL));
+          const i1 = Math.min(NX - 1, Math.floor((Math.max(ax, bx, cx) + R) / CELL));
+          const j0 = Math.max(0, Math.floor((Math.min(az, bz, cz) + R) / CELL));
+          const j1 = Math.min(NX - 1, Math.floor((Math.max(az, bz, cz) + R) / CELL));
+          const span = (i1 - i0 + 1) * (j1 - j0 + 1);
+          if (span > 1 && span <= 4096) {
+            for (let j = j0; j <= j1; j++) {
+              for (let i = i0; i <= i1; i++) {
+                const kk = j * NX + i;
+                let rr = col.get(kk);
+                if (!rr) col.set(kk, (rr = { bins: new Uint8Array(NY), area: new Float32Array(NY), lab: new Map() }));
+                for (let y = y0; y <= y1; y++) rr.bins[y] = 1;
+              }
+            }
+          }
+          let r = col.get(k);
+          if (!r) col.set(k, (r = { bins: new Uint8Array(NY), area: new Float32Array(NY), lab: new Map() }));
           for (let y = y0; y <= y1; y++) { r.bins[y] = 1; r.area[y] += A2 / (y1 - y0 + 1); }
           const lb = Math.floor((ay + by + cy) / 3) - YMIN;
           if (lb >= 0 && lb < NY) {
