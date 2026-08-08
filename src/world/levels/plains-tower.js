@@ -429,7 +429,7 @@ export function buildTower(A, groundY) {
 
   const shell = A.beginScope('shell:NF-TOWER');
   buildPodium(A, rng, y, groundY, lights);
-  buildShaft(A, rng, y);
+  buildShaft(A, rng, y, lights);
   buildCab(A, rng, y, lights);
   A.endScope();
 
@@ -522,6 +522,26 @@ export function buildTower(A, groundY) {
         s.id, s.kind, TOWER.x + s.x, y(s.h), TOWER.z + s.z, s.yaw,
         { botReachable: s.botReachable, perishable: s.perishable, beacon: s.beacon }
       )),
+      /**
+       * ────────────────────────────────────────────────────────────────────
+       * THE LAMPS GO OUT WITH THE THING THAT HELD THEM UP
+       * ────────────────────────────────────────────────────────────────────
+       * `A.setScopeVisible` switches merged triangle ranges and instance slots
+       * and it does NOT touch registered lights — they are `THREE.PointLight`s
+       * added straight to the level root in `Assembler.finalize`. Every lamp
+       * below is authored INSIDE the shell scope, so its emissive body goes and
+       * the light it is supposed to come from stays.
+       *
+       * MEASURED, `_tzlights.mjs`, intact vs razed: the masthead beacon at
+       * `(0, 42.1, -32)` — 38.9 m over the plain, intensity 105.7, range 150 —
+       * came back `visible: true` in BOTH states. After the raze there is bare
+       * ground under it (max 1.06 m over the plain), so what it lit was rubble
+       * tinted red from a source that no longer exists anywhere in the world.
+       *
+       * `publishWorks` switches these with the shell. @see its own note for why
+       * the switch is `intensity` and not `visible`.
+       */
+      lights,
     },
     lights,
   };
@@ -1466,7 +1486,7 @@ function deckFurniture(A, rng, y, lights) {
 }
 
 // ──────────────────────────────────────────────────────────────────── shaft ──
-function buildShaft(A, rng, y) {
+function buildShaft(A, rng, y, lights) {
   const box = BOX(A);
 
   // the mass, storey by storey so each pour reads as its own lift
@@ -1495,8 +1515,8 @@ function buildShaft(A, rng, y) {
   shaftFaces(A, rng, y);
   shaftLining(A, rng, y);
   signBand(A, y);
-  controlRoom(A, rng, y);
-  shaftInterior(A, rng, y);
+  controlRoom(A, rng, y, lights);
+  shaftInterior(A, rng, y, lights);
 
   // the roof deck over the shaft, under the cab: a real slab with a hatch
   A.add('concrete_dark', box, LL(IDENT, TOWER.x, y(ROOF_Y - 0.2), TOWER.z, 0, SH_R * 2, 0.4, SH_R * 2),
@@ -1759,7 +1779,7 @@ function shaftFaces(A, rng, y) {
  * and a shelf unit 1.1; "the centre cleared the circle and the body of the object
  * did not" is written in `builder.js` about the exact bug this avoids.
  */
-function controlRoom(A, rng, y) {
+function controlRoom(A, rng, y, lights) {
   const box = BOX(A);
   const inR = SH_R - SH_WALL / 2;
 
@@ -1869,8 +1889,8 @@ function controlRoom(A, rng, y) {
   buildStores(A, rng, y, ROOM_Y);
 
   // two bulbs, because an unlit room at 21:40 is a black hole with a door in it
-  practical(A, TOWER.x - 2.2, y(ROOM_Y + 3.4), TOWER.z + 1.4, 0xffc07a, 11, 14, { s: 0.14 });
-  practical(A, TOWER.x + 2.4, y(ROOM_Y + 3.4), TOWER.z - 1.8, 0xffc07a, 9, 13, { s: 0.14 });
+  lights.push(practical(A, TOWER.x - 2.2, y(ROOM_Y + 3.4), TOWER.z + 1.4, 0xffc07a, 11, 14, { s: 0.14 }));
+  lights.push(practical(A, TOWER.x + 2.4, y(ROOM_Y + 3.4), TOWER.z - 1.8, 0xffc07a, 9, 13, { s: 0.14 }));
 }
 
 /**
@@ -1919,7 +1939,7 @@ const LAND_Z = 2.0;
 /** One half-flight: its centre off the axis, and its width. */
 const FLIGHT_XO = 1.28, FLIGHT_XW = 2.3;
 
-function shaftInterior(A, rng, y) {
+function shaftInterior(A, rng, y, lights) {
   const box = BOX(A);
   const inR = SH_R - SH_WALL / 2;
   for (let f = 1; f < FLOORS.length + 1; f++) {
@@ -2004,7 +2024,7 @@ function shaftInterior(A, rng, y) {
      */
     buildStores(A, rng, y, fy);
     if (f < FLOORS.length) {
-      practical(A, TOWER.x + rng.range(-2, 2), y(fy + 3.2), TOWER.z + rng.range(-2, 2), 0xffc07a, 7, 11, { s: 0.12 });
+      lights.push(practical(A, TOWER.x + rng.range(-2, 2), y(fy + 3.2), TOWER.z + rng.range(-2, 2), 0xffc07a, 7, 11, { s: 0.12 }));
     }
   }
 }

@@ -470,9 +470,41 @@ export function publishWorks(A, records, physics) {
     A.setScopeVisible(rec.shell, true);
     A.setScopeVisible(rec.ruin, false);
     A.setScopeSolid(rec.ruin, physics, false);
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * A LAMP INSIDE THE SHELL SCOPE IS NOT SWITCHED BY THE SHELL SCOPE
+     * ──────────────────────────────────────────────────────────────────────
+     * `setScopeVisible` switches merged triangle ranges and instance slots.
+     * Registered lights are neither: `Assembler.finalize` adds them to the
+     * level root as real `THREE.PointLight`s and hands them to
+     * `render.addLight`, so a lamp authored inside a shell survives its own
+     * building. Measured on the tower (`_tzlights.mjs`): the masthead beacon,
+     * 38.9 m over the plain at intensity 105.7 with a 150 m range, read
+     * `visible: true` intact AND razed — a light with no body, tinting bare
+     * rubble from nothing.
+     *
+     * IT IS SWITCHED ON `intensity` AND NOT ON `visible`, and that is measured
+     * rather than stylistic. `RenderSystem._cullLights` runs every frame and
+     * ENDS with `light.visible = fade > 0.002`, fade being purely the camera
+     * distance — so a `visible = false` written here is gone on the next
+     * frame. The same loop opens by adopting an intensity it did not itself
+     * write as the new base (the "flickering lamps" case its own comment
+     * describes), which is exactly this: write 0 and the light is black from
+     * that frame on, write the authored value back and it comes up again. The
+     * plain's fires already drive their lamps through the same channel.
+     *
+     * The value restored is the one `practical` stamped on the light at its
+     * construction (@see it), NOT `light.intensity` read here: by the time a
+     * level publishes, the culler may already have faded the lamp to a fraction
+     * of what the level authored, and latching that would make the tower come
+     * back dimmer every round it is rebuilt.
+     */
     rec.setVisual = (down) => {
       A.setScopeVisible(rec.shell, !down);
       A.setScopeVisible(rec.ruin, down);
+      for (const l of rec.lights ?? []) {
+        l.intensity = down ? 0 : (l.userData.owAuthoredIntensity ?? l.intensity);
+      }
     };
     rec.setCollision = (down) => {
       A.setScopeSolid(rec.shell, physics, !down);
@@ -560,6 +592,14 @@ export function practical(A, x, y, z, colour, intensity, range, opts = {}) {
   const l = new THREE.PointLight(colour, intensity, range, 2);
   l.position.set(x, y, z);
   l.castShadow = false;
+  /**
+   * WHAT THE LEVEL ASKED FOR, kept because nothing else keeps it: `render`
+   * writes `light.intensity` every frame off its own distance fade, so the
+   * authored number is gone after the first cull and there is no way back to
+   * it. A structure that switches its lamps off when it is destroyed needs it
+   * to switch them on again. @see `publishWorks`.
+   */
+  l.userData.owAuthoredIntensity = intensity;
   A.light(l, { range, priority: opts.priority ?? 2 });
   return l;
 }
