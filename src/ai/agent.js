@@ -853,28 +853,85 @@ const ARCHETYPE_MIX = {
  * 90 m scatters three times as wide on the ground as the same round at 30 m.
  * Long fire is suppression and noise, which is 「銃声が鳴り響きまくる」, and it is
  * not free accuracy. 「AIMは悪くてもいい」 is the standing permission.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * `mag` AND `reload` — THE DUTY CYCLE, WHICH IS THE REAL CAP ON THE VOLUME
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「敵の銃撃を必ず増やすこと何度も言うけど 全体で相手へと撃つ球の数を増やせ」 — asked
+ * THREE TIMES, so the thing to move is the absolute count and not a ratio.
+ *
+ * The refusal board says where it was going. `src/ai/volleycheck.mjs`, town,
+ * seeds 7 / 11: of 139 258 man-frames in which a man could SEE a living enemy,
+ * **6.5 % sent a round**, and of the rest:
+ *
+ *   reloading            51.3 %   ◄── the whole ceiling, in one bar
+ *   suppressed           21.6 %
+ *   ducked (peek down)    9.6 %
+ *   wantFire false        6.9 %
+ *   out of range          0.4 %   ◄── what `reach` above was spent on
+ *   burst gap             0.0 %
+ *   magazine EMPTY        0.0 %
+ *
+ * AND THE 51.3 % IS NOT A BUG, IT IS ARITHMETIC. A carbine at 800 rpm empties
+ * thirty rounds in 30/(800/60) = 2.25 s and then takes 2.35 s to reload, so the
+ * gun is APART for 2.35 of every 4.60 seconds — a 49 % duty cycle, which is the
+ * 51.3 % on the board to within the noise. Every burst-length, trigger-
+ * discipline and coin-flip change made in this file for the last five passes
+ * has been competing for the other half of a clock that was already spoken for.
+ * `magazine EMPTY` reading 0.0 % is the proof it is not an ammunition problem:
+ * `reserve` is `magSize × spares × RESERVE_MUL` = 780 rounds for a rifleman and
+ * nobody ever runs out. He is not short of bullets. He is short of SECONDS.
+ *
+ * So the two numbers that own those seconds move, and only those two: the
+ * magazine gets HALF AS BIG AGAIN and the change gets about 17 % quicker.
+ *
+ *              mag        reload      firing s   duty  →  duty
+ *   carbine   30 → 45   2.35 → 1.95     3.38     49 %  →  63 %
+ *   ak        30 → 45   2.75 → 2.25     4.50     62 %  →  67 %
+ *   smg       32 → 48   2.05 → 1.75     3.03     50 %  →  63 %
+ *   lmg      100 → 130  5.60 → 4.60    10.40     59 %  →  69 %
+ *   mpistol   20 → 32   1.85 → 1.55     1.83     38 %  →  54 %
+ *   magnum     6 → 8    3.40 → 2.80     2.82     45 %  →  50 %
+ *   sniper     5 → 7    3.10 → 2.60
+ *
+ * EVERY GUN KEEPS ITS CHARACTER because every gun moves by the same shape: the
+ * belt is still four times the rifle's magazine and the slowest thing to feed,
+ * the machine pistol is still the fastest change on the map, and the bolt gun
+ * still holds the fewest rounds of anything. 「個性を作ってもいいけど…みんな増やせ」
+ * is a floor raised under all of them, which is exactly what a common shape is.
+ *
+ * `reserve` NEEDS NO CHANGE and deliberately gets none: it is computed FROM
+ * `magSize`, so a bigger magazine carries a proportionally bigger load and the
+ * ammunition economy is untouched by construction.
+ *
+ * THE BAR THIS DOES NOT TOUCH, AND WHY. `suppressed` at 21.6 % is the second
+ * largest and it is left alone on purpose: it is the one refusal on the board
+ * that is a real soldier doing a real thing, and with the whole roster now
+ * firing more it will grow on its own. If the volume still reads low after
+ * this, THAT is the next bar — and it should be argued as a change to what
+ * being suppressed DOES, not as another trigger-discipline dial.
  */
 const WEAPONS = {
-  carbine: { audio: 'rifle', rpm: 800, mag: 30, spares: 4, damage: 17, cone: 0.030, coneLow: 0.055, reload: 2.35, hold: 1.0, move: 1.00, reach: 88, want: 22 },
-  ak: { audio: 'ak', rpm: 600, mag: 30, spares: 3, damage: 21, cone: 0.034, coneLow: 0.062, reload: 2.75, hold: 0.85, move: 0.98, reach: 94, want: 26 },
-  smg: { audio: 'smg', rpm: 950, mag: 32, spares: 5, damage: 15, cone: 0.041, coneLow: 0.072, reload: 2.05, hold: 1.3, move: 1.06, reach: 57, want: 12 },
+  carbine: { audio: 'rifle', rpm: 800, mag: 45, spares: 4, damage: 17, cone: 0.030, coneLow: 0.055, reload: 1.95, hold: 1.0, move: 1.00, reach: 88, want: 22 },
+  ak: { audio: 'ak', rpm: 600, mag: 45, spares: 3, damage: 21, cone: 0.034, coneLow: 0.062, reload: 2.25, hold: 0.85, move: 0.98, reach: 94, want: 26 },
+  smg: { audio: 'smg', rpm: 950, mag: 48, spares: 5, damage: 15, cone: 0.041, coneLow: 0.072, reload: 1.75, hold: 1.3, move: 1.06, reach: 57, want: 12 },
   /**
    * THE BELT. `magSize` 100 is the whole character of it: this is the man who
    * does not stop, and he is the direct answer to "マガジンを使い切るくらい撃たない
    * のか". Two belts behind it rather than four magazines, and a 5.6 s tray
    * change during which he is worth nothing — the cost of holding it down.
    */
-  lmg: { audio: 'lmg', rpm: 750, mag: 100, spares: 2, damage: 17, cone: 0.047, coneLow: 0.082, reload: 5.6, hold: 2.4, move: 0.78, reach: 105, want: 30 },
-  mpistol: { audio: 'machinepistol', rpm: 1050, mag: 20, spares: 7, damage: 14, cone: 0.055, coneLow: 0.092, reload: 1.85, hold: 1.15, move: 1.08, reach: 45, want: 9 },
-  magnum: { audio: 'magnum', rpm: 170, mag: 6, spares: 8, damage: 42, cone: 0.019, coneLow: 0.040, reload: 3.4, hold: 0.35, move: 1.06, reach: 65, want: 16 },
+  lmg: { audio: 'lmg', rpm: 750, mag: 130, spares: 2, damage: 17, cone: 0.047, coneLow: 0.082, reload: 4.6, hold: 2.4, move: 0.78, reach: 105, want: 30 },
+  mpistol: { audio: 'machinepistol', rpm: 1050, mag: 32, spares: 7, damage: 14, cone: 0.055, coneLow: 0.092, reload: 1.55, hold: 1.15, move: 1.08, reach: 45, want: 9 },
+  magnum: { audio: 'magnum', rpm: 170, mag: 8, spares: 8, damage: 42, cone: 0.019, coneLow: 0.040, reload: 2.8, hold: 0.35, move: 1.06, reach: 65, want: 16 },
   /**
    * The bolt gun, and every dial on it is a trade rather than a tightening.
    * @see the block in the constructor that applies `extra` — the settle, the
    * tracking and the reach are what make 0.9 rounds a second survivable.
    */
   sniper: {
-    audio: 'sniper', rpm: 55, mag: 5, spares: 6, damage: 55, cone: 0.0072, coneLow: 0.0135,
-    reload: 3.1, hold: 0.3, move: 0.90,
+    audio: 'sniper', rpm: 55, mag: 7, spares: 6, damage: 55, cone: 0.0072, coneLow: 0.0135,
+    reload: 2.6, hold: 0.3, move: 0.90,
     extra: { settleTime: [2.05, -1.15], trackRate: [1.6, 2.2], aimWobble: [0.004, 0.012], weaponRange: [111, 43], viewRange: 136 },
   },
 };

@@ -136,6 +136,9 @@ for (const seed of SEEDS) {
        * and the only thing the two can be compared on.
        */
       manSecs: 0,
+      /* the refusal board, eyes-on */
+      eyesOn: 0, eyesOnFiring: 0, wReload: 0, wDry: 0, wRange: 0, wSupp: 0,
+      wPeekDown: 0, wBurstGap: 0, wNoWant: 0, wOther: 0,
       /* the lean */
       leanFrames: 0, leanBelow: 0, leanFracSum: 0,
       sprintGranted: 0, travel: 0, travelCeil: 0, travelSlow: 0,
@@ -211,6 +214,33 @@ for (const seed of SEEDS) {
             else S.loiterOpen++;
           }
         }
+        /**
+         * ══════════════════════════════════════════════════════════════════
+         * THE REFUSAL BOARD — eyes ON a live man, and NO round leaving
+         * ══════════════════════════════════════════════════════════════════
+         * 「敵の銃撃を必ず増やすこと何度も言うけど 全体で相手へと撃つ球の数を増やせ」,
+         * asked three times. A share cannot answer it and neither can a guess
+         * at which gate is binding: the last census that named `reloading` at
+         * 56.7 % predates `TOPUP_FRAC` 0.9, so it is a stale number and
+         * spending against it would be spending against a bar that has
+         * already moved. This is that census re-taken, in `_shoot`'s own
+         * order, over frames where the man CAN SEE a living enemy.
+         */
+        if (a.targetVisible && a.hasTarget && a.targetActor) {
+          S.eyesOn++;
+          if (a.__firedFrame === e.time.frame) S.eyesOnFiring++;
+          else {
+            const dv = a.position.distanceTo(a.targetActor.position);
+            if (a.animator?.reloading === true) S.wReload++;
+            else if (a.ammo <= 0) S.wDry++;
+            else if (dv >= a.weaponRange) S.wRange++;
+            else if (a.state === 'suppressed') S.wSupp++;
+            else if (a.cover && !a.peeking) S.wPeekDown++;
+            else if (a.burstCooldown > 0 && a.burstLeft <= 0) S.wBurstGap++;
+            else if (!a.wantFire) S.wNoWant++;
+            else S.wOther++;
+          }
+        }
         if (a.hasTarget && a.targetActor) {
           S.contact++;
           const d = a.position.distanceTo(a.targetActor.position);
@@ -268,6 +298,13 @@ console.log(`LEAN         mean ${(sum('leanFracSum') / Math.max(1, sum('leanFram
 console.log(`travel       ${pc(sum('travelCeil'), sum('travel'))} at >=98 % of own ceiling; under 5 m/s ${pc(sum('travelSlow'), sum('travel'))}`);
 console.log(`LOITER       cover ${pc(sum('loiterCover'), sum('combatFrames'))}  open ${pc(sum('loiterOpen'), sum('combatFrames'))}  of combat man-time`);
 console.log(`RANGE GATE   ${pc(sum('rangeRefused'), sum('contact'))} of contact time refused purely by distance`);
+console.log(`EYES-ON      ${sum('eyesOn')} man-frames with a VISIBLE live enemy; firing ${pc(sum('eyesOnFiring'), sum('eyesOn'))}`);
+console.log('  why no round left the barrel, of those frames:');
+for (const [k, lbl] of [['wReload','reloading'],['wDry','magazine empty'],['wRange','out of range'],
+                        ['wSupp','suppressed'],['wPeekDown','ducked (peek down)'],
+                        ['wBurstGap','burst gap'],['wNoWant','wantFire false'],['wOther','other']]) {
+  if (sum(k)) console.log(`    ${lbl.padEnd(20)} ${pc(sum(k), sum('eyesOn')).padStart(7)}`);
+}
 const b = runs[0].buckets;
 const cd = sumA('contactDist'); const rd = sumA('refusedDist');
 console.log('  contact by distance (share, and share of THAT refused by range):');
