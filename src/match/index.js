@@ -5963,7 +5963,22 @@ export class MatchSystem {
     }
 
     const ready = this.caches.ready(c, now);
-    const beaconReady = this.caches.beaconCooldown(now) <= 0 && !this.caches.beacon.active;
+    /**
+     * `c.beacon !== false` IS PART OF "READY", AND LEAVING IT OUT SHIPPED A LIE.
+     *
+     * NACHTFELD's tower carries two posts the player can reach and a bot cannot
+     * — the weapon rack at 21.2 m and the cab at 26 m — declared `beacon: false`
+     * because `Caches._jitterOnto` raycasts down from `beacon.y + 3` and would
+     * strand men on a shaft slab forever. `plantBeacon` refuses them correctly
+     * at `caches.js`. What did not know was the PROMPT: it advertised
+     * "PLANT BEACON · 60S FORWARD SPAWN" at both, and the refusal then fell
+     * through to "BEACON UNAVAILABLE · READY IN 0S" — the wrong reason, on a
+     * cooldown that was never the problem.
+     */
+    const beaconReady =
+      c.beacon !== false &&
+      this.caches.beaconCooldown(now) <= 0 &&
+      !this.caches.beacon.active;
 
     /* ---- the press ---------------------------------------------------- */
     if (down) {
@@ -6058,7 +6073,12 @@ export class MatchSystem {
       : this.caches.beacon.active
         ? `ONE IS UP · ${Math.ceil(this.caches.beaconRemaining(now))}S`
         : `READY IN ${Math.ceil(this.caches.beaconCooldown(now))}S`;
-    p.alt = alt;
+    /**
+     * A post that can never take a beacon does not offer one. @see the note on
+     * `beaconReady`. Offering it and then refusing is worse than not offering:
+     * the player learns the key does nothing HERE, not that it is on cooldown.
+     */
+    p.alt = c.beacon === false ? null : alt;
     ui.setPrompt(p);
 
     h.near = c.id;
