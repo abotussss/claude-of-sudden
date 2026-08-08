@@ -358,6 +358,41 @@ const POST_REACH = 55;
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
+ * …AND THE NO-PROGRESS CUT INSIDE IT, BECAUSE TWELVE SECONDS IS TOO LONG TO
+ * WALK ON THE SPOT — 「スタックしているのに移動方法変えないし」
+ * ────────────────────────────────────────────────────────────────────────────
+ * `_trackProgress` opens by REFUSING to look at a man on a post
+ * (`if (this.post && this.postPhase > 0) return`) and says why: every rung of
+ * `_unstick` is a height-field move and a man on a landing is not on the height
+ * field, so the best rung available would throw him back into the street. That
+ * is right, and it leaves `POST_PHASE_T` as the only thing that ever ends a
+ * climb that is not happening — twelve seconds of `desiredSpeed = 2.9` with the
+ * capsule not translating a millimetre, which the animator plays as a full
+ * walk cycle on the spot.
+ *
+ * MEASURED (`_stuckwho.mjs`, town, 41 men, two runs): all three men
+ * `tools/stuckcheck.mjs` flags are in phase 1 or 3, every one of them with
+ * `stuckRung 0`, `_progTime 0` and `postTimer` counting 10.1 -> 0.9 across
+ * exactly the flagged run. The gate's window is five samples, ~5.3 s of game
+ * time — less than half of `POST_PHASE_T` — so under the old clock EVERY failed
+ * climb was guaranteed to trip it before its own recovery could fire. The gate
+ * was reading a real defect and it could not have read anything else.
+ *
+ * THE NUMBERS ARE THE PHASE-2 PRECEDENT'S, three lines down in the same method:
+ * a man walks at his firing position for three seconds and then holds. Three
+ * seconds at the climb's own 2.9 m/s is 8.7 m of stairs and the waypoints are
+ * 0.8 m apart, so 0.75 m in three seconds is not "slow", it is "not moving" —
+ * and a man shoved off a tread by the two squadmates on the same flight has
+ * three full seconds to be shoved back. The exit is `_dropPost`, which is the
+ * exit the twelve-second clock already used: he gives the window back, takes
+ * his 25-55 s cooldown, and becomes an ordinary soldier that `_unstick` CAN
+ * help.
+ */
+const POST_STALL = 3.0;
+const POST_STALL_CLEAR = 0.75;
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
  * AND THE THIRD NUMBER, WHICH IS THE ONE THE PLAYER WAS LOOKING AT
  * ────────────────────────────────────────────────────────────────────────────
  * 「AIが屋内にいるとき、外にも出ないしその場で突っ立ったままです」.
@@ -2068,6 +2103,14 @@ export class Agent {
     this.postDry = POST_DRY;
     this.postWp = 0;
     this.postTimer = 0;
+    /**
+     * THE CLIMB'S OWN NO-PROGRESS WINDOW. @see `_postClock` and the note in
+     * `_runPost`'s phase 1/3 branch: `_trackProgress` refuses to touch a man on
+     * a post, so without this the only thing that ever ends a failed climb is
+     * the full `POST_PHASE_T`.
+     */
+    this._postProgT = 0;
+    this._postProgFrom = new THREE.Vector3();
     this._postCool = 0;
     this.holdTimer = 0;
     /**
@@ -2615,6 +2658,19 @@ export class Agent {
     return true;
   }
 
+  /**
+   * SOMETHING GOOD HAPPENED: RE-ARM BOTH CLOCKS. Every place that wrote
+   * `postTimer = POST_PHASE_T` is a place where the manoeuvre moved on — a
+   * phase began, or a tread was ticked off — so it is also the place the
+   * no-progress window has to restart from. One call instead of two lines makes
+   * the two clocks impossible to set apart. @see the phase 1/3 branch.
+   */
+  _postClock() {
+    this.postTimer = POST_PHASE_T;
+    this._postProgT = 0;
+    this._postProgFrom.copy(this.position);
+  }
+
   /** Give the window back and go and be an ordinary soldier. */
   _dropPost(why = 'timeout') {
     /**
@@ -2673,7 +2729,7 @@ export class Agent {
       if (dx * dx + dz * dz < 2.2 * 2.2) {
         this.postPhase = 1;
         this.postWp = 1;
-        this.postTimer = POST_PHASE_T;
+        this._postClock();
         this.hasMoveTarget = false;
         return true;
       }
@@ -2698,6 +2754,26 @@ export class Agent {
       this.crouch = false;
       this.aimWeight = 0.4;
       this.wantFire = false;
+      /**
+       * IS THE CLIMB ACTUALLY HAPPENING? @see `POST_STALL`. Measured in THREE
+       * dimensions, because a staircase is mostly Y and a man gaining a storey
+       * scores nothing at all on the plan distance `stuckcheck` reads.
+       * `_postClock` re-arms this wherever the manoeuvre moves on, so this only
+       * ever fires on a man who has ticked no tread and gained no height for
+       * three seconds.
+       */
+      this._postProgT += dt;
+      if (this._postProgT >= POST_STALL) {
+        const mx = this.position.x - this._postProgFrom.x;
+        const my = this.position.y - this._postProgFrom.y;
+        const mz = this.position.z - this._postProgFrom.z;
+        this._postProgT = 0;
+        this._postProgFrom.copy(this.position);
+        if (mx * mx + my * my + mz * mz < POST_STALL_CLEAR * POST_STALL_CLEAR) {
+          this._dropPost('no-progress');
+          return false;
+        }
+      }
       this.desiredSpeed = 2.9;
       this.hasMoveTarget = false;
       // Steered, not planned. Refreshed every frame so `_move` never falls back
@@ -2730,7 +2806,7 @@ export class Agent {
          */
         if (ddx * ddx + ddz * ddz < 0.8 * 0.8 && Math.abs(this.position.y - w.y) < 0.5) {
           this.postWp = k + (up ? 1 : -1);
-          this.postTimer = POST_PHASE_T;
+          this._postClock();
         }
       }
       /**
@@ -2780,7 +2856,7 @@ export class Agent {
     if (Math.abs(stand.y - this.position.y) > 1.4) {
       this.postPhase = 3;
       this.postWp = p.route.length - 1;
-      this.postTimer = POST_PHASE_T;
+      this._postClock();
       return true;
     }
     /**
@@ -2850,7 +2926,7 @@ export class Agent {
     if (this.dry || this.health < 40 || this.suppression > 1.35 || this.postDry <= 0) {
       this.postPhase = 3;
       this.postWp = p.route.length - 1;
-      this.postTimer = POST_PHASE_T;
+      this._postClock();
     }
     return true;
   }
