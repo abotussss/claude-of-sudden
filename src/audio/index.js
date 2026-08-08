@@ -1675,7 +1675,12 @@ export class AudioSystem {
       level: o.level ?? 1,
       // A far voice is cheap to steal and can steal almost nothing: at 0.3 it
       // reaches nothing above 0.55, i.e. no near shot, no blast, no bark.
-      maxDist: 260, occlusion: 0, echoBoost: WET_OUTDOOR,
+      // 260 -> 340, TOGETHER WITH `FAR_MAX` 230 -> 320 in battle.js. These two
+      // numbers are one decision and the gap between them is the slack that
+      // stops a round binned at 229 m being thrown away here because the bin's
+      // mean drifted; if they are ever edited apart, the band between them is a
+      // silent ring around the player. @see FAR_MAX in src/audio/battle.js
+      maxDist: 340, occlusion: 0, echoBoost: WET_OUTDOOR,
       // The level is a function of the range, because the attenuation curve is
       // nearly flat out here and a fixed gain would make 200 m as loud as 70.
       gain: farGain(this.field.distanceTo(x, y, z)),

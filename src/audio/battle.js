@@ -100,14 +100,103 @@ const FAR_RATE = 9;
  * @see _updateFar — a refusal used to throw the whole bin away.
  */
 const BIN_STALE = 1.4;
-/** Nothing past this is worth a slot; `ambience` carries the rest of the war. */
-const FAR_MAX = 230;
+/**
+ * Nothing past this is worth a slot; `ambience` carries the rest of the war.
+ *
+ * 230 -> 320, AND THIS IS A MAP SIZE, NOT A MIX OPINION. 230 m is a diagonal of
+ * the town (114x141 m, 181 m corner to corner), so on the town this number has
+ * never once been reached and this change is a NO-OP there — that is the whole
+ * reason it is safe. NACHTFELD is a plain whose capture zones are 154-314 m
+ * apart and whose bases are 302 m apart, and MEASURED through a live 20v20 on
+ * it (`_plainguns.mjs --map=plains --drive`, 60 s at 1x) 94 remote rounds a
+ * minute were fired from beyond 230 m and thrown away by this line — 5 % of the
+ * war, and specifically the half of the map the player is walking towards.
+ *
+ * `playFar`'s own `maxDist` moves with it (260 -> 340) or the two disagree and
+ * the band between them is a silent ring. @see AudioSystem.playFar
+ *
+ * The level out there is still honest and still monotone: `gunRangeGain` puts a
+ * burst at 300 m 2.3 dB under one at 90 m, so the far edge of the plain is
+ * audible and audibly farther away.
+ */
+const FAR_MAX = 320;
 /**
  * Where the near path stops. `_onFire` plays a full `weaponShot` inside this and
  * this file takes everything outside it — the two ranges MUST agree or a band of
  * the map goes silent again. @see AudioSystem._onFire
  */
 const FAR_MIN = 60;
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * A FLOOR UNDER THE DISTANT WAR — 「敵味方全ての銃声をもっと鳴らして」
+ * ════════════════════════════════════════════════════════════════════════════
+ *
+ * How many coalesced far voices may be live AT ONCE when `_room` has already
+ * said no. It is a small, absolute allowance, and it exists because of one
+ * measurement on the map the complaint is about.
+ *
+ * MEASURED, NACHTFELD, 60 s at 1x with the player driven into a real firefight
+ * (`_plainguns.mjs --map=plains --drive`; median nearest enemy 3.6 m):
+ *
+ *   remote rounds fired by bots            1862 / min
+ *   inside 60 m (the near `weaponShot`)     358        19 %
+ *   offered to this layer                  1504        81 %
+ *   taken into a bearing bin               1410
+ *   `_room('weapons', 0.85)` asked          2458
+ *   `_room` REFUSED                         2458       100 %
+ *   `playFar` reached                          0
+ *   far voices played                          0
+ *   rounds left rotting in bins at the end     98
+ *
+ * Every arrow in the chain was healthy except one, and that one was total. The
+ * cause is arithmetic: `_room`'s fade is 0 at `full * 0.34` = 24.48 slots and
+ * the render governor's floor is `MIN_EMITTERS` = 24 (see spatial.js), so at
+ * the floor `head` is not small, it is ZERO — and a busy match SITS at the
+ * floor (measured pool cap 24/72 for the whole run, on both maps). The fade
+ * that replaced the old cliff put a new cliff one slot lower down and landed it
+ * exactly on the state the game is actually in.
+ *
+ * On the town that was survivable, because the town is 114x141 m and most of
+ * its fire is inside 60 m, where the FULL `weaponShot` runs and is governed by
+ * nothing here. On a 200 m plain it is not survivable, because 81 % of every
+ * round fired is on this path: the layer being off IS the war being silent.
+ * That is 「銃声がなんでもっとならないの？」 and it is not a level.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHY A FLOOR AND NOT A GENTLER FADE
+ * ────────────────────────────────────────────────────────────────────────────
+ * The fade is a share of the WEAPONS BUS, and at the pool's floor that bus is
+ * 10 slots of which the near fight already holds ~7 (measured 6.9 mean). Any
+ * share of that number is under one voice, so no amount of re-shaping the fade
+ * gives the distant war a voice while a near fight is on — which on this map is
+ * always. What the far layer needs is what `_busCap` says a category needs when
+ * it is losing to sheer arrival rate: a QUOTA OF ITS OWN, small and absolute.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT IT CAN AND CANNOT TAKE — the containment, stated so it can be checked
+ * ────────────────────────────────────────────────────────────────────────────
+ * This is the first thing in this file that ever COMPETES, so the bound matters
+ * and it is already enforced by `acquire`, not by hope. A far voice asks at
+ * priority 0.3 and `acquire` refuses any victim above `pri + 0.25` = 0.55:
+ *
+ *   near remote shot   0.59-0.95 (0.95 - dist*0.006, and it only exists inside
+ *                      60 m, so 0.59 is its floor)          CANNOT BE TAKEN
+ *   bark 0.85, explosion 1.0, tank gun 0.99                 CANNOT BE TAKEN
+ *   collapse 1.3, and everything at PROTECTED_PRI 1.2       CANNOT BE TAKEN
+ *   impact 0.55, warfield's far 0.5, remote step 0.28       can be taken
+ *
+ * So the floor cannot make the fight in front of you quieter; at worst it costs
+ * three impacts or footfalls out of twenty-four slots. Three voices is ~126
+ * Web Audio nodes — less than half of one explosion — and each carries up to
+ * `BIN_ROUNDS` rounds, so the ceiling this puts back is ~14 distant rounds a
+ * second at the pool's floor rather than zero.
+ *
+ * IT IS ONLY EVER MORE PERMISSIVE THAN THE CODE IT REPLACES: `_farRoom` returns
+ * true everywhere `_room` did and in one band more. A healthy pool is bit for
+ * bit what it was, and `FAR_RATE` still caps the whole layer at 9 voices a
+ * second either way.
+ */
+const FAR_FLOOR_SLOTS = 3;
 
 /* ---------------------------------------------------------------- */
 /* Footsteps of other men                                            */
@@ -300,6 +389,30 @@ export class BattleLayer {
     return f.busLoad(bus) < f.busCap(bus) * share * head;
   }
 
+  /** Coalesced far voices live in the field right now. @see AudioSystem.playFar */
+  _farLive() {
+    const f = this.audio.field;
+    if (!f) return 0;
+    let n = 0;
+    for (let i = 0; i < f.emitters.length; i++) {
+      const e = f.emitters[i];
+      if (!e.free && e.kindTag === 'far') n++;
+    }
+    return n;
+  }
+
+  /**
+   * May the distant war take a slot? `_room` first — so a healthy pool behaves
+   * exactly as it did — and under it an absolute floor of `FAR_FLOOR_SLOTS`,
+   * because on a 200 m map this layer is not extra content, it is the battle.
+   * @see FAR_FLOOR_SLOTS for the measurement and for what a far voice can and
+   * cannot evict.
+   */
+  _farRoom(live) {
+    if (this._room('weapons', 0.85)) return true;
+    return live < FAR_FLOOR_SLOTS;
+  }
+
   /* ================================================================ */
   /* distant gunfire                                                  */
   /* ================================================================ */
@@ -329,6 +442,13 @@ export class BattleLayer {
 
   /** Flush whichever bins are ready, inside the voice budget. */
   _updateFar(now) {
+    /**
+     * Counted ONCE per frame and then tracked locally. `stats.farHeld` is the
+     * same census but it is computed at the END of `update()`, i.e. a frame
+     * stale — and a gate that is a frame stale is a gate that can be beaten by
+     * a burst, which is the whole failure mode this layer keeps having.
+     */
+    let live = this._farLive();
     // Round-robin the start of the scan so one bearing cannot monopolise the
     // rate limit just because it is first in the array.
     for (let k = 0; k < BINS; k++) {
@@ -351,7 +471,7 @@ export class BattleLayer {
        * 0.85: the far layer still yields to the fight in front of you, still
        * fades with the governor's `head`, and still cannot grow the pool.
        */
-      if (!this._room('weapons', 0.85)) {
+      if (!this._farRoom(live)) {
         if (age > BIN_STALE) this._binN[b] = 0;
         continue;
       }
@@ -368,7 +488,7 @@ export class BattleLayer {
       // the mean of the bin — so the band it is shaped for and the attenuation
       // it is played at are the same number by construction.
       const ok = this.audio.playFar(x, y, z, { profile: this._binP[b], rounds, spacing });
-      if (ok) { this.stats.farVoices++; this.stats.farRounds += rounds; }
+      if (ok) { live++; this.stats.farVoices++; this.stats.farRounds += rounds; }
     }
   }
 
