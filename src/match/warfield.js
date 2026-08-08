@@ -336,6 +336,32 @@ export class Warfield {
       const h = world.groundHeight?.(x, z);
       return Number.isFinite(h) ? h : 0;
     };
+    /**
+     * IS THERE ANYTHING STANDING WHERE THIS POSITION IS?
+     *
+     * `world.groundHeight` is the level's ANALYTIC outdoor deck and `physics`
+     * knows what is actually there, so the difference between them is "how
+     * much mass is on this square metre" — the same test
+     * `Bomber._reportGround` makes about a crater, asked about a muzzle.
+     *
+     * IT MATTERS BECAUSE NACHTFELD IS BEING BUILT UNDER THIS TABLE. Trenches,
+     * fieldworks, wrecked vehicles and ruined buildings are all landing on the
+     * crossings while this file is being written, and an engagement that ends
+     * up inside a new revetment is a firefight whose flashes the player sees
+     * through a wall. A table authored against a map that then moves is
+     * exactly how `bomber.js`'s two lane runs spent months on a rooftop.
+     *
+     * IT WARNS AND DOES NOT DROP. Two metres over the deck is a man on a
+     * parapet and is fine; eight is a man inside a building, and the answer to
+     * that is to move a number in the table — which is a decision, not
+     * something a boot may make silently.
+     */
+    const phys = ctx.peek('physics');
+    const overDeck = (x, z) => {
+      if (!phys?.groundHeight) return 0;
+      const h = phys.groundHeight(x, z, 60);
+      return Number.isFinite(h) ? h - gy(x, z) : 0;
+    };
     const p = new THREE.Vector3();
     const push = (fid, kind, ax, az, bx, bz) => {
       world.levelToWorld(ax, 0, az, p);
@@ -344,6 +370,16 @@ export class Warfield {
       const wbx = p.x, wbz = p.z;
       const ay = gy(wax, waz) + MUZZLE_Y;
       const by = gy(wbx, wbz) + MUZZLE_Y;
+      const oa = overDeck(wax, waz);
+      const ob = overDeck(wbx, wbz);
+      if (oa > 2 || ob > 2) {
+        const ends = `${oa > 2 ? 'A' : ''}${oa > 2 && ob > 2 ? '+' : ''}${ob > 2 ? 'B' : ''}`;
+        console.warn(
+          `[warfield] ${fid}: end ${ends} stands ${Math.max(oa, ob).toFixed(1)} m over the outdoor ` +
+            'deck — something has been built on this engagement since it was authored. Move it, ' +
+            'or its muzzle flashes are inside a wall.'
+        );
+      }
       const dx = wbx - wax;
       const dz = wbz - waz;
       const span = Math.hypot(dx, dz);
