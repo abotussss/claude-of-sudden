@@ -76,6 +76,59 @@ export function fbm3(x, y, z, octaves = 3) {
   return sum / norm;
 }
 
+/**
+ * RIDGED noise, in [0, 1] — and it is the one function `fbm3` cannot stand in
+ * for when the subject is rock.
+ *
+ * An fbm is a sum of smooth bumps and it is symmetric about its own mean, so a
+ * landscape built from one has rounded tops AND rounded bottoms: it is a dune
+ * field, or a duvet. Every photograph of a mountain has the opposite asymmetry
+ * — SHARP crests and BROAD valleys — because the crest is what erosion has left
+ * behind and the valley is where the material went. Folding the noise about its
+ * midline (`1 - |2n - 1|`) makes every zero crossing a crease, and squaring it
+ * broadens the floors while leaving the creases where they are.
+ *
+ * The second half is what makes it read as a RANGE rather than as a field of
+ * creases: each octave is weighted by the one above it, so the fine detail only
+ * appears where the coarse ridge already is. That is why real rock has crags on
+ * its aretes and smooth ground in its corries, and it costs one multiply.
+ *
+ * Bounded by construction: `n` is in [0, 1] and the feedback weight is capped at
+ * 1, so `sum <= norm` and the result cannot leave [0, 1] whatever the octave
+ * count. A height field built on it needs no clamp.
+ */
+export function ridged3(x, y, z, octaves = 4, gain = 0.5) {
+  let a = 1;
+  let sum = 0;
+  let norm = 0;
+  let w = 1;
+  for (let i = 0; i < octaves; i++) {
+    let n = 1 - Math.abs(noise3(x, y, z) * 2 - 1);
+    n *= n;
+    sum += n * a * w;
+    norm += a;
+    w = Math.min(1, n * 1.7 + 0.15);
+    a *= gain;
+    x *= 2.03;
+    y *= 2.01;
+    z *= 1.97;
+  }
+  return sum / norm;
+}
+
+/**
+ * Domain-warped fbm, in [0, 1]. The field is sampled at a position that has
+ * itself been pushed around by a coarser field, which turns the isotropic blobs
+ * of a plain fbm into stretched, folded, flow-like structure — the difference
+ * between "noise" and "something happened here". Two extra `fbm3` calls, so it
+ * belongs in a build pass and not in a per-frame path.
+ */
+export function warpFbm3(x, y, z, octaves = 3, warp = 0.7) {
+  const wx = fbm3(x + 5.2, y + 1.3, z + 9.1, 2) - 0.5;
+  const wz = fbm3(x + 3.7, y + 7.9, z + 2.4, 2) - 0.5;
+  return fbm3(x + wx * warp, y, z + wz * warp, octaves);
+}
+
 // ----------------------------------------------------------------- matrix --
 const _q = new THREE.Quaternion();
 const _e = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -663,6 +716,107 @@ export function patchGeometry(rng, radius, opts = {}) {
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   g.setIndex(idx);
+  g.computeBoundingBox();
+  g.computeBoundingSphere();
+  return g;
+}
+
+/**
+ * A GROUND PATCH WITH A THIRD DIMENSION — the thing `patchGeometry` above is
+ * not, and the reason a plain photographs as painted lino.
+ *
+ * `patchGeometry` is a fan of triangles at y = 0: it can change the COLOUR of
+ * the ground and nothing else. Laid on open terrain it has no silhouette, takes
+ * the same normal as the ground under it, and therefore takes the same light —
+ * so at a raking sun or a fire on the skyline it disappears entirely, which is
+ * exactly when ground detail is supposed to appear. What the eye reads as
+ * "ground" at half a metre is not a texture, it is thousands of small MASSES
+ * that catch light on one side and shade on the other.
+ *
+ * So this is a radial sheet with real relief: `rings` concentric rows whose
+ * radius wanders per lobe, a profile that can be domed (a turf hummock, a spoil
+ * pile, a molehill), dished (a wind scrape, a puddle pan, a hoof print) or both
+ * at once (a scrape with a spoil lip on its lee side), and a noise displacement
+ * on every vertex so no two are the same object. Normals are computed, so the
+ * relief is lit rather than drawn.
+ *
+ * The rim closes at y = 0 whatever the profile — a patch that does not meet the
+ * ground at its own edge is a decal standing on a lip, which is the failure this
+ * replaces rather than a new one.
+ *
+ * @param {object} rng
+ * @param {number} radius   mean radius, metres
+ * @param {number} height   crown height above the ground, metres (0 = flat)
+ * @param {object} opts
+ *   rings   radial rows (3 is enough for a 1 m tussock, 5 for a 4 m mound)
+ *   lobes   points around the rim; the silhouette's roughness
+ *   wobble  0..1 how far each lobe's radius strays from `radius`
+ *   bump    per-vertex noise, as a fraction of `height` (or of `radius*0.06`
+ *           when the patch is flat)
+ *   dish    metres to sink the middle. Applied under the dome, so a scrape with
+ *           a lip is `height: 0.06, dish: 0.14`.
+ *   power   profile exponent: 1 is a cone, 2 a dome, 4 a plateau with a rolled
+ *           edge. 1.7 is the shape of a tussock and the default.
+ *   lean    0..1 pushes the crown off centre, so the mass is not a body of
+ *           revolution. Wind and water both have a direction.
+ */
+export function domeGeometry(rng, radius, height, opts = {}) {
+  const {
+    rings = 3, lobes = 11, wobble = 0.38, bump = 0.35,
+    dish = 0, power = 1.7, lean = 0.35,
+  } = opts;
+  const seed = rng.float() * 60;
+  const amp = (height || radius * 0.06) * bump;
+  const lx = Math.cos(rng.float() * 6.283) * lean;
+  const lz = Math.sin(rng.float() * 6.283) * lean;
+
+  // per-lobe rim radius, held in a table so every ring shares the same outline
+  const rr = [];
+  for (let i = 0; i < lobes; i++) rr.push(radius * (1 - wobble + rng.float() * wobble * 2));
+
+  const pos = [];
+  const nrm = [];
+  const uv = [];
+  const idx = [];
+  // centre
+  pos.push(0, height - dish + (fbm3(seed, 0, seed, 2) - 0.5) * amp, 0);
+  nrm.push(0, 1, 0);
+  uv.push(0.5, 0.5);
+  for (let j = 1; j <= rings; j++) {
+    const v = j / rings; // 0 centre, 1 rim
+    // profile: crown at the middle, closing to 0 at the rim
+    const prof = Math.pow(1 - v, power);
+    for (let i = 0; i < lobes; i++) {
+      const t = (i / lobes) * Math.PI * 2;
+      const ct = Math.cos(t);
+      const st = Math.sin(t);
+      const r = rr[i] * v;
+      const x = ct * r;
+      const z = st * r;
+      // the crown leans, so the mass has a windward and a lee side
+      const off = 1 + (ct * lx + st * lz) * (1 - v);
+      let y = height * prof * off - dish * prof;
+      if (j < rings) y += (fbm3(x * 1.9 + seed, 3.3, z * 1.9 + seed, 2) - 0.5) * amp * (1 - v * 0.5);
+      pos.push(x, y, z);
+      nrm.push(0, 1, 0);
+      uv.push(0.5 + ct * v * 0.5, 0.5 + st * v * 0.5);
+    }
+  }
+  for (let i = 0; i < lobes; i++) idx.push(0, 1 + i, 1 + ((i + 1) % lobes));
+  for (let j = 1; j < rings; j++) {
+    const a0 = 1 + (j - 1) * lobes;
+    const b0 = 1 + j * lobes;
+    for (let i = 0; i < lobes; i++) {
+      const i1 = (i + 1) % lobes;
+      idx.push(a0 + i, b0 + i, a0 + i1, a0 + i1, b0 + i, b0 + i1);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
   g.computeBoundingBox();
   g.computeBoundingSphere();
   return g;

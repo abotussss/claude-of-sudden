@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BOX, BOX_SOFT, IDENT, LL } from '../kit.js';
-import { fbm3, patchGeometry, paintMasks, rockGeometry, disposeAll } from '../util.js';
+import { fbm3, ridged3, patchGeometry, paintMasks, rockGeometry, disposeAll } from '../util.js';
 import { registerProps } from '../props.js';
 import { Rng } from '../../core/rng.js';
 import { buildTower, TOWER, TOWER_R } from './plains-tower.js';
@@ -115,7 +115,48 @@ const FIELD_SEG = 148; // 3.18 m quads
   * ridge, which is where a night horizon belongs.
   */
 const FAR = 1500;
-const FAR_SEG = 40;
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * …AND IT IS A POLAR SHEET NOW, BECAUSE THE SQUARE ONE WAS A BUG YOU COULD SEE
+ * ────────────────────────────────────────────────────────────────────────────
+ * A pale flat plane stood above the rim at about 115°, and it was on the record
+ * as SUSPECTED to be this mesh. It was this mesh, and `_terrpale.mjs` settles it
+ * by measurement rather than by argument: rays fired through that part of the
+ * frame from [-71, 152] land on triangles with 53 m and 79.6 m SIDES, in the
+ * `world_mountain_rock` batch, at radius 194.8 and 33 m up. Nothing else on this
+ * map is built at that size — the walked field is metres, a rim boulder is
+ * metres, a prop is centimetres — and radius 194.8 is halfway up the walked
+ * ridge. The far range was standing 30 m proud of the mountain it is supposed to
+ * be behind.
+ *
+ * THE MECHANISM, which matters because the naive fix does not work. This was a
+ * 1 500 m PlaneGeometry at 40 segments — 37.5 m quads — evaluated at its own
+ * vertices. Inside `RIDGE_R1 * 0.94` it took `plainsY - 1.5` and outside it took
+ * the true surface, so a single quad could have one corner 1.5 m under the plain
+ * and the opposite corner 40 m up the far side of the crest. The face it spans
+ * is CONCAVE UPWARD over its whole lower half (a smoothstep is), and a chord
+ * across a concave curve lies ABOVE it. Every quad crossing the foot of the
+ * mountain rose through it, all the way round, and the "flat plane" is one of
+ * those triangles seen edge on.
+ *
+ * Raising `FAR_SEG` alone shrinks the error without removing it, and it pays for
+ * that everywhere — 90 % of this mesh is horizon 600 m away where 37.5 m quads
+ * were entirely adequate. The error is RADIAL, so the mesh is now radial:
+ *
+ *   `FAR_A`   spokes, evenly round. 256 of them is 5.2 m of arc at the crest.
+ *   rings     start at the crest and step outward GEOMETRICALLY — 3 m where it
+ *             matters, 40 m at the horizon where nothing can be resolved anyway.
+ *   `FAR_DROP` and it is the belt to the braces: everywhere this sheet is under
+ *             the walked field it is authored a further 3.5 m DOWN, decaying to
+ *             nothing past the walked field's own corner reach. A chord can no
+ *             longer climb out through the plain even if a later edit makes one
+ *             span further than it should.
+ *
+ * 19.5 k triangles against the 3.2 k it replaces, on a map that draws 4.3 M.
+ */
+const FAR_A = 256;
+const FAR_R = FAR / 2;
+const FAR_DROP = 3.5;
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
@@ -312,13 +353,72 @@ function ridgeH(x, z) {
   return s * RIDGE_H * Math.max(0.42, peak);
 }
 
-/** Everything past the crest: a real range, drawn and never walked. */
+/**
+ * Everything past the crest: a real range, drawn and never walked.
+ *
+ * THIS IS THE WALKED FIELD'S COPY AND IT IS NOT TO BE TOUCHED. `plainsY`
+ * includes it, so the collision mesh, the bot height field and every tool that
+ * samples the ground in the corners of the play box are all built on this exact
+ * function. `rangeH` below is the DRAWN range and is free to be prettier,
+ * because it starts past the last metre of terrain anyone can reach.
+ */
 function farH(x, z) {
   const r = Math.hypot(x, z);
   if (r <= RIDGE_R1) return 0;
   const f = smoothstep(RIDGE_R1, RIDGE_R1 + 260, r);
   const m = Math.max(0, fbm3(x * 0.0035, 5.7, z * 0.0035, 4) - 0.34);
   return f * m * 110;
+}
+
+/**
+ * THE HORIZON, AS A RANGE RATHER THAN AS A DUVET.
+ *
+ * `farH` is `max(0, fbm - 0.34)`, which is a sum of smooth bumps: it has
+ * rounded tops and rounded bottoms, and at 600 m under a moon that is all you
+ * see of it. It reads as cloth. What separates a mountain horizon from cloth is
+ * that the crests are CREASES and the floors are broad, so `ridged3` shapes it
+ * — @see the note on that function for why an fbm structurally cannot.
+ *
+ * IT MULTIPLIES `farH`'s OWN ENVELOPE rather than adding to it, and that is the
+ * one constraint this had to be written under. The 1 500 m / 110 m figure in the
+ * header was MEASURED against the auto-exposure: a taller horizon stands out of
+ * the fog, never enters a shadow cascade, becomes the brightest thing in frame,
+ * and the plain the player is standing on goes to black. So the massifs are
+ * where they always were and are no taller than 1.18x what they were — the
+ * change is entirely in their SHAPE.
+ */
+function rangeH(x, z) {
+  const r = Math.hypot(x, z);
+  if (r <= RIDGE_R1) return 0;
+  const f = smoothstep(RIDGE_R1, RIDGE_R1 + 260, r);
+  const mass = Math.max(0, fbm3(x * 0.0035, 5.7, z * 0.0035, 4) - 0.34);
+  // where the massif is, an arete; where it is not, nothing rises anyway
+  const crease = ridged3(x * 0.0031 + 11.3, 4.7, z * 0.0031 + 6.1, 4);
+  // and enough small structure that a 40 m quad at the horizon is not a facet
+  const grain = (fbm3(x * 0.011, 2.9, z * 0.011, 3) - 0.5) * 0.30;
+  return f * mass * 110 * (0.52 + 0.58 * crease + grain);
+}
+
+/**
+ * The height of the DRAWN far sheet at a point.
+ *
+ * Three things are folded together here and each of them is load-bearing:
+ *
+ *  1. `farH` -> `rangeH` over 320-420 m. Inside that the sheet is bit-for-bit
+ *     the surface the walked field is built from, so the two cannot disagree
+ *     where they overlap. Outside it, nothing walks and the range is free.
+ *  2. `FAR_DROP`, faded out by 420 m — the sheet is authored BELOW the walked
+ *     field everywhere the walked field exists. @see the note on `FAR_DROP`.
+ *     The step this leaves is at r >= 235, behind a 46 m crest, and no eye
+ *     inside the rim at 178 can be above it to see it.
+ *  3. The pads are NOT applied. They are inside 176; this sheet starts at 208.
+ */
+function farSheetY(x, z) {
+  const r = Math.hypot(x, z);
+  const t = smoothstep(320, 420, r);
+  const far = farH(x, z) * (1 - t) + rangeH(x, z) * t;
+  const drop = FAR_DROP * (1 - smoothstep(300, 420, r));
+  return swell(x, z) + ridgeH(x, z) + far - drop;
 }
 
 /** The pad heights, resolved once off the raw swell. */
@@ -456,24 +556,85 @@ function buildTerrain(A) {
 
   /**
    * THE RANGE BEYOND THE CREST. Visual only — no collision, no nav, no
-   * shadow-caster cost worth the cascades — and it sits UNDER the walked field
-   * everywhere the two overlap (`farH` is 0 inside `RIDGE_R1`, and the field's
-   * own ridge is not), so there is no z-fight and no seam anybody can stand
-   * near to see. It exists because a 400 m plain with a hard horizon at 214 m
-   * reads as a room.
+   * shadow-caster cost worth the cascades. @see `FAR_A` for why it is polar and
+   * for the measurement that made it so.
    */
-  const far = terrainMesh(FAR, FAR_SEG, (x, z) => {
-    const r = Math.hypot(x, z);
-    if (r < RIDGE_R1 * 0.94) return plainsY(x, z) - 1.5;
-    return swell(x, z) + ridgeH(x, z) + farH(x, z);
-  });
+  const far = farSheet();
   paintMasks(far, (x, y, z, nx, ny, nz, out) => {
-    out[0] = 0.55;
-    out[1] = 0.3;
-    out[2] = 0.25;
+    // Steep faces scour to bare rock at this scale too, and a horizon whose
+    // masks are three constants is a horizon with no form in it.
+    const steep = 1 - Math.min(1, Math.max(0, (ny - 0.55) / 0.35));
+    const n = fbm3(x * 0.004, 8.1, z * 0.004, 3);
+    out[0] = 0.42 + steep * 0.4;
+    out[1] = 0.22 + n * 0.34;
+    out[2] = 0.2 + steep * 0.25;
   });
   A.add('mountain_rock', far, null);
   far.dispose();
+}
+
+/**
+ * THE FAR SHEET — an annulus of `FAR_A` spokes and geometrically spaced rings,
+ * from just inside the crest out to the horizon.
+ *
+ * Radial, because the error it replaces was radial. Geometric, because the
+ * resolution a horizon needs falls off with distance exactly as fast as the
+ * rings get cheap: 3 m at the crest where a chord could climb out through the
+ * mountain, ~40 m at 700 m where a 40 m quad is a third of a degree.
+ *
+ * The ring radii are built ONCE into an array and then indexed, rather than
+ * accumulated inside the vertex loop, so every spoke uses identical radii and
+ * the sheet has no spiral seam.
+ */
+function farSheet() {
+  const radii = [];
+  let r = RIDGE_R1 - 6;
+  let step = 3.0;
+  while (r < FAR_R) {
+    radii.push(r);
+    r += step;
+    step *= 1.075;
+  }
+  radii.push(FAR_R);
+  const NR = radii.length;
+
+  const pos = new Float32Array(FAR_A * NR * 3);
+  const uv = new Float32Array(FAR_A * NR * 2);
+  const idx = [];
+  for (let j = 0; j < NR; j++) {
+    const rr = radii[j];
+    for (let i = 0; i < FAR_A; i++) {
+      const a = (i / FAR_A) * Math.PI * 2;
+      const x = Math.cos(a) * rr;
+      const z = Math.sin(a) * rr;
+      const k = j * FAR_A + i;
+      pos[k * 3] = x;
+      pos[k * 3 + 1] = farSheetY(x, z);
+      pos[k * 3 + 2] = z;
+      uv[k * 2] = x * 0.02;
+      uv[k * 2 + 1] = z * 0.02;
+    }
+  }
+  for (let j = 0; j < NR - 1; j++) {
+    for (let i = 0; i < FAR_A; i++) {
+      const i1 = (i + 1) % FAR_A;
+      const a = j * FAR_A + i;
+      const b = j * FAR_A + i1;
+      const c = (j + 1) * FAR_A + i;
+      const d = (j + 1) * FAR_A + i1;
+      idx.push(a, c, b, b, c, d);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  g.setIndex(new THREE.BufferAttribute(
+    pos.length / 3 > 65535 ? new Uint32Array(idx) : new Uint16Array(idx), 1));
+  g.computeVertexNormals();
+  g.computeBoundingBox();
+  g.computeBoundingSphere();
+  console.info(`[world] nachtfeld far range: ${FAR_A}x${NR} polar, ${idx.length / 3} triangles, r ${(RIDGE_R1 - 6)}-${FAR_R} m`);
+  return g;
 }
 
 /**
