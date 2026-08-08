@@ -288,8 +288,9 @@ const FIELD_FS = /* glsl */ `
     // the roof, and only for the man who is close enough for it to be over him:
     // prox is 0 at the rim and inward and 1 past 2.6 r, so at a hundred metres
     // the dome is still a whole dome and still the long-range read the header
-    // spends its rim budget on. The GROUND BAND is excused entirely, because it
-    // is the mark that tells a man standing inside where the edge is.
+    // spends its rim budget on. (The GROUND BAND was excused entirely here, on
+    // the grounds that it is the mark that tells a man standing inside where the
+    // edge is. That exemption is withdrawn below — @see the next block.)
     //
     // WHAT THIS MUST NOT DO is make the field invisible from outside — "an
     // invisible region that eats your kit" is the failure this file was written
@@ -300,10 +301,44 @@ const FIELD_FS = /* glsl */ `
     float elev = D.y / max(0.001, length(D));
     float lid = 1.0 - smoothstep(0.26, 0.60, elev);
 
+    // ══════════════════════════════════════════════════════════════════════
+    // AN ANGLE IS NOT A CEILING. HEIGHT OVER THE HEAD IS.
+    // ══════════════════════════════════════════════════════════════════════
+    // The paragraph above was measured from a man STANDING ON THE PAD and it is
+    // right for him. It is wrong for the man it was written for. Re-measured at
+    // the real camera pose on the trench floor at (-140, -93), eye y -0.42,
+    // 24.6 m from A's centre so prox is 0 and every fade here is at full
+    // authority (_empwhy.mjs):
+    //
+    //   emp-shell  997 of 1225 vertices over the eye   alpha peaks 0.136
+    //   emp-post   8 of 16 on three of the fourteen    alpha peaks 0.136
+    //   emp-band   40 of 256                           alpha 0.51, FLAT
+    //
+    // and the peak is at elev 0.26-0.30 EVERY TIME -- the bottom of the ramp
+    // above, where lid is 1 and this code believes it is looking at a wall. It
+    // is not. At 53 m, 15 deg of elevation is 13.8 m of shell OVER HIS HEAD; the
+    // band that reads 0.51 is 6.5 m over it at 22 m. A 34 m shell is big enough
+    // that its low-elevation band is a roof, and a man standing in a cut sees
+    // the sky through a SLOT -- the only part of the field he can see at all is
+    // the part this test was excusing.
+    //
+    // So the test gains the quantity the angle cannot express: how far over his
+    // head the fragment actually is, in metres. Both must hold for the surface
+    // to be kept -- near his horizon AND not stacked above him.
+    float rise = D.y;
+    float over = 1.0 - smoothstep(1.2, 4.5, rise);
+    float keep = min(lid, over);
+
     float uFar = mix(1.0, 0.34, smoothstep(90.0, 300.0, d));
     float uNear = smoothstep(0.5, 4.0, d);
     a *= uFar * mix(uNear * mix(0.5, 1.0, prox), 1.0, uGround);
-    a *= mix(mix(lid, 1.0, prox), 1.0, uGround);
+    // AND THE BAND LOSES ITS BLANKET EXEMPTION, because the sentence that earned
+    // it -- "it is the mark that tells a man standing inside where the edge is"
+    // -- is a statement about a man standing ON the floor it is drawn on. Two
+    // metres down in a cut it is not his floor, it is a green ribbon in his sky,
+    // and it was the brightest thing in the frame. over is 1 wherever the band
+    // is at or below head height, so nothing moves for the man it was for.
+    a *= mix(keep, 1.0, prox);
 
     // AND THE BAND IS EXCUSED THE FRESNEL IN THE COLOUR TOO, which was the other
     // half of the same oversight: the alpha above already excludes it, but the
@@ -401,6 +436,14 @@ export class EmpZones {
       const g = new THREE.Group();
       g.name = `emp-${id}`;
       const shell = new THREE.Mesh(dome, z.mat);
+      /**
+       * NAMED, AND THE NAMES ARE A MEASUREMENT TOOL. The shell, the fourteen
+       * posts and the ground band are three different surfaces with three
+       * different jobs and three different fade budgets; unnamed they all report
+       * as `match-emp/emp-A/<Mesh>` and a ceiling census cannot say which of them
+       * is over the trench. It cost a full run to find out that the band was.
+       */
+      shell.name = 'emp-shell';
       shell.position.copy(z.position);
       shell.scale.setScalar(r);
       // A transparent shell is not a shadow caster and is not depth-prepass mass.
@@ -422,6 +465,7 @@ export class EmpZones {
         const pz = z.position.z + Math.sin(a) * r;
         const py = world.groundHeight ? world.groundHeight(px, pz) : z.position.y;
         const m = new THREE.Mesh(post, z.mat);
+        m.name = 'emp-post';
         m.position.set(px, py + POST_H * 0.5 - 0.4, pz);
         m.userData.owNoShadow = true;
         m.userData.owNoPrepass = true;
@@ -432,6 +476,7 @@ export class EmpZones {
       const band = this._ringGeometry(world, z);
       this._geo.push(band);
       const ring = new THREE.Mesh(band, z.ringMat);
+      ring.name = 'emp-band';
       ring.userData.owNoShadow = true;
       ring.userData.owNoPrepass = true;
       ring.renderOrder = 5;
