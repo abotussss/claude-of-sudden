@@ -431,6 +431,28 @@ function empStation(A, groundY, pad, seed) {
   parapet(A, rng, outer, y);
 
   // ── two ramps up off the courtyard floor ────────────────────────────────
+  /**
+   * THE RAMPS DO NOT MOVE WITH THE INSET, AND THAT IS NOT A DETAIL.
+   *
+   * The ramps run along the inner faces of the two flats normal to local X, so
+   * their RUN is parallel to local Z — which is the axis `INSET` slides the
+   * station along. Carried by `edgeInfo` alone they slid 1.3 m down their own
+   * length, and at station B that put the foot of the +X ramp on to a wire
+   * entanglement standing 0.33-2.53 m off the courtyard floor (`plains-
+   * fieldworks.js`, measured with `_nfwhat.mjs`; the mirror point at A is bare
+   * dirt). The lowest walkable cell of the ramp went 0.23 -> 0.72 against a
+   * courtyard at 0.07, `NavGrid.maxStep` is 0.45, and the whole redoubt came
+   * away as ONE 447-CELL ISLAND — the walk, both ramps and the bastions, with
+   * the capture point inside and no way up. Stranded cells inside r 176:
+   * 1 879 -> 2 522.
+   *
+   * The inner face of a flat is a LINE, and sliding the octagon along that line
+   * moves the face's extent but not the face. So the ramp is put back exactly
+   * where it stood by adding the inset's own component along the edge tangent:
+   * the fort is inset, the two ramps are not, and neither foot moves a
+   * millimetre from ground that was already measured clear.
+   */
+  const drift = [P(0, 0)[0] - Q(0, 0)[0], P(0, 0)[1] - Q(0, 0)[1]];
   for (const i of RAMPS) {
     const e = edgeInfo(inner, i);
     const run = WALK_Y / RAMP_GRADE;
@@ -438,7 +460,9 @@ function empStation(A, groundY, pad, seed) {
     // Laid along the inner face, half a width in from it, so the top landing's
     // outer edge lands EXACTLY on the walk's inner edge and the two are the same
     // height in adjacent cells — which is the whole of why a bot can get up here.
-    const cx = e.mx - e.nx * (w / 2), cz = e.mz - e.nz * (w / 2);
+    const along = e.tx * drift[0] + e.tz * drift[1];
+    const cx = e.mx - e.nx * (w / 2) + e.tx * along;
+    const cz = e.mz - e.nz * (w / 2) + e.tz * along;
     ramp(A, rng, 'concrete',
       cx - e.tx * (run / 2), cz - e.tz * (run / 2), y(0),
       cx + e.tx * (run / 2), cz + e.tz * (run / 2), y(WALK_Y), w, { baseY: y(FOOT_Y) });
@@ -670,12 +694,40 @@ function generatorSet(A, x, z, gy, yaw) {
    */
   A.add('concrete', box, LL(IDENT, x, gy + 0.25, z, yaw, hw * 2, 3.7, hd * 2), { masks: [0.3, 0.46, 0.34] });
   A.box('concrete', x, gy + 0.25, z, hw * 2, 3.7, hd * 2, yaw);
-  const cap = new THREE.ConeGeometry(hd * 1.3, hd * 1.66, 4, 1);
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE CAP HAS TO COVER THE BLOCK, AND THE FIRST CUT'S DID NOT
+   * ──────────────────────────────────────────────────────────────────────────
+   * `ConeGeometry(r, h, 4)` puts its base VERTICES on the axes, so the base is a
+   * diamond; rotating it 45° turns that into an axis-aligned square of half-side
+   * `0.707 r`. Sized off `hd` — 4.42 m of radius, 3.13 m of half-side — it
+   * covered a 10.4 x 6.8 m block on neither axis, and left ~30 m² of FLAT ROOF
+   * showing at both ends: 2 x 47 walkable cells at 2.1 m with no neighbour
+   * inside `maxStep`, which is the sky island the silo cones and this cap were
+   * both shaped to avoid. It went unmeasured because the generator set stood
+   * outside r 176 where nobody counts.
+   *
+   * A cone big enough to cover it in that orientation is 9.4 m of radius with a
+   * 4 m eave over the ground at head height. So the base is fitted to the block
+   * instead: `thetaStart` PI/4 puts the flat FACES on the axes, and the
+   * non-uniform scale in `LL` takes the unit cone's `0.707` half-side out to
+   * exactly `hw` and `hd`. The four base corners land on the four block corners
+   * and there is no eave at all.
+   *
+   * `H` is what keeps it off the height field: the shallowest face is the pair
+   * spanning `hw`, at `atan(H / hw)` = 49.1°, past the 46° slope limit — and the
+   * apex lands at 8.1 m against the first cut's 7.7, so the silhouette this
+   * station is read by at 150 m is the one that was authored.
+   */
+  const H = 6.0;
+  const cap = new THREE.ConeGeometry(1, 1, 4, 1, false, Math.PI / 4);
+  // The cone is a UNIT one now, so the noise has to be walked in the scale it
+  // will be drawn at or the whole cap comes out one flat value.
   paintMasks(cap, (px, py, pz, nx, ny, nz, out) => {
-    const n = fbm3(px * 0.4, py * 0.4, pz * 0.4, 2);
+    const n = fbm3(px * hw * 0.57, py * H * 0.4, pz * hd * 0.57, 2);
     out[0] = 0.3 + n * 0.25; out[1] = 0.48 + n * 0.3; out[2] = 0.3;
   });
-  const cm = LL(IDENT, x, gy + 2.1 + hd * 0.83, z, yaw + Math.PI / 4, 1, 1, 1);
+  const cm = LL(IDENT, x, gy + 2.1 + H / 2, z, yaw, hw * Math.SQRT2, H, hd * Math.SQRT2);
   A.add('concrete', cap, cm, null);
   A.collideGeo('concrete', cap, cm);
   cap.dispose();
