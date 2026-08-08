@@ -118,6 +118,17 @@ import { wallRun, debrisField, drawDebris, fallenMember } from './plains-works.j
  * the `dressPlain` section.
  */
 
+/**
+ * One query-string read, guarded once. `globalThis.location` does not exist in
+ * node, and every gate in `tools/` that builds a world outside a browser would
+ * throw on the bare read — which is a boot failure reported as a nav failure.
+ */
+function coverFlag(name) {
+  try {
+    return new URLSearchParams(globalThis.location?.search ?? '').has(name);
+  } catch { return false; }
+}
+
 // ─────────────────────────────────────────────────────────────── the ceiling ──
 /**
  * The tallest anything in this file may stand except a ruin wall. @see note 4:
@@ -173,10 +184,39 @@ const PLAIN_R = 173;
  */
 const SMOKE_BANKS = 4;
 /** The disc a puff is born in. THIS is the number the eye reads. @see above. */
-const SMOKE_FOOT = 4.6;
-/** …and how far it swells over its life. Kept near the can's 1.8, not 5.85. */
-const SMOKE_GROWTH = 2.3;
+const SMOKE_FOOT = 5.4;
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * `growth` IS NOT ON THIS SEAM, AND IT IS NOT A TYPO THAT IT IS MISSING
+ * ────────────────────────────────────────────────────────────────────────────
+ * `Ambience._scan` reads SEVEN fields off `userData.fxSmoke` — radius, rate,
+ * rise, dark, life, ember, haze — and `growth` is not one of them, so a bank
+ * authored here always swells by `addSource`'s own default of 3.4 whatever this
+ * file asks for. Measured on the built map: `fx.ambience.emitters` came back
+ * with `growth: 3.4` on all four while this constant said 2.3.
+ *
+ * The number is kept, and it is kept as documentation rather than as a setting:
+ * `SMOKE_FOOT` is chosen KNOWING the multiplier is 3.4, so a puff is born at
+ * 3.8-6.5 m and dies at 15-23 m. Passing it would need a field added to a seam
+ * in `src/fx`, which is another agent's directory and not worth a cross-cutting
+ * change to land a number this file can simply account for.
+ */
+const SMOKE_GROWTH_ACTUAL = 3.4;
 const SMOKE_LIFE = 8.5;
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * HOW PALE, AND THIS IS THE ONE THAT DECIDED WHETHER IT WAS VISIBLE AT ALL
+ * ────────────────────────────────────────────────────────────────────────────
+ * The first cut used the smoke can's own 0.04, and the can is tuned on a town
+ * at three in the afternoon. Photographed here at 30 m and 60 m off a bank on a
+ * 21:40 map, 140 live sprites at 0.04 were INDISTINGUISHABLE FROM THE NIGHT —
+ * `_puff` writes `dark` straight into the particle's colour and these are LIT
+ * particles, so a value that reads as pale grey under a sun reads as black
+ * against a black sky. `crash.js`'s burning cells use 0.16 on this same map and
+ * they read; 0.18 is that, plus a little, because a bank has to be seen ACROSS
+ * the plain to break a sightline the player is planning around.
+ */
+const SMOKE_DARK = 0.18;
 /**
  * 0.5 against the can's 0.85. A burning wreck on a plain at 21:40 should lay
  * its smoke ACROSS the ground and downwind, not stand it up in a column — a
@@ -184,7 +224,7 @@ const SMOKE_LIFE = 8.5;
  */
 const SMOKE_RISE = 0.5;
 /** Share of `fx.lit` all four banks together may hold. A can takes 25 % alone. */
-const SMOKE_SHARE = 0.2;
+const SMOKE_SHARE = 0.24;
 
 /**
  * The emission rate, resolved against the tier the game actually booted at.
@@ -265,6 +305,28 @@ const KINDS = ['wreck', 'berm', 'emplace', 'ruin', 'wreck', 'emplace', 'berm', '
 const KIND_R = { wreck: 9.0, berm: 9.5, emplace: 4.5, ruin: 8.0 };
 const KIND_W = { wreck: 4.5, berm: 3.0, emplace: 3.0, ruin: 7.0 };
 
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHERE THE MASS ACTUALLY IS — which is NOT `KIND_R`, and the difference cost a
+ * whole crossing
+ * ────────────────────────────────────────────────────────────────────────────
+ * `KIND_R` is the SEPARATION radius: how far apart two stations are kept so the
+ * map does not read as a row of the same object. It is deliberately generous.
+ * The mass inside it is much smaller — a wreck site is two hulls about 3.5 m to
+ * a side (`wreck` hands back r 4.2), a berm is its own 12-19 m of length.
+ *
+ * Using the separation radius to decide whether a piece BLOCKS THE LANE credits
+ * a burnt lorry standing 8.5 m off the centreline with covering it. Measured on
+ * BASE-N -> E: exactly that happened, the route was booked as having a lane
+ * blocker at 111 m, both gap passes therefore left it alone, and the probe
+ * walked the whole crossing with the forward ray dying at 138 m — 87 % exposed
+ * with a station on the route that has no mass anywhere near it.
+ *
+ * So the two questions are asked with two numbers. Separation keeps `KIND_R`;
+ * "is it on the lane" and "would these two interpenetrate" use this one.
+ */
+const KIND_MASS = { wreck: 4.0, berm: 7.5, emplace: 2.5, ruin: 6.0 };
+
 // ─────────────────────────────────────────────────────────────── the placer ──
 /**
  * Walk each crossing and hand back the stations that survive every keep-out.
@@ -314,6 +376,16 @@ function stations(rng, pads, isOpen) {
     return true;
   };
 
+  /**
+   * The longest stretch of a walk that may stand with no lane-blocking mass on
+   * it. It is the gate for BOTH passes below, so a change to it moves the whole
+   * map's spacing rather than one loop's.
+   */
+  const MAX_GAP = 46;
+
+  /** Each crossing's geometry and what stood up on it. @see the edge pass. */
+  const routes = [];
+
   for (let ci = 0; ci < CROSSINGS.length; ci++) {
     const c = CROSSINGS[ci];
     const A0 = by.get(c.a); const B0 = by.get(c.b);
@@ -362,9 +434,9 @@ function stations(rng, pads, isOpen) {
         }
         if (clash) continue;
         const st = {
-          x, z, r, kind, yaw: yaw + rng.range(-0.32, 0.32), route: ci,
-          /** Along-route coordinate, and whether the piece covers the middle. */
-          s: along, onLane: Math.abs(o) - r < 2.5,
+          x, z, r, kind, mr: KIND_MASS[kind], yaw: yaw + rng.range(-0.32, 0.32), route: ci,
+          /** Along-route coordinate, and whether the MASS covers the middle. */
+          s: along, onLane: Math.abs(o) - KIND_MASS[kind] < 1.5,
         };
         placed.push(st); out.push(st);
         return st;
@@ -397,7 +469,6 @@ function stations(rng, pads, isOpen) {
      * does not count as a blocker: it is 1.4 m and a standing eye is 1.62, so
      * you see straight over it, which is the entire point of it.
      */
-    const MAX_GAP = 46;
     for (let pass = 0; pass < 3; pass++) {
       const line = mine.filter((m) => m.onLane && m.kind !== 'emplace')
         .map((m) => m.s).sort((a, b) => a - b);
@@ -409,6 +480,102 @@ function stations(rng, pads, isOpen) {
         const st = tryAt((edges[i] + edges[i - 1]) / 2,
           rng.float() < 0.55 ? 'wreck' : 'berm', gap * 0.34);
         if (st) { mine.push(st); added = true; }
+      }
+      if (!added) break;
+    }
+    routes.push({ ci, A0, B0, L, tx, tz, nx, nz, yaw, mine });
+  }
+
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE EDGE PASS — bound the lane where the MIDDLE of it is somebody else's
+   * ──────────────────────────────────────────────────────────────────────────
+   * The gap pass above searches outwards FROM THE MIDDLE of a gap, so on a walk
+   * whose middle cannot be built on it finds nothing on the line, slides off,
+   * and puts a berm twenty metres to the side — which moves `covered` and does
+   * not move `lane` by one metre. That is not a hypothetical: BASE-N -> E
+   * measured 87 % exposed with an 84 m run AFTER the whole of this file had run,
+   * and the 84 m is NORDGRABEN. `isOpen` refuses the centreline of that walk
+   * from 30 m to 108 m because the trench is dug along it, the trench IS the
+   * covered route there, and this file may no more build across it than it may
+   * pitch a stall in the cathedral.
+   *
+   * What it CAN do is stop the lane at the first open ground on each side. The
+   * ray backwards stops at the pad, so on a 156 m walk ONE piece standing on the
+   * centreline at 114 m takes every sample on it from a 138 m lane to a 114 m
+   * one — the man crossing the corridor is no longer in something open from both
+   * ends at once. So: walk IN from each edge of every unfillable gap, three
+   * metres at a time, and take the first place a piece will stand.
+   *
+   * THE OFFSETS ARE TINY ON PURPOSE — ±6 m against the main search's ±25. A
+   * piece that does not straddle the centreline fails the only test this pass
+   * exists to pass, so it is better to place nothing than to place it wide.
+   */
+  const MAX_EDGE = 3;
+  for (const R of routes) {
+    /**
+     * Scan OUT from the middle of the gap towards `to`, and take the first
+     * spot that will stand — so the piece lands as DEEP into the unbuildable
+     * stretch as the ground allows rather than as close to the edge as
+     * possible. It is the same number of pieces and a much shorter lane: a stop
+     * at 114 m bounds every sample behind it at 114 m, one at 130 m bounds them
+     * at 130, and 120 is the line between covered and exposed.
+     */
+    const scan = (mid, to) => {
+      const kind = rng.float() < 0.5 ? 'wreck' : 'berm';
+      const r = KIND_R[kind];
+      const mr = KIND_MASS[kind];
+      const dir = Math.sign(to - mid) || 1;
+      for (let d = 0; d <= Math.abs(to - mid); d += 3) {
+        const along = mid + dir * d;
+        if (along < R.A0.r0 + 8 || along > R.L - R.B0.r0 - 8) continue;
+        for (const o of [0, 3.5, -3.5, 6, -6]) {
+          const x = R.A0.x + R.tx * along + R.nx * o;
+          const z = R.A0.z + R.tz * along + R.nz * o;
+          if (!offPads(x, z, r)) continue;
+          if (!fits(x, z, r, KIND_W[kind], R.nx, R.nz)) continue;
+          /**
+           * CLASHES ARE JUDGED ON MASS HERE, not on the separation radius —
+           * @see `KIND_MASS`. This pass is deliberately standing a stop NEXT to
+           * whatever is already on the walk, so the only thing it has to be
+           * sure of is that the two do not interpenetrate. Judged on `KIND_R`
+           * the one spot on BASE-N -> E that bounds the lane is refused for
+           * being 18 m from a lorry that is 4 m across.
+           */
+          let clash = false;
+          for (const p of placed) {
+            const need = (p.mr ?? p.r) + mr + 4;
+            if ((x - p.x) ** 2 + (z - p.z) ** 2 < need * need) { clash = true; break; }
+          }
+          if (clash) continue;
+          const st = {
+            x, z, r, mr, kind, yaw: R.yaw + rng.range(-0.24, 0.24), route: R.ci,
+            s: along, onLane: Math.abs(o) - mr < 1.5, edge: true,
+          };
+          placed.push(st); out.push(st); R.mine.push(st);
+          return st;
+        }
+      }
+      return null;
+    };
+
+    let budget = MAX_EDGE;
+    for (let pass = 0; pass < 3 && budget > 0; pass++) {
+      const line = R.mine.filter((m) => m.onLane && m.kind !== 'emplace')
+        .map((m) => m.s).sort((a, b) => a - b);
+      const edges = [R.A0.r0 + 6, ...line, R.L - R.B0.r0 - 6];
+      let added = false;
+      for (let i = 1; i < edges.length && budget > 0; i++) {
+        const lo = edges[i - 1], hi = edges[i];
+        if (hi - lo <= MAX_GAP) continue;
+        // out towards the far edge, then out towards the near one — both ends
+        // of the stretch get a stop, so the lane is bounded whichever way he
+        // walks it, and each stop is as deep in as the ground allows
+        const mid = (lo + hi) / 2;
+        for (const to of [hi, lo]) {
+          if (budget <= 0) break;
+          if (scan(mid, to)) { added = true; budget--; }
+        }
       }
       if (!added) break;
     }
@@ -623,7 +790,20 @@ function ruin(A, rng, gy, cx, cz, yaw) {
 function wreck(A, rng, gy, cx, cz, yaw, variant) {
   const c = Math.cos(yaw), s = Math.sin(yaw);
   const P = (lx, lz) => [cx + c * lx + s * lz, cz - s * lx + c * lz];
-  const g = gy(cx, cz);
+  /**
+   * A HULL IS RIGID AND THE PLAIN IS NOT. Taking `gy` at the centre stands a
+   * seven-metre wreck on one point of a swell that runs to 0.37 of gradient, so
+   * one axle floats and the other is buried. The LOWEST ground under its own
+   * footprint, less a few centimetres of settle, puts every wheel on or in the
+   * ground and none of them in the air — which is the side of the error
+   * `_floatcheck.mjs` does not fail and the player does not see.
+   */
+  let g = Infinity;
+  for (const [lx, lz] of [[0, 0], [-1.4, -3.4], [1.4, -3.4], [-1.4, 3.4], [1.4, 3.4]]) {
+    const [px, pz] = P(lx, lz);
+    g = Math.min(g, gy(px, pz));
+  }
+  g -= 0.06;
   const burnt = { masks: [0.95, 0.8, 0.15] };
   const box = BOX(A);
   /** Put a box in the wreck's own frame. `ry` is extra yaw, `rz` a list. */
@@ -760,17 +940,45 @@ function berm(A, rng, gy, cx, cz, yaw) {
   const h = rng.range(1.85, TALL - 0.25);
   const w = rng.range(3.6, 5.2);
   const c = Math.cos(yaw), s = Math.sin(yaw);
+  const base = gy(cx, cz);
   /** Both faces, so it is a bank and not a cliff with a back you can see over. */
   for (const side of [1, -1]) {
     const g = driftBerm(rng, len, w, h, { nz: 5 });
+    /**
+     * ────────────────────────────────────────────────────────────────────
+     * CONFORMED TO THE PLAIN, VERTEX BY VERTEX — the float bug this had
+     * ────────────────────────────────────────────────────────────────────
+     * `driftBerm` builds a flat-bottomed bank about y=0 and the first cut of
+     * this placed the whole thing at `gy(cx, cz)`. The swell runs to 0.37 of
+     * gradient at its worst, so a 19 m berm laid on it stood up to 1.4 m clear
+     * of the ground at one end and was buried to the crest at the other —
+     * photographed at 12 m, and the class of defect `_floatcheck.mjs` exists
+     * for, which has shipped four times on this project.
+     *
+     * `plainsY` IS the ground (@see the note on it in plains.js — the terrain
+     * mesh is built from it and the collision IS that mesh), so asking it per
+     * vertex puts the toe of the bank exactly on the plain everywhere. The
+     * yaw used here is the yaw the piece is PLACED at, so the mirrored face
+     * conforms to the ground it is actually standing on rather than to its
+     * twin's.
+     */
+    const yw = yaw + (side > 0 ? 0 : Math.PI);
+    const cw2 = Math.cos(yw), sw2 = Math.sin(yw);
+    const pa = g.getAttribute('position');
+    for (let i = 0; i < pa.count; i++) {
+      const lx = pa.getX(i), lz = pa.getZ(i);
+      const wx = cx + cw2 * lx + sw2 * lz;
+      const wz = cz - sw2 * lx + cw2 * lz;
+      pa.setY(i, pa.getY(i) + gy(wx, wz) - base);
+    }
+    g.computeVertexNormals();
     paintMasks(g, (x, y, z, mx, my, mz, out) => {
       const n = fbm3(x * 0.35 + cx, 2.3, z * 0.35 + cz, 3);
       out[0] = Math.min(1, 0.2 + n * 0.5);
       out[1] = Math.min(1, 0.34 + n * 0.5);
       out[2] = Math.min(1, 0.3 + (1 - Math.min(1, y / h)) * 0.35);
     });
-    A.addOnce('steppe_bare', g, LL(IDENT, cx, gy(cx, cz) - 0.06, cz, yaw + (side > 0 ? 0 : Math.PI)),
-      { masks: [0.3, 0.6, 0.35] });
+    A.addOnce('steppe_bare', g, LL(IDENT, cx, base - 0.06, cz, yw), { masks: [0.3, 0.6, 0.35] });
   }
   /**
    * Collision as a run of boxes down the crest — the drawn skin is a shell.
@@ -1146,6 +1354,23 @@ function dressPlain(A, rng, gy, isOpen, sites, R) {
  * @param {object} ctx  the engine context, for `world.root` (smoke markers)
  */
 export function buildCover(A, groundY, isOpen, pads, ctx) {
+  /**
+   * `?nocover` — build the plain WITHOUT this pass, so the before/after the
+   * whole file is justified by can be measured against the SAME build.
+   *
+   * The alternative is a git stash and a second `vite build`, which compares two
+   * different worlds: three other agents have uncommitted work in the trenches,
+   * the tower and the fort, and a baseline taken before their changes would
+   * credit this file with their occluders. This flag moves one variable.
+   *
+   * It is safe to return early. This pass is called LAST in `PLAINS.build` and
+   * draws from its own `Rng`, so skipping it does not move one stone placed by
+   * any earlier pass — @see note 5 — and the two runs differ only in this file.
+   */
+  if (coverFlag('nocover')) {
+    console.info('[world] nachtfeld cover: SKIPPED (?nocover) — bare plain');
+    return { sites: [], fires: [], ground: null };
+  }
   const rng = new Rng(0x4ca7e2);
   const sites = stations(rng, pads, isOpen);
   const counts = { ruin: 0, wreck: 0, berm: 0, emplace: 0 };
@@ -1219,8 +1444,8 @@ export function buildCover(A, groundY, isOpen, pads, ctx) {
     burning(A, rng, groundY, f.x, f.z);
     if (!root) continue;
     root.add(smokeMarker(f.x, groundY(f.x, f.z) + 0.7, f.z, {
-      radius: SMOKE_FOOT, growth: SMOKE_GROWTH, rate, life: SMOKE_LIFE,
-      rise: SMOKE_RISE, dark: 0.055, ember: 0.14, haze: 0.75,
+      radius: SMOKE_FOOT, rate, life: SMOKE_LIFE,
+      rise: SMOKE_RISE, dark: SMOKE_DARK, ember: 0.14, haze: 0.75,
     }));
   }
 
@@ -1231,14 +1456,12 @@ export function buildCover(A, groundY, isOpen, pads, ctx) {
    * station to a trench is to have the solver say where it put things. Off by
    * default: fifty-one records is not a boot log.
    */
-  try {
-    if (new URLSearchParams(globalThis.location?.search ?? '').has('covertag')) {
-      console.info('[world] nachtfeld cover sites: ' +
-        sites.map((s) => `${s.kind}@${s.x.toFixed(0)},${s.z.toFixed(0)}`).join(' '));
-      console.info('[world] nachtfeld smoke banks: ' +
-        chosen.map((s) => `${s.x.toFixed(0)},${s.z.toFixed(0)}`).join(' '));
-    }
-  } catch { /* no location outside a browser */ }
+  if (coverFlag('covertag')) {
+    console.info('[world] nachtfeld cover sites: ' +
+      sites.map((s) => `${s.kind}@${s.x.toFixed(0)},${s.z.toFixed(0)}`).join(' '));
+    console.info('[world] nachtfeld smoke banks: ' +
+      chosen.map((s) => `${s.x.toFixed(0)},${s.z.toFixed(0)}`).join(' '));
+  }
 
   console.info(
     `[world] nachtfeld cover: ${sites.length} stations on ${CROSSINGS.length} crossings — ` +
