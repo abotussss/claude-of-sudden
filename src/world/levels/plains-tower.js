@@ -1533,14 +1533,16 @@ function buildShaft(A, rng, y) {
  * `stairMarks` is built on, and those are the parts the previous pass measured
  * as still carrying in the dark.
  *
- * IT IS DESIGNED TO DEGRADE, which is the part that makes it work on a map with
- * this much air in it:
+ * IT IS DESIGNED TO DEGRADE, and this is what it was PHOTOGRAPHED doing at
+ * hour 21.65 with no lighting changed (`_tzshots.mjs`, `shots/tzraze/`):
  *
- *   at 300 m  a bright bar high on the only vertical object between the rims —
- *             the tower has something on it
- *   at 100 m  three separate marks — it is a supply point, not a light
- *   at  30 m  a cross, a stack of rounds and a rifle — an aid post, ammunition
- *             and the map's only second primary weapon are in this building
+ *   at 150 m  (`02-intact-150m-west`) three separate orange marks on a black
+ *             shaft, under the red masthead beacon — the tower has a supply
+ *             point on it, and that is the whole of what needs to carry at
+ *             the range a man decides whether to cross the plain
+ *   at  32 m  (`03-intact-from-D`, standing on zone D) the three glyphs resolve:
+ *             a rifle, a stack of rounds, a cross — an aid post, ammunition and
+ *             the map's only second primary weapon are in this building
  *
  * Four faces, so it reads from every bearing men arrive on, and the same three
  * marks go on the sign board at the foot of every climb, at eye height, where
