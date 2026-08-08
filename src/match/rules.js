@@ -2075,10 +2075,15 @@ export const MAP_RULES = {
      * because a route on the plain is 100-308 m across a 216k-cell grid where
      * the town's is a street. 4.5 / 1.7 = 2.6, clamped up to 3.
      *
-     * So the whole of what forty a side buys is QUEUE, and it is exactly a
-     * doubling: `agents.length / ration` is 44/3.1 = 14 frames at twenty and
-     * 84/3.3 = 25 frames at forty, i.e. a man waits about 0.4 s for a route
-     * instead of 0.2 s, and deferrals go 0.06 -> 0.37 a frame. THE SYMPTOM THAT
+     * So the whole of what forty a side buys is QUEUE, and it is a doubling:
+     * a man is served every `agents.length / ration` frames, and the roster is
+     * the only term in that which moved. Re-measured on the finished tree with
+     * the capture-site structures in (`_forty.mjs`, three blocks, quiet box):
+     * plains 84 agents, ration 6.2, 13.5 frames, 0.54 deferred a frame, mean
+     * 52.4 ms / p95 63.4 — against the TOWN's 44 agents, ration 9.0, 4.9
+     * frames, 0.09 deferred, mean 49.3 / p95 60.9. So the plain at FORTY a side
+     * costs 6 % more frame time than the town at twenty and makes each man wait
+     * about 0.22 s for a route instead of 0.08. THE SYMPTOM THAT
      * WOULD MAKE THAT MATTER IS MEASURABLE AND DID NOT APPEAR, which is the same
      * test the 15 -> 20 note above applied: `tools/stuckcheck.mjs` reports
      * 0 STUCK OF 81 and 0 of 81 that barely moved, against a plains baseline of
