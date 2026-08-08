@@ -646,6 +646,36 @@ export class AiSystem {
     this._smokeNext = 0;
     /** What a can is worth, mirrored and then latched from the real one. @see `SMOKE_R`. */
     this._smokeR = SMOKE_R;
+    /**
+     * ════════════════════════════════════════════════════════════════════════
+     * THE WORLD'S OWN SMOKE, WHICH A BOT COULD SEE STRAIGHT THROUGH
+     * ════════════════════════════════════════════════════════════════════════
+     * NACHTFELD authors permanent banks of smoke off its burning wrecks, one on
+     * each of the open crossings, and the player asked for them for exactly one
+     * reason — 「平原での移動にもう少し無防備な時間を少なくして」. `plains-cover.js`
+     * states the limitation in its own header rather than hiding it: the banks
+     * are `userData.fxSmoke` markers, they deliberately do NOT publish
+     * `weapon:smoke`, and so they were cover to the CAMERA and not to
+     * `_smokeBlocks`. A screen that hides you from the player's eye and not
+     * from the enemy's is worse than no screen at all — it tells the man he is
+     * concealed while every bot on the map still has him.
+     *
+     * WHY IT IS A SECOND LIST AND NOT SIX MORE SLOTS IN `_smoke`. That ring is
+     * a ration of six RECYCLED slots with expiry stamps, sized for the two
+     * throwables; and `weapon:smoke` also LATCHES `_smokeR`, which is how a bot
+     * learns what a can is worth. Pushing eight permanent world plumes through
+     * that path would evict live grenades, expire things that never expire, and
+     * quietly re-tune every bot's own smoke to a wreck's radius. So the world's
+     * banks are their own flat array with no clock on them, and the two are
+     * only ever joined at the sightline test.
+     *
+     * IT IS BUILT ONCE PER LEVEL, lazily, off the tag the world already
+     * publishes — no import, no new event, no cooperation required from
+     * `world`, and `_bankLevel` re-scans when the map changes.
+     */
+    this._bank = null;
+    this._bankN = 0;
+    this._bankLevel = null;
     /** Suppression against armour — @see clause 3 of `armourWorth`. Flipped
      *  only by `_tankfight.mjs`, to report the engagement rate both ways. */
     this.armourSuppress = true;
@@ -1710,7 +1740,13 @@ export class AiSystem {
      * AND THE SMOKE. @see `_smokeBlocks` — a screen only the player can hide
      * behind is a decoration, and this is the line that makes it a wall.
      */
-    if (this._smokeN > 0 && this._smokeBlocks(eye, p)) return -1;
+    /**
+     * `_bankN` IS IN THIS GATE, AND LEAVING IT OUT WAS THE WHOLE BUG'S TWIN.
+     * The short-circuit used to read `_smokeN > 0`, i.e. "only test smoke when
+     * a GRENADE is live" — so a map whose every crossing is screened by a
+     * permanent bank still ran zero smoke tests unless somebody threw a can.
+     */
+    if ((this._smokeN > 0 || this._bankN > 0) && this._smokeBlocks(eye, p)) return -1;
     return dist;
   }
 
@@ -1767,6 +1803,53 @@ export class AiSystem {
     this._smokeNext = 0;
   }
 
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * FIND THE WORLD'S PERMANENT BANKS, ONCE PER LEVEL
+   * ══════════════════════════════════════════════════════════════════════════
+   * @see `this._bank` for why these are not `_smoke` slots.
+   *
+   * The tag is `userData.fxSmoke`, which is the seam `src/fx/ambience.js`
+   * already publishes and `plains-cover.js` already writes — so this reads a
+   * contract that exists rather than asking `world` for a new one, and a map
+   * that authors no banks (the town) simply produces an empty list.
+   *
+   * WHAT RADIUS. `cfg.radius` is the FOOTPRINT — the disc a puff is BORN in —
+   * and `plains-cover.js` is emphatic that the footprint is what the eye reads
+   * ("WHAT YOU SEE IS THE YOUNG PUFF, AND THE YOUNG PUFF IS THE FOOTPRINT"),
+   * `growth` being a multiplier a sprite only reaches as it is erased. So the
+   * footprint is the honest screen, and `SMOKE_CORE` is applied to it exactly
+   * as `_addSmoke` applies it to a can: grazing the edge of a bank is still a
+   * shot, standing in the middle of one is not.
+   *
+   * THE CENTRE IS LIFTED off the marker for the same reason a can's is — a
+   * sphere sitting on the ground screens a man's knees. `rise` is the drift
+   * speed and `life` its span, so `rise * life * 0.5` is where the column's
+   * mass actually sits, clamped so a slow bank still screens a standing man.
+   */
+  _scanBanks() {
+    const world = this.ctx.peek('world');
+    const id = world?.level?.id ?? null;
+    if (this._bankLevel === id && this._bank) return;
+    this._bankLevel = id;
+    const found = [];
+    const v = this._v;
+    (world?.root ?? this.ctx.scene)?.traverse?.((o) => {
+      const cfg = o.userData?.fxSmoke;
+      if (!cfg) return;
+      o.updateWorldMatrix(true, false);
+      v.setFromMatrixPosition(o.matrixWorld);
+      const r = (cfg.radius ?? 0.35) * SMOKE_CORE;
+      const lift = Math.min(3.2, Math.max(1.2, (cfg.rise ?? 1.1) * (cfg.life ?? 3.4) * 0.5));
+      found.push(v.x, v.y + lift, v.z, r);
+    });
+    this._bank = new Float64Array(found);
+    this._bankN = found.length / 4;
+    if (this._bankN > 0) {
+      console.info(`[ai] ${this._bankN} world smoke bank(s) on ${id} now block bot sight`);
+    }
+  }
+
   _smokeBlocks(a, b) {
     const S = this._smoke;
     const now = this.ctx.time.elapsed;
@@ -1781,6 +1864,20 @@ export class AiSystem {
       if (t < 0) t = 0; else if (t > 1) t = 1;
       const px = cx - abx * t, py = cy - aby * t, pz = cz - abz * t;
       const r = S[o + 3];
+      if (px * px + py * py + pz * pz < r * r) return true;
+    }
+    /**
+     * …AND THE WORLD'S OWN, on the identical segment/sphere test with no clock.
+     * Same loop shape, same flat array, no allocation. @see `_scanBanks`.
+     */
+    const B = this._bank;
+    for (let i = 0; i < this._bankN; i++) {
+      const o = i * 4;
+      const cx = B[o] - a.x, cy = B[o + 1] - a.y, cz = B[o + 2] - a.z;
+      let t = (cx * abx + cy * aby + cz * abz) / len2;
+      if (t < 0) t = 0; else if (t > 1) t = 1;
+      const px = cx - abx * t, py = cy - aby * t, pz = cz - abz * t;
+      const r = B[o + 3];
       if (px * px + py * py + pz * pz < r * r) return true;
     }
     return false;
@@ -2870,6 +2967,14 @@ export class AiSystem {
 
     // `match` flips playerTeam at the half; hostile and friendly swap with it.
     if (this._rimTeam !== this.playerTeam) this._applyTeamRims();
+
+    /**
+     * THE WORLD'S SMOKE BANKS. One `peek` and an identity compare on the level
+     * id per frame; the traverse itself happens once per map. @see `_scanBanks`.
+     * It cannot run in the constructor — `world` builds after `ai.init` — and a
+     * lazy test inside `_sightTo` would put it on the hottest path in the file.
+     */
+    this._scanBanks();
 
     // Six flags and a compare. Only a block that actually moved costs anything.
     if (this._demoRecs) this.syncCoverBlocks();
