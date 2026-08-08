@@ -293,6 +293,24 @@ export class Ambience {
         rise: cfg.rise ?? 1.1,
         dark: cfg.dark ?? 0.13,
         life: cfg.life ?? 3.4,
+        /**
+         * `growth` WAS THE ONE FIELD THIS SEAM DROPPED, and it is the field
+         * that decides whether smoke billows or hazes.
+         *
+         * `_puff` sizes a sprite `radius` at birth and `radius * growth` at
+         * death, and `alphaCurve` is 1.7 — so what the eye reads is the YOUNG
+         * puff, and a large `growth` spends the sprite's whole visible life
+         * inflating it into something you can see a wall through. This is
+         * written down in this repo's own history: 「実質３mくらいしかスモークで
+         * てない」 was fixed in 5b8d7b0 by taking the can's growth from 5.85 to
+         * 1.8 and its rate from 26 to 78, and NOT by touching the radius.
+         *
+         * A world-authored bank could ask for all seven of the other fields and
+         * silently got `addSource`'s 3.4 for this one, which is 2 % of the
+         * screen per sprite at 18 m across and reads as fog. Defaulted to the
+         * same 3.4, so nothing that does not ask for it changes at all.
+         */
+        growth: cfg.growth ?? 3.4,
         ember: cfg.ember ?? 0.2,
         haze: cfg.haze ?? 0.3,
         object: o,

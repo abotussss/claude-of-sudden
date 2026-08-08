@@ -187,44 +187,72 @@ const SMOKE_BANKS = 4;
 const SMOKE_FOOT = 5.4;
 /**
  * ────────────────────────────────────────────────────────────────────────────
- * `growth` IS NOT ON THIS SEAM, AND IT IS NOT A TYPO THAT IT IS MISSING
+ * `growth` — THE FIELD THAT DECIDES BILLOW AGAINST HAZE
  * ────────────────────────────────────────────────────────────────────────────
- * `Ambience._scan` reads SEVEN fields off `userData.fxSmoke` — radius, rate,
- * rise, dark, life, ember, haze — and `growth` is not one of them, so a bank
- * authored here always swells by `addSource`'s own default of 3.4 whatever this
- * file asks for. Measured on the built map: `fx.ambience.emitters` came back
- * with `growth: 3.4` on all four while this constant said 2.3.
+ * `Ambience._scan` used to read SEVEN fields off `userData.fxSmoke` — radius,
+ * rate, rise, dark, life, ember, haze — and drop this one, so a bank authored
+ * here swelled by `addSource`'s default of 3.4 whatever it asked for. Measured:
+ * `fx.ambience.emitters` came back with `growth: 3.4` on all four.
  *
- * The number is kept, and it is kept as documentation rather than as a setting:
- * `SMOKE_FOOT` is chosen KNOWING the multiplier is 3.4, so a puff is born at
- * 3.8-6.5 m and dies at 15-23 m. Passing it would need a field added to a seam
- * in `src/fx`, which is another agent's directory and not worth a cross-cutting
- * change to land a number this file can simply account for.
+ * That is not a cosmetic default. `_puff` sizes a sprite `radius` at birth and
+ * `radius * growth` at death and `alphaCurve` is 1.7, so what the eye reads is
+ * the YOUNG puff and a big `growth` spends the sprite's visible life inflating
+ * it into something you can see a wall through. At 3.4 these banks were 18 m
+ * ghosts: photographed at 12 m with all 168 sprites alive, the bank read as
+ * FOG — an A/B against the same frame with the emitters suppressed is the only
+ * way it showed up at all.
+ *
+ * So `_scan` now passes it, defaulted to the 3.4 it was already using so that
+ * nothing which does not ask for it changes, and this asks for the number the
+ * player's own smoke can was fixed to in 5b8d7b0 — 1.8, against the 5.85 that
+ * produced 「実質３mくらいしかスモークでてない」. Same lesson, same direction: a
+ * big footprint at a high rate with a SMALL growth, never the reverse.
  */
-const SMOKE_GROWTH_ACTUAL = 3.4;
+const SMOKE_GROWTH = 2.2;
 const SMOKE_LIFE = 8.5;
 /**
  * ────────────────────────────────────────────────────────────────────────────
  * HOW PALE, AND THIS IS THE ONE THAT DECIDED WHETHER IT WAS VISIBLE AT ALL
  * ────────────────────────────────────────────────────────────────────────────
  * The first cut used the smoke can's own 0.04, and the can is tuned on a town
- * at three in the afternoon. Photographed here at 30 m and 60 m off a bank on a
- * 21:40 map, 140 live sprites at 0.04 were INDISTINGUISHABLE FROM THE NIGHT —
- * `_puff` writes `dark` straight into the particle's colour and these are LIT
- * particles, so a value that reads as pale grey under a sun reads as black
- * against a black sky. `crash.js`'s burning cells use 0.16 on this same map and
- * they read; 0.18 is that, plus a little, because a bank has to be seen ACROSS
- * the plain to break a sightline the player is planning around.
+ * at three in the afternoon. `_puff` writes `dark` STRAIGHT INTO the particle's
+ * colour and these are LIT particles, so a value that reads as pale grey under
+ * a sun reads as black against a night sky. 0.04 was invisible; 0.18 was chosen
+ * to sit just over `crash.js`'s burning cells at 0.16, and photographed at 26 m
+ * with every sprite alive it was STILL barely there — the bank only showed up
+ * against a frame of the same view with the emitters suppressed.
+ *
+ * 0.62 is measured rather than reasoned. `_nfsmoketune.mjs` stands one camera
+ * 26 m off a bank and photographs the same view while mutating the live
+ * emitters, a full sprite life apart, so paleness is compared against nothing
+ * else moving: 0.18 is a smudge, 0.45 is a bank you can see, 0.62 is one that
+ * hides the foot of the ridge behind it. 0.75 is smoke you cannot see the fire
+ * through at all, which is a different map.
+ *
+ * IT IS PALE FOR A REASON AND NOT BY ACCIDENT: this is what the eye does at
+ * night. Smoke is only ever as bright as what lights it, and what lights this
+ * is a wreck fire two metres under it and a burning ridge behind it, so the
+ * near face of a real bank on this map IS the brightest thing on the ground.
  */
-const SMOKE_DARK = 0.18;
+const SMOKE_DARK = 0.62;
 /**
  * 0.5 against the can's 0.85. A burning wreck on a plain at 21:40 should lay
  * its smoke ACROSS the ground and downwind, not stand it up in a column — a
  * column breaks no sightline at all, which is the entire job here.
  */
 const SMOKE_RISE = 0.5;
-/** Share of `fx.lit` all four banks together may hold. A can takes 25 % alone. */
-const SMOKE_SHARE = 0.24;
+/**
+ * Share of `fx.lit` all four banks together may hold. A can takes 25 % alone.
+ *
+ * 0.36 against the 0.24 this was authored at, which is 30 sprites a second a
+ * bank instead of 20 — the step from "visible" to 「もくもく」 in the tune above,
+ * and the last one that is affordable. At 70/s the ring SATURATES (2 805 of
+ * 2 805 instances live, measured) and the blood, the impact puffs and the
+ * player's own smoke are then competing for what four scenery plumes have
+ * already taken. `fx.lit` is a ring and over-subscribing it does not fail
+ * loudly — it silently shortens everything else.
+ */
+const SMOKE_SHARE = 0.36;
 
 /**
  * The emission rate, resolved against the tier the game actually booted at.
@@ -1444,7 +1472,7 @@ export function buildCover(A, groundY, isOpen, pads, ctx) {
     burning(A, rng, groundY, f.x, f.z);
     if (!root) continue;
     root.add(smokeMarker(f.x, groundY(f.x, f.z) + 0.7, f.z, {
-      radius: SMOKE_FOOT, rate, life: SMOKE_LIFE,
+      radius: SMOKE_FOOT, growth: SMOKE_GROWTH, rate, life: SMOKE_LIFE,
       rise: SMOKE_RISE, dark: SMOKE_DARK, ember: 0.14, haze: 0.75,
     }));
   }

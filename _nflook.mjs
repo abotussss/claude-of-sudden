@@ -54,10 +54,25 @@ await page.evaluate(() => {
 const frames = (n) => page.evaluate((k) =>
   new Promise((d) => { let i = 0; const t = () => (++i >= k ? d() : requestAnimationFrame(t)); requestAnimationFrame(t); }), n);
 
-// Let the smoke banks fill: a persistent emitter at 16/s needs its own life
-// (8.5 s) before the bank it makes is the bank the player sees.
+/**
+ * ──────────────────────────────────────────────────────────────────────────
+ * LET THE BANKS FILL, AND 14 s IS NOT ENOUGH — MEASURED
+ * ──────────────────────────────────────────────────────────────────────────
+ * Two waits are in series here and only the second one was accounted for.
+ *
+ * `Ambience._scan` walks the scene for `userData.fxSmoke` on a 2 s timer and
+ * does not run at all until `fx` is updating, so a world-authored bank does not
+ * EXIST until about 11.5 s after `__READY__`. Only then does it begin to fill,
+ * and it is not the bank the player sees until it is `life` old — 8.5 s.
+ *
+ * Measured on this map: at the old 14 s the four banks were 1-3 s old and held
+ * about 60 sprites between them, and photographs at 30 m and 80 m showed a 3 m
+ * blob. At age 10.4 s they hold their authored 168 each. That is the entire
+ * difference between "the smoke is broken" and "the probe was early", and the
+ * first reading cost a smoke re-tune that was not needed.
+ */
 await frames(2);
-await page.waitForTimeout(14000);
+await page.waitForTimeout(26000);
 
 for (const spec of args) {
   const [name, from, to, eye] = spec.split(':');
