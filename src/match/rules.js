@@ -2034,6 +2034,79 @@ export const RULES = {
 export const MAP_RULES = {
   plains: {
     /**
+     * ═══════════════════════════════════════════════════════════════════════
+     * FORTY A SIDE, AND ON THIS MAP ONLY — 「平原のマップのときは４０−４０にしろ」
+     * ═══════════════════════════════════════════════════════════════════════
+     * `RULES.teamSize` 20 is the TOWN'S number and its own note is the argument
+     * for why it belongs here rather than there: every figure in it was measured
+     * on a 114 x 141 m street plan where 39 live actors already put A* deferrals
+     * at 5.19 a frame. NACHTFELD is 356 m across with 154-314 m between zones,
+     * and forty men on it are further apart than twenty are on the town.
+     *
+     * WHAT IT COSTS, MEASURED RATHER THAN ASSUMED. `_forty.mjs` walks 400 real
+     * frames of a LIVE match at `time.scale` 1 (not the `scale` 12 stress rig
+     * the table above uses — these are frames a player would see), three blocks
+     * to a boot, median of the three with the spread beside it. The two plains
+     * columns are an A/B on ONE tree with only `teamSize` moved, built to
+     * `dist-t20` / `dist-t40` and served from the same port:
+     *
+     *                    plains 20v20        plains 40v40        town 20v20
+     *   live actors           44                  84                 44
+     *   frame mean     56.5 (54.9-57.0)   52.4 (47.4-52.4)   69.9 (53.6-106.2)
+     *   frame p95      79.5 (68.8-92.4)   64.0 (63.2-66.9)  113.1 (68.0-143.7)
+     *   A* solve cost   1.67 (0.97-2.48)   1.70 (1.18-1.84)   0.23 (0.16-0.45)
+     *   A* ration        3.1 (3.0-6.5)      3.3 (3.1-4.2)      8.9 (8.4-9.0)
+     *   A* deferred/f   0.06 (0.01-0.29)   0.37 (0.24-0.51)   0.03 (0.00-0.06)
+     *
+     * READ THE FRAME COLUMNS AS "INSIDE THE NOISE" AND NOTHING MORE. Doubling
+     * the roster did not raise the frame mean above the run-to-run spread, and
+     * the honest reason is that the spread is enormous: several agents are
+     * building and driving headless Chromium on this box at once, and single
+     * blocks of the SAME build came back 68.3 and 53.1 ms. What can be said is
+     * bounded and useful — the plain at FORTY a side is not more expensive than
+     * the town at twenty, which is the configuration that ships.
+     *
+     * THE A* BUDGET IS THE NUMBER THAT ACTUALLY MOVES, AND IT MOVES IN A WAY
+     * THAT IS STRUCTURAL RATHER THAN NOISY. The ration is a MILLISECOND budget
+     * turned into a solve count (`ai.pathMsBudget` 4.5 / `_pathCostMs`, floored
+     * at 3), so a bigger roster CANNOT cost more frame time — it can only make
+     * each man wait longer. And on this map the ration is ALREADY ON ITS FLOOR
+     * at twenty a side: a solve here costs 1.7 ms against the town's 0.23,
+     * because a route on the plain is 100-308 m across a 216k-cell grid where
+     * the town's is a street. 4.5 / 1.7 = 2.6, clamped up to 3.
+     *
+     * So the whole of what forty a side buys is QUEUE, and it is exactly a
+     * doubling: `agents.length / ration` is 44/3.1 = 14 frames at twenty and
+     * 84/3.3 = 25 frames at forty, i.e. a man waits about 0.4 s for a route
+     * instead of 0.2 s, and deferrals go 0.06 -> 0.37 a frame. THE SYMPTOM THAT
+     * WOULD MAKE THAT MATTER IS MEASURABLE AND DID NOT APPEAR, which is the same
+     * test the 15 -> 20 note above applied: `tools/stuckcheck.mjs` reports
+     * 0 STUCK OF 81 and 0 of 81 that barely moved, against a plains baseline of
+     * 0 of 41. `pathMsBudget` is deliberately NOT raised — a budget raised
+     * against a problem nobody can measure is just frame time spent.
+     *
+     * WHAT ELSE IS SIZED OFF THE ROSTER, checked one at a time:
+     *   `PLAINS_SPAWNS`      grown to 45 stand points a side. @see sites.js —
+     *                        `_spawnTeam` indexes MODULO the list, so 21 points
+     *                        for 40 men stands nineteen pairs of bodies inside
+     *                        each other on the opening frame.
+     *   `BOT_NAMES`          41 a side, up from 21, for the same modulo.
+     *   `hiddenSquadLive`    a CONCURRENT ceiling of 15, independent of the
+     *                        roster; `HIDDEN_NAMES` already carries 30.
+     *   `reinforceCount`     10 canopies, independent of the roster;
+     *                        `REINFORCE_NAMES` already carries 10.
+     *   the civilian militia and the tank crews are not roster-derived at all —
+     *                        the militia is authored against the town's district
+     *                        and the six hulls carry two named crew apiece.
+     *
+     * WHAT IS KNOWN-WRONG AND IS NOT THIS FILE'S TO FIX: `MAX_TEAM` / `MAX_ROWS`
+     * in `src/ui/round.js` are hard caps of 20 and 40 and they TRUNCATE
+     * SILENTLY, so at 40 a side the pip strip draws half a team and the
+     * scoreboard forty of eighty men. That file belongs to somebody else and is
+     * named here rather than edited.
+     */
+    teamSize: 40,
+    /**
      * 「１０００ポイントゲームにして」 — literally the request, and it is not just a
      * bigger number. `_matchProgress` is `max(elapsed / matchTime, leader /
      * scoreTarget)`, so EVERY progress threshold in this file is measured
@@ -2188,17 +2261,33 @@ export function roleOf(team, round) {
  *
  * There must be at least `RULES.teamSize` of them per side or two men share a
  * name and the killfeed stops being readable — `_spawnTeam` indexes this modulo
- * its length. TWENTY-ONE each, which covers a `teamSize` of 20 plus the slot the
- * human occupies on his own side; it was sixteen for the 15v15 and the modulo
- * would silently have wrapped five callsigns onto a second man each.
+ * its length. It was sixteen for the 15v15 and the modulo would silently have
+ * wrapped five callsigns onto a second man each; twenty-one covered the town's
+ * `teamSize` of 20 plus the slot the human occupies on his own side.
+ *
+ * FORTY-ONE EACH NOW, BECAUSE THE PLAIN RUNS 40 v 40 (`MAP_RULES.plains
+ * .teamSize`). The list is not per-map and must not become so: `applyMapRules`
+ * folds one entry into `RULES` at boot and every reader is live, but these two
+ * arrays are module constants read by `_spawnTeam` on the frame a man spawns —
+ * so the list has to be as long as the LARGEST roster any map asks for, and the
+ * town simply never reaches index 21. Twenty new words a side, in the same
+ * register as the twenty-one that were already there (RED: hard mineral and
+ * ironwork; BLUE: cold weather and water), so a killfeed at forty a side still
+ * reads as two sides rather than as one list that ran out of ideas.
  */
 export const BOT_NAMES = [
   ['HAWK', 'VIPER', 'RONIN', 'SABLE', 'KILO', 'ORCA', 'ZENITH', 'DRIFT', 'CINDER',
    'BASALT', 'QUARRY', 'TINDER', 'HALYARD', 'OBSIDIAN', 'RAMPART', 'JACKAL',
-   'FLINT', 'GANTRY', 'MARROW', 'PIKE', 'SCORIA'],
+   'FLINT', 'GANTRY', 'MARROW', 'PIKE', 'SCORIA',
+   'ANVIL', 'BRAZIER', 'CALDERA', 'DERRICK', 'EMBER', 'FORGE', 'GRAVEL',
+   'HAMMER', 'INGOT', 'KILN', 'LATHE', 'MAGNET', 'NAPHTHA', 'OXIDE',
+   'PUMICE', 'RIVET', 'SLAG', 'TALUS', 'VITRIC', 'WARDEN'],
   ['FROST', 'TALON', 'NOMAD', 'AZURE', 'ECHO', 'MAKO', 'VECTOR', 'SPARK', 'GLACIER',
    'COBALT', 'MERIDIAN', 'HALCYON', 'TUNDRA', 'PELAGIC', 'BOREAL', 'KESTREL',
-   'SIROCCO', 'LANTERN', 'THRESHER', 'WEIR', 'ZEPHYR'],
+   'SIROCCO', 'LANTERN', 'THRESHER', 'WEIR', 'ZEPHYR',
+   'ALBATROSS', 'BRINE', 'CIRRUS', 'DRIFTICE', 'ESTUARY', 'FATHOM', 'GALE',
+   'HOARFROST', 'INLET', 'JETSAM', 'KELP', 'LEEWARD', 'MISTRAL', 'NIMBUS',
+   'OSPREY', 'PACKICE', 'QUAY', 'RIME', 'SLEET', 'TIDEWAY'],
 ];
 
 /**

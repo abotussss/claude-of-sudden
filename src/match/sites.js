@@ -977,23 +977,52 @@ export const PLAINS_ZONES = [
 ];
 
 /**
- * Both bases, 302 m apart on the plain's long diagonal. Twenty-one men a side in
- * seven ranks of three, the same shape as the town's clusters and for the same
- * reason: `Agent.viewRange` is 58 m, so the round has to open with both sides
- * walking rather than shooting.
+ * Both bases, 302 m apart on the plain's long diagonal. The same shape as the
+ * town's clusters and for the same reason: `Agent.viewRange` is 58 m, so the
+ * round has to open with both sides walking rather than shooting.
  *
  * yaw 0 faces +Z and `Math.PI` faces -Z (this level's transform is the identity,
  * so `world.levelYaw` adds nothing). North base looks south down the plain,
  * south base looks north.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * FORTY-FIVE POINTS A SIDE, BECAUSE THE PLAIN RUNS 40 v 40
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「平原のマップのときは４０−４０にしろ」, and the town's own spawn note is the exact
+ * argument for why the table has to move with the roster: `_spawnTeam` indexes
+ * this list MODULO its length, so twenty-one points for forty men stands
+ * nineteen pairs of bodies inside each other on the opening frame, and
+ * `_safeSpawn`'s third tier — "pick the emptiest of the cluster" — is choosing
+ * between points that are never free. It was seven ranks of three; it is nine
+ * ranks of five.
+ *
+ * THE PITCH GOT LOOSER, NOT TIGHTER, AND THE PAD IS WHY. The town had to
+ * squeeze (1.8 m ranks, a measured 1.79 m nearest neighbour) because its
+ * clusters stand in a street with a `KEEPOUT` circle and a hard walkable edge
+ * 71.6 m out. Here the cluster stands on `PADS['BASE-N']` — held dead level
+ * inside r0 = 16 m and blended out to 34 — so the constraint is the FLAT, and
+ * the flat is a 32 m circle where the old cluster used 16 x 15 m of it:
+ *
+ *   x  -26 -20 -14  -8  -2      attack   (pad centre x -14, 6.0 m pitch)
+ *   z  -160 … -140                       (2.5 m pitch, unchanged)
+ *
+ * The far corner of the block is |(12, 10)| = 15.6 m from the pad centre, so
+ * every one of the forty-five stands on ground that is flat by construction
+ * rather than by measurement — which is the property the town's cluster had to
+ * buy with `_spawnfit.mjs` and a re-authored pitch. Nearest-neighbour spacing is
+ * 2.5 m against the town's 1.79, i.e. three men wide, and the count is 45 for a
+ * roster of 40 on purpose: the surplus is what tier 3 chooses BETWEEN.
+ *
+ * Both clusters are still exact images of each other through the origin, so
+ * neither side gets the better pocket, and the closest attack/defence pair is
+ * still 280 m against an `Agent.viewRange` of 58.
  */
-const plainsRank = (x0, z, yaw) => [
-  [x0 - 8, z, yaw],
-  [x0, z, yaw],
-  [x0 + 8, z, yaw],
-];
+const PLAINS_RANK_DX = [-12, -6, 0, 6, 12];
+const plainsRank = (x0, z, yaw) => PLAINS_RANK_DX.map((dx) => [x0 + dx, z, yaw]);
+const PLAINS_RANK_Z = [160, 157.5, 155, 152.5, 150, 147.5, 145, 142.5, 140];
 export const PLAINS_SPAWNS = {
-  attack: [-158, -155.5, -153, -150.5, -148, -145.5, -143].flatMap((z) => plainsRank(-14, z, 0)),
-  defend: [158, 155.5, 153, 150.5, 148, 145.5, 143].flatMap((z) => plainsRank(14, z, Math.PI)),
+  attack: PLAINS_RANK_Z.flatMap((z) => plainsRank(-14, -z, 0)),
+  defend: PLAINS_RANK_Z.flatMap((z) => plainsRank(14, z, Math.PI)),
 };
 
 /**
