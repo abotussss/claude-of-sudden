@@ -1354,11 +1354,15 @@ const CSS = `
   display:flex; align-items:center; gap: calc(var(--u) * 3);
   white-space: nowrap;
 }
-.ow-round-pips { display:flex; gap: calc(var(--u) * .9); align-items:center; }
+/* --pipw / --pipgap are written on .ow-round by RoundStrip._layout, which
+   compresses the pips when a side is too big to draw at full pitch. The
+   FALLBACKS are the values this sheet always had, and they are also exactly
+   what _layout emits whenever the roster fits — so 20 v 20 is unchanged. */
+.ow-round-pips { display:flex; gap: var(--pipgap, calc(var(--u) * .9)); align-items:center; }
 .ow-round-pips.them { flex-direction: row-reverse; }
 .ow-pip {
   display:block;
-  width: calc(4.5px * var(--k)); height: calc(11px * var(--k));
+  width: var(--pipw, calc(4.5px * var(--k))); height: calc(11px * var(--k));
   background: var(--friend);
   box-shadow: 0 0 calc(4px * var(--k)) rgba(0,0,0,.75);
   transform: skewX(-12deg);
@@ -1371,6 +1375,21 @@ const CSS = `
 .ow-round-pips .ow-pip.down,
 .ow-round-pips.them .ow-pip.down { background: rgba(255,255,255,.13); box-shadow:none; }
 
+/* THE COUNT IN FIGURES, flanking the phase readout. Forty marks cannot be
+   counted and the count is the point of the strip, so the number is written as
+   well. Colour is --friend / --enemy through .us / .them, which are the local
+   player's point of view — never a team index. */
+.ow-round-count {
+  font-family: var(--fm); font-size: calc(11.5px * var(--k)); letter-spacing:.04em;
+  min-width: calc(46px * var(--k)); text-shadow: var(--sh-o1);
+}
+.ow-round-count.us { color: var(--friend); text-align:right; }
+.ow-round-count.them { color: var(--enemy); text-align:left; }
+/* What the strip could not draw. Hidden unless it is non-zero. */
+.ow-round-more {
+  font-family: var(--fm); font-size: calc(9.5px * var(--k)); letter-spacing:.02em;
+  color: var(--ink-3); text-shadow: var(--sh-o1);
+}
 .ow-round-mid { text-align:center; min-width: calc(150px * var(--k)); }
 .ow-round-phase {
   font-size: calc(9.5px * var(--k)); letter-spacing:.22em;
@@ -1405,8 +1424,11 @@ const CSS = `
   position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
   background: rgba(4,6,8,.46);
 }
+/* --sbw is written by Scoreboard.update when the roster needs a second column
+   of rows per side; 660 is the one-column-a-side width this panel has always
+   had, so the town's board is the width it was. */
 .ow-sb-panel {
-  width: min(calc(660px * var(--k)), 88vw);
+  width: min(calc(var(--sbw, 660) * 1px * var(--k)), 88vw);
   padding: calc(var(--u) * 5) calc(var(--u) * 5.5) calc(var(--u) * 5);
   background: linear-gradient(180deg, rgba(10,13,17,.90), rgba(10,13,17,.74));
   border: 1px solid var(--hair);
@@ -1419,7 +1441,17 @@ const CSS = `
 .ow-sb-sub { margin-top: calc(var(--u) * .8); font-size: calc(10.5px * var(--k));
   letter-spacing:.2em; color: var(--ink-2); }
 .ow-sb-cols { display:flex; gap: calc(var(--u) * 5); }
+/* One side: its team header, then however many columns of rows the roster
+   needs. At one column this nests to exactly what .ow-sb-col used to be. */
+.ow-sb-side { flex:1 1 0; min-width:0; }
+.ow-sb-subs { display:flex; gap: calc(var(--u) * 3); }
 .ow-sb-col { flex:1 1 0; min-width:0; }
+/* Men the panel did not have room for, and why they are the ones missing.
+   Stated, never elided — a row that is not drawn has to be accounted for. */
+.ow-sb-more {
+  margin-top: calc(var(--u) * 1.6); font-size: calc(9.5px * var(--k));
+  letter-spacing:.14em; color: var(--ink-3); text-shadow: var(--sh-o1);
+}
 .ow-sb-team {
   display:flex; align-items:baseline; gap: calc(var(--u) * 2);
   font-size: calc(11px * var(--k)); letter-spacing:.24em;
@@ -1427,6 +1459,12 @@ const CSS = `
   margin-bottom: calc(var(--u) * 1.2);
 }
 .ow-sb-team .n { flex:1 1 auto; }
+/* Alive over total for the side — the same fact the pip strip draws in marks,
+   and the one readout that stays true when the rows have to be rationed. */
+.ow-sb-team .c {
+  font-family: var(--fm); font-size: calc(10px * var(--k)); letter-spacing:.04em;
+  color: var(--ink-3);
+}
 .ow-sb-team .k, .ow-sb-team .d {
   width: calc(28px * var(--k)); text-align:right;
   font-size: calc(9.5px * var(--k)); color: var(--ink-3); letter-spacing:.1em;

@@ -1008,6 +1008,13 @@ export class UiSystem {
     this.crosshair.setScale(this.k);
     this.compass.setScale(this.k);
     this.minimap.resize(this.k);
+    /**
+     * HOW WIDE THE PIP STRIP MAY GET. The round strip compresses its pips when
+     * a side is too big to draw at full pitch (forty a side on the plain), and
+     * how much room it has is a function of the window, not of the roster — so
+     * it is told, rather than assuming 1920. @see RoundStrip.setViewport
+     */
+    this.roundStrip.setViewport(w, this.k);
   }
 
   dispose() {

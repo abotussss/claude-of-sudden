@@ -1,21 +1,66 @@
 import { el, setText, setStyle, setClass, clamp01, damp, ease, mmss } from './util.js';
 
+/* ══════════════════════════════════════════════════════════════════════════ */
+/* HOW MANY MEN THE HUD DRAWS — and why no number below is a roster size.      */
+/* ══════════════════════════════════════════════════════════════════════════ */
+
 /**
- * Pip and scoreboard-row capacity. Both are hard caps: `_pips` hides the
- * surplus and the scoreboard hides surplus rows, so a roster larger than these
- * is silently truncated on screen. At 8 the strip drew half a team and the
- * scoreboard eight of fifteen men — the count is the most decision-relevant
- * number on the HUD and it was wrong.
+ * WHAT USED TO BE HERE, AND WHAT IT DID.
  *
- * TWENTY AND FORTY, because `RULES.teamSize` is 20 ("あと２０VS20にしてください").
- * These two constants are the one place in `src/ui` that has to know the roster
- * size, and the failure mode when they lag behind it is SILENT — twenty men
- * alive and sixteen pips lit reads as a side that has lost four, which is worse
- * than no pips at all. `MAX_ROWS` is per BOTH sides (`MAX_ROWS / 2` rows are
- * built per column), so it is twice `MAX_TEAM` by construction.
+ *   const MAX_TEAM = 20;   // pips built per side
+ *   const MAX_ROWS = 40;   // scoreboard rows, both sides
+ *
+ * Two hard caps, both built into the constructors, both hiding the surplus
+ * rather than reporting it. Every man past the twentieth on a side simply did
+ * not exist on screen: the plain went to forty a side (`MAP_RULES.plains
+ * .teamSize`, 「平原のマップのときは４０−４０にしろ」) and the strip drew half a
+ * team while the scoreboard showed forty of eighty men, with nothing to say so.
+ *
+ * AND IT WAS ALREADY WRONG ON THE TOWN. `rosterUs` is `_rosterSize(team)` —
+ * every record on the side, not `RULES.teamSize` — and the roster GROWS inside
+ * a match: `reinforceCount` 10 out of the helicopter, then up to
+ * `hiddenSquadWaves * hiddenSquadSize` = 30 out of the cellars, all pushed onto
+ * one side's roster and never removed. A town match can put SIXTY records on a
+ * side; the strip capped at twenty, silently, on the map the user actually
+ * plays. The plain only made the existing defect impossible to miss.
+ *
+ * WHAT REPLACES THEM: nothing that knows a roster size. The pools GROW to
+ * whatever `s.rosterUs` / `s.rosterThem` report, on the frame they change, and
+ * the only constants left describe how the HUD DRAWS — a pip's pitch, how many
+ * rows make a readable column — which are properties of the screen and of the
+ * eye, not of the match. The one place a limit still bites (a strip so
+ * compressed the pips stop being marks) STATES what it is not drawing.
  */
-const MAX_TEAM = 20;
-const MAX_ROWS = 40;
+
+/**
+ * PIP GEOMETRY, in design pixels — every number here is multiplied by `--k`
+ * (the HUD's viewport scale) on its way into CSS, like the rest of the sheet.
+ * `PIP_W` and `PIP_GAP` are the values `.ow-pip` and `.ow-round-pips` have
+ * always shipped, so a roster that fits at full pitch draws EXACTLY the strip
+ * the town has always drawn — the compression below is off at 20 a side.
+ */
+const PIP_W = 4.5;
+/** `.ow-round-pips` gap: `calc(var(--u) * .9)`, and `--u` is `4px * --k`. */
+const PIP_GAP = 3.6;
+const PIP_PITCH = PIP_W + PIP_GAP;
+/**
+ * The pitch below which a pip stops being a countable mark and becomes a
+ * texture. Nothing is allowed to shrink past it; a strip that needs more room
+ * than the budget at this pitch draws what fits and says how many it did not.
+ */
+const PIP_MIN_PITCH = 4.0;
+/**
+ * A BLANK SLOT EVERY TEN — the whole answer to "forty pips is not twenty pips
+ * twice". Twenty marks in a row can be counted; forty cannot, and the strip's
+ * job is a count. Four ranks of ten reads as forty at a glance and three ranks
+ * plus two reads as thirty-two, which is the number a player rotates on.
+ * Only applied when the strip has to compress, so 20 v 20 is untouched.
+ */
+const PIP_RANK = 10;
+/** Widest one side's strip may grow before the pips compress instead. */
+const PIP_BUDGET = 300;
+/** Room the phase readout and the two live counts need between the strips. */
+const PIP_MID = 300;
 
 /**
  * ROUND STRIP — who is left, and how long you have.
@@ -26,32 +71,155 @@ const MAX_ROWS = 40;
  * screen: 3v1 and 1v3 are different games and you have to know which one you are
  * in without reading a scoreboard.
  *
- * Every pip and every row is built once. `update()` only writes text, opacity
- * and transforms, all through the change-guarded setters in util.js.
+ * AND AT FORTY A SIDE THE PIPS ARE NOT ENOUGH ON THEIR OWN, so each strip
+ * carries the number as text as well: `14 / 40`, yours cold and theirs hot.
+ * Nobody counts forty marks under fire, the exact figure is the thing the strip
+ * exists to deliver, and a written count is the ONE readout that stays true at
+ * any roster size — including the sizes where the marks have to be rationed.
+ *
+ * Every pip and every row is built ONCE PER SHAPE: the pools grow on the frame
+ * the roster changes (match start, a helicopter, a wave out of the cellars) and
+ * never again. `update()` only writes text, opacity and transforms, all through
+ * the change-guarded setters in util.js.
  */
 export class RoundStrip {
   constructor(parent) {
     this.root = el('div', 'ow-round', parent);
 
     this.usWrap = el('div', 'ow-round-pips us', this.root);
+    /**
+     * STATED OVERFLOW. Built first so it lands at the OUTER end of both strips
+     * (`.them` is `row-reverse`), and hidden while everything fits — which is
+     * every roster either map has ever produced. It exists so that the day a
+     * strip cannot draw a man, the screen says `+6` instead of saying nothing.
+     */
+    this.usMore = el('span', 'ow-round-more', this.usWrap, '');
+    this.usCount = el('div', 'ow-round-count us', this.root, '');
     this.mid = el('div', 'ow-round-mid', this.root);
+    this.themCount = el('div', 'ow-round-count them', this.root, '');
     this.themWrap = el('div', 'ow-round-pips them', this.root);
+    this.themMore = el('span', 'ow-round-more', this.themWrap, '');
 
     this.usPips = [];
     this.themPips = [];
-    for (let i = 0; i < MAX_TEAM; i++) {
-      this.usPips.push(el('i', 'ow-pip', this.usWrap));
-      this.themPips.push(el('i', 'ow-pip', this.themWrap));
-    }
     this.phase = el('div', 'ow-round-phase', this.mid, '');
     this.alert = el('div', 'ow-round-alert', this.mid, '');
     this._alertPulse = 0;
+
+    /** Last shape laid out: men per side, and how many of them are drawn. */
+    this._nUs = -1;
+    this._nThem = -1;
+    this._drawnUs = 0;
+    this._drawnThem = 0;
+    /** Viewport width in design units (CSS px / `--k`). @see setViewport */
+    this._vwUnits = 1920;
+  }
+
+  /**
+   * The HUD's own resize, forwarded so the strip knows how much room it has.
+   * `w` is CSS pixels and `k` the HUD scale, so `w / k` is the width expressed
+   * in the design units every number in this file is written in. Re-lays out
+   * rather than re-builds: the pip pool is untouched unless it has to grow.
+   */
+  setViewport(w, k) {
+    const u = Math.max(320, w / Math.max(0.01, k));
+    if (Math.abs(u - this._vwUnits) < 0.5) return;
+    this._vwUnits = u;
+    this._layout();
+  }
+
+  /** Pips plus the blank slot that separates each rank of ten. */
+  _slots(n) {
+    return n + Math.ceil(n / PIP_RANK) - 1;
+  }
+
+  /**
+   * Fit both strips to the roster and the window. Called only when one of those
+   * two changes, so it may allocate; `update()` may not.
+   */
+  _layout() {
+    const nUs = this._nUs;
+    const nThem = this._nThem;
+    if (nUs < 0 || nThem < 0) return;
+    const n = Math.max(nUs, nThem);
+    const budget = Math.max(80, Math.min(PIP_BUDGET, (this._vwUnits - PIP_MID) / 2));
+
+    /**
+     * UNCOMPRESSED WHILE THE BIGGER SIDE STILL FITS at the pitch this widget
+     * shipped with, which is what keeps the town identical: 20 pips at 8.1
+     * design px is 162, well inside the 300 budget, so `pitch` stays PIP_PITCH,
+     * no rank gutters appear, and the emitted `--pipw` / `--pipgap` are the
+     * literal values the stylesheet already had.
+     */
+    let pitch = PIP_PITCH;
+    let ranked = false;
+    let fit = n;
+    if (n * PIP_PITCH > budget) {
+      ranked = true;
+      pitch = budget / this._slots(n);
+      if (pitch < PIP_MIN_PITCH) {
+        // Thinner than this and the strip is a smear. Draw what fits and let
+        // `_more` say what did not.
+        pitch = PIP_MIN_PITCH;
+        while (fit > 1 && this._slots(fit) * pitch > budget) fit--;
+      }
+    }
+    const w = pitch * (PIP_W / PIP_PITCH);
+    setStyle(this.root, '--pipw', `calc(${w.toFixed(3)}px * var(--k))`);
+    setStyle(this.root, '--pipgap', `calc(${(pitch - w).toFixed(3)}px * var(--k))`);
+    const rank = ranked ? `calc(${pitch.toFixed(3)}px * var(--k))` : '';
+
+    this._drawnUs = Math.min(nUs, fit);
+    this._drawnThem = Math.min(nThem, fit);
+    this._grow(this.usWrap, this.usPips, this._drawnUs, 'margin-left', rank);
+    this._grow(this.themWrap, this.themPips, this._drawnThem, 'margin-right', rank);
+    this._more(this.usMore, nUs - this._drawnUs);
+    this._more(this.themMore, nThem - this._drawnThem);
+  }
+
+  /**
+   * Grow a pip pool to `n` and mark the ranks. `side` is which physical margin
+   * carries the rank gutter: `.them` is laid out `row-reverse`, so the same
+   * `margin-left` would put its gutters one pip off the boundary.
+   */
+  _grow(wrap, pips, n, side, rank) {
+    while (pips.length < n) pips.push(el('i', 'ow-pip', wrap));
+    for (let i = 0; i < pips.length; i++) {
+      setStyle(pips[i], 'display', i < n ? '' : 'none');
+      setStyle(pips[i], 'margin-left', '');
+      setStyle(pips[i], 'margin-right', '');
+      if (rank && i > 0 && i % PIP_RANK === 0) setStyle(pips[i], side, rank);
+    }
+  }
+
+  _more(node, hidden) {
+    setStyle(node, 'display', hidden > 0 ? '' : 'none');
+    if (hidden > 0) setText(node, `+${hidden}`);
   }
 
   update(dt, s) {
     if (!s) return;
-    this._pips(this.usPips, s.aliveUs, s.rosterUs ?? s.aliveUs);
-    this._pips(this.themPips, s.aliveThem, s.rosterThem ?? s.aliveThem);
+    /**
+     * THE ROSTER IS LIVE, so the shape is re-read every frame and re-laid-out
+     * only when it moves. `rosterUs` counts records, not `RULES.teamSize`, so
+     * this is also what catches the ten paratroopers and the men in the cellars.
+     */
+    const nUs = s.rosterUs ?? s.aliveUs;
+    const nThem = s.rosterThem ?? s.aliveThem;
+    if (nUs !== this._nUs || nThem !== this._nThem) {
+      this._nUs = nUs;
+      this._nThem = nThem;
+      this._layout();
+    }
+    this._pips(this.usPips, s.aliveUs, this._drawnUs);
+    this._pips(this.themPips, s.aliveThem, this._drawnThem);
+    /**
+     * The count carries `--friend` / `--enemy` through the `.us` / `.them`
+     * classes the pips already use, which are the player's point of view by
+     * construction — no team index is read here and none may be.
+     */
+    setText(this.usCount, `${s.aliveUs} / ${nUs}`);
+    setText(this.themCount, `${s.aliveThem} / ${nThem}`);
 
     /**
      * DOMINATION HAS NO ROUND AND NO SIDE. "ROUND 1 · ATTACK" was actively
@@ -80,12 +248,12 @@ export class RoundStrip {
     setStyle(this.alert, 'color', armed ? 'var(--red)' : 'var(--amber)');
   }
 
-  _pips(pips, alive, total) {
-    for (let i = 0; i < pips.length; i++) {
-      const used = i < total;
-      setStyle(pips[i], 'display', used ? '' : 'none');
-      if (used) setClass(pips[i], 'down', i >= alive);
-    }
+  /**
+   * `drawn` is what `_layout` decided the strip can hold, never the roster:
+   * display is settled there, so the per-frame pass only paints the dead.
+   */
+  _pips(pips, alive, drawn) {
+    for (let i = 0; i < drawn; i++) setClass(pips[i], 'down', i >= alive);
   }
 
   dispose() {
@@ -348,44 +516,118 @@ export class BombPanel {
 }
 
 /**
+ * ROWS TO A COLUMN — a DISPLAY density, and deliberately not a roster number.
+ *
+ * Twenty is the tallest column the scoreboard has ever drawn, on every window
+ * the town has ever been played in: at `--k` 0.62 (a 600px-high window, the
+ * floor of the clamp in `ui.resize`) twenty rows are about 260px under a 100px
+ * header, and at `--k` 1 they are 420 under 160. It fits because it has always
+ * fitted. A FORTY-row column would not, at any scale, which is the whole reason
+ * eighty men get columns rather than a longer list.
+ *
+ * So a side of forty is two columns of twenty side by side — the same column
+ * the town draws, twice — and the vertical extent of the panel does not change
+ * between the two maps at all. Sorted by kills, filling the left sub-column
+ * first, so the top twenty read down one column exactly as they do today.
+ */
+const ROWS_PER_COL = 20;
+/**
+ * AND TWO SUB-COLUMNS A SIDE IS WHERE IT STOPS, which is a cap, so it is
+ * STATED: past forty men a side the panel prints `+23 NOT SHOWN` under the
+ * column and says the hidden men are the ones with the fewest kills. Four name
+ * columns is already the point where a 660px panel has to become a 980px one;
+ * six would be a table nobody reads, and a silent forty-first row is exactly
+ * the defect this file was opened to remove.
+ *
+ * NOTHING EITHER MAP PRODUCES REACHES IT AT THE START — the town is 20 and the
+ * plain is 40 — but a match that runs long does: `reinforceCount` and the
+ * `hiddenSquad` waves push records onto one side for the whole match, and the
+ * plain can end at eighty on a side. That is the case this line is here for.
+ */
+const MAX_SUBCOLS = 2;
+/** Panel width in design px: one name column pair, plus each extra pair. */
+const SB_BASE_W = 660;
+const SB_COL_W = 320;
+
+/**
  * SCOREBOARD — held on Tab, and shown automatically between rounds.
  *
- * Two columns, your side first, sorted by kills. Nothing here is animated on a
- * CSS transition: the fade is integrated from dt like every other widget, so a
+ * Your side first, sorted by kills. Nothing here is animated on a CSS
+ * transition: the fade is integrated from dt like every other widget, so a
  * paused or captured frame looks the same every time.
+ *
+ * Rows are built ONCE PER SHAPE, not per frame and not to a fixed cap: the pool
+ * grows to the roster the frame the roster changes, into as many sub-columns as
+ * `ROWS_PER_COL` needs, and the header carries `24 / 61` so the totals are on
+ * screen whether or not every man has a row.
  */
 export class Scoreboard {
   constructor(parent) {
     this.root = el('div', 'ow-sb', parent);
     const panel = el('div', 'ow-sb-panel', this.root);
+    this.panel = panel;
     const head = el('div', 'ow-sb-head', panel);
     this.title = el('div', 'ow-sb-title', head, 'DEMOLITION');
     this.sub = el('div', 'ow-sb-sub', head, '');
 
     const cols = el('div', 'ow-sb-cols', panel);
-    this.cols = [el('div', 'ow-sb-col', cols), el('div', 'ow-sb-col', cols)];
     this.heads = [];
+    this.counts = [];
+    this.subWraps = [];
+    this.subCols = [[], []];
+    this.rows = [[], []];
+    this.more = [];
     for (let c = 0; c < 2; c++) {
+      // One side. The team header spans the side's sub-columns rather than
+      // repeating over each of them — "RED" twice would read as four teams.
+      const side = el('div', 'ow-sb-side', cols);
       // Team name on the left, K and D lined up over the columns they label —
       // two bare numbers with no header is the classic unreadable scoreboard.
-      const head = el('div', 'ow-sb-team', this.cols[c]);
+      const head = el('div', 'ow-sb-team', side);
       this.heads.push(el('span', 'n', head, c ? 'BLUE' : 'RED'));
+      /** Alive over total, the same fact the pip strip states in marks. */
+      this.counts.push(el('span', 'c', head, ''));
       el('span', 'k', head, 'K');
       el('span', 'd', head, 'D');
-    }
-    this.rows = [[], []];
-    for (let c = 0; c < 2; c++) {
-      for (let i = 0; i < MAX_ROWS / 2; i++) {
-        const row = el('div', 'ow-sb-row', this.cols[c]);
-        row._n = el('span', 'n', row, '');
-        row._k = el('span', 'k', row, '0');
-        row._d = el('span', 'd', row, '0');
-        this.rows[c].push(row);
-      }
+      this.subWraps.push(el('div', 'ow-sb-subs', side));
+      const more = el('div', 'ow-sb-more', side, '');
+      setStyle(more, 'display', 'none');
+      this.more.push(more);
     }
     this.shown = 0;
     this._sorted = [[], []];
+    /** Men per side at the last layout, and how many of them have a row. */
+    this._shape = '';
+    this._drawn = [0, 0];
     setStyle(this.root, 'display', 'none');
+  }
+
+  /**
+   * Give side `c` enough rows for `n` men, in columns of `ROWS_PER_COL`, and
+   * say so when it cannot. Returns how many men actually got a row. Allocates,
+   * so it is called only when the roster changes shape — never per frame.
+   */
+  _fitSide(c, n) {
+    const draw = Math.min(n, ROWS_PER_COL * MAX_SUBCOLS);
+    const rows = this.rows[c];
+    while (rows.length < draw) {
+      const i = rows.length;
+      const sc = (i / ROWS_PER_COL) | 0;
+      while (this.subCols[c].length <= sc)
+        this.subCols[c].push(el('div', 'ow-sb-col', this.subWraps[c]));
+      const row = el('div', 'ow-sb-row', this.subCols[c][sc]);
+      row._n = el('span', 'n', row, '');
+      row._k = el('span', 'k', row, '0');
+      row._d = el('span', 'd', row, '0');
+      rows.push(row);
+    }
+    // A sub-column emptied by a smaller roster must not keep its flex share.
+    for (let i = 0; i < this.subCols[c].length; i++)
+      setStyle(this.subCols[c][i], 'display', i * ROWS_PER_COL < draw ? '' : 'none');
+    const hidden = n - draw;
+    setStyle(this.more[c], 'display', hidden > 0 ? '' : 'none');
+    if (hidden > 0) setText(this.more[c], `+${hidden} NOT SHOWN — FEWEST KILLS OF ${n}`);
+    return draw;
   }
 
   /** @param {boolean} want  visible this frame */
@@ -420,18 +662,40 @@ export class Scoreboard {
           : `   ·   ${s.role === 'attack' ? 'YOU ATTACK' : 'YOU DEFEND'}`)
     );
 
+    // Both sides sorted first, because the panel's width is a function of the
+    // taller of the two and has to be settled before either is written.
+    for (let c = 0; c < 2; c++) {
+      const list = this._sorted[c];
+      list.length = 0;
+      for (const r of s.roster ?? []) if (r.team === order[c]) list.push(r);
+      list.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+    }
+    const shape = `${this._sorted[0].length}|${this._sorted[1].length}`;
+    if (shape !== this._shape) {
+      this._shape = shape;
+      this._drawn[0] = this._fitSide(0, this._sorted[0].length);
+      this._drawn[1] = this._fitSide(1, this._sorted[1].length);
+      const subs = Math.max(
+        1,
+        Math.ceil(this._drawn[0] / ROWS_PER_COL),
+        Math.ceil(this._drawn[1] / ROWS_PER_COL)
+      );
+      setStyle(this.panel, '--sbw', String(SB_BASE_W + (subs - 1) * SB_COL_W));
+    }
+
     for (let c = 0; c < 2; c++) {
       const team = order[c];
       setText(this.heads[c], names[team]);
       setStyle(this.heads[c], 'color', colors[team]);
       const list = this._sorted[c];
-      list.length = 0;
-      for (const r of s.roster ?? []) if (r.team === team) list.push(r);
-      list.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
+      let alive = 0;
+      for (const r of list) if (r.alive) alive++;
+      setText(this.counts[c], `${alive} / ${list.length}`);
       const rows = this.rows[c];
+      const draw = this._drawn[c];
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const rec = list[i];
+        const rec = i < draw ? list[i] : null;
         setStyle(row, 'display', rec ? '' : 'none');
         if (!rec) continue;
         setText(row._n, rec.name);
