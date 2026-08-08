@@ -22,7 +22,14 @@
  * Usage: node _tankmatch.mjs [url] [seed] [health] [speed]
  */
 import { chromium } from 'playwright';
-const BASE = 'http://127.0.0.1:4579/';
+/**
+ * `BASE` from the environment, exactly as its sibling `_dtankdiag.mjs` already
+ * takes it. The port was baked in as a literal, so this gate could only ever be
+ * run against whichever server happened to be on 4579 — and an agent told to
+ * hold one preview port could not run it at all, which is how a listed gate goes
+ * unmeasured. Unset, it is the same 4579 it always was.
+ */
+const BASE = process.env.BASE ?? 'http://127.0.0.1:4579/';
 const MAP = process.env.MAP ?? 'town';
 
 const URL = process.argv[2] ?? 'http://127.0.0.1:4383/';
