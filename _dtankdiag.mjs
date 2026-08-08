@@ -25,7 +25,7 @@
  *   seen/shot?    health lost, main-gun shots fired, kill credit
  */
 import { chromium } from 'playwright';
-const BASE = 'http://127.0.0.1:4579/';
+const BASE = process.env.BASE ?? 'http://127.0.0.1:4579/';
 const MAP = process.env.MAP ?? 'town';
 const URL = process.argv[2] ?? 'http://127.0.0.1:4272/';
 const SPEED = Number(process.argv[3] ?? 12);
