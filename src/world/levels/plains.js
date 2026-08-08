@@ -8,6 +8,7 @@ import { buildFort, FORT, FORT_R } from './plains-fort.js';
 import { buildTrenches, trenchKeepOut, inCorridor } from './plains-trench.js';
 import { publishWorks } from './plains-works.js';
 import { buildRim } from './plains-rim.js';
+import { buildCrags } from './plains-crag.js';
 import { buildCover } from './plains-cover.js';
 
 /**
@@ -1416,6 +1417,15 @@ export const PLAINS = {
      * stream: it draws nothing from `rng` and moves nothing above it.
      */
     buildCover(A, plainsY, plainsOpen, PADS, ctx);
+    /**
+     * …AND THE MOUNTAIN'S OWN ROCK, LAST OF ALL. 「山もリアルに」 — ribs, bedding
+     * slabs, summit teeth and the talus apron under them, all of it OUTSIDE the
+     * boundary at r 186 and none of it carrying collision. @see
+     * `plains-crag.js`, which explains why a height field cannot do this on its
+     * own and what each of the four passes is for. Own fixed-seed stream: it
+     * draws nothing from `rng` and moves nothing above it.
+     */
+    buildCrags(A, plainsY, this.ridge);
     this._works = works;
 
     return {
