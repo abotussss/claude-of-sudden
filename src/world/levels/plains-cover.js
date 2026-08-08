@@ -274,7 +274,37 @@ const PLAIN_R = 173;
  * live sprite count out of `fx.lit`, whose capacity is a share of
  * `q.particleBudget`. @see `smokeRate`.
  */
-const SMOKE_BANKS = 4;
+const SMOKE_BANKS = 6;
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 4 -> 6, AND WHAT THE PHOTOGRAPH SAYS THAT THE TUNE DID NOT
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「硝煙も少ない」, second time of asking, against a tune that had measured 252
+ * live sprites a bank and called it 「もくもく」. Both are true, and the missing
+ * measurement is RANGE. `_nfsmokewhen.mjs` stands a camera on the line back to
+ * the map centre and shoots the same bank at three distances in the dark build:
+ *
+ *   30 m   a pale plume, clearly a burning wreck, clearly smoke
+ *   100 m  a smudge — the bank does not read
+ *   200 m  nothing
+ *
+ * A 400 m map with four banks all of them within seventy metres of the boundary
+ * therefore has, from most places a man stands, no smoke in the frame at all —
+ * which is exactly what he is reporting, and no amount of density on four banks
+ * fixes it, because density is not the axis that failed.
+ *
+ * SO: MORE BANKS, AND THE COST IS STATED RATHER THAN HIDDEN. `rate x life` IS
+ * the live sprite count out of `fx.lit`, whose capacity measured 2 805 on the
+ * default preset, and `SMOKE_SHARE` is the fraction of that ring all the banks
+ * together may hold. Six banks at 0.48 is 1 346 live against 1 010 before — 48 %
+ * of the ring rather than 36 %, and 27.5 sprites/s a bank rather than 29.7, so
+ * each bank is 7 % thinner and there are 50 % more of them.
+ *
+ * WHAT IS NOT MEASURED, and it is the honest half of this: whether 48 % of the
+ * lit ring starves the blood, the impact puffs and the player's own can under a
+ * heavy firefight. The ring does not fail loudly when it is over-subscribed, it
+ * silently shortens everything else. @see `SMOKE_SHARE`.
+ */
 /** The disc a puff is born in. THIS is the number the eye reads. @see above. */
 const SMOKE_FOOT = 5.4;
 /**
@@ -344,7 +374,7 @@ const SMOKE_RISE = 0.5;
  * already taken. `fx.lit` is a ring and over-subscribing it does not fail
  * loudly — it silently shortens everything else.
  */
-const SMOKE_SHARE = 0.36;
+const SMOKE_SHARE = 0.48;
 
 /**
  * The emission rate, resolved against the tier the game actually booted at.
@@ -1114,6 +1144,12 @@ function berm(A, rng, gy, cx, cz, yaw) {
   const w = rng.range(3.6, 5.2);
   const c = Math.cos(yaw), s = Math.sin(yaw);
   const base = gy(cx, cz);
+  /**
+   * THE DRAWN SKIN, MEASURED, so the collision below can be made out of it
+   * rather than out of a second guess at the same bank. @see the note there.
+   * Per side: the crest height and the toe distance at each station.
+   */
+  const skin = [];
   /** Both faces, so it is a bank and not a cliff with a back you can see over. */
   for (const side of [1, -1]) {
     const g = driftBerm(rng, len, w, h, { nz: 5 });
@@ -1145,6 +1181,28 @@ function berm(A, rng, gy, cx, cz, yaw) {
       pa.setY(i, pa.getY(i) + gy(wx, wz) - base);
     }
     g.computeVertexNormals();
+    /**
+     * READ THE SKIN BACK. `driftBerm` lays `nz + 1` points across the section
+     * at each of `nx + 1` stations, j = 0 at the crest and j = nz at the toe,
+     * so the crest profile and the toe line are two columns of this attribute
+     * and neither of them is knowable from `h` and `w` alone — @see the
+     * collision note. Read in the LOCAL frame, which is the frame the collision
+     * strip is authored in and the one `yw` maps to the world.
+     */
+    {
+      const nz = 5, row = nz + 1;
+      const stations = pa.count / row;
+      const prof = [];
+      for (let i = 0; i < stations; i++) {
+        prof.push({
+          lx: pa.getX(i * row),
+          crest: pa.getY(i * row),
+          toeZ: pa.getZ(i * row + nz),
+          toeY: pa.getY(i * row + nz),
+        });
+      }
+      skin.push({ yw, prof });
+    }
     paintMasks(g, (x, y, z, mx, my, mz, out) => {
       const n = fbm3(x * 0.35 + cx, 2.3, z * 0.35 + cz, 3);
       out[0] = Math.min(1, 0.2 + n * 0.5);
@@ -1181,31 +1239,87 @@ function berm(A, rng, gy, cx, cz, yaw) {
    * bullets — it is the cover — and `clipBox`'s own contract is that bullets and
    * sightlines pass through it. The fix here is the shape, not the layer.
    */
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * AND IT IS MADE OUT OF THE SKIN NOW, BECAUSE THE TWO DID NOT AGREE
+   * ────────────────────────────────────────────────────────────────────────
+   * The cross-section here used to be derived from `h` and `RIDGE_DEG` alone:
+   * a smooth triangle whose apex tapered evenly from `h` at the middle to
+   * 0.55 h at the ends, half-width `h / tan 58°`. `driftBerm` does not draw
+   * that bank and never did. Measured off the geometry it actually emits:
+   *
+   *   the drawn crest is `h · wob · taper` with `wob = 0.45 + fbm · 1.1`, so it
+   *   WANDERS between 0.45 h and 1.55 h along the length — 0.8 m to 3.4 m on a
+   *   2.2 m berm — while the collision apex was a smooth 2.2 m everywhere;
+   *   the drawn toe is at `w · (0.6 + fbm · 0.85)` and the bank is drawn TWICE,
+   *   mirrored, so the visible mound is up to 15 m across the flats, against a
+   *   collision ridge 2.8 m wide.
+   *
+   * Both errors are shipped defects and they are opposite ones. Where the skin
+   * is low the collision stands over a metre PROUD OF VISIBLE GROUND — an
+   * invisible wall on open plain, which is what the single ray at a berm centre
+   * was actually reporting when it "found the plain, not a crest": the ray was
+   * on the flank, and the flank of this ridge is 1.3 m of nothing where the
+   * drawing has 4 m of earth. Where the skin is high you walk INTO the mound and
+   * shoot THROUGH it, up to 1.2 m before anything stops either of you. Both are
+   * "obstacles that do not work", and 「平原に障害物が少ない」 is what a map full
+   * of them looks like from the inside.
+   *
+   * So the strip is built from the two skins' own vertices — crest height and
+   * toe distance read back per station per side — and it is a TRAPEZOID, not a
+   * triangle: the top 82 % of each face stands at `RIDGE_DEG` (past the 46°
+   * limit, so no cell on it is ever walkable and no island is ever made) and the
+   * remaining skirt runs out to the drawn toe at ~15°, which is walkable, is
+   * CONNECTED to the plain by construction, and is where the visible earth is.
+   *
+   * THE APEX IS CAPPED AT THE OLD CEILING and that is a tank decision, not a
+   * taste one: `tank.js`'s `CLIMB_TOP` is 2.6 m and six hulls drive baked routes
+   * over these. Letting the collision follow a 3.4 m drawn crest would turn a
+   * climbable bank into a wall on legs that were baked over it, and the boot log
+   * would report the dropped spokes after the fact.
+   */
   {
-    const n = Math.max(3, Math.round(len / 2.2));
     const tan = Math.tan((RIDGE_DEG * Math.PI) / 180);
+    const CAP = TALL - 0.25;
+    /**
+     * The two skins are the same stations in opposite order — side -1 is drawn
+     * at `yaw + PI`, so its local (x, z) is this frame's (-x, -z). They are
+     * merged into ONE profile before anything is emitted, and the crest takes
+     * the HIGHER of the two: the faces are drawn from two different fbm seeds,
+     * so a strip built per side would leave a vertical crack up to a metre deep
+     * along the whole crest — a seam that a capsule can fall into and a bullet
+     * can pass through, which is the class of defect this is fixing.
+     */
+    const A0 = skin[0].prof, B0 = skin[1].prof;
+    const n = A0.length - 1;
     const pos = [];
     const idx = [];
     for (let i = 0; i <= n; i++) {
-      const u = i / n;
-      const taper = Math.min(1, Math.min(u, 1 - u) * 5);
-      const lx = (u - 0.5) * len;
-      const hh = h * (0.55 + 0.45 * taper);
-      const W = hh / tan;
-      // the ground under THIS station, in the same local frame the matrix uses
+      const lx = A0[i].lx;
+      const H = Math.max(0.25, Math.min(Math.max(A0[i].crest, B0[n - i].crest), CAP));
+      const Zp = Math.max(0.7, A0[i].toeZ);
+      const Zn = Math.max(0.7, B0[n - i].toeZ);
       const dy = gy(cx + c * lx, cz - s * lx) - base;
-      // apex, then the two toes, sunk so there is no lip where it meets the plain
-      pos.push(lx, dy + hh, 0, lx, dy - 0.3, -W, lx, dy - 0.3, W);
+      const yB = H * 0.18;
+      // the break: the top 82 % of the face stands at RIDGE_DEG, the rest is skirt
+      const zBp = Math.min(Zp * 0.75, (H - yB) / tan);
+      const zBn = Math.min(Zn * 0.75, (H - yB) / tan);
+      pos.push(lx, dy - 0.3, -Zn);   // 0 toe, -Z
+      pos.push(lx, dy + yB, -zBn);   // 1 break, -Z
+      pos.push(lx, dy + H, 0);       // 2 apex
+      pos.push(lx, dy + yB, zBp);    // 3 break, +Z
+      pos.push(lx, dy - 0.3, Zp);    // 4 toe, +Z
     }
     for (let i = 0; i < n; i++) {
-      const a = i * 3, b = (i + 1) * 3;
-      // near face, far face — wound so both point outward and neither is flat
-      idx.push(a, a + 1, b + 1, a + 1, b + 1, b);
-      idx.push(a, b, b + 2, a, b + 2, a + 2);
+      const a = i * 5, b = (i + 1) * 5;
+      for (let k = 0; k < 4; k++) {
+        idx.push(a + k, a + k + 1, b + k + 1, a + k, b + k + 1, b + k);
+      }
     }
     // and the two ends, which are vertical and therefore refused on their own
-    idx.push(0, 1, 2);
-    idx.push(n * 3, n * 3 + 2, n * 3 + 1);
+    for (const e of [0, n * 5]) {
+      idx.push(e, e + 1, e + 2, e, e + 2, e + 3, e, e + 3, e + 4);
+    }
     const cg = new THREE.BufferGeometry();
     cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     cg.setIndex(idx);
@@ -1558,6 +1672,170 @@ function dressPlain(A, rng, gy, isOpen, sites, R) {
   return { sward, tuss, grit, sheet };
 }
 
+// ───────────────────────────────────────────────────────── the objectives ──
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * COVER ON THE POINTS THEMSELVES — 「平原に障害物が少なく」, SECOND TIME OF ASKING
+ * ════════════════════════════════════════════════════════════════════════════
+ * The measurement the first pass made is a WALK: mean lane 115 → 62 m, exposed
+ * 38 % → 7 %, eleven of twelve walks at 0 %. All of that is true and none of it
+ * is what a player does. He stands on a point, holds it, and turns round.
+ *
+ * PHOTOGRAPHED, standing eye 1.62 m, eight bearings at each of the five zones
+ * and both bases (`shots/nf360-before/`): at zone E, at zone A and at both
+ * bases the ground is EMPTY for sixty metres on most bearings. Not thin —
+ * empty. And it is empty by construction rather than by accident, which is why
+ * adding a thirteenth crossing would not have touched it:
+ *
+ *     `stations.offPads` refuses any piece whose own half-extent crosses
+ *     `p.r0 + 4` of a zone or `p.r0 + 7` of a base. With `r0` 16 at every zone
+ *     that is 20 m plus the piece — 24.5 m for an emplacement, 29.5 m for a
+ *     berm — so THE NEAREST COVER TO ANY CAPTURE POINT IS 24.5 m AWAY, and the
+ *     one place on this map a man is required to stand still is the largest
+ *     clear circle on it.
+ *
+ * The rule that made that is right about the thing it was written for — the
+ * objective is not cover, and a spawn cluster with a burnt lorry in it is a
+ * spawn cluster you die in. What it should have said is that the objective is
+ * not FULL cover. So this pass fills the ring the other one is forbidden from,
+ * with the one kind on the list you can fight from rather than hide behind.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT IS ALLOWED IN THERE, AND WHERE, AND WHY IT DOES NOT CLOSE THE POINT
+ * ────────────────────────────────────────────────────────────────────────────
+ *   NOTHING inside r 11. `RULES.captureRadius` is 8, so the circle a man has to
+ *   stand in to take the point is untouched and no piece can be stood on to
+ *   contest it from outside the mechanic.
+ *   THE INNER RING SITS BETWEEN THE STANDING POINTS. `sites.standRing` resolves
+ *   eight standing points at r 14 on the cardinal and diagonal bearings and
+ *   every one of them is proved walkable at boot, so the ring is authored at
+ *   the EIGHT BEARINGS BETWEEN THEM, 22.5° off, and the nearest piece to a
+ *   standing point is 6.2 m of open ground away.
+ *   MOSTLY EMPLACEMENTS: 1.3-1.5 m, the one height in this file you fire over
+ *   standing and are completely behind crouched. A ring of berms would be a
+ *   fort, and a fort on a capture point is a point whose holder cannot be shot
+ *   at, which is worse than an empty one.
+ *   THE OUTER RING IS SIX PIECES AT 60°, so between any two of them there are
+ *   fifteen metres of open ground at r 23 — the point stays approachable from
+ *   every bearing and `navcheck` still solves every spawn to every site.
+ *
+ * ZONE D IS NOT IN THIS LIST. `src/match/sites.js` states in as many words that
+ * D is "the 21 m of open plain between the two [works], in the open, overlooked
+ * from a 43.7 m gallery on one side and a rampart on the other", and it is
+ * locked until the tower comes off it. Cover in that gap is a change to a
+ * documented decision in somebody else's file, not a change to this one.
+ *
+ * ITS OWN FIXED-SEED STREAM, so it can be called between two passes that share
+ * `buildCover`'s `rng` without moving one stone either of them places. Same rule
+ * `plains-tower.js` and `plains-fort.js` follow.
+ */
+const RING_ZONES = ['A', 'B', 'C', 'E'];
+/** Inner ring: r, and what stands there, per bearing (22.5° + k·45°). */
+const RING_IN = ['emplace', 'emplace', 'wreck', 'emplace', 'emplace', 'emplace', 'wreck', 'emplace'];
+/** Outer ring: six at 60°, offset 15°, where the full-cover pieces are. */
+const RING_OUT = ['berm', 'emplace', 'ruin', 'berm', 'emplace', 'wreck'];
+/** …and a thinner apron outside each base, where the first forty metres are. */
+const APRON = ['emplace', 'berm', 'emplace', 'emplace', 'berm', 'emplace'];
+
+function zoneWorks(A, groundY, isOpen, pads) {
+  const rng = new Rng(0x4ca7f7);
+  const out = [];
+  /**
+   * Would this piece stand here? The same fit test the crossing solver uses,
+   * and for the same reason: a piece whose CENTRE is open can still have half
+   * its length in a trench. `KIND_MASS` is the mass half-extent, not the
+   * separation radius.
+   */
+  const willFit = (kind, x, z, yaw) => {
+    const m = KIND_MASS[kind];
+    for (let i = -2; i <= 2; i++) {
+      const u = (i / 2) * m;
+      if (!isOpen(x + Math.cos(yaw) * u, z - Math.sin(yaw) * u, 1.2)) return false;
+    }
+    for (const s of out) {
+      if ((x - s.x) ** 2 + (z - s.z) ** 2 < (s.r + m) ** 2) return false;
+    }
+    return true;
+  };
+  const lay = (kind, x, z, yaw) => {
+    const m = KIND_MASS[kind];
+    let r;
+    if (kind === 'berm') r = berm(A, rng, groundY, x, z, yaw).r;
+    else if (kind === 'ruin') r = ruin(A, rng, groundY, x, z, yaw).r ?? KIND_MASS.ruin;
+    else if (kind === 'wreck') r = wreck(A, rng, groundY, x, z, yaw, rng.int(0, 3)).r ?? KIND_MASS.wreck;
+    else r = emplacement(A, rng, groundY, x, z, yaw).r;
+    out.push({ x, z, r: Math.max(r, 2.5), kind, ring: true });
+  };
+  /**
+   * A piece laid on a bearing lies ACROSS it — its long axis (local +X, which a
+   * yaw of `y` maps to `(cos y, -sin y)`) is set tangential, so it is a wall
+   * between the point and whoever is coming from that bearing rather than a
+   * handrail pointing at him. Same convention correction the crossing solver
+   * records having had to make.
+   */
+  const across = (a) => Math.atan2(-Math.cos(a), -Math.sin(a));
+
+  /**
+   * THE SLOT IS A SEARCH, NOT A COORDINATE. The first cut of this authored one
+   * point per bearing and stood up 23 of 68: three of the four zones sit 157 m
+   * out on a plain `plainsOpen` refuses past 173, so every outward slot on
+   * their far side was over the boundary, and the two flank spine trenches run
+   * within twenty metres of A, C, B and E. So each slot slides in and out along
+   * its own bearing, then a few degrees round, exactly as the crossing solver
+   * slides along a walk before it slides off it — and falls back to an
+   * emplacement, which needs 2.5 m of mass rather than a berm's 7.5, before it
+   * gives the slot up.
+   */
+  const slot = (kind, cx0, cz0, a, d0) => {
+    for (const k of kind === 'emplace' ? [kind] : [kind, 'emplace']) {
+      for (const dd of [0, -2.6, 2.6, -5.2, 5.2, -7.8]) {
+        for (const da of [0, 0.22, -0.22, 0.44, -0.44]) {
+          const a2 = a + da;
+          const d = d0 + dd;
+          if (d < 11.5) continue;
+          const x = cx0 + Math.cos(a2) * d;
+          const z = cz0 + Math.sin(a2) * d;
+          if (!willFit(k, x, z, across(a2))) continue;
+          lay(k, x, z, across(a2));
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  for (const p of pads) {
+    const zone = RING_ZONES.includes(p.id);
+    const base = p.id.startsWith('BASE');
+    if (!zone && !base) continue;
+    if (zone) {
+      for (let k = 0; k < 8; k++) {
+        const a = (k + 0.5) * Math.PI / 4 + rng.range(-0.06, 0.06);
+        const d = 13.2 + (k % 3) * 1.4 + rng.range(-0.6, 0.9);
+        slot(RING_IN[k], p.x, p.z, a, d);
+      }
+      for (let k = 0; k < 6; k++) {
+        const a = k * Math.PI / 3 + Math.PI / 12 + rng.range(-0.08, 0.08);
+        const d = 21.5 + (k % 2) * 1.8 + rng.range(-0.8, 1.2);
+        slot(RING_OUT[k], p.x, p.z, a, d);
+      }
+    } else {
+      /**
+       * The base apron stands OUTSIDE `r0 + 7`, which is where `offPads` starts
+       * refusing — 27 m — so nothing here is in a spawn cluster. What it covers
+       * is the first thirty metres of every push, which every man on the map
+       * walks twice a life.
+       */
+      for (let k = 0; k < 6; k++) {
+        const a = k * Math.PI / 3 + Math.PI / 6 + rng.range(-0.1, 0.1);
+        const d = 29 + (k % 2) * 2.4 + rng.range(-1, 1.5);
+        slot(APRON[k], p.x, p.z, a, d);
+      }
+    }
+  }
+  return out;
+}
+
 // ──────────────────────────────────────────────────────────────────── build ──
 /**
  * THE PASS. Called last in `PLAINS.build`, off its own stream. @see note 5.
@@ -1637,6 +1915,10 @@ export function buildCover(A, groundY, isOpen, pads, ctx) {
     }
   }
 
+  /* ---- and the objectives, which had NONE ------------------------------- */
+  const ring = zoneWorks(A, groundY, isOpen, pads);
+  for (const s of ring) sites.push(s);
+
   /* ---- and the ground it is all standing on ---------------------------- */
   const ground = dressPlain(A, rng, groundY, isOpen, sites, PLAIN_R);
 
@@ -1679,7 +1961,8 @@ export function buildCover(A, groundY, isOpen, pads, ctx) {
   }
 
   console.info(
-    `[world] nachtfeld cover: ${sites.length} stations on ${CROSSINGS.length} crossings — ` +
+    `[world] nachtfeld cover: ${sites.length - ring.length} stations on ${CROSSINGS.length} crossings ` +
+    `+ ${ring.length} on the objectives — ` +
     `${counts.ruin} ruins, ${counts.wreck} wreck sites, ${counts.berm} berms, ${counts.emplace} emplacements · ` +
     `${chosen.length} smoke banks at ${rate.toFixed(1)}/s (${Math.round(rate * SMOKE_LIFE)} live sprites each)` +
     `${root ? '' : ' — NO WORLD ROOT, SMOKE SKIPPED'} · ground ${ground.sward} sward, ` +
