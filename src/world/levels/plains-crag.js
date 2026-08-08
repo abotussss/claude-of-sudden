@@ -181,7 +181,7 @@ export function buildCrags(A, groundY, ridge) {
    * `y - h * 0.34` puts a third of every mass inside the hill so it grows out of
    * the face instead of resting on it.
    */
-  for (let i = 0; i < 900; i++) {
+  for (let i = 0; i < 3200; i++) {
     const a = rng.float() * Math.PI * 2;
     const rr = R_START + Math.sqrt(rng.float()) * 46;
     const x = Math.cos(a) * rr;
@@ -214,7 +214,7 @@ export function buildCrags(A, groundY, ridge) {
    */
   const DIP = 0.42;
   const DIP_DIR = 1.15;
-  for (let i = 0; i < 620; i++) {
+  for (let i = 0; i < 2400; i++) {
     const a = rng.float() * Math.PI * 2;
     const rr = R_START + 3 + Math.sqrt(rng.float()) * 42;
     const x = Math.cos(a) * rr;

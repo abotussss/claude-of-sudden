@@ -9,6 +9,7 @@ import { buildTrenches, trenchKeepOut, inCorridor } from './plains-trench.js';
 import { publishWorks } from './plains-works.js';
 import { buildRim } from './plains-rim.js';
 import { buildCrags } from './plains-crag.js';
+import { buildGroundDetail } from './plains-ground.js';
 import { buildCover } from './plains-cover.js';
 
 /**
@@ -695,14 +696,39 @@ function buildTerrain(A) {
    * past the ragged edge this leaves. @see `inCorridor`.
    */
   cutCorridors(field);
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE MASKS — the cheapest realism on this map, and they were one octave deep
+   * ──────────────────────────────────────────────────────────────────────────
+   * `r` is dryness/wear, `g` is grime, `b` is extra AO (@see `util.js`), and the
+   * material generators turn all three into albedo AND roughness. So this is
+   * where the plain's colour variation lives, it costs no triangles, and it was
+   * a single 18 m noise plus a slope term: one scale, so the ground had ONE
+   * grain size and photographed as a tiled material with a wash over it.
+   *
+   * Ground does not have one grain size. It has a soil map (hundreds of metres),
+   * patches within that (tens), and mottle within those (metres), and the eye
+   * reads the RATIO between them as "this is a real place". Four scales now, and
+   * the finest is 6 m — six samples across a 1.59 m quad, which is the limit
+   * this mesh can carry and the reason `FIELD_SEG` had to move first.
+   *
+   * `low` is the map's own drainage, and it is the one term here that is not
+   * noise: grass, silt and grime gather in the hollows and the crowns of the
+   * swells scour to dry stone. `plains-cover.dressPlain` keys its vegetation to
+   * the same fact with the same sign, so the soil under the grass and the grass
+   * on top of it agree about where the good ground is.
+   */
+  const cl = (v) => Math.min(1, Math.max(0, v));
   paintMasks(field, (x, y, z, nx, ny, nz, out) => {
-    // ny is the slope: 1 flat, 0 vertical. Steep ground is scoured to stone,
-    // flat ground holds soil, and a broad noise keeps either from being uniform.
-    const n = fbm3(x * 0.055, 2.3, z * 0.055, 3);
-    const steep = 1 - Math.min(1, Math.max(0, (ny - 0.62) / 0.3));
-    out[0] = 0.18 + steep * 0.6;
-    out[1] = 0.22 + n * 0.46 - steep * 0.18;
-    out[2] = 0.18 + n * 0.22;
+    // ny is the slope: 1 flat, 0 vertical. Steep ground is scoured to stone.
+    const steep = cl((0.92 - ny) / 0.3);
+    const broad = fbm3(x * 0.0072 + 17.3, 3.9, z * 0.0072 - 5.1, 4); // ~140 m
+    const mid = fbm3(x * 0.055, 2.3, z * 0.055, 3); //  ~18 m
+    const fine = fbm3(x * 0.16, 6.7, z * 0.16, 2); //   ~6 m
+    const low = cl(0.5 - y * 0.11); // 1 in the hollows, 0 on the crowns
+    out[0] = cl(0.06 + steep * 0.58 + (1 - low) * 0.20 + broad * 0.34 + fine * 0.12);
+    out[1] = cl(0.10 + mid * 0.40 + low * 0.34 - steep * 0.20 + fine * 0.10);
+    out[2] = cl(0.10 + broad * 0.20 + fine * 0.20 + steep * 0.22);
   });
   /**
    * ──────────────────────────────────────────────────────────────────────────
@@ -1426,6 +1452,15 @@ export const PLAINS = {
      * draws nothing from `rng` and moves nothing above it.
      */
     buildCrags(A, plainsY, this.ridge);
+    /**
+     * …AND THE GROUND ITSELF. 「もっと平原をリアルに」 — sheets of different soil,
+     * wind blowouts, bedrock pans, turf tussocks, gravel spreads and grit, none
+     * of it in the height field (there are five millimetres of headroom left in
+     * that, measured) and none of it carrying collision. @see
+     * `plains-ground.js`. Own fixed-seed stream, and LAST, so nothing above it
+     * moves.
+     */
+    buildGroundDetail(A, plainsY, plainsOpen, PADS);
     this._works = works;
 
     return {

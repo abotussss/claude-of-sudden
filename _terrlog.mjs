@@ -1,0 +1,11 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch({ headless: true, args: ['--use-angle=metal','--ignore-gpu-blocklist','--mute-audio'] });
+const p = await b.newPage({ viewport: { width: 640, height: 400 } });
+const logs = []; p.on('console', (m) => { const t = m.text(); if (/\[world\]|\[ai\] nav/.test(t)) logs.push(t); });
+p.on('pageerror', (e) => console.log('PAGEERROR', String(e.message).slice(0,300)));
+await p.goto('http://127.0.0.1:4611/?capture=1&map=plains', { waitUntil: 'domcontentloaded' });
+await p.waitForFunction('window.__READY__===true', null, { timeout: 300000 });
+console.log(logs.join('\n'));
+const st = await p.evaluate(() => { const w = window.__ENGINE__.ctx.peek('world'); return { stats: w.stats, info: window.__RENDER_INFO__ }; });
+console.log(JSON.stringify(st));
+await b.close();
