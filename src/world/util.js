@@ -873,6 +873,76 @@ export function domeGeometry(rng, radius, height, opts = {}) {
 }
 
 /**
+ * ────────────────────────────────────────────────────────────────────────────
+ * DRAPE A GEOMETRY OVER THE GROUND IT IS ABOUT TO BE PLACED ON
+ * ────────────────────────────────────────────────────────────────────────────
+ * `domeGeometry` and `patchGeometry` both close to y = 0 at their rim, and both
+ * are placed by ONE rigid transform at the floor height under their CENTRE. On a
+ * flat floor that is exact. On a swell it is not: the piece stays a plane, the
+ * ground does not, and the rim leaves it. NACHTFELD's soil sheets run to 17 m of
+ * radius over a plain whose gradient reaches 0.37 — measured, 1 936 of them
+ * stood over 0.5 m proud, 269 over 2 m and the worst 6.01 m, which is a shelf
+ * with a shadow under it rather than a change of soil.
+ *
+ * The fix is one ground sample PER VERTEX instead of one for the piece: lift
+ * every vertex by how much the ground moves between its own (x, z) and the
+ * centre's, so a rim vertex at local y = 0 lands exactly on the floor and the
+ * piece's own relief survives on top of it. This is the same bug, and the same
+ * cure, as the berm that used one sample for a 19 m run.
+ *
+ * IT IS THE CALLER'S PLACEMENT THAT IS BEING UNDONE, so this has to know it:
+ * `LL(IDENT, cx, y, cz, yaw)` composes a quaternion from `Euler(0, yaw, 0)`,
+ * which maps local (x, z) to world (x cos + z sin, -x sin + z cos). Passing a
+ * `yaw` that does not match the placement drapes the piece over the wrong strip
+ * of ground — the error is small on a gentle swell and total on a face.
+ *
+ * NO `rng` DRAW. A pass that inserts one shifts every prop after it (@see the
+ * note in `plains.js` on the level's single stream), and this one deliberately
+ * takes none: it is a deformation of geometry that already exists.
+ *
+ * Normals are recomputed, which is the point of doing it at all — a draped
+ * sheet takes the ground's light as well as its shape. Uniform scale only; the
+ * callers on this map place these at scale 1.
+ *
+ * NO CLAMP ON THE LIFT, and that was a decision rather than an omission.
+ * Sampled over NACHTFELD, the ground under a full 17 m sheet moves 0-4 m almost
+ * everywhere and up to 17 m at the mountain foot (r 172, where the face starts
+ * inside the sheet's own reach). Capping the lift at, say, 8 m would leave that
+ * one 9 m proud — the exact defect being fixed — so the cap is strictly worse
+ * than the drape wherever it would bind. What a drape on a face costs instead is
+ * TESSELLATION: three rings across 17 m is 5.7 m between them, so a sheet lying
+ * up the mountain foot is faceted. That is a handful of pieces, outside the
+ * r 176 the player is stopped at, behind the rim rock, and it is a coarse
+ * surface rather than a floating shelf.
+ *
+ * @param {THREE.BufferGeometry} geo  modified in place, and returned
+ * @param {(x:number,z:number)=>number} groundY  analytic floor, WORLD/level space
+ * @param {number} cx  centre the piece will be placed at
+ * @param {number} cz
+ * @param {number} yaw the Y rotation it will be placed with
+ */
+export function conformToGround(geo, groundY, cx, cz, yaw = 0) {
+  const pa = geo.getAttribute('position');
+  if (!pa) return geo;
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  const y0 = groundY(cx, cz);
+  if (!isFinite(y0)) return geo;
+  for (let i = 0; i < pa.count; i++) {
+    const lx = pa.getX(i);
+    const lz = pa.getZ(i);
+    const wy = groundY(cx + lx * c + lz * s, cz - lx * s + lz * c);
+    if (!isFinite(wy)) continue;
+    pa.setY(i, pa.getY(i) + (wy - y0));
+  }
+  pa.needsUpdate = true;
+  geo.computeVertexNormals();
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+/**
  * A drift berm: a ridge of blown sand or swept rubble piled against a wall.
  *
  * Runs along local +X for `len`, `w` deep in Z with the TALL edge at z=0 (put

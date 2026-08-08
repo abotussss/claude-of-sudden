@@ -1,5 +1,5 @@
 import { IDENT, LL } from '../kit.js';
-import { fbm3, rockGeometry, domeGeometry, disposeAll } from '../util.js';
+import { fbm3, rockGeometry, domeGeometry, conformToGround, disposeAll } from '../util.js';
 import { Rng } from '../../core/rng.js';
 
 /**
@@ -165,7 +165,24 @@ export function buildGroundDetail(A, groundY, isOpen, pads) {
       rings: 3, lobes: 12, wobble: 0.5, bump: 0.55, power: 2.1, lean: 0.5,
     });
     geos.push(g);
-    A.add(key, g, LL(IDENT, x, groundY(x, z) + 0.015, z, rng.float() * 6.283, 1, 1, 1), {
+    /**
+     * …DRAPED, NOT LAID FLAT. `domeGeometry` closes to y = 0 at its rim and the
+     * `LL` below is ONE rigid transform at the ground under the CENTRE, so up to
+     * this line a 34 m sheet on a swell was a 34 m plane with its middle on the
+     * ground and its rim in the air. Measured before this call: 1 936 of them
+     * over 0.5 m proud, 269 over 2 m, worst 6.01 m. While these were wound
+     * inside out that was invisible; the winding is fixed and they draw, so a
+     * proud rim is a shelf with a shadow under it in the middle of the plain.
+     *
+     * THE YAW HAS TO BE DRAWN HERE, between `domeGeometry` and the masks, and
+     * not hoisted above the geometry: this file's `rng` is one stream in
+     * sequence and moving a draw moves every sheet, scar, hummock and pan after
+     * it. Same count, same order, same map — the vertices move and nothing else
+     * does. @see `conformToGround`.
+     */
+    const yaw = rng.float() * 6.283;
+    conformToGround(g, groundY, x, z, yaw);
+    A.add(key, g, LL(IDENT, x, groundY(x, z) + 0.015, z, yaw, 1, 1, 1), {
       masks: [rng.range(0.1, 0.5), rng.range(0.25, 0.85), rng.range(0.1, 0.4)],
     });
     sheets++;
@@ -189,8 +206,17 @@ export function buildGroundDetail(A, groundY, isOpen, pads) {
       dish: rng.range(0.12, 0.34), lean: 0.9,
     });
     geos.push(g);
-    A.add(rng.float() < 0.6 ? 'steppe_dust' : 'steppe_bare',
-      g, LL(IDENT, x, groundY(x, z) + 0.01, z, rng.float() * 6.283, 1, 1, 1), {
+    /**
+     * Draped for the same reason the sheets are, and it matters MORE here even
+     * though a scar is a third of the size: the whole point of a blowout is that
+     * it reads as a HOLE, and a dish whose rim is 40 cm off the ground on the
+     * downhill side is a dish you can see under. Draws are kept in their
+     * original order — the key's float, then the yaw, then the three masks.
+     */
+    const key = rng.float() < 0.6 ? 'steppe_dust' : 'steppe_bare';
+    const yaw = rng.float() * 6.283;
+    conformToGround(g, groundY, x, z, yaw);
+    A.add(key, g, LL(IDENT, x, groundY(x, z) + 0.01, z, yaw, 1, 1, 1), {
       masks: [rng.range(0.2, 0.6), rng.range(0.3, 0.9), rng.range(0.2, 0.5)],
     });
     scars++;
