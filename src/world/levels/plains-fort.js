@@ -136,8 +136,19 @@ const STORES = [
   { id: 'NF-FORT-MORTAR-frag', kind: 'grenade', x: -14.0, z: 45.4, h: 0.02, yaw: Math.PI },
   { id: 'NF-FORT-AID-med', kind: 'medic', x: -9.0, z: 66.0, h: 0.02, yaw: 2.67 },
   { id: 'NF-FORT-SHED-rack', kind: 'weapon', x: -15.7, z: 61.0, h: 0.04, yaw: 1.92 },
-  { id: 'NF-FORT-GATE-N', kind: 'vantage', x: 0, z: 22.0, h: WALK_Y + 0.02, yaw: Math.PI },
-  { id: 'NF-FORT-GATE-S', kind: 'vantage', x: 0, z: 74.0, h: WALK_Y + 0.02, yaw: 0 },
+  /**
+   * ON THE CURTAIN WALK BESIDE EACH GATEHOUSE, NOT OVER THE PASSAGE — and the
+   * 11.5 m offset is a nav fact rather than a composition. Each gate publishes
+   * an `interiorVolume` (@see `gates`) whose box is x ±3.2 by z ±4.6 about the
+   * passage, and a volume REPLACES the floor of every cell inside it: over the
+   * gate the grid holds the ROAD at 3.21 m, not the bridge at 7.60. Measured —
+   * the first pair stood at (0, 22) and (0, 74) and `Caches.prove` dropped both
+   * with "walkable but no route", because the cell it snapped to was the road
+   * underneath. 11.5 m also clears the 5.6 m gatehouse block, which reaches
+   * x 8.5. Both posts still look straight down their own approach road.
+   */
+  { id: 'NF-FORT-GATE-N', kind: 'vantage', x: 11.5, z: 21.5, h: WALK_Y + 0.02, yaw: Math.PI },
+  { id: 'NF-FORT-GATE-S', kind: 'vantage', x: -11.5, z: 74.5, h: WALK_Y + 0.02, yaw: 0 },
 ];
 
 /**
