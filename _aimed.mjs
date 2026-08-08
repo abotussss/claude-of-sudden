@@ -54,6 +54,15 @@ const URL = args.url ?? 'http://127.0.0.1:4574/';
 const SEEDS = String(args.seeds ?? args.seed ?? '7').split(',');
 const WARM = +(args.warm ?? 120);
 const WINDOW = +(args.window ?? 150);
+/**
+ * WHICH LEVEL — `_engage.mjs`'s flag, copied for the same reason it exists
+ * there. This file was written when there was one map and it pinned itself to
+ * `DEFAULTS.map` by omission, so "run it on both maps" silently measured the
+ * same one twice. Absent, it still resolves to `DEFAULTS.map`, so a command
+ * line written before this flag existed measures exactly what it used to.
+ */
+const MAP = args.map ?? null;
+const Q = MAP ? `&map=${MAP}` : '';
 
 const browser = await chromium.launch({
   headless: true,
@@ -65,7 +74,7 @@ for (const seed of SEEDS) {
   const page = await browser.newPage({ viewport: { width: 900, height: 520 } });
   const errs = [];
   page.on('pageerror', (e) => errs.push(String(e.message)));
-  await page.goto(`${URL}?capture=1&seed=${seed}`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${URL}?capture=1&seed=${seed}${Q}`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
 
   const out = await page.evaluate(async ({ WARM, WINDOW }) => {
@@ -87,6 +96,10 @@ for (const seed of SEEDS) {
     await frame(); await frame(); await frame();
 
     const S = {
+      /* WHICH MAP ACTUALLY RAN — read from inside the page, not from the flag
+         that asked for it. A query string that does not take is otherwise a
+         silent duplicate run. */
+      level: e.ctx.peek('world')?.level?.id ?? '?',
       /* rounds, split by what he was pointing at */
       rounds: 0, aimed: 0, blind: 0, stale: 0, atArmour: 0, atDrone: 0,
       /* the same, for the ELITE ten only. @see `Agent.elite`. */
@@ -230,7 +243,7 @@ for (const seed of SEEDS) {
 
   const pc = (a, b) => (b ? ((a / b) * 100).toFixed(1) + ' %' : '-');
   const perMin = (a) => (out.manSecs ? (a / (out.manSecs / 60)).toFixed(1) : '-');
-  console.log(`\n═══ seed ${seed} — ${out.secs.toFixed(0)} s of live round, ` +
+  console.log(`\n═══ ${out.level} · seed ${seed} — ${out.secs.toFixed(0)} s of live round, ` +
     `${(out.manSecs / 60).toFixed(1)} man-minutes ═══`);
   console.log(`ROUNDS      ${out.rounds}   ${perMin(out.rounds)}/man-min`);
   console.log(`  AIMED     ${out.aimed}  (${pc(out.aimed, out.rounds)} of all)   ` +
