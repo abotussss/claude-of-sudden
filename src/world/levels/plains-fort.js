@@ -451,8 +451,35 @@ function depot(A, rng, y) {
     { masks: [0.8, 0.5, 0.15] });
   A.box('metal', DEPOT.x + DEPOT.hw - 1.6, y(0.19), DEPOT.z + DEPOT.hd - 1.0, 2.5, 0.38, 1.0);
 
-  // the fuel store, held well away from the ammunition
-  fuelBund(A, rng, BUND.x, y(0), BUND.z, BUND.yaw, BUND.hw, BUND.hd);
+  /**
+   * The fuel store, held well away from the ammunition.
+   *
+   * `(cx, cz, gy)` — NOT `(x, gy, z)`. This line read `BUND.x, y(0), BUND.z`
+   * and built the bund at cz = 3.243 and gy = 43.5, i.e. **a concrete slab,
+   * its kerb, nine oil drums and a sign floating 40 m in the air** with nothing
+   * between y 4 and y 40. It is what the user was seeing:
+   *
+   *   「グラフィックとして塹壕に入ると天井みたいな黒い壁が出てくる
+   *     そう言うのが至る所にある」
+   *
+   * A horizontal concrete underside 40 m up at night, lit only by a burning
+   * ridge at ground level, reads as a black lid — and from a cut floor you are
+   * looking up at it from anywhere on the map.
+   *
+   * It was not only a picture. `physics.groundHeight(17.5, 3.25)` returned
+   * **44.54** against a real plain at 3.20, because the kerb's `A.box` and the
+   * drums' proxies are solid; `NavGrid` drops one ray per cell and keeps the
+   * first hit. And `nearWorks()` still reserved the bund's INTENDED footprint
+   * at (17.5, 43.5), so the courtyard had an empty reserved patch while nothing
+   * kept clear of where it actually landed.
+   *
+   * The trap is local: the three calls below use two different conventions —
+   * `fuelBund`/`mortarPit` take `(cx, cz, gy)`, `antennaMast`/`searchlight`/
+   * `boomBarrier`/`stencilBoard` take `(x, gy, z)`.
+   *
+   * Changing the argument order moves no `rng` draw, so nothing else shifts.
+   */
+  fuelBund(A, rng, BUND.x, BUND.z, y(0), BUND.yaw, BUND.hw, BUND.hd);
   // the gun pit and its frag stack
   mortarPit(A, rng, PIT.x, PIT.z, y(0.02), PIT.yaw);
   // the command post's mast, and the cable run from it to everything else
