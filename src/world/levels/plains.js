@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BOX, BOX_SOFT, IDENT, LL } from '../kit.js';
-import { fbm3, ridged3, warpFbm3, patchGeometry, paintMasks, rockGeometry, disposeAll } from '../util.js';
+import { fbm3, ridged3, warpFbm3, paintMasks, rockGeometry, disposeAll } from '../util.js';
 import { registerProps } from '../props.js';
 import { Rng } from '../../core/rng.js';
 import { buildTower, TOWER, TOWER_R } from './plains-tower.js';
@@ -244,10 +244,10 @@ const PADS = [
    * …AND THE GROUND THE WORKS STAND ON. APPENDED, and the position in this
    * array is load-bearing twice over.
    * ────────────────────────────────────────────────────────────────────────
-   * `dressGround` and `markPads` both walk `PADS` in order off their own
-   * fixed-seed streams, so a pad inserted in the MIDDLE would re-roll every
-   * patch and every stone on every pad after it. Appended, the five zones and
-   * the two bases draw exactly what they always drew.
+   * `markPads` walks `PADS` in order off its own fixed-seed stream, so a pad
+   * inserted in the MIDDLE would re-roll every stone on every pad after it.
+   * Appended, the five zones and the two bases draw exactly what they always
+   * drew. (`dressGround` did the same and is deleted — @see `build`.)
    *
    * `y` IS FORCED TO ZONE D'S rather than taken from the swell under each
    * centre, which is what the loop below would otherwise do. Two overlapping
@@ -938,72 +938,6 @@ function cutCorridors(geo) {
 }
 
 /**
- * SCREE, DUST AND WORN GROUND — the patch pass.
- *
- * The quality bar forbids a flat untextured surface and a 350 m disc of one
- * material is the largest one this project has ever drawn. Three passes, each
- * on its own fixed-seed stream so none of them can move the props placed after:
- * blown dust in the hollows, worn ground on the crowns of the swells, and scree
- * spilling off the mountain foot.
- */
-function dressGround(A) {
-  const r = new Rng(0x9e10a5);
-  const R = RIDGE_R0 - 4;
-
-  // dust and silt, gathered where water would run
-  for (let i = 0; i < 520; i++) {
-    const a = r.float() * Math.PI * 2;
-    const d = Math.sqrt(r.float()) * R;
-    const x = Math.cos(a) * d;
-    const z = Math.sin(a) * d;
-    if (inWorks(x, z)) continue;
-    const g = patchGeometry(r, r.range(0.9, 3.4), { lobes: 11, wobble: 0.6 });
-    A.addOnce(
-      r.float() < 0.55 ? 'steppe_dust' : 'steppe_bare',
-      g,
-      LL(IDENT, x, plainsY(x, z) + 0.02, z, r.float() * 6.28, 1, 1, r.range(0.6, 1.5)),
-      { masks: [0.15, r.range(0.3, 0.8), r.range(0.2, 0.5)] }
-    );
-  }
-
-  /**
-   * Scree off the mountain foot, all the way round.
-   *
-   * THE OUTER REACH IS 185 AND NOT 202, and the draw count is untouched so
-   * nothing below this loop moves. `patchGeometry` is a horizontal fan — it has
-   * no way to lie along a slope — and 186 is where `ridgeRelief` starts pitching
-   * the face over. A flat disc on a 50° face is a disc standing edge-on out of
-   * the mountain. The face above 186 is the crag pass's, and it puts real talus
-   * there instead. @see `RIDGE_RB` and `plains-crag.js`.
-   */
-  for (let i = 0; i < 700; i++) {
-    const a = r.float() * Math.PI * 2;
-    const d = RIDGE_R0 + r.range(-16, 9);
-    const x = Math.cos(a) * d;
-    const z = Math.sin(a) * d;
-    const g = patchGeometry(r, r.range(0.7, 2.6), { lobes: 10, wobble: 0.55 });
-    A.addOnce('scree', g, LL(IDENT, x, plainsY(x, z) + 0.02, z, r.float() * 6.28, 1, 1, r.range(0.5, 1.2)), {
-      masks: [0.4, r.range(0.3, 0.7), 0.2],
-    });
-  }
-
-  // the pads read as ground that has been used: bare, driven-over centres
-  for (const p of PADS) {
-    for (let i = 0; i < 70; i++) {
-      const a = r.float() * Math.PI * 2;
-      const d = Math.sqrt(r.float()) * p.r0 * 1.15;
-      const x = p.x + Math.cos(a) * d;
-      const z = p.z + Math.sin(a) * d;
-      if (inWorks(x, z)) continue;
-      const g = patchGeometry(r, r.range(0.6, 2.2), { lobes: 11, wobble: 0.5 });
-      A.addOnce('steppe_bare', g, LL(IDENT, x, plainsY(x, z) + 0.025, z, r.float() * 6.28, 1, 1, r.range(0.6, 1.3)), {
-        masks: [0.5, r.range(0.35, 0.8), 0.15],
-      });
-    }
-  }
-}
-
-/**
  * WHAT GROWS ON IT, AND WHAT IS LYING ON IT.
  *
  * Instanced, and LOD'd hard: `weeds` carries `maxDist: 40` from `props.js`, so
@@ -1392,7 +1326,21 @@ export const PLAINS = {
     registerProps(A, rng);
 
     buildTerrain(A);
-    dressGround(A);
+    /**
+     * `dressGround(A)` STOOD HERE and it is deleted — 「この地面テクスチャーが
+     * 浮いてます 至る所で 消して」. It laid 520 dust patches, 700 scree patches at
+     * the mountain foot and 70 worn patches on each of the nine pads, all of
+     * them `patchGeometry`: a horizontal fan of triangles at y = 0.
+     *
+     * A horizontal surface at night, when the only key light is a burning ridge
+     * ON THE HORIZON, has N·L ≈ 0 and renders at the ambient floor whatever its
+     * material — so every one of these photographed as a hard-edged black
+     * quadrilateral lying across the lit steppe. @see the long note in
+     * `plains-ground.js`, which is where the same arithmetic is written out.
+     *
+     * Its `Rng(0x9e10a5)` was drawn by nothing else, so no patch, stone, tuft,
+     * wreck or rivet anywhere on this map moved with it.
+     */
     markPads(A);
     this.fires = [];
     buildFires(A, this.fires);

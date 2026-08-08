@@ -1,5 +1,4 @@
-import { IDENT, LL } from '../kit.js';
-import { fbm3, rockGeometry, domeGeometry, conformToGround, disposeAll } from '../util.js';
+import { fbm3, rockGeometry, domeGeometry } from '../util.js';
 import { Rng } from '../../core/rng.js';
 
 /**
@@ -63,15 +62,8 @@ import { Rng } from '../../core/rng.js';
  * own light, so at a fire on the skyline it disappears exactly when ground
  * detail is supposed to appear. THE PLAIN IS SMOOTH, and that is what is left.
  *
- * So: three passes, all of them relief, none of them a blade of grass.
+ * So: two passes, both of them relief, neither of them a blade of grass.
  *
- *   SHEETS   4-16 m of a different soil, DOMED by 5-35 cm. Merged and always
- *            drawn, because this is the 30-200 m read — the thing that makes the
- *            plain a landscape with places in it rather than one disc of one
- *            material. Their flat patches do the colour; these do the form.
- *   SCARS    wind blowouts — a dish with the spoil piled on its lee lip. The one
- *            ground feature that reads as a HOLE, which nothing else on this map
- *            does at any scale.
  *   PANS     bedrock breaking the surface, under 0.35 m proud. The only hard
  *            edge on the plain, and the only thing on it that is not soft.
  *   HUMMOCKS the mound of soil a tuft of grass actually stands on. Grazed
@@ -79,6 +71,45 @@ import { Rng } from '../../core/rng.js';
  *            scoured ground between them, and `nf_tussock` above is the plant
  *            without the mound. Small count, because these sit UNDER somebody
  *            else's vegetation rather than beside it.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * THERE WERE TWO MORE, AND THEY ARE DELETED. 「この地面テクスチャーが浮いてます
+ * 至る所で 消して」
+ * ────────────────────────────────────────────────────────────────────────────
+ * ~1 100 SHEETS (4-17 m discs of a different soil, domed by 10-42 cm) and
+ * ~1 600 SCARS (wind blowouts, a dish with its spoil on the lee lip). Both were
+ * a horizontal sheet lying ON the plain, and both are gone.
+ *
+ * THEY WERE ALREADY "FIXED" ONCE AND THE COMPLAINT DID NOT MOVE. The first
+ * diagnosis was that a rigid disc placed at `groundY` under its own CENTRE
+ * stands proud at its rim on a swell — measured, 1 936 of them over 0.5 m, worst
+ * 6.01 m — so they were draped per vertex with `conformToGround`. That
+ * measurement was true and it was not the defect the user was photographing,
+ * because:
+ *
+ *   A HORIZONTAL SURFACE AT NIGHT, WHEN THE ONLY KEY LIGHT IS A BURNING RIDGE
+ *   AT GROUND LEVEL, RENDERS BLACK WHATEVER ITS MATERIAL AND WHATEVER ITS
+ *   HEIGHT.
+ *
+ * The key light on this map arrives along the horizon. N·L on an up-facing
+ * surface is therefore ~0, and every up-facing surface goes to the ambient
+ * floor — so a sheet lying flat on the ground photographs as a hard-edged black
+ * quadrilateral over the lit steppe, and is INDISTINGUISHABLE from a slab
+ * floating over it. That is the same arithmetic that made a fuel dump 40 m up
+ * read as a ceiling (`plains-fort.js`, the `fuelBund` argument order). "It is
+ * correctly conformed to the ground" and "it looks like a black hole in the
+ * map" were both true at once, which is why conforming them did not help.
+ *
+ * The relief passes below are kept: a hummock and a pan are MASSES with a lit
+ * side and a shaded side, and a surface with a normal that is not straight up
+ * is a surface the ridge can light. That is the whole difference, and it is why
+ * the answer is "delete the sheets" rather than "make the sheets brighter".
+ *
+ * WHAT MOVED. This file's `rng` is one stream in sequence, so removing the two
+ * loops re-rolls everything drawn after them: the HUMMOCKS AND THE PANS ARE IN
+ * NEW PLACES. Neither carries a collision proxy, appears in the nav height
+ * field or is reachable by `_scatterblock`, so nothing measurable moved with
+ * them. No other file draws from this seed.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * DENSITY IS THE SAME FIELD THE VEGETATION USES
@@ -108,7 +139,6 @@ function turf(x, z) {
  */
 export function buildGroundDetail(A, groundY, isOpen, pads) {
   const rng = new Rng(0x3b91d7);
-  const geos = [];
   const R = 172;
 
   /** How made-up this ground is: 1 on a capture pad, 0 out on the plain. */
@@ -131,97 +161,6 @@ export function buildGroundDetail(A, groundY, isOpen, pads) {
     return isOpen(x, z, 0.6) ? [x, z] : null;
   };
 
-  // ─────────────────────────────────────────────────────────────── sheets ──
-  /**
-   * The mid-distance read. Merged rather than instanced ON PURPOSE: a prototype
-   * with a `maxDist` pops out at its radius, and the whole job of these is to be
-   * the thing you can see 150 m away. Each one is its own geometry — a shared
-   * prototype repeated eleven hundred times is a tiling pattern at exactly the
-   * range this is trying to break up.
-   */
-  let sheets = 0;
-  for (let i = 0; i < 1100; i++) {
-    const s = site(R);
-    if (!s) continue;
-    const [x, z] = s;
-    const t = turf(x, z);
-    const pad = padness(x, z);
-    // On the pads the ground is driven and bare; out on the plain it varies.
-    const key = pad > 0.5
-      ? (rng.float() < 0.7 ? 'steppe_bare' : 'steppe_dust')
-      : t > 0.52 ? 'steppe'
-        : t > 0.4 ? (rng.float() < 0.5 ? 'steppe_bare' : 'steppe_dust')
-          : (rng.float() < 0.55 ? 'scree' : 'steppe_dust');
-    const rad = rng.range(4.0, 17.0);
-    /**
-     * 0.10-0.42 m of crown, and the CEILING IS THE PLAYER rather than the eye.
-     * This geometry is drawn and not collided — his feet stay on `plainsY` — so
-     * a mound taller than he steps over is a mound he walks THROUGH, and the
-     * illusion goes at exactly the moment he reaches it. `STANCE.stand.stepHeight`
-     * is 0.42, so that is the whole budget, and it is why the plain's relief has
-     * to be broad rather than tall. Flattened on the pads, which are made ground.
-     */
-    const g = domeGeometry(rng, rad, rng.range(0.10, 0.42) * (1 - pad * 0.75), {
-      rings: 3, lobes: 12, wobble: 0.5, bump: 0.55, power: 2.1, lean: 0.5,
-    });
-    geos.push(g);
-    /**
-     * …DRAPED, NOT LAID FLAT. `domeGeometry` closes to y = 0 at its rim and the
-     * `LL` below is ONE rigid transform at the ground under the CENTRE, so up to
-     * this line a 34 m sheet on a swell was a 34 m plane with its middle on the
-     * ground and its rim in the air. Measured before this call: 1 936 of them
-     * over 0.5 m proud, 269 over 2 m, worst 6.01 m. While these were wound
-     * inside out that was invisible; the winding is fixed and they draw, so a
-     * proud rim is a shelf with a shadow under it in the middle of the plain.
-     *
-     * THE YAW HAS TO BE DRAWN HERE, between `domeGeometry` and the masks, and
-     * not hoisted above the geometry: this file's `rng` is one stream in
-     * sequence and moving a draw moves every sheet, scar, hummock and pan after
-     * it. Same count, same order, same map — the vertices move and nothing else
-     * does. @see `conformToGround`.
-     */
-    const yaw = rng.float() * 6.283;
-    conformToGround(g, groundY, x, z, yaw);
-    A.add(key, g, LL(IDENT, x, groundY(x, z) + 0.015, z, yaw, 1, 1, 1), {
-      masks: [rng.range(0.1, 0.5), rng.range(0.25, 0.85), rng.range(0.1, 0.4)],
-    });
-    sheets++;
-  }
-
-  // ──────────────────────────────────────────────────────────────── scars ──
-  /**
-   * Wind blowouts. `dish` sinks the middle and `height` piles the spoil on the
-   * lee lip, so the two together are a scrape with a bank on one side of it —
-   * which is what a deflation hollow in dry ground actually is, and the only
-   * feature on this plain that reads as a hole rather than as a lump.
-   */
-  let scars = 0;
-  for (let i = 0; i < 1600; i++) {
-    const s = site(R);
-    if (!s) continue;
-    const [x, z] = s;
-    if (rng.float() > 0.95 - turf(x, z) * 0.75) continue; // thin ground blows out
-    const g = domeGeometry(rng, rng.range(2.4, 8.5), rng.range(0.08, 0.26), {
-      rings: 3, lobes: 11, wobble: 0.45, bump: 0.6, power: 1.4,
-      dish: rng.range(0.12, 0.34), lean: 0.9,
-    });
-    geos.push(g);
-    /**
-     * Draped for the same reason the sheets are, and it matters MORE here even
-     * though a scar is a third of the size: the whole point of a blowout is that
-     * it reads as a HOLE, and a dish whose rim is 40 cm off the ground on the
-     * downhill side is a dish you can see under. Draws are kept in their
-     * original order — the key's float, then the yaw, then the three masks.
-     */
-    const key = rng.float() < 0.6 ? 'steppe_dust' : 'steppe_bare';
-    const yaw = rng.float() * 6.283;
-    conformToGround(g, groundY, x, z, yaw);
-    A.add(key, g, LL(IDENT, x, groundY(x, z) + 0.01, z, yaw, 1, 1, 1), {
-      masks: [rng.range(0.2, 0.6), rng.range(0.3, 0.9), rng.range(0.2, 0.5)],
-    });
-    scars++;
-  }
-
   // ────────────────────────────────────────────────────── the prototypes ──
   /**
    * The two instanced kinds. `collide` is not declared on either — @see the
@@ -230,12 +169,12 @@ export function buildGroundDetail(A, groundY, isOpen, pads) {
    *
    * ────────────────────────────────────────────────────────────────────────
    * A PROTOTYPE'S GEOMETRY IS NOT DISPOSED HERE, and the distinction matters.
-   * A PROTOTYPE'S GEOMETRY IS NOT DISPOSED HERE, and the distinction matters.
    * A geometry handed to `A.add` is COPIED into the merge accumulator on the
-   * spot, so disposing it afterwards is right and `geos` collects those. A
-   * geometry handed to `A.proto` is held by REFERENCE until `finalize` builds
-   * the `InstancedMesh` from it — `props.js` registers thirty of these and
-   * disposes none.
+   * spot, so disposing it afterwards is right — that is what the deleted sheet
+   * and scar passes used a `geos` list for. A geometry handed to `A.proto` is
+   * held by REFERENCE until `finalize` builds the `InstancedMesh` from it, so
+   * there is nothing left in this file to dispose: `props.js` registers thirty
+   * of these and disposes none.
    */
   const P = (id, key, geo, opts) => {
     A.proto(id, { geo, key, ...opts });
@@ -303,7 +242,6 @@ export function buildGroundDetail(A, groundY, isOpen, pads) {
     pans++;
   }
 
-  disposeAll(geos);
-  console.info(`[world] nachtfeld ground: ${sheets} sheets, ${scars} scars, ${pans} pans, ${hummocks} hummocks — no collision`);
-  return { sheets, scars, pans, hummocks };
+  console.info(`[world] nachtfeld ground: ${pans} pans, ${hummocks} hummocks — no collision, no flat sheets`);
+  return { sheets: 0, scars: 0, pans, hummocks };
 }

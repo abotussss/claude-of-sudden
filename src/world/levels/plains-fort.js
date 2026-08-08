@@ -13,6 +13,38 @@ import {
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
+ * `noSheet` — THE FLAT GROUND SHEETS, DELETED, WITHOUT MOVING ANYTHING ELSE
+ * ════════════════════════════════════════════════════════════════════════════
+ * 「この地面テクスチャーが浮いてます 至る所で 消して」
+ *
+ * Seven families in this file: the wear on the rampart walk, the ruts through
+ * the gate, the scree on the magazine roof, the hardstanding blotches in the
+ * courtyard, the dust in the shed, the worn ground on the glacis, and the
+ * scorch across the ruined courtyard. Every one of them was `patchGeometry` —
+ * a fan of triangles at y = 0, i.e. a horizontal surface and nothing else.
+ *
+ * The only key light on this map is a burning ridge ON THE HORIZON, so N·L on
+ * an up-facing surface is ≈ 0 and every one of these fell to the ambient floor
+ * whatever material it carried: a hard-edged black quadrilateral lying on the
+ * ground, which is what a slab floating over the ground also looks like. This
+ * file has already paid for that arithmetic once at 40 m — @see the note on the
+ * `fuelBund` argument order, where the SAME appearance had a real floating slab
+ * behind it. On the ground it is the appearance without the slab, and the user
+ * cannot tell the two apart because from a standing eye they are identical.
+ *
+ * WHY IT IS A SINK AND NOT A DELETED CALL. The fortress draws from ONE `rng`
+ * stream in sequence and these sheets sit in the middle of it — the courtyard
+ * blotches before the ammunition bays, the shed dust before the stores.
+ * Deleting the draws would re-roll every crate, gabion, bay and boulder placed
+ * after them, and those carry COLLISION that `boundcheck`, `stuckcheck` and
+ * `_scatterblock` are all measured against today. So `A.addOnce(...)` becomes
+ * `noSheet(...)` with the argument list untouched: every draw still happens, in
+ * the same order, and NOTHING ELSE ON THIS MAP MOVES.
+ */
+const noSheet = (key, geo) => { geo?.dispose?.(); };
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
  * NACHTFELD — DIE SCHANZE. The fortress. 「要塞がある平原」
  * ════════════════════════════════════════════════════════════════════════════
  * The other anchor. The control tower stands 32 m NORTH of zone D on the
@@ -676,7 +708,11 @@ function rampartPaint(base) {
   };
 }
 
-/** The top of the rampart, as ground that has been walked on for a long time. */
+/**
+ * The top of the rampart. The walked-on wear was a flat sheet and is deleted —
+ * @see `noSheet`. The drainage channel below it is real mass and stays: it has a
+ * vertical side, so the ridge can light it.
+ */
 function walkWear(A, rng, e, y, proj) {
   const inset = PARAPET_T + 0.3;
   const width = RAMP_T + proj - inset - 0.4;
@@ -686,7 +722,7 @@ function walkWear(A, rng, e, y, proj) {
     const px = e.mx + e.tx * e.len * t - e.nx * (inset + d) + e.nx * proj;
     const pz = e.mz + e.tz * e.len * t - e.nz * (inset + d) + e.nz * proj;
     const g = patchGeometry(rng, rng.range(0.4, 1.5), { lobes: 10, wobble: 0.55 });
-    A.addOnce(rng.float() < 0.6 ? 'road_dust' : 'steppe_bare', g,
+    noSheet(rng.float() < 0.6 ? 'road_dust' : 'steppe_bare', g,
       LL(IDENT, px, y(WALK_Y) + 0.022, pz, rng.float() * 6.28, 1, 1, rng.range(0.6, 1.3)),
       { masks: [0.3, rng.range(0.45, 0.95), 0.35] });
   }
@@ -779,10 +815,11 @@ function gates(A, rng, y) {
       masks: [0.75, 0.5, 0.25],
     });
     A.box('concrete', cx, y(-0.14), cz, RAMP_T + 5, 0.3, GATE_W + 1.4, e.yaw);
-    // the ruts a fortress gate has worn into its own road
+    // the ruts a fortress gate has worn into its own road — deleted flat
+    // sheets, @see `noSheet`. The made road slab under them is real mass.
     for (let k = 0; k < 12; k++) {
       const g = patchGeometry(rng, rng.range(0.5, 1.6), { lobes: 10, wobble: 0.5 });
-      A.addOnce('road_rut', g, LL(IDENT,
+      noSheet('road_rut', g, LL(IDENT,
         cx + e.nx * rng.range(-5, 5) + e.tx * rng.range(-1.8, 1.8), y(0.02),
         cz + e.nz * rng.range(-5, 5) + e.tz * rng.range(-1.8, 1.8),
         rng.float() * 6.28, 1, 1, rng.range(0.5, 1.2)), { masks: [0.5, 0.9, 0.3] });
@@ -1010,13 +1047,14 @@ function magazine(A, rng, y) {
         wz + S.nz * (wall / 2 + 0.01), S.yaw + Math.PI / 2, 2.2, 0.4, 1), { masks: [0.15, 0.9, 0.95] });
     }
   }
-  // the roof slab and the earth burster course over it
+  // the roof slab, and the earth burster course over it — the course was flat
+  // scree sheets and is deleted, @see `noSheet`. The slab itself is unchanged.
   A.add('concrete_dark', BOX_SOFT(A), LL(IDENT, cx, y(roof + 0.22), cz, 0, hw * 2 + 0.9, 0.44, hd * 2 + 0.9),
     { masks: [0.6, 0.45, 0.15] });
   A.box('concrete', cx, y(roof + 0.22), cz, hw * 2 + 0.9, 0.44, hd * 2 + 0.9);
   for (let i = 0; i < 40; i++) {
     const g = patchGeometry(rng, rng.range(0.6, 2.0), { lobes: 11, wobble: 0.5 });
-    A.addOnce('scree', g, LL(IDENT, cx + rng.range(-hw, hw), y(roof + 0.46), cz + rng.range(-hd, hd),
+    noSheet('scree', g, LL(IDENT, cx + rng.range(-hw, hw), y(roof + 0.46), cz + rng.range(-hd, hd),
       rng.float() * 6.28, 1, 1, rng.range(0.5, 1.2)), { masks: [0.4, rng.range(0.3, 0.8), 0.2] });
   }
   A.put('roof_vent', cx + 2.4, y(roof + 0.46), cz, 0.3, 1.3);
@@ -1084,7 +1122,7 @@ function courtyard(A, rng, y) {
     const d = Math.sqrt(rng.float()) * (R_IN - 1);
     const px = FORT.x + Math.cos(a) * d, pz = FORT.z + Math.sin(a) * d;
     const g = patchGeometry(rng, rng.range(0.6, 2.4), { lobes: 11, wobble: 0.55 });
-    A.addOnce(rng.float() < 0.5 ? 'road_dust' : 'steppe_bare', g,
+    noSheet(rng.float() < 0.5 ? 'road_dust' : 'steppe_bare', g,
       LL(IDENT, px, y(0.06), pz, rng.float() * 6.28, 1, 1, rng.range(0.6, 1.4)),
       { masks: [0.28, rng.range(0.45, 0.95), 0.35] });
   }
@@ -1292,7 +1330,7 @@ function barrackShed(A, y) {
   for (let i = 0; i < 14; i++) {
     const lx = rng.range(-hw + 0.3, hw - 0.3), lz = rng.range(-hd + 0.3, hd - 0.3);
     const g = patchGeometry(rng, rng.range(0.4, 1.4), { lobes: 10, wobble: 0.5 });
-    A.addOnce('road_dust', g, LL(IDENT, shedX(lx, lz), y(0.06), shedZ(lx, lz), rng.float() * 6.28,
+    noSheet('road_dust', g, LL(IDENT, shedX(lx, lz), y(0.06), shedZ(lx, lz), rng.float() * 6.28,
       1, 1, rng.range(0.5, 1.1)), { masks: [0.3, rng.range(0.5, 0.95), 0.4] });
   }
   /**
@@ -1353,7 +1391,7 @@ function glacis(A, rng, y, groundY) {
     const d = R_OUT + rng.range(1, 14);
     const px = FORT.x + Math.cos(a) * d, pz = FORT.z + Math.sin(a) * d;
     const g = patchGeometry(rng, rng.range(0.8, 3.2), { lobes: 11, wobble: 0.55 });
-    A.addOnce('steppe_bare', g, LL(IDENT, px, groundY(px, pz) + 0.03, pz, rng.float() * 6.28,
+    noSheet('steppe_bare', g, LL(IDENT, px, groundY(px, pz) + 0.03, pz, rng.float() * 6.28,
       1, 1, rng.range(0.6, 1.4)), { masks: [0.5, rng.range(0.3, 0.8), 0.2] });
   }
 }
@@ -1438,13 +1476,13 @@ function buildFortRuin(A, rng, y) {
     }
   }
 
-  // scorch
+  // scorch across the burnt-out courtyard — deleted. @see `noSheet`.
   for (let i = 0; i < 40; i++) {
     const a = rng.float() * Math.PI * 2;
     const d = Math.sqrt(rng.float()) * (R_IN - 1);
     const px = FORT.x + Math.cos(a) * d, pz = FORT.z + Math.sin(a) * d;
     const g = patchGeometry(rng, rng.range(1.4, 4.6), { lobes: 12, wobble: 0.6 });
-    A.addOnce('road_dust', g, LL(IDENT, px, y(0.05), pz, rng.float() * 6.28, 1, 1, rng.range(0.6, 1.4)),
+    noSheet('road_dust', g, LL(IDENT, px, y(0.05), pz, rng.float() * 6.28, 1, 1, rng.range(0.6, 1.4)),
       { masks: [0.15, 1.0, 0.55] });
   }
 }

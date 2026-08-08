@@ -8,6 +8,40 @@ import { wallRun, debrisField, drawDebris, fallenMember } from './plains-works.j
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
+ * `noSheet` — THE FLAT GROUND SHEETS, DELETED, WITHOUT MOVING ANYTHING ELSE
+ * ════════════════════════════════════════════════════════════════════════════
+ * 「この地面テクスチャーが浮いてます 至る所で 消して」
+ *
+ * WHY THEY GO. `patchGeometry` is a fan of triangles at y = 0 — a horizontal
+ * surface, by construction, and nothing else. The only key light on this map is
+ * a burning ridge ON THE HORIZON, so N·L on an up-facing surface is ≈ 0 and the
+ * sheet falls to the ambient floor whatever material it carries. It
+ * photographs as a hard-edged black quadrilateral lying across the lit steppe,
+ * which is exactly what a slab floating over the ground photographs as. That is
+ * why the previous fix — conforming them to the terrain per vertex — changed
+ * nothing the user could see: "correctly on the ground" and "a black hole in
+ * the map" were both true at once. @see the long note in `plains-ground.js`.
+ *
+ * WHY IT IS A SINK AND NOT A DELETED CALL. This file's `rng` is ONE STREAM
+ * drawn in sequence across every site it dresses, and the sheets sit in the
+ * middle of it — the scorch inside a bunker is drawn before the next wreck, the
+ * hardstanding under a berm before the crates on it. Deleting the draws would
+ * re-roll every crate, hesco block, sandbag, wreck and boulder placed after
+ * them, and those carry COLLISION: `boundcheck`'s 1.2-2.0 m boundary margin,
+ * `stuckcheck` and `_scatterblock`'s 0.42-0.68 m trip band are all measured
+ * against where they are today. So `A.addOnce(...)` becomes `noSheet(...)`
+ * with its argument list untouched: every `rng.float()`, `rng.range()` and
+ * `patchGeometry` lobe draw still happens, in the same order, and NOT ONE PROP
+ * ON THIS MAP MOVES. The geometry is built and thrown away, which costs a few
+ * hundred discarded triangles at load and nothing at all per frame.
+ *
+ * Signature is `A.addOnce`'s so the call sites read unchanged and a future
+ * reader can see exactly what used to be drawn.
+ */
+const noSheet = (key, geo) => { geo?.dispose?.(); };
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
  * NACHTFELD — DIE TRÜMMERFELDER. What the plain was fought over before tonight.
  * ════════════════════════════════════════════════════════════════════════════
  * 「平原にしても障害物なさすぎ もっと荒廃した建物、乗り物、でかい硝煙のようにして
@@ -949,10 +983,10 @@ function ruin(A, rng, gy, cx, cz, yaw) {
     A.put(id, px, gy(px, pz) - 0.02, pz, rng.float() * 6.28, rng.range(0.9, 1.15));
   }
 
-  /** Scorch and blown dust, so the ground reads as having been in it too. */
+  /** Scorch and blown dust round the bunker — deleted. @see `noSheet`. */
   for (let i = 0; i < 14; i++) {
     const [px, pz] = P(rng.range(-0.85, 0.85) * w, rng.range(-0.85, 0.85) * d);
-    A.addOnce(rng.float() < 0.5 ? 'road_dust' : 'steppe_bare',
+    noSheet(rng.float() < 0.5 ? 'road_dust' : 'steppe_bare',
       patchGeometry(rng, rng.range(0.7, 2.6), { lobes: 11, wobble: 0.6 }),
       LL(IDENT, px, gy(px, pz) + 0.03, pz, rng.float() * 6.28, 1, 1, rng.range(0.6, 1.3)),
       { masks: [0.5, rng.range(0.4, 0.9), 0.4] });
@@ -1117,7 +1151,7 @@ function wreck(A, rng, gy, cx, cz, yaw, variant) {
   for (let i = 0; i < 7; i++) {
     const a = rng.float() * 6.28, dd = rng.range(1.5, 6.5);
     const x = cx + Math.cos(a) * dd, z = cz + Math.sin(a) * dd;
-    A.addOnce(rng.float() < 0.6 ? 'road_dust' : 'steppe_bare',
+    noSheet(rng.float() < 0.6 ? 'road_dust' : 'steppe_bare',
       patchGeometry(rng, rng.range(0.8, 2.4), { lobes: 10, wobble: 0.6 }),
       LL(IDENT, x, gy(x, z) + 0.03, z, rng.float() * 6.28, 1, 1, rng.range(0.6, 1.2)),
       { masks: [0.7, rng.range(0.4, 0.9), 0.5] });
@@ -1387,10 +1421,11 @@ function emplacement(A, rng, gy, cx, cz, yaw) {
     A.add('metal_rust', BOX_THIN(A), LL(IDENT, x, gy(x, z) + h + 0.06, z, yaw, 1.42, 0.06, 2.2),
       { masks: [0.9, 0.6, 0] });
   }
-  /** The scrape behind it, and what was left in it. */
+  /** The scrape behind it — the sheet is deleted; @see `noSheet`. What was
+   *  left standing in it is the loop under this one and is untouched. */
   for (let i = 0; i < 5; i++) {
     const [x, z] = P(rng.range(-0.45, 0.45) * span, rng.range(-2.2, -0.5));
-    A.addOnce('steppe_bare', patchGeometry(rng, rng.range(0.7, 1.9), { lobes: 10, wobble: 0.55 }),
+    noSheet('steppe_bare', patchGeometry(rng, rng.range(0.7, 1.9), { lobes: 10, wobble: 0.55 }),
       LL(IDENT, x, gy(x, z) + 0.03, z, rng.float() * 6.28, 1, 1, rng.range(0.6, 1.2)),
       { masks: [0.45, rng.range(0.4, 0.9), 0.25] });
   }
@@ -1431,13 +1466,17 @@ function smokeMarker(x, y, z, cfg) {
   return o;
 }
 
-/** The seat of the fire: charred ground, embers in it, and a low flame body. */
+/**
+ * The seat of the fire: embers and a low flame body. The charred ground under
+ * it was a flat sheet and is deleted — @see `noSheet`. The fire itself is
+ * `ember` mass, which stands up out of the ground and is untouched.
+ */
 function burning(A, rng, gy, x, z) {
   const g = gy(x, z);
   for (let i = 0; i < 6; i++) {
     const a = rng.float() * 6.28, d = rng.range(0.4, 3.4);
     const px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d;
-    A.addOnce('road_dust', patchGeometry(rng, rng.range(0.9, 2.2), { lobes: 11, wobble: 0.65 }),
+    noSheet('road_dust', patchGeometry(rng, rng.range(0.9, 2.2), { lobes: 11, wobble: 0.65 }),
       LL(IDENT, px, gy(px, pz) + 0.035, pz, rng.float() * 6.28, 1, 1, rng.range(0.5, 1.1)),
       { masks: [0.95, 0.2, 0.85] });
   }
@@ -1602,7 +1641,7 @@ function dressPlain(A, rng, gy, isOpen, sites, R) {
   const field = (x, z) => fbm3(x * 0.0093 + 31.7, 2.9, z * 0.0093 - 12.4, 4);
   const fine = (x, z) => fbm3(x * 0.061, 7.7, z * 0.061, 2);
 
-  let sward = 0, grit = 0, tuss = 0, sheet = 0;
+  let sward = 0, grit = 0, tuss = 0, sheetsDropped = 0;
 
   /* ---- the sward: the mat you stand in --------------------------------- */
   for (let i = 0; i < 40000; i++) {
@@ -1649,13 +1688,21 @@ function dressPlain(A, rng, gy, isOpen, sites, R) {
   }
 
   /**
-   * ---- and the sheets, which are the only part of this with no LOD at all --
+   * ---- and the sheets, WHICH ARE DELETED ---------------------------------
    *
-   * A merged static patch is drawn at 200 m as readily as at 2 m, which is what
-   * the instanced passes above cannot do at any affordable count. So the far
-   * read of the ground — gravel pans, scoured crowns, silt in the hollows — is
-   * carried by these, and the instances are the near detail on top of them.
-   * ~12 triangles each.
+   * 2 600 of them, 1.1-4.6 m, and they were the largest single family of flat
+   * ground on the map: gravel pans, scoured crowns, silt in the hollows, drawn
+   * at 200 m as readily as at 2 m because a merged static patch has no LOD.
+   * That reach is exactly what made them the thing in the photograph — 「この
+   * 地面テクスチャーが浮いてます 至る所で 消して」. @see `noSheet` at the top of
+   * this file for why a horizontal fan at y = 0 is black on this map wherever
+   * it lies, and why draping it on the terrain did not change that.
+   *
+   * WHAT CARRIES THE GROUND NOW: the three instanced passes above — 16 700
+   * swards, 2 100 tussocks, 11 200 grit and shingle — plus `plains-ground.js`'s
+   * hummocks and bedrock pans. Every one of those is a MASS with a lit side and
+   * a shaded side, which is the whole difference. They are LOD'd, so the far
+   * read of the plain is now the terrain's own shading and not a patchwork.
    */
   for (let i = 0; i < 2600; i++) {
     const a = rng.float() * Math.PI * 2;
@@ -1664,12 +1711,12 @@ function dressPlain(A, rng, gy, isOpen, sites, R) {
     if (!isOpen(x, z, 0.2)) continue;
     const dry = 1 - field(x, z) + fine(x, z) * 0.3;
     const key = dry > 0.85 ? 'gravel' : dry > 0.6 ? 'scree' : dry > 0.4 ? 'steppe_dust' : 'steppe_bare';
-    A.addOnce(key, patchGeometry(rng, rng.range(1.1, 4.6), { lobes: 11, wobble: 0.62 }),
+    noSheet(key, patchGeometry(rng, rng.range(1.1, 4.6), { lobes: 11, wobble: 0.62 }),
       LL(IDENT, x, gy(x, z) + 0.018, z, rng.float() * 6.28, 1, 1, rng.range(0.55, 1.5)),
       { masks: [rng.range(0.2, 0.6), rng.range(0.3, 0.9), rng.range(0.15, 0.5)] });
-    sheet++;
+    sheetsDropped++;
   }
-  return { sward, tuss, grit, sheet };
+  return { sward, tuss, grit, sheetsDropped };
 }
 
 // ───────────────────────────────────────────────────────── the objectives ──
@@ -1966,7 +2013,7 @@ export function buildCover(A, groundY, isOpen, pads, ctx) {
     `${counts.ruin} ruins, ${counts.wreck} wreck sites, ${counts.berm} berms, ${counts.emplace} emplacements · ` +
     `${chosen.length} smoke banks at ${rate.toFixed(1)}/s (${Math.round(rate * SMOKE_LIFE)} live sprites each)` +
     `${root ? '' : ' — NO WORLD ROOT, SMOKE SKIPPED'} · ground ${ground.sward} sward, ` +
-    `${ground.tuss} tussock, ${ground.grit} grit, ${ground.sheet} sheets`
+    `${ground.tuss} tussock, ${ground.grit} grit, ${ground.sheetsDropped} flat sheets DELETED`
   );
   return { sites, fires: chosen, ground };
 }
