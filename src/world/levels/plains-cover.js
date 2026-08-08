@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { BOX, BOX_FINE, BOX_SOFT, BOX_THIN, IDENT, LL, mergeSimple } from '../kit.js';
 import {
-  fbm3, patchGeometry, rockGeometry, driftBerm, paintMasks, tubeY, fillMasks,
+  fbm3, patchGeometry, rockGeometry, driftBerm, paintMasks, tubeY, fillMasks, newTrs,
 } from '../util.js';
 import { Rng } from '../../core/rng.js';
 import { wallRun, debrisField, drawDebris, fallenMember } from './plains-works.js';
@@ -140,6 +140,98 @@ const TALL = 2.55;
 
 /** Cell of the relaxed rubble fields. @see `debrisField`. */
 const RUBBLE_CELL = 2.2;
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE ANGLE THAT KEEPS THE MAP ONE COMPONENT
+ * ────────────────────────────────────────────────────────────────────────────
+ * `NavGrid` refuses a cell whose floor normal is under `cos(46°)`, and THIS MAP
+ * IS THE REACTION TO WHAT HAPPENS OTHERWISE: the town carries 36 820 walkable
+ * cells above 2.5 m in 2 113 components with NOT ONE of them joined to the
+ * ground, because every roof and upper floor there is a flat surface a ray can
+ * find. NACHTFELD's rule is one component with the ground, and there are only
+ * ever two ways to keep it — JOIN the surface, or make sure nothing can stand
+ * on it at all.
+ *
+ * Everything in this file that a man has no business standing on is authored
+ * past this angle rather than left flat and unreachable: the leaning roof slabs
+ * in `ruin` (already 54-73°), the berm ridge, the caps on the ruin walls. 58°
+ * is comfortably past 46° with room for the ground under a piece to tilt it a
+ * few degrees the wrong way and still be refused.
+ */
+const RIDGE_DEG = 58;
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * A CRUMPLED DECK — collision only, and the drawn hull does not move
+ * ────────────────────────────────────────────────────────────────────────────
+ * A wreck's decks are the last islands on this map: 771 stranded cells over 31
+ * sites, a lorry bed at 1.08 m and a hull roof at 2.2 m that a ray finds, a man
+ * can be put on and no bot can ever reach.
+ *
+ * ONE ridge over a deck is not an option — the apex height follows the width,
+ * so a 2.25 m chassis would carry a 1.8 m spike. A CORRUGATION does the same
+ * job at a fifth of the height: ridges every `pitch` metres, which is under the
+ * 0.8 m nav cell, so wherever a cell centre lands it lands on a face at
+ * `RIDGE_DEG` and the whole deck is refused. Six triangles a ridge.
+ *
+ * IT IS THE COLLISION AND NOT THE HULL. `wreck`'s `put` draws with `A.add` and
+ * collides with `A.box` in two separate calls off the same transform, so this
+ * changes what a ray finds and what a capsule stands on while every wreck looks
+ * exactly as it did. That is also the honest description of the trade: a burnt
+ * hull whose plating has buckled is not a firing step, and the alternative was
+ * ramping thirty-one of them up to the ground.
+ */
+function deckCrown(A, surface, x, y, z, sx, sz, yaw, pitch = 0.5) {
+  const m = Math.max(1, Math.round(sx / pitch));
+  const halfW = sx / m / 2;
+  const capH = halfW * Math.tan((RIDGE_DEG * Math.PI) / 180);
+  const h = sz / 2;
+  const pos = []; const idx = [];
+  for (let i = 0; i < m; i++) {
+    const cxl = -sx / 2 + (i + 0.5) * (sx / m);
+    const b = i * 6;
+    pos.push(
+      cxl, capH, -h, cxl - halfW, 0, -h, cxl + halfW, 0, -h,
+      cxl, capH, h, cxl - halfW, 0, h, cxl + halfW, 0, h,
+    );
+    idx.push(b, b + 1, b + 4, b, b + 4, b + 3);
+    idx.push(b, b + 3, b + 5, b, b + 5, b + 2);
+    idx.push(b, b + 2, b + 1, b + 3, b + 4, b + 5);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  A.collideGeo(surface, g, newTrs(x, y, z, yaw));
+  return capH;
+}
+
+/**
+ * A triangular prism, ridge along local Z, apex over the middle — the collision
+ * cap that stops a flat top being a floor.
+ *
+ * `halfW` is half the thickness it has to cover and the apex height follows
+ * from `RIDGE_DEG`, so the caller cannot accidentally author a shallow one: the
+ * only way to cover a wider top is to stand a taller ridge on it.
+ */
+function ridgePrism(halfW, len) {
+  const capH = halfW * Math.tan((RIDGE_DEG * Math.PI) / 180);
+  const h = len / 2;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute([
+    0, capH, -h, -halfW, 0, -h, halfW, 0, -h,
+    0, capH, h, -halfW, 0, h, halfW, 0, h,
+  ], 3));
+  g.setIndex([
+    0, 1, 4, 0, 4, 3,   // one face
+    0, 3, 5, 0, 5, 2,   // the other
+    0, 2, 1, 3, 4, 5,   // the two ends
+  ]);
+  g.computeVertexNormals();
+  g.userData.capH = capH;
+  return g;
+}
 
 /** The walkable disc. `RIDGE_R0` is 176; three metres in is where scatter stops. */
 const PLAIN_R = 173;
@@ -687,8 +779,25 @@ function ruin(A, rng, gy, cx, cz, yaw) {
         y0: base - 0.35, y1: base + h, t, batter: 0.05, course: rng.range(0.5, 0.72),
         coping: false, overrun: 0.05,
       });
-      A.box('concrete', mx, base + (h - 0.35) / 2, mz, t + 0.04, h + 0.35, len / n + 0.05,
-        Math.atan2(bx - ax, bz - az));
+      /**
+       * THE WALL, AND ITS TOP IS A RIDGE. The note at the head of this file has
+       * always said a wall top here is not a ledge — "a continuous flat 0.5 m
+       * ledge 3 m up is a strip of cells the ray finds at 3 m and the ground
+       * beside them at 0 — an island, by construction" — and it was only ever
+       * true of the DRAWN cap. `wallRun` adds no collision at all; this box was
+       * the whole of the wall as far as `NavGrid` is concerned, and its top was
+       * flat. Measured: 229 stranded cells over 7 ruins.
+       *
+       * So the box stops `capH` short and a prism finishes it, which leaves the
+       * total height exactly `h` — the cover a man fires over is unchanged to
+       * the centimetre, and there is no longer a floor on top of it.
+       */
+      const panelYaw = Math.atan2(bx - ax, bz - az);
+      const cap = ridgePrism((t + 0.04) / 2, len / n + 0.05);
+      const capH = Math.min(cap.userData.capH, h * 0.5);
+      A.box('concrete', mx, base + (h - capH - 0.35) / 2, mz, t + 0.04, h - capH + 0.35,
+        len / n + 0.05, panelYaw);
+      A.collideGeo('concrete', cap, newTrs(mx, base + h - cap.userData.capH, mz, panelYaw));
       // …and a broken cap: three or four blocks with gaps, which is what the
       // top course of a shelled wall is and is also not a ledge.
       const caps = Math.max(2, Math.round((len / n) / 0.8));
@@ -840,6 +949,17 @@ function wreck(A, rng, gy, cx, cz, yaw, variant) {
     A.add(key, box, LL(IDENT, x, g + ly, z, yaw + ry, sx, sy, sz, rx, rz), { masks: m });
     if (solid) A.box(A.surfaceOf(key), x, g + ly, z, sx, sy, sz, yaw + ry, rx, rz);
   };
+  /**
+   * A `put` whose TOP would otherwise be a floor — a bed, a cab roof, an engine
+   * deck, the shell of a tanker. Identical drawing, crumpled collision.
+   * @see `deckCrown`. Only surfaces wide enough for a 0.8 m nav cell to land on
+   * are worth crowning, and only where nothing else is stacked over them.
+   */
+  const deck = (key, lx, ly, lz, sx, sy, sz, ry = 0, rx = 0, rz = 0, m = burnt) => {
+    put(key, lx, ly, lz, sx, sy, sz, ry, rx, rz, m);
+    const [x, z] = P(lx, lz);
+    deckCrown(A, A.surfaceOf(key), x, g + ly + sy / 2, z, sx, sz, yaw + ry);
+  };
   const wheel = (lx, lz, r, lean = 0) => {
     const [x, z] = P(lx, lz);
     A.put('tyre', x, g + r * 0.5, z, yaw + Math.PI / 2 + lean, r / 0.33, null, 1.55, 0);
@@ -849,11 +969,11 @@ function wreck(A, rng, gy, cx, cz, yaw, variant) {
     /* ---- a lorry, upright, burnt to the frame -------------------------- */
     const L = rng.range(6.2, 7.4);
     put('metal_rust', 0, 0.72, 0, 2.25, 0.42, L);                       // chassis
-    put('metal_dark', 0, 1.05, -L / 2 + 1.15, 2.2, 0.62, 2.3);          // engine bay
+    deck('metal_dark', 0, 1.05, -L / 2 + 1.15, 2.2, 0.62, 2.3);         // engine bay
     // the cab, crushed to one side
-    put('metal_rust', 0.12, 1.85, -L / 2 + 1.6, 2.05, 1.35, 2.05, 0.05, 0, rng.range(0.08, 0.2));
+    deck('metal_rust', 0.12, 1.85, -L / 2 + 1.6, 2.05, 1.35, 2.05, 0.05, 0, rng.range(0.08, 0.2));
     // the bed: a floor, four ribs, one side standing and one collapsed out
-    put('wood_prop_dark', 0, 1.0, L / 2 - 2.2, 2.15, 0.16, L - 3.1, 0, 0, 0, { masks: [0.85, 0.7, 0.3] });
+    deck('wood_prop_dark', 0, 1.0, L / 2 - 2.2, 2.15, 0.16, L - 3.1, 0, 0, 0, { masks: [0.85, 0.7, 0.3] });
     for (let i = 0; i < 4; i++) {
       const lz = L / 2 - 3.6 + i * ((L - 3.4) / 4);
       put('metal_rust', 0, 1.55, lz, 2.25, 0.1, 0.13, 0, 0, 0, burnt, false);
@@ -875,8 +995,8 @@ function wreck(A, rng, gy, cx, cz, yaw, variant) {
     const roll = rng.range(1.36, 1.62); // 78-93 degrees
     put('metal_rust', 0, 1.2, 0, 0.5, 2.4, L, 0, 0, 0, burnt);
     put('metal_dark', -0.42, 1.55, 0, 0.42, 1.55, L - 1.2, 0, 0, rng.range(-0.1, 0.1));
-    put('metal_rust', 0.3, 2.05, -L / 2 + 1.5, 1.5, 0.5, 2.0, 0, 0, -roll * 0.18);
-    put('metal_dark', 0, 0.34, 1.2, 2.3, 0.5, 2.6, rng.range(-0.2, 0.2), 0, rng.range(-0.14, 0.14));
+    deck('metal_rust', 0.3, 2.05, -L / 2 + 1.5, 1.5, 0.5, 2.0, 0, 0, -roll * 0.18);
+    deck('metal_dark', 0, 0.34, 1.2, 2.3, 0.5, 2.6, rng.range(-0.2, 0.2), 0, rng.range(-0.14, 0.14));
     // wheels in the air, on the axles that are now horizontal
     for (const lz of [-L / 2 + 1.6, L / 2 - 1.8]) {
       const [x, z] = P(0.75, lz);
@@ -897,7 +1017,14 @@ function wreck(A, rng, gy, cx, cz, yaw, variant) {
     tank.translate(0, -(L - 1.6) / 2, 0);
     const [tx, tz] = P(0, 0.2);
     A.addOnce('steel', tank, LL(IDENT, tx, g + 1.5, tz, yaw, 1, 1, 1, Math.PI / 2), { masks: [0.9, 0.75, 0.2] });
+    /**
+     * The barrel is DRAWN round and COLLIDES as a box, so its top is a 2 m wide
+     * flat deck 2.5 m up — the tallest island a wreck makes here. The box stays
+     * (a cylinder BVH for a prop this size is not worth it) and the crown goes
+     * over it, which also happens to be the shape the drawn barrel already has.
+     */
     A.box('metal', tx, g + 1.5, tz, 2.0, 2.0, L - 1.6, yaw);
+    deckCrown(A, 'metal', tx, g + 2.5, tz, 2.0, L - 1.6, yaw);
     // the split down the top, and the shell that made it
     put('metal_dark', 0.1, 2.42, rng.range(-1.5, 1.5), 1.35, 0.22, rng.range(1.8, 3.0), rng.range(-0.15, 0.15), 0, 0.3);
     put('metal_rust', 0, 1.35, -L / 2 + 0.5, 1.9, 1.5, 0.5, 0, 0, 0, burnt);
@@ -911,11 +1038,11 @@ function wreck(A, rng, gy, cx, cz, yaw, variant) {
     /* ---- a tracked hull, turret gone, one track unspooled -------------- */
     const L = rng.range(6.2, 7.0);
     put('metal_dark', 0, 0.62, 0, 3.0, 0.9, L, 0, 0, rng.range(-0.05, 0.05));
-    put('metal_rust', 0, 1.32, rng.range(-0.4, 0.4), 2.55, 0.62, L - 1.4, 0, 0, rng.range(-0.05, 0.05));
+    deck('metal_rust', 0, 1.32, rng.range(-0.4, 0.4), 2.55, 0.62, L - 1.4, 0, 0, rng.range(-0.05, 0.05));
     // the glacis, and the ring where the turret was
     put('metal_dark', 0, 1.42, -L / 2 + 1.1, 2.5, 0.5, 1.9, 0, 0.32, 0);
-    put('metal_rust', 0, 1.78, 0.4, 1.85, 0.34, 1.85, rng.range(-0.3, 0.3));
-    put('metal_dark', rng.range(-0.3, 0.3), 2.05, 0.4, 1.25, 0.36, 1.25, rng.range(-0.4, 0.4), 0, rng.range(-0.2, 0.2));
+    deck('metal_rust', 0, 1.78, 0.4, 1.85, 0.34, 1.85, rng.range(-0.3, 0.3));
+    deck('metal_dark', rng.range(-0.3, 0.3), 2.05, 0.4, 1.25, 0.36, 1.25, rng.range(-0.4, 0.4), 0, rng.range(-0.2, 0.2));
     // road wheels down both sides
     for (const side of [-1, 1]) {
       for (let i = 0; i < 5; i++) {
@@ -1009,21 +1136,63 @@ function berm(A, rng, gy, cx, cz, yaw) {
     A.addOnce('steppe_bare', g, LL(IDENT, cx, base - 0.06, cz, yw), { masks: [0.3, 0.6, 0.35] });
   }
   /**
-   * Collision as a run of boxes down the crest — the drawn skin is a shell.
-   * THE BOX'S LONG SIDE IS ITS `sx`, because the crest runs along local x and
-   * `A.box`'s `ry` maps local x to `(cos ry, -sin ry)`; giving the segment
-   * length to `sz` instead lays every proxy at ninety degrees to the earth it
-   * is standing in for, which is a berm you can walk through and a wall four
-   * metres to the side of it.
+   * ──────────────────────────────────────────────────────────────────────────
+   * COLLISION IS A RIDGE, NOT A RUN OF BOXES — AND THAT IS A NAV FACT
+   * ──────────────────────────────────────────────────────────────────────────
+   * The drawn skin is a shell; these triangles are the berm as far as anything
+   * that matters. They used to be a run of boxes, and a box has a FLAT TOP.
+   *
+   * `NavGrid.build` drops one ray per 0.8 m cell and keeps the first hit under
+   * `MASK.WORLD`, then refuses the cell only if `down.normal.y < maxSlope`
+   * (cos 46°). A flat crest 2 m up is therefore a strip of PERFECTLY WALKABLE
+   * cells whose sides are vertical — which is the definition of an island, and
+   * this map exists as the reaction to the town's 36 820 of them. Measured with
+   * `_nfisland.mjs`: 1 302 stranded cells over 17 berms, the single largest
+   * contributor on the plain and more than the wrecks and ruins together.
+   *
+   * A BERM IS A WALL. Its own note two paragraphs up says so — "2.2 m of bank
+   * is far over `maxStep` and is therefore a WALL to the height field, which is
+   * exactly what makes it cover". A wall you can stand on top of but never
+   * reach is not cover, it is 76 cells of nothing. So the cross-section is a
+   * triangle whose faces stand at `RIDGE_DEG`, past the 46° limit at every
+   * station INCLUDING the tapered ends — the half-width is derived FROM the
+   * local crest height rather than fixed, so a lower end is a narrower ridge
+   * and not a shallower one.
+   *
+   * It stays on `LAYER.STATIC` and it is NOT `clipBox`. A berm has to stop
+   * bullets — it is the cover — and `clipBox`'s own contract is that bullets and
+   * sightlines pass through it. The fix here is the shape, not the layer.
    */
-  const n = Math.max(3, Math.round(len / 2.4));
-  for (let i = 0; i < n; i++) {
-    const u = (i + 0.5) / n;
-    const taper = Math.min(1, Math.min(u, 1 - u) * 5);
-    const lx = (u - 0.5) * len;
-    const x = cx + c * lx, z = cz - s * lx;
-    const hh = h * (0.55 + 0.45 * taper);
-    A.box('dirt', x, gy(x, z) + hh / 2 - 0.1, z, len / n + 0.1, hh, w * 0.72, yaw);
+  {
+    const n = Math.max(3, Math.round(len / 2.2));
+    const tan = Math.tan((RIDGE_DEG * Math.PI) / 180);
+    const pos = [];
+    const idx = [];
+    for (let i = 0; i <= n; i++) {
+      const u = i / n;
+      const taper = Math.min(1, Math.min(u, 1 - u) * 5);
+      const lx = (u - 0.5) * len;
+      const hh = h * (0.55 + 0.45 * taper);
+      const W = hh / tan;
+      // the ground under THIS station, in the same local frame the matrix uses
+      const dy = gy(cx + c * lx, cz - s * lx) - base;
+      // apex, then the two toes, sunk so there is no lip where it meets the plain
+      pos.push(lx, dy + hh, 0, lx, dy - 0.3, -W, lx, dy - 0.3, W);
+    }
+    for (let i = 0; i < n; i++) {
+      const a = i * 3, b = (i + 1) * 3;
+      // near face, far face — wound so both point outward and neither is flat
+      idx.push(a, a + 1, b + 1, a + 1, b + 1, b);
+      idx.push(a, b, b + 2, a, b + 2, a + 2);
+    }
+    // and the two ends, which are vertical and therefore refused on their own
+    idx.push(0, 1, 2);
+    idx.push(n * 3, n * 3 + 2, n * 3 + 1);
+    const cg = new THREE.BufferGeometry();
+    cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    cg.setIndex(idx);
+    cg.computeVertexNormals();
+    A.collideGeo('dirt', cg, newTrs(cx, base, cz, yaw));
   }
   /**
    * WHAT WAS PUSHED UP WITH IT. A bank of bare spoil is a shape; the stone,
