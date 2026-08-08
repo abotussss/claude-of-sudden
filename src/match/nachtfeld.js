@@ -153,6 +153,25 @@ function structH(rec) {
  * gallery. The angle steps by the golden angle rather than by a fixed arc so
  * consecutive rounds are never on the same bearing and the walk does not read
  * as a metronome — the same objection the cathedral's `along` jitter answers.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE TIGHT RADIUS COMES OFF `radius` NOW, NOT OFF `halfW`, AND IT HAD TO
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「更地にするつもりで」 put the podium into the tower's demolition scope, and
+ * `airstrike._buildDemoSite` derives the settled pile's radius from
+ * `min(halfW, halfD) * 0.85`. At the shaft's own 6.5 m that is a 5.5 m disc,
+ * and every chunk of a 42 m podium would have been dragged into it — a mound on
+ * the axis instead of a levelled site. So `plains-tower.js` now publishes the
+ * PODIUM'S half-extent, which is the only reading of `halfW` that is true of
+ * the thing that comes down.
+ *
+ * This function was the one reader that wanted the other number, and it wanted
+ * it for a reason that has nothing to do with plan extent: it is the radius the
+ * helix TIGHTENS TO once it is up the shaft. `radius * 0.27` is 7.0 m against
+ * the 5.85 m `halfW * 0.9` used to give — half a shaft's width wider, on a walk
+ * that already jitters ±1.1 m — and it is derived from the same published
+ * extent every other number in this file comes off, which is the rule the file
+ * header states. `rec.halfW` now means one thing.
  */
 function climbAim(i, n, rec, rng, out) {
   const apron = 4;
@@ -166,12 +185,21 @@ function climbAim(i, n, rec, rng, out) {
   const t = (i - apron) / Math.max(1, n - apron - 1);
   const a = (i - apron) * 2.39996 + 1.1;
   // Wide at the podium, tight at the cab: the shaft is a cone in plan.
-  const r = (rec.radius * 0.52) * (1 - t) + Math.max(2.2, rec.halfW * 0.9) * t;
+  const r = (rec.radius * 0.52) * (1 - t) + Math.max(2.2, rec.radius * 0.27) * t;
   out[0] = Math.cos(a) * r + rng.range(-1.1, 1.1);
   out[1] = Math.sin(a) * r + rng.range(-1.1, 1.1);
-  // …AND THE CLIMB STOPS UNDER THE ROOF. @see `structH` for the 5.8 m of open
-  // sky the three top rounds used to go off in.
-  out[2] = 1.5 + t * (structH(rec) - 1.5) * 0.94;
+  /**
+   * …AND THE CLIMB STOPS UNDER THE ROOF. @see `structH` for the 5.8 m of open
+   * sky the three top rounds used to go off in.
+   *
+   * 0.94 -> 0.80, and the only thing that moved is the base. `baseY` was the
+   * P2 deck and is now the ground, so `structH` went from 31.9 m to 38.5 m and
+   * the same fraction would put the last four rounds in the mast and over the
+   * cab roof. 0.80 of 38.5 is 30.8 m over a base at 3.2 — the cab floor is at
+   * 29.2 and its roof at 34.2, so the walk still finishes ON the cab, which is
+   * where a decapitation has to finish.
+   */
+  out[2] = 1.5 + t * (structH(rec) - 1.5) * 0.80;
 }
 
 /**
@@ -242,13 +270,25 @@ function siegeAim(i, n, rec, rng, out) {
  * and the middle of them is a capture point appearing in a gap that has been
  * overlooked from a 43.7 m gallery for the whole match.
  *
- * WHAT IS STILL STANDING AFTERWARDS, because "更地" is NOT what this record
- * scopes and the difference is load-bearing: `plains-tower.js` puts only the
- * SUPERSTRUCTURE — the shaft above the gallery, the cab, the mast — in its
- * `shell` scope. The two podium decks, their ramps and the apron are the AI's
- * ground, they are outside both scopes, and they do not move. A man who was on
- * P1 when this fires is still on P1. @see `publishWorks` in
- * `src/world/levels/plains-works.js`.
+ * WHAT IS STILL STANDING AFTERWARDS: THE APRON, AND NOTHING ELSE —
+ * 「完全に管制塔破壊しろ、つまり更地にするつもりで」
+ *
+ * This used to scope the SUPERSTRUCTURE alone and the note here used to say so
+ * with some pride: the two podium decks, all four climbs and everything on them
+ * survived, because the decks are the AI's only high ground on this map. That
+ * is reversed, at the player's instruction, and it is reversed because it was
+ * measured doing the one thing a demolition must never do —
+ * 「管制塔の中にいるときに爆撃されると出れなくなる」. `plains-tower.js` carries the
+ * flood-fill numbers; the short version is that the old ruin re-walled the
+ * shaft with no doorways in it and left a man in the control room standing on
+ * rubble seven metres above the plain with 7.1 m of reach on every bearing.
+ *
+ * What is left is the APRON — a hardstanding 0.06 m proud of the turf — under a
+ * graded rubble field whose peak is 0.85 m, i.e. under the crouch eye. A man
+ * who was on P1 when this fires is on the ground afterwards, and so is
+ * everybody else. TWO SUPPLY POSTS STAND ON THAT APRON and outlive the tower,
+ * which is what stops 更地 costing the site every reason to be there.
+ * @see `STORES` in `plains-tower.js` and `publishWorks` in `plains-works.js`.
  */
 const TOWER_ACT = {
   id: 'NF-TOWER',

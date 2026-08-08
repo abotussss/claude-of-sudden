@@ -59,6 +59,17 @@ import { post, dressPost } from './plains-stores.js';
  * staircase between two floors with the same footprint, and pretending otherwise
  * by putting the decks on `LAYER.CLIP` would only move the lie. Bots hold the
  * ground, the two decks and the room; the man at the keyboard gets the tower.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * …AND ALL OF IT STOPS EXISTING IN ACT I — 「更地にするつもりで」
+ * ────────────────────────────────────────────────────────────────────────────
+ * The section above is the tower for the first three minutes of a match. After
+ * `NF-TOWER` fires there is no ziggurat, no deck, no climb and no room: the
+ * whole of it is inside the `shell` scope now, the apron is the only thing that
+ * survives, and the site is a graded rubble field on the plain. Everything this
+ * file says about nested annuli and one-floor-per-cell is about the standing
+ * tower; what the demolition leaves is flat ground and the nav patch re-probes
+ * it as such. @see `buildTower`'s scope note and `buildTowerRuin`.
  */
 
 // ────────────────────────────────────────────────────────────────── the plan ──
@@ -230,34 +241,83 @@ const DOOR_CLEAR = 2.6;
  *   spawn for your side. Holding the tower is a forward spawn 32 m off the
  *   capture point, and that is the reward verticality is actually worth here.
  *
+ * ════════════════════════════════════════════════════════════════════════════
+ * 「管制塔はもっと役目を果たせ」— AND THE MEASUREMENT OF WHY IT WAS NOT
+ * ════════════════════════════════════════════════════════════════════════════
+ * The table above was the answer to 「なんのためにあんの？？」 and it is still not
+ * enough, said while playing. Three things were measurably wrong with it, and
+ * none of them is about what the rewards ARE.
+ *
+ *   1. THE TWO BEST THINGS ON THE MAP WERE INVISIBLE BY CONSTRUCTION.
+ *      `Caches.nearby` — the ONLY thing that puts a marker on a supply post —
+ *      drops any post more than `dy > 8` above the player (`src/match/caches.js`,
+ *      and the comment there says why: a marker about a room you cannot reach
+ *      from here). The weapon rack stood at 21.2 m and the cab post at 26 m, so
+ *      from the P2 gallery at 6.6 m they are 14.6 m and 19.4 m up and NEITHER
+ *      HAS EVER BEEN MARKED FOR ANYBODY. The map's only second primary weapon
+ *      was a thing you could only find by guessing it was there.
+ *   2. …AND `RULES.cacheMarkerRange` IS 26 m, ON A 300 m MAP. That number is
+ *      right for the town ("about one building plus its street") and it means
+ *      that on the plain nothing tells you a tower has anything in it until you
+ *      are already at its foot. It is shared with the town and is not this
+ *      file's to move — so the TOWER has to say it, in the one language this
+ *      map has proved works in the dark. @see `annunciator`.
+ *   3. EVERY REWARD DIED WITH THE BUILDING. Five of the seven posts stand on
+ *      something in the shell scope, and the scope is now the whole tower, so
+ *      after Act I the tower's ground would have been worth nothing at all for
+ *      the remaining 240 s of the match.
+ *
  * ────────────────────────────────────────────────────────────────────────────
- * THE LADDER OF REWARDS FOLLOWS THE LADDER OF EFFORT, AND WHO CAN CLIMB IT
+ * THE LADDER OF REWARDS, WHO CAN CLIMB IT, AND WHAT SURVIVES ACT I
  * ────────────────────────────────────────────────────────────────────────────
- *   3.2 m  P1 deck      a dressing station and a resupply — BOT-REACHABLE, so
- *                       the fight over the tower happens on the tower.
- *   6.6 m  P2 gallery   a nest overlooking zone D, with rounds. BOT.
- *   6.74 m control room a resupply and the map's only frag stack, INDOORS and
- *                       bot-reachable through `world.interiorVolumes` — which
- *                       is the whole "屋内戦闘" argument `caches.js` measured on
- *                       the town (3 of 29 men had ever gone inside; 23 do now).
- *   21.2 m shaft storey THE WEAPON RACK. Player only, and it is meant to be:
- *                       four storeys of stair is the price of the second gun.
- *   26 m   the cab      rounds at the best sightline on the map, for the man
- *                       who carried that gun up.
+ *   0.06 m THE APRON     a dressing station on the south foot (the face zone D
+ *                        is on) and a resupply on the north foot (the face the
+ *                        attack walks in at). BOT-REACHABLE, beacon-plantable,
+ *                        AT GRADE — and therefore OUTSIDE the shell, so this is
+ *                        the half of the tower that is still worth holding
+ *                        after it has been levelled. It is also what makes the
+ *                        tower a place men go THROUGH on the way to D rather
+ *                        than past.
+ *   3.2 m  P1 deck       a dressing station and a resupply — BOT-REACHABLE, so
+ *                        the fight over the tower happens on the tower. DIES.
+ *   6.6 m  P2 gallery    a nest overlooking zone D, with rounds. BOT. DIES.
+ *   6.74 m control room  a resupply and the map's only frag stack, INDOORS and
+ *                        bot-reachable through `world.interiorVolumes` — which
+ *                        is the whole "屋内戦闘" argument `caches.js` measured on
+ *                        the town (3 of 29 men had ever gone inside; 23 do now).
+ *                        DIES.
+ *   11.6 m shaft storey  THE WEAPON RACK, moved down from 21.2 m. Still player
+ *                        only and still a real climb — one storey of dog-leg
+ *                        above the room, and the fight on the way back down is
+ *                        the price. What changes is that 11.6 m is 5.0 m over
+ *                        the P2 gallery and 4.9 m over the control-room floor,
+ *                        i.e. INSIDE `Caches.nearby`'s 8 m window from both, so
+ *                        a man who has got as far as the gallery is TOLD the
+ *                        gun is one flight up. At 21.2 m nothing ever was. DIES.
+ *   26 m   the cab       rounds at the best sightline on the map, for the man
+ *                        who carried that gun up. DIES.
  *
  * `x`/`z` are OFFSETS from `TOWER`, `h` is height above the pad datum, so the
  * table reads against the section drawing at the top of this file. The two
  * player-only posts refuse a beacon — @see `plains-stores.js`, which has the
  * measurement of what `_jitterOnto` does with one planted at 26 m.
+ *
+ * `perishable` is now on EVERY post inside the shell, which after this pass is
+ * every post above the apron. `Caches.update` disables one the frame its record
+ * goes down; a live pickup marker floating over a rubble field is the same bug
+ * as floating rubble and it has shipped here four times.
  */
 const STORES = [
-  { id: 'NF-TOWER-P1-med', kind: 'medic', x: 0, z: -15.2, h: P1_TOP, yaw: 0 },
-  { id: 'NF-TOWER-P1-ammo', kind: 'ammo', x: 0, z: 15.2, h: P1_TOP, yaw: Math.PI },
-  { id: 'NF-TOWER-P2-nest', kind: 'vantage', x: 0, z: 9.4, h: P2_TOP, yaw: Math.PI },
+  /** `x`/`z`/`yaw` are filled by `placeFootStores` off `CLIMBS[foot]`. */
+  { id: 'NF-TOWER-FOOT-med', kind: 'medic', x: 0, z: 0, h: 0.06, yaw: 0, foot: 2 },
+  { id: 'NF-TOWER-FOOT-ammo', kind: 'ammo', x: 0, z: 0, h: 0.06, yaw: 0, foot: 3 },
+  { id: 'NF-TOWER-P1-med', kind: 'medic', x: 0, z: -15.2, h: P1_TOP, yaw: 0, perishable: true },
+  { id: 'NF-TOWER-P1-ammo', kind: 'ammo', x: 0, z: 15.2, h: P1_TOP, yaw: Math.PI, perishable: true },
+  { id: 'NF-TOWER-P2-nest', kind: 'vantage', x: 0, z: 9.4, h: P2_TOP, yaw: Math.PI, perishable: true },
   { id: 'NF-TOWER-ROOM-ammo', kind: 'ammo', x: 2.48, z: 0.77, h: ROOM_Y, yaw: -1.87, perishable: true },
   { id: 'NF-TOWER-ROOM-frag', kind: 'grenade', x: -2.48, z: -0.77, h: ROOM_Y, yaw: 1.27, perishable: true },
   {
-    id: 'NF-TOWER-RACK', kind: 'weapon', x: -3.55, z: 0, h: FLOORS[3], yaw: Math.PI / 2,
+    id: 'NF-TOWER-RACK', kind: 'weapon', x: -3.55, z: 0, h: FLOORS[1], yaw: Math.PI / 2,
     perishable: true, botReachable: false, beacon: false,
   },
   {
@@ -265,6 +325,30 @@ const STORES = [
     perishable: true, botReachable: false, beacon: false, clip: true,
   },
 ];
+
+/**
+ * The two apron posts are placed IN THEIR CLIMB'S OWN FRAME rather than by hand,
+ * for the reason the whole `climb()` frame exists: move a flight and its post
+ * moves with it. `foot` indexes `CLIMBS`; this is resolved once, at module load,
+ * after `CLIMBS` is built.
+ */
+function placeFootStores() {
+  /**
+   * Past the bottom step and clear of `onClimb`'s keep-out, so nothing is ever
+   * dressed in a stair: the keep-out reaches `RUN1/2 + 1.4 + 1.1` = 6.71 m along
+   * the face and this stands at 7.61 m. Props in a doorway is five separate
+   * shipped bugs on this repo.
+   */
+  const v = -(RUN1 / 2 + 3.4);
+  for (const s of STORES) {
+    if (s.foot === undefined) continue;
+    const c = CLIMBS[s.foot];
+    s.x = c.nx * OUT1 + c.tx * v;
+    s.z = c.nz * OUT1 + c.tz * v;
+    // face back along the approach, i.e. at the man walking in
+    s.yaw = Math.atan2(-c.tx, -c.tz);
+  }
+}
 
 /**
  * Is (x, z) close enough to a store post on level `h` to foul it? Every
@@ -310,21 +394,44 @@ export function buildTower(A, groundY) {
   const lights = [];
 
   /**
-   * THE DESTROYED STATE IS SCOPED ROUND THE SUPERSTRUCTURE, NOT THE WHOLE
-   * TOWER, and that is a navigation decision rather than a budget one. The two
-   * podium decks are the AI's ground up here; re-baking a 21 m octagonal
-   * platform into a ruin scope only to stand an identical one back up would
-   * double the geometry to change nothing anybody can walk on. What comes down
-   * is everything above the P2 deck — the shaft, the cab and the mast — which
-   * is the whole of the skyline and the whole of the overwatch.
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE WHOLE TOWER IS IN THE SCOPE NOW — 「更地にするつもりで」
+   * ══════════════════════════════════════════════════════════════════════════
+   * This scope USED to be the superstructure alone — the shaft, the cab and the
+   * mast — and the two podium decks, their four climbs and everything on them
+   * survived. That was a deliberate navigation decision (the decks are the AI's
+   * only high ground on this map, and rebuilding a 21 m octagon into a ruin
+   * scope to stand an identical one back up buys nothing anybody can walk on),
+   * and it is reversed here because it was measured doing the one thing a
+   * demolition must never do.
+   *
+   * MEASURED, `_tztrap.mjs`, flooding the real collision surface from where the
+   * man is standing, 0.4 m lattice, `maxStep` 0.45, torso capsule:
+   *
+   *   INTACT, a man in the control room     47 716 cells, 62.2 m of reach,
+   *                                         44 040 of them at grade
+   *   RAZED,  the same man                     817 cells,  7.1 m of reach,
+   *                                         **NOT ONE of them at grade**
+   *
+   * — 「管制塔の中にいるときに爆撃されると出れなくなる」, exactly, and the cause was
+   * the OLD RUIN rather than the settle: `buildTowerRuin` re-walled all eight
+   * edges of the shaft as a stump WITH NO DOORWAYS IN IT, while the room's own
+   * floor slab and its four door surrounds were inside this scope and went. The
+   * man landed on the debris drawn over the P2 gallery at 10.9 m and stood
+   * inside a closed octagon seven metres above the plain.
+   *
+   * WHAT IT COSTS, stated rather than discovered: the two podium decks stop
+   * being AI ground and all five of the posts that stood on them die with their
+   * shells (@see `STORES`). What replaces them is two posts ON THE APRON, which
+   * is at grade, is outside this scope, and therefore outlives the tower.
    */
+  buildApron(A, rng, y, groundY);
+
   const shell = A.beginScope('shell:NF-TOWER');
+  buildPodium(A, rng, y, groundY, lights);
   buildShaft(A, rng, y);
   buildCab(A, rng, y, lights);
   A.endScope();
-
-  // …and the platform it stands on, which survives whatever happens to it.
-  buildPodium(A, rng, y, groundY, lights);
 
   const ruin = A.beginScope('ruin:NF-TOWER');
   buildTowerRuin(A, new Rng(0x7a11e3), y, groundY);
@@ -347,10 +454,46 @@ export function buildTower(A, groundY) {
       opens: false,
       shell, ruin,
       x: TOWER.x, z: TOWER.z,
-      baseY: y(P2_TOP),
+      /**
+       * THE BASE IS THE GROUND NOW, NOT THE GALLERY. `baseY` is what
+       * `nachtfeld.structH` measures the structure's height against and what
+       * `_actAim` adds to every aiming point, so leaving it at the P2 deck
+       * would have the barrage begin 6.6 m up a building that now comes down
+       * from the turf. At grade it is 38.5 m of structure and the four opening
+       * rounds on the apron land on the apron — which is also the only way they
+       * leave a scorch, @see `SCORCH_CEIL`.
+       */
+      baseY: y(0),
       top: y(MAST_TOP),
-      radius: 22,
-      halfW: SH_R, halfD: SH_R,
+      /**
+       * 22 -> 26: the rectangle the nav patch re-probes and the circle the
+       * barrage's opening rounds walk. It has to take in everything that STOPS
+       * EXISTING, and that is now the apron's own edge — the outboard flights
+       * stand at 24.75 and `TOWER_R` is 25.4.
+       */
+      radius: 26,
+      /**
+       * ──────────────────────────────────────────────────────────────────────
+       * THE HALF-EXTENT IS THE PODIUM'S, AND IT IS THE SETTLE THAT NEEDS IT
+       * ──────────────────────────────────────────────────────────────────────
+       * `airstrike._buildDemoSite` derives `moundR` from
+       * `min(halfW, halfD) * 0.85` and `_buildMesh` settles EVERY chunk at
+       * `mound + dir * r` — the rest pose is not consulted. At `SH_R` that is a
+       * 5.5 m disc, which is right for a shaft and would have dragged all four
+       * podium faces, forty-two metres apart, into one mound on the axis. At
+       * `P1_R` it is 17.9 m and the podium's rubble comes to rest over the
+       * podium's own plan, which is what 更地 means.
+       *
+       * It is also what `_spectacle` sizes a demolition's dust off: the haze
+       * ring goes from 5.9 m to 18.9 m and the five smoke columns from ±4.7 m
+       * to ±15 m, i.e. the dust now covers the thing that fell.
+       *
+       * THE ONE READER THAT WANTED THE OLD NUMBER IS `climbAim`, which used
+       * `halfW * 0.9` as the radius its helix tightens to at the cab. That is
+       * fixed where it belongs — in `nachtfeld.js`, off `rec.radius`, so this
+       * record has one meaning for `halfW` instead of two.
+       */
+      halfW: P1_R, halfD: P1_R,
       surfaces: ['concrete', 'metal'],
       tint: 0x9aa0a2,
       /**
@@ -385,33 +528,183 @@ export function buildTower(A, groundY) {
 }
 
 /**
- * The falling mass, as axis-aligned boxes on the level's own axes. The octagon
- * is fractured as the square it is inscribed in: `fracture` cuts boxes, the
- * chunks are 1-2 m of broken concrete by the time they land, and nobody has ever
- * been able to see the corner of a chamfer in a dust cloud.
+ * ════════════════════════════════════════════════════════════════════════════
+ * HOW BIG A PIECE OF THIS TOWER IS WHEN IT LANDS — 「瓦礫がデカすぎる、小さくしろ」
+ * ════════════════════════════════════════════════════════════════════════════
+ * A chunk's size is `size / cut` per axis and nothing else, so these three
+ * numbers ARE the rubble. What they were, measured off the table this replaces:
+ *
+ *   shaft walls   1.59 x 1.63 m      roof slab    2.17 x 2.17 m
+ *   storey slabs  1.85 x 1.85 m      cab roof     1.91 x 1.91 m
+ *
+ * — i.e. the biggest pieces of this building landed at over two metres across,
+ * which is a car, not rubble, and it is the whole complaint.
+ *
+ * THEY ARE NOT ONE NUMBER, AND THE REASON IS PERSPECTIVE RATHER THAN THRIFT.
+ * The pieces a player ever gets to judge are the ones that come to rest at his
+ * feet — the podium, its parapets and the four climbs — and the pieces he only
+ * ever sees falling are the cab and the mast, thirty metres up. So the ladder
+ * runs the other way from the building: finest at the bottom, coarsest at the
+ * top. Halving a chunk's edge quadruples the count on a plate and octuples it in
+ * a solid, and this mass is already the biggest on the map, so spending the
+ * count where it cannot be seen would be paying twice for nothing.
+ *
+ * AND THESE ARE NOT THE CHUNK SIZE, THEY ARE ITS MEAN. `fracture` jitters every
+ * interior boundary by ±0.3 of a cell (`splits` in `airstrike.js`), so two
+ * boundaries that jitter apart give a cell 1.6x nominal — which is why the
+ * table above says 2.17 for a part authored at 2.1 and why this is measured on
+ * the DRAWN INSTANCES rather than read off the cut grid. `_tzchunks.mjs` takes
+ * the longest world edge of every chunk of the site; `_tzbefore.mjs` runs the
+ * old table through the same `splits` with the same seed:
+ *
+ *             chunks   min   p25  median   p75   p95   max   >1.5m  >2.0m
+ *   before       977  0.95  1.65    1.83  2.01  2.42  3.08     861    285
+ *   after      3 365  0.83  1.11    1.30  1.44  1.67  1.89     681      0
+ *
+ * The median piece of this tower is 0.53 m smaller, the biggest is 1.19 m
+ * smaller, and NOT ONE of 3 365 is over two metres where 285 of 977 were — and
+ * that is while the mass being broken went from the superstructure alone to the
+ * whole building, podium and stairs included.
+ *
+ * WHAT IT COSTS, because 3 365 is more than the cathedral's 2 151 and that
+ * deserves a number rather than a shrug: nothing is computed on the frame it
+ * fires — @see the discipline note in `airstrike.js` — so the cost is boot
+ * (one `groundHeight` per chunk for the settle probe), 210 KB of settled poses
+ * to memcpy at `SETTLE_AT`, and 40 k triangles in two instanced draws that
+ * exist only between the fire and the end of the round. Measured with
+ * `_razecost.mjs`; the numbers are in the commit.
+ */
+const CHUNK_LOW = 0.85;
+const CHUNK_MID = 1.15;
+const CHUNK_HIGH = 1.25;
+/**
+ * Along a forty-metre wall, where the OTHER two axes are already a chunk. It is
+ * a shade coarser than `CHUNK_LOW` for the same reason the ladder exists at
+ * all: cutting the long axis of four 42 m faces as fine as their section would
+ * add three hundred chunks to make a piece look 0.3 m shorter from one bearing
+ * out of four.
+ */
+const RUN_LOW = 1.15;
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE FALLING MASS — AND IT IS THE WHOLE TOWER NOW
+ * ════════════════════════════════════════════════════════════════════════════
+ * 「完全に管制塔破壊しろ、つまり更地にするつもりで」.
+ *
+ * Axis-aligned boxes on the level's own axes; the octagon is fractured as the
+ * square it is inscribed in, because `fracture` cuts boxes and nobody has ever
+ * seen the corner of a chamfer in a dust cloud.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT IS HERE THAT WAS NOT, AND WHAT IS DELIBERATELY STILL NOT
+ * ────────────────────────────────────────────────────────────────────────────
+ * ADDED: both podium rings with their parapets, and all four climbs. Those are
+ * the parts a man standing on the plain watches come apart, and the previous
+ * scope — superstructure only — is exactly why the site was still a fortress
+ * afterwards.
+ *
+ * NOT ADDED: the DECK PLATES, i.e. the 9 m annulus of P1 and the disc of P2.
+ * That is not an oversight and it is the same judgement `MASS_BLOCK` in
+ * `airstrike.js` makes about a building (a storey box, a skin and a balcony —
+ * never the solid volume). A podium is mass on grade: demolishing it breaks the
+ * RIM and the parapets and turns the middle into rubble WHERE IT ALREADY IS,
+ * which is what `buildTowerRuin`'s graded debris field draws on the same frame
+ * the plates stop being drawn. Fracturing 1 700 m² of 0.34 m plate would cost
+ * six hundred chunks to animate a surface that is under a nineteen-metre dust
+ * ring and is replaced by rubble at the instant it moves.
  */
 function towerMass(y) {
-  const n = (m, per = 1.6) => Math.max(1, Math.round(m / per));
+  const n = (m, per) => Math.max(1, Math.round(m / per));
   const t = SH_WALL;
   const W = SH_R * 2;
   const H = ROOF_Y - ROOM_Y;
-  const parts = [
-    { id: 'shaftXp', mat: 1, size: [t, H, W], at: [(W - t) / 2, y(ROOM_Y + H / 2), 0], cut: [1, n(H), n(W)] },
-    { id: 'shaftXn', mat: 1, size: [t, H, W], at: [-(W - t) / 2, y(ROOM_Y + H / 2), 0], cut: [1, n(H), n(W)] },
-    { id: 'shaftZp', mat: 1, size: [W - t * 2, H, t], at: [0, y(ROOM_Y + H / 2), (W - t) / 2], cut: [n(W), n(H), 1] },
-    { id: 'shaftZn', mat: 1, size: [W - t * 2, H, t], at: [0, y(ROOM_Y + H / 2), -(W - t) / 2], cut: [n(W), n(H), 1] },
-  ];
+  const parts = [];
+
+  /**
+   * ---- the two podium rings ------------------------------------------------
+   * Each is FOUR walls round the square the octagon is inscribed in, carried up
+   * over the deck to take in the parapet as one pour: the parapet is the piece
+   * that actually gets thrown, and separating it would only mean two rows of
+   * chunks meeting on a joint no one can see.
+   */
+  const ring = (id, mat, r, y0, y1, th) => {
+    const w = r * 2;
+    const h = y1 - y0;
+    const cy = y((y0 + y1) / 2);
+    const up = n(h, CHUNK_LOW);
+    parts.push(
+      { id: `${id}Xp`, mat, size: [th, h, w], at: [(w - th) / 2, cy, 0], cut: [1, up, n(w, RUN_LOW)] },
+      { id: `${id}Xn`, mat, size: [th, h, w], at: [-(w - th) / 2, cy, 0], cut: [1, up, n(w, RUN_LOW)] },
+      { id: `${id}Zp`, mat, size: [w - th * 2, h, th], at: [0, cy, (w - th) / 2], cut: [n(w - th * 2, RUN_LOW), up, 1] },
+      { id: `${id}Zn`, mat, size: [w - th * 2, h, th], at: [0, cy, -(w - th) / 2], cut: [n(w - th * 2, RUN_LOW), up, 1] }
+    );
+  };
+  ring('p1', 1, P1_R, 0, P1_TOP + 1.16, 1.1);
+  ring('p2', 1, P2_R, P1_TOP, P2_TOP + 1.1, 1.0);
+
+  /**
+   * ---- the four climbs ----------------------------------------------------
+   * Every flight on this tower is on a cardinal axis (@see the note on `TREAD`,
+   * which is the reason), so each one is an axis-aligned box with no transform:
+   * the ±X climbs run their first flight along Z and their second along X, and
+   * the ±Z climbs are the same two boxes with their footprints swapped.
+   */
+  for (const c of CLIMBS) {
+    const alongX = Math.abs(c.tx) > 0.5;
+    // flight I — outboard of the P1 face, climbing along it
+    const f1 = [FLIGHT_W, P1_TOP, RUN1];
+    const c1 = [n(FLIGHT_W, RUN_LOW), n(P1_TOP, CHUNK_LOW), n(RUN1, RUN_LOW)];
+    parts.push({
+      id: `climb${c.nx}${c.nz}A`, mat: 1,
+      size: alongX ? [f1[2], f1[1], f1[0]] : f1,
+      at: [c.nx * OUT1, y(P1_TOP / 2), c.nz * OUT1],
+      cut: alongX ? [c1[2], c1[1], c1[0]] : c1,
+    });
+    // flight II — radial, inward, from the parapet gate up to P2
+    const uMid = (P2_R + RUN2 - 0.6 + P2_R - 0.6) / 2;
+    const f2 = [FLIGHT_W, P2_TOP - P1_TOP, RUN2];
+    const c2 = [n(FLIGHT_W, RUN_LOW), n(P2_TOP - P1_TOP, CHUNK_LOW), n(RUN2, RUN_LOW)];
+    parts.push({
+      id: `climb${c.nx}${c.nz}B`, mat: 1,
+      size: alongX ? f2 : [f2[2], f2[1], f2[0]],
+      at: [c.nx * uMid + c.tx * (RUN1 / 2), y((P1_TOP + P2_TOP) / 2), c.nz * uMid + c.tz * (RUN1 / 2)],
+      cut: alongX ? c2 : [c2[2], c2[1], c2[0]],
+    });
+  }
+
+  // ---- the shaft, storey by storey ----------------------------------------
+  parts.push(
+    { id: 'shaftXp', mat: 1, size: [t, H, W], at: [(W - t) / 2, y(ROOM_Y + H / 2), 0], cut: [1, n(H, CHUNK_MID), n(W, CHUNK_MID)] },
+    { id: 'shaftXn', mat: 1, size: [t, H, W], at: [-(W - t) / 2, y(ROOM_Y + H / 2), 0], cut: [1, n(H, CHUNK_MID), n(W, CHUNK_MID)] },
+    { id: 'shaftZp', mat: 1, size: [W - t * 2, H, t], at: [0, y(ROOM_Y + H / 2), (W - t) / 2], cut: [n(W - t * 2, CHUNK_MID), n(H, CHUNK_MID), 1] },
+    { id: 'shaftZn', mat: 1, size: [W - t * 2, H, t], at: [0, y(ROOM_Y + H / 2), -(W - t) / 2], cut: [n(W - t * 2, CHUNK_MID), n(H, CHUNK_MID), 1] }
+  );
   for (let f = 1; f < FLOORS.length; f++) {
     parts.push({
       id: `slab${f}`, mat: 1, size: [W - t * 2, 0.28, W - t * 2],
-      at: [0, y(FLOORS[f] - 0.14), 0], cut: [n(W, 2.1), 1, n(W, 2.1)],
+      at: [0, y(FLOORS[f] - 0.14), 0], cut: [n(W, CHUNK_HIGH), 1, n(W, CHUNK_HIGH)],
     });
   }
-  parts.push({ id: 'roof', mat: 1, size: [W, 0.4, W], at: [0, y(ROOF_Y - 0.2), 0], cut: [n(W, 2.1), 1, n(W, 2.1)] });
-  // the cab: a light box that comes apart into a lot of small pieces
-  parts.push({ id: 'cab', mat: 0, size: [CAB_R * 2, 3.2, CAB_R * 2], at: [0, y(ROOF_Y + 1.9), 0], cut: [n(CAB_R * 2, 1.5), 3, n(CAB_R * 2, 1.5)] });
-  parts.push({ id: 'cabroof', mat: 1, size: [CAB_R * 2, 0.34, CAB_R * 2], at: [0, y(CAB_TOP - 0.17), 0], cut: [n(CAB_R * 2, 2.0), 1, n(CAB_R * 2, 2.0)] });
-  parts.push({ id: 'mast', mat: 0, size: [1.5, MAST_TOP - CAB_TOP, 1.5], at: [0, y((CAB_TOP + MAST_TOP) / 2), 0], cut: [1, n(MAST_TOP - CAB_TOP, 1.4), 1] });
+  parts.push({ id: 'roof', mat: 1, size: [W, 0.4, W], at: [0, y(ROOF_Y - 0.2), 0], cut: [n(W, CHUNK_HIGH), 1, n(W, CHUNK_HIGH)] });
+  /**
+   * THE CAB IS A RIM, NOT A BLOCK. It is 17.2 m across, 3.2 m tall and almost
+   * entirely glazing and air — fracturing it as a solid box spent 363 chunks at
+   * the old cut and would spend 768 at this one, on a thing that is four glazed
+   * walls on a floor plate. Four rim boxes are 126, and they are what actually
+   * comes off it.
+   */
+  const CAB_W = CAB_R * 2;
+  const rim = 1.3;
+  const cabUp = n(3.2, CHUNK_LOW);
+  parts.push(
+    { id: 'cabXp', mat: 0, size: [rim, 3.2, CAB_W], at: [(CAB_W - rim) / 2, y(ROOF_Y + 1.9), 0], cut: [1, cabUp, n(CAB_W, CHUNK_HIGH)] },
+    { id: 'cabXn', mat: 0, size: [rim, 3.2, CAB_W], at: [-(CAB_W - rim) / 2, y(ROOF_Y + 1.9), 0], cut: [1, cabUp, n(CAB_W, CHUNK_HIGH)] },
+    { id: 'cabZp', mat: 0, size: [CAB_W - rim * 2, 3.2, rim], at: [0, y(ROOF_Y + 1.9), (CAB_W - rim) / 2], cut: [n(CAB_W - rim * 2, CHUNK_HIGH), cabUp, 1] },
+    { id: 'cabZn', mat: 0, size: [CAB_W - rim * 2, 3.2, rim], at: [0, y(ROOF_Y + 1.9), -(CAB_W - rim) / 2], cut: [n(CAB_W - rim * 2, CHUNK_HIGH), cabUp, 1] }
+  );
+  parts.push({ id: 'cabroof', mat: 1, size: [CAB_W, 0.34, CAB_W], at: [0, y(CAB_TOP - 0.17), 0], cut: [n(CAB_W, CHUNK_HIGH), 1, n(CAB_W, CHUNK_HIGH)] });
+  parts.push({ id: 'mast', mat: 0, size: [1.5, MAST_TOP - CAB_TOP, 1.5], at: [0, y((CAB_TOP + MAST_TOP) / 2), 0], cut: [1, n(MAST_TOP - CAB_TOP, CHUNK_MID), 1] });
   return parts;
 }
 
@@ -674,6 +967,23 @@ function stairMarks(A, c, y) {
   // …and a bar under it, so the board reads as a sign and not as a window
   const [ux2, uz2] = P(P1_R + 0.12, -RUN1 / 2 + 0.9);
   A.add('ember', BOX_SOFT(A), LL(IDENT, ux2, y(1.52), uz2, yaw, 0.05, 0.09, 2.3));
+
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * AND WHAT IS UP THERE, AT THE HEIGHT A MAN READS IT FROM
+   * ──────────────────────────────────────────────────────────────────────────
+   * The same three marks the shaft carries at 18.6 m (@see `signBand`), on a
+   * second board beside the foot of the stair. The band is what tells you the
+   * tower has something on it from across the plain; this is what tells you
+   * WHAT, at the moment you are deciding whether to spend the climb. Both are
+   * flat against the podium face, 0.14 m proud, lowest edge at 1.15 m — nothing
+   * to walk into and nothing for `_scatterblock` to find.
+   */
+  const [sx, sz] = P(P1_R + 0.07, -RUN1 / 2 + 4.6);
+  A.add('metal_dark', box, LL(IDENT, sx, y(1.72), sz, yaw, 0.14, 1.1, 3.3),
+    { masks: [0.85, 0.5, 0.1] });
+  const [gx, gz] = P(P1_R + 0.15, -RUN1 / 2 + 4.6);
+  supplyMarks(A, gx, y(1.72), gz, c.nx, c.nz, yaw, 0.62, 1.0);
 }
 
 // ─────────────────────────────────────────────────────────────────── podium ──
@@ -780,6 +1090,8 @@ const CLIMBS = [
   climb(0, 1, { cheek: false }), // south — the face zone D looks at; foot opens EAST
   climb(0, -1),   // north — the attack's approach; foot opens WEST, at their base
 ];
+/** …and the two apron posts, in the frames the flights they stand at own. */
+placeFootStores();
 
 /** Is (x, z) on or beside a flight? Keeps deck dressing out of the climb. */
 function onClimb(x, z, margin = 1.1) {
@@ -797,27 +1109,40 @@ function onClimb(x, z, margin = 1.1) {
   return false;
 }
 
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE APRON — THE ONE PIECE OF THIS TOWER THAT IS NOT IN THE SHELL
+ * ════════════════════════════════════════════════════════════════════════════
+ * A skirt of hardstanding round the foot, so the podium meets the plain on a
+ * made surface rather than on a razor edge through the grass.
+ *
+ * IT SURVIVES THE DEMOLITION, AND IT SURVIVES IT BECAUSE IT IS ALREADY THE
+ * GROUND: 0.61 m of slab whose top stands 0.06 m over the plain. There is
+ * nothing here to climb, nothing to fall off, nothing for `_scatterblock` to
+ * find and nothing in the 0.42-0.68 m band that this map refuses to have
+ * standing proud of the turf. What keeping it buys is everything: the site
+ * still reads as a place where something stood, the two supply posts on it are
+ * still there for the remaining four minutes of the match, and the nav patch
+ * has a flat, known plane to re-probe onto instead of raw steppe under rubble.
+ */
+function buildApron(A, rng, y, groundY) {
+  const ap = at(octagon(P1_R + 4.4, P1_CUT + 1.2));
+  prism(A, 'concrete_dark', ap, y(-0.55), y(0.06), { surface: 'concrete' });
+  for (let i = 0; i < 130; i++) {
+    const a = rng.float() * Math.PI * 2;
+    const d = P1_R + rng.range(1.5, 8.5);
+    const px = TOWER.x + Math.cos(a) * d;
+    const pz = TOWER.z + Math.sin(a) * d;
+    const g = patchGeometry(rng, rng.range(0.8, 3.0), { lobes: 11, wobble: 0.55 });
+    A.addOnce('steppe_bare', g, LL(IDENT, px, groundY(px, pz) + 0.03, pz, rng.float() * 6.28,
+      1, 1, rng.range(0.6, 1.4)), { masks: [0.5, rng.range(0.3, 0.8), 0.2] });
+  }
+  /** …and the two posts that outlive the tower. @see `STORES`. */
+  buildStores(A, rng, y, 0.06);
+}
+
 function buildPodium(A, rng, y, groundY, lights) {
   const box = BOX(A);
-
-  /**
-   * THE APRON — a skirt of hardstanding round the foot, so the podium meets the
-   * plain on a made surface rather than on a razor edge through the grass. It is
-   * flat ground: the nav grid keeps it exactly as it keeps the rest of the pad.
-   */
-  {
-    const ap = at(octagon(P1_R + 4.4, P1_CUT + 1.2));
-    prism(A, 'concrete_dark', ap, y(-0.55), y(0.06), { surface: 'concrete' });
-    for (let i = 0; i < 130; i++) {
-      const a = rng.float() * Math.PI * 2;
-      const d = P1_R + rng.range(1.5, 8.5);
-      const px = TOWER.x + Math.cos(a) * d;
-      const pz = TOWER.z + Math.sin(a) * d;
-      const g = patchGeometry(rng, rng.range(0.8, 3.0), { lobes: 11, wobble: 0.55 });
-      A.addOnce('steppe_bare', g, LL(IDENT, px, groundY(px, pz) + 0.03, pz, rng.float() * 6.28,
-        1, 1, rng.range(0.6, 1.4)), { masks: [0.5, rng.range(0.3, 0.8), 0.2] });
-    }
-  }
 
   // ---------------------------------------------------------------- P1 mass --
   prism(A, 'concrete', P1, y(0), y(P1_TOP), { surface: 'concrete' });
@@ -1169,12 +1494,98 @@ function buildShaft(A, rng, y) {
   faceDetail(A, rng, SH, P2_TOP, ROOF_Y, y, { batter: 0 });
   shaftFaces(A, rng, y);
   shaftLining(A, rng, y);
+  signBand(A, y);
   controlRoom(A, rng, y);
   shaftInterior(A, rng, y);
 
   // the roof deck over the shaft, under the cab: a real slab with a hatch
   A.add('concrete_dark', box, LL(IDENT, TOWER.x, y(ROOF_Y - 0.2), TOWER.z, 0, SH_R * 2, 0.4, SH_R * 2),
     { masks: [0.55, 0.4, 0.2] });
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * HOW A PLAYER FINDS OUT THE TOWER HAS ANYTHING IN IT — 「もっと役目を果たせ」
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE ANSWER TODAY IS THAT HE DOES NOT, AND THAT IS A MEASUREMENT RATHER THAN
+ * AN OPINION. A supply post is announced by exactly one thing in this game,
+ * `MatchSystem`'s `caches.nearby(player, RULES.cacheMarkerRange, …)`, and:
+ *
+ *   `cacheMarkerRange` is 26 m. This map is 300 m across. Nothing on the plain
+ *   tells you a building has stores in it until you are already at its foot,
+ *   and 26 is the town's number — one building plus its street — which is right
+ *   there and is not this file's to change.
+ *   `Caches.nearby` drops anything more than `dy > 8` overhead, so the two best
+ *   things on the tower have never been marked for anybody at all.
+ *
+ * The previous two passes answered 「なんのためにあんの」 with stores and a beacon
+ * and answered 「入る場所がわからない」 with lit stairs, and he played both builds
+ * and said it again. Both answers were about the WAY IN. Neither was about the
+ * REASON, and a reason nobody can see from three hundred metres is not one.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * SO THE BUILDING SAYS IT, IN THE ONE LANGUAGE THIS MAP HAS PROVED IN THE DARK
+ * ────────────────────────────────────────────────────────────────────────────
+ * A lit band on each of the four shaft faces, mid-shaft, 18.6 m over the plain
+ * and clear of every slit window on that elevation. It is EMISSION and not one
+ * light: `world`'s punctual count forces every material's program cache key on
+ * this renderer, so four lamps here would recompile the map — the same argument
+ * `stairMarks` is built on, and those are the parts the previous pass measured
+ * as still carrying in the dark.
+ *
+ * IT IS DESIGNED TO DEGRADE, which is the part that makes it work on a map with
+ * this much air in it:
+ *
+ *   at 300 m  a bright bar high on the only vertical object between the rims —
+ *             the tower has something on it
+ *   at 100 m  three separate marks — it is a supply point, not a light
+ *   at  30 m  a cross, a stack of rounds and a rifle — an aid post, ammunition
+ *             and the map's only second primary weapon are in this building
+ *
+ * Four faces, so it reads from every bearing men arrive on, and the same three
+ * marks go on the sign board at the foot of every climb, at eye height, where
+ * the man who has walked up to it can read them properly.
+ */
+/** Aid, rounds, a rifle: three marks, in a face's own frame. `w` is one mark. */
+function supplyMarks(A, mx, my, mz, nx, nz, yaw, w, gap) {
+  const tx = -nz, tz = nx;
+  const mark = (v, sy, sz, dy = 0) =>
+    A.add('ember', BOX_SOFT(A), LL(IDENT, mx + tx * v, my + dy, mz + tz * v, yaw, 0.055, sy, sz));
+  // ---- the cross -----------------------------------------------------------
+  mark(-gap, w, w * 0.3);
+  mark(-gap, w * 0.3, w);
+  // ---- the rounds: three bars in a stack -----------------------------------
+  for (let k = -1; k <= 1; k++) mark(0, w * 0.2, w * 0.92, k * w * 0.36);
+  // ---- the rifle: a long bar with its magazine under the middle of it -------
+  mark(gap, w * 0.18, w, w * 0.16);
+  mark(gap + w * 0.12, w * 0.42, w * 0.2, -w * 0.2);
+}
+
+function signBand(A, y) {
+  /** Between the first and second slit windows: 13.77 .. 16.93 of clear wall. */
+  const bandY = y((FLOORS[1] + 1.35 + 0.82 + (FLOORS[2] + 1.35 - 0.82)) / 2);
+  for (let i = 0; i < SH.length; i++) {
+    const e = edgeInfo(SH, i);
+    const isDoor = DOORS.some((d) => Math.abs(e.nx - d.ax) < 0.05 && Math.abs(e.nz - d.az) < 0.05);
+    if (!isDoor) continue;
+    const ox = e.nx * 0.52, oz = e.nz * 0.52;
+    /**
+     * THE BACKING PLATE FIRST, AND IT IS NOT DECORATION. The first cut of the
+     * stair pylons stood a strip of emission on a dark post and at 32 m the
+     * post was invisible and the strip was a slab of orange light hanging in
+     * the air with nothing under it — which is the shape of the complaint about
+     * this map's graphics, not the answer to it. A light on a night map has to
+     * have a thing holding it up.
+     */
+    A.add('metal_dark', BOX(A), LL(IDENT, e.mx + e.nx * 0.46, bandY, e.mz + e.nz * 0.46, e.yaw,
+      0.16, 2.5, 7.4), { masks: [0.85, 0.45, 0.1] });
+    // the frame round it, so the band has an edge in raking moonlight
+    for (const s of [-1, 1]) {
+      A.add('metal_rust', BOX_THIN(A), LL(IDENT, e.mx + ox, bandY + s * 1.28, e.mz + oz, e.yaw,
+        0.09, 0.14, 7.4), { masks: [0.9, 0.6, 0.05] });
+    }
+    supplyMarks(A, e.mx + ox, bandY, e.mz + oz, e.nx, e.nz, e.yaw, 1.5, 2.35);
+  }
 }
 
 /**
@@ -1743,77 +2154,179 @@ function buildCab(A, rng, y, lights) {
 
 // ───────────────────────────────────────────────────────────────────── ruin ──
 /**
- * WHAT IS LEFT AFTER THE EVENT. Baked at boot into the same merged batches,
- * hidden and intangible until somebody calls `setDown(true)`.
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHAT IS LEFT AFTER THE EVENT — 「更地にするつもりで」
+ * ════════════════════════════════════════════════════════════════════════════
+ * Baked at boot into the same merged batches, hidden and intangible until
+ * somebody calls `setDown(true)`.
  *
- * The shaft is snapped off eight metres above the gallery with the reinforcement
- * standing out of the break; the cab has gone over the side and lies across the
- * P1 deck and the apron with the mast beyond it; the rest is graded rubble. The
- * debris field is RELAXED (`debrisField`) so it presents no step over 0.36 m —
- * a pile the bots cannot cross would only replace a tower nobody could climb
- * with a mound nobody can pass.
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT THIS REPLACED, AND WHY IT WAS THE TRAP
+ * ────────────────────────────────────────────────────────────────────────────
+ * The old ruin re-walled ALL EIGHT EDGES of the shaft as a stump 5-9 m tall —
+ * `A.box('concrete', e.mx, …, SH_WALL, h, e.len, e.yaw)` for every edge — and
+ * the four doorways were not cut in it, because the door piers and lintels live
+ * in `buildShaft` and `buildShaft` is inside the shell. The control room's own
+ * floor slab went with the shell too. So the destroyed state was a closed
+ * octagonal wall standing on the P2 deck with a 1.5 m debris pile inside it,
+ * and a man who had been in the room when the strike landed came to rest on
+ * that pile SEVEN METRES ABOVE THE PLAIN with no opening on any bearing.
+ *
+ * Measured before (`_tztrap.mjs`, flooding the real collision surface):
+ *   817 cells reachable, 7.1 m of reach, NOT ONE cell at grade.
+ * 「管制塔の中にいるときに爆撃されると出れなくなる」, and that is it exactly.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * SO THERE IS NO STUMP. THERE IS NOTHING TO BE INSIDE OF.
+ * ────────────────────────────────────────────────────────────────────────────
+ * Everything here stands on `groundY` — the plain's own analytic height field —
+ * and nothing on it reaches a metre. The site becomes:
+ *
+ *   ONE GRADED DEBRIS FIELD over the whole footprint. `debrisField` RELAXES the
+ *   height field until no cell stands more than 0.36 m over its neighbour,
+ *   which is under `NavGrid.maxStep` 0.45 however the two lattices line up, so
+ *   the pile is a slope rather than a wall.
+ *   `peak` IS 0.6 AND THE ARITHMETIC MATTERS: the field's own noise term is
+ *   `peak * shape * (0.45 + fbm * 1.1)`, i.e. up to 1.55x, so 0.6 tops out at
+ *   0.93 m — measured 4.13 against a plain at 3.20. That is under the 1.02 m
+ *   crouch eye EVERYWHERE, which is what stops 更地 turning into the complaint
+ *   `KEEP_LOW` was written for (「瓦礫による視認性の悪さが問題」): the whole site is
+ *   cover you get behind crouched and see over standing. At 0.85 the tallest
+ *   cells reached 1.32 m and half a dozen of them were chest-high walls.
+ *   A HEAVIER RING where the podium's rim was, because that is where 42 m of
+ *   battered face and its parapet came down, and a ruin with no plan in it is
+ *   a gravel car park.
+ *   THE CAB, on the ground on its side, and the mast lying out across the
+ *   apron. They are the two pieces a player can still name, and they are the
+ *   whole of what says a TOWER stood here rather than a shed.
+ *   Both are laid so their tops are inside the crouch line at the middle and
+ *   the mast tapers to nothing, so neither is a step and neither is a wall.
+ *
+ * NOTHING IS IN THE 0.42-0.68 m BAND AS A STEP, nothing is over `maxStep` and
+ * nothing encloses anything. @see `_tztrap.mjs` and `tools/navcheck.mjs` for
+ * the numbers this is measured against.
  */
 function buildTowerRuin(A, rng, y, groundY) {
   const box = BOX(A);
-  const BREAK = ROOM_Y + 7.6;
 
-  // the stump: the same walls, torn off at a different height on every face
-  for (let i = 0; i < SH.length; i++) {
-    const e = edgeInfo(SH, i);
-    const h = BREAK + rng.range(-2.6, 1.4) - ROOM_Y;
-    const courses = Math.max(2, Math.round(h / 0.8));
-    for (let c = 0; c < courses; c++) {
-      const ch = h / courses;
-      const cy = ROOM_Y + (c + 0.5) * ch;
-      const shrink = c === courses - 1 ? rng.range(0.3, 0.8) : 1;
-      A.add('concrete', box, LL(IDENT, e.mx, y(cy), e.mz, e.yaw + rng.range(-0.01, 0.01),
-        SH_WALL, ch * (c === courses - 1 ? 0.7 : 1.0), e.len * shrink),
-        { masks: [0.55 + rng.float() * 0.4, 0.5 + rng.float() * 0.4, 0.3] });
-    }
-    A.box('concrete', e.mx, y(ROOM_Y + h / 2), e.mz, SH_WALL, h, e.len, e.yaw);
-    // reinforcement standing out of the break
-    for (let k = 0; k < 6; k++) {
-      A.add('metal_rust', BOX_THIN(A), LL(IDENT,
-        e.mx + e.tx * rng.range(-e.len / 2, e.len / 2), y(ROOM_Y + h + rng.range(0.3, 1.5)),
-        e.mz + e.tz * rng.range(-e.len / 2, e.len / 2), rng.float() * 6.28,
-        0.035, rng.range(0.8, 2.4), 0.035, rng.range(-0.5, 0.5), rng.range(-0.5, 0.5)),
-        { masks: [0.95, 0.75, 0] });
+  /**
+   * THE FIELD, over the WHOLE footprint rather than over the shaft. `TOWER_R`
+   * is 25.4 and the apron's own edge is at 25.4, so the rubble stops exactly
+   * where the made ground does and the plain outside it is untouched — which is
+   * what keeps `plains.js`'s scatter, the tank lanes and the boundary margin
+   * out of this entirely.
+   */
+  const field = debrisField(rng, TOWER.x, TOWER.z, TOWER_R, 0.6, 2.2);
+  drawDebris(A, rng, field, (x, z) => groundY(x, z), { key: 'concrete', key2: 'concrete_dark' });
+
+  /**
+   * THE RIM. A ring of heavier broken mass on the line the podium's face stood
+   * on, drawn only — the walked surface is the relaxed field above and this sits
+   * inside it, so nothing here can be a step. Two courses of it, on the two
+   * radii the two podiums had, so the plan of the building is still legible in
+   * its own rubble from the P-something-metres a player sees it from.
+   */
+  for (const [r, count, size] of [[P1_R, 130, 1.15], [P2_R, 70, 0.95]]) {
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2 + rng.range(-0.03, 0.03);
+      const d = r + rng.range(-1.9, 1.9);
+      const px = TOWER.x + Math.cos(a) * d;
+      const pz = TOWER.z + Math.sin(a) * d;
+      const s = rng.range(0.55, 1.0) * size;
+      const g = rockGeometry(rng, s, 0, rng.range(0.35, 0.75));
+      A.addOnce(rng.float() < 0.3 ? 'concrete_dark' : 'concrete', g,
+        LL(IDENT, px, groundY(px, pz) + s * 0.2, pz, rng.float() * 6.28, 1, 1, 1,
+          rng.range(-0.7, 0.7), rng.range(-0.7, 0.7)),
+        { masks: [0.4 + rng.float() * 0.4, 0.5 + rng.float() * 0.4, 0.35] });
+      // reinforcement torn out of the face, bent over
+      if (rng.float() < 0.18) {
+        A.add('metal_rust', BOX_THIN(A), LL(IDENT, px + rng.range(-0.8, 0.8),
+          groundY(px, pz) + rng.range(0.2, 0.75), pz + rng.range(-0.8, 0.8), rng.float() * 6.28,
+          0.035, rng.range(0.6, 1.7), 0.035, rng.range(-1.1, 1.1), rng.range(-1.1, 1.1)),
+          { masks: [0.95, 0.7, 0] });
+      }
     }
   }
 
-  // the debris: on the P2 gallery, over the P1 deck and out onto the apron
-  const inner = debrisField(rng, TOWER.x, TOWER.z, 11.6, 1.5, 2.2);
-  drawDebris(A, rng, inner, () => y(P2_TOP), { key: 'concrete', key2: 'concrete_dark' });
-  const outer = debrisField(rng, TOWER.x + 12, TOWER.z - 4, 14, 1.25, 2.4);
-  drawDebris(A, rng, outer, (x, z) => {
-    const d = Math.hypot(x - TOWER.x, z - TOWER.z);
-    return d < P1_R ? y(P1_TOP) : groundY(x, z);
-  }, { key: 'concrete', key2: 'concrete_dark' });
-
-  // the cab, on its side across the deck, and the mast beyond it
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE CAB, ON THE GROUND — AND FLAT ENOUGH TO WALK OVER, WHICH IS MEASURED
+   * ──────────────────────────────────────────────────────────────────────────
+   * It used to lie at `P1_TOP + 2.4`, i.e. on top of a deck that no longer
+   * exists — 5.6 m in the air. Bedding it on the apron is the obvious half of
+   * the fix and it is not the whole of it.
+   *
+   * THE FIRST CUT OF THIS STOOD 0.9 m PROUD AND ISLANDED 124 NAV CELLS.
+   * Measured (`_tzsite.mjs`, walkable cells inside r 176 not joined to the
+   * ground component): 1 899 intact, 2 023 with the tower razed — and the
+   * difference is a 9.5 x 8.4 m slab whose sides are twice `NavGrid.maxStep`.
+   * A ray from the sky finds its top, the top is flat, so the grid calls it
+   * walkable and A* then has 124 cells of roof that nothing can reach. That is
+   * the same defect as a floating chunk wearing a different hat, and floating
+   * rubble has shipped on this map four times.
+   *
+   * So it lies 0.18 m proud at its middle and 0.085-0.275 m across its whole
+   * length (1.2 m box, bedded at -0.42, tilted 0.02 rad over a 4.75 m half
+   * length). Under `maxStep` everywhere, and clear of the 0.42-0.68 m band this
+   * map refuses to have anything standing in. What makes it read as a CAB at
+   * that height is the eaves fascia and the mullions, which are drawn and carry
+   * no collision at all — the same split the shaft lining is built on.
+   */
   {
     const cx = TOWER.x + 14.5, cz = TOWER.z - 6.5;
-    A.add('concrete_dark', box, LL(IDENT, cx, y(P1_TOP + 2.4), cz, 0.7, 9.5, 4.6, 8.4, 0.34, 0.2),
+    const gy = groundY(cx, cz);
+    A.add('concrete_dark', box, LL(IDENT, cx, gy - 0.42, cz, 0.7, 9.5, 1.2, 8.4, 0.02, 0.01),
       { masks: [0.7, 0.7, 0.35] });
-    A.box('concrete', cx, y(P1_TOP + 2.4), cz, 9.5, 4.6, 8.4, 0.7, 0.34);
+    A.box('concrete', cx, gy - 0.42, cz, 9.5, 1.2, 8.4, 0.7, 0.02);
+    // the eaves and the mullions off it — drawn only, so nothing here is a step
+    for (const s of [-1, 1]) {
+      A.add('metal_dark', BOX_SOFT(A), LL(IDENT, cx + Math.cos(0.7) * s * 4.3, gy + 0.3,
+        cz - Math.sin(0.7) * s * 4.3, 0.7, 0.5, 0.34, 8.0), { masks: [0.75, 0.55, 0.2] });
+    }
+    for (let i = 0; i < 9; i++) {
+      const t = (i / 8 - 0.5) * 7.6;
+      A.add('metal_dark', BOX_THIN(A), LL(IDENT, cx - Math.sin(0.7) * t, gy + 0.22,
+        cz - Math.cos(0.7) * t, 0.7, 8.6, 0.12, 0.1), { masks: [0.8, 0.5, 0.1] });
+    }
     for (let i = 0; i < 26; i++) {
-      A.add('window_glass', BOX_THIN(A), LL(IDENT, cx + rng.range(-6, 6), y(P1_TOP + rng.range(0.1, 0.5)),
-        cz + rng.range(-6, 6), rng.float() * 6.28, rng.range(0.2, 0.9), 0.012, rng.range(0.2, 0.9)),
+      const px = cx + rng.range(-6, 6);
+      const pz = cz + rng.range(-6, 6);
+      A.add('window_glass', BOX_THIN(A), LL(IDENT, px, groundY(px, pz) + rng.range(0.05, 0.3),
+        pz, rng.float() * 6.28, rng.range(0.2, 0.9), 0.012, rng.range(0.2, 0.9)),
         { masks: [0.1, 0.4, 0] });
     }
-    fallenMember(A, rng, 'steel', cx + 6.0, y(P1_TOP + 2.2), cz - 4.0,
-      cx + 22.0, y(0.9), cz - 15.0, 1.4);
+    /**
+     * THE MAST, and it is held to the same rule: a 0.9 m section lying on the
+     * turf is a thirteen-metre kerb across the apron. 0.55 m bedded at 0.12
+     * puts its top at 0.40 m — a thing you step over rather than a wall.
+     */
+    fallenMember(A, rng, 'steel', cx + 4.0, gy + 0.12, cz - 3.0,
+      cx + 17.0, groundY(cx + 17, cz - 12) + 0.10, cz - 12.0, 0.55);
   }
 
-  // scorch and dust over everything
+  /**
+   * …AND THE THINGS THAT ARE STILL BURNING. The tower's own lamps are REAL
+   * point lights and `Assembler.setScopeVisible` switches merged geometry and
+   * instance slots — it does not touch `A.lights` — so the generator lamp on
+   * P1 and the gallery lamp keep burning after the shell goes. Rather than
+   * leave two glows with nothing under them, the ruin puts a source under each:
+   * a fire in the wreck is what a demolished plant room looks like, and it is
+   * the only reason this site is lit at all at 21:40.
+   */
+  for (const [ox, oz] of [[15.5, 6.0], [8.6, -2.4], [-6.0, 9.0]]) {
+    const px = TOWER.x + ox, pz = TOWER.z + oz;
+    A.add('ember', BOX_SOFT(A), LL(IDENT, px, groundY(px, pz) + 0.32, pz, rng.float() * 6.28,
+      rng.range(0.5, 0.9), 0.3, rng.range(0.5, 0.9)));
+  }
+
+  // scorch and dust over everything, all of it on the plain
   for (let i = 0; i < 46; i++) {
     const a = rng.float() * Math.PI * 2;
     const d = rng.range(2, 26);
     const px = TOWER.x + Math.cos(a) * d;
     const pz = TOWER.z + Math.sin(a) * d;
-    const gy = d < P2_R ? y(P2_TOP) : d < P1_R ? y(P1_TOP) : groundY(px, pz);
     const g = patchGeometry(rng, rng.range(1.2, 4.5), { lobes: 12, wobble: 0.6 });
-    A.addOnce('road_dust', g, LL(IDENT, px, gy + 0.04, pz, rng.float() * 6.28, 1, 1, rng.range(0.6, 1.4)),
+    A.addOnce('road_dust', g, LL(IDENT, px, groundY(px, pz) + 0.04, pz, rng.float() * 6.28, 1, 1, rng.range(0.6, 1.4)),
       { masks: [0.15, 1.0, 0.55] });
   }
 }
