@@ -18,12 +18,15 @@ import { chromium } from 'playwright';
 const url = process.argv[2];
 const seconds = Number(process.argv[3] ?? 25);
 const shot = process.argv[4] ?? null;
+/** The HUD scales off viewport HEIGHT (`--k`) and fits off WIDTH, so both. */
+const W = Number(process.argv[5] ?? 1920);
+const H = Number(process.argv[6] ?? 1080);
 
 const b = await chromium.launch({
   headless: true,
   args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--mute-audio', '--force-device-scale-factor=1'],
 });
-const p = await b.newPage({ viewport: { width: 1920, height: 1080 } });
+const p = await b.newPage({ viewport: { width: W, height: H } });
 const errs = [];
 p.on('pageerror', (e) => errs.push(String(e.message)));
 await p.goto(url, { waitUntil: 'domcontentloaded' });
@@ -35,7 +38,17 @@ const out = await p.evaluate(() => {
   const E = window.__ENGINE__;
   const m = E.ctx.peek('match');
   const ui = E.ctx.peek('ui');
-  // Force the scoreboard open without touching input: damp it to 1 by hand.
+  /**
+   * HOLD THE BOARD OPEN. Damping it by hand is not enough — the next engine
+   * frame calls `scoreboard.update(dt, false, ...)` and fades it straight back
+   * out, which is how the first run of this probe photographed an empty sky.
+   * The wrapper pins `want` true until the probe puts it back.
+   */
+  if (!ui.scoreboard._pinned) {
+    const orig = ui.scoreboard.update.bind(ui.scoreboard);
+    ui.scoreboard._pinned = orig;
+    ui.scoreboard.update = (dt, want, s) => orig(dt, true, s);
+  }
   for (let i = 0; i < 12; i++) ui.scoreboard.update(0.5, true, ui.round);
   const vis = (n) => !!n.offsetParent && getComputedStyle(n).display !== 'none';
   const cnt = (sel) => [...document.querySelectorAll(sel)].filter(vis).length;
@@ -70,6 +83,13 @@ const out = await p.evaluate(() => {
       document.querySelector('.ow-round-pips.them').getBoundingClientRect().width,
     ].map((n) => Math.round(n)),
     roundW: Math.round(document.querySelector('.ow-round').getBoundingClientRect().width),
+    /** The strip is centred and `nowrap`; overflow here would be invisible. */
+    roundFits: (() => {
+      const r = document.querySelector('.ow-round').getBoundingClientRect();
+      return r.left >= 0 && r.right <= innerWidth;
+    })(),
+    viewport: [innerWidth, innerHeight],
+    k: getComputedStyle(document.querySelector('.ow-hud')).getPropertyValue('--k').trim(),
     sbHead, sbRows, sbMore: more,
     sbSubCols: sb.map((s) => [...s.querySelectorAll('.ow-sb-col')].filter(vis).length),
     sbPanelW: Math.round(document.querySelector('.ow-sb-panel').getBoundingClientRect().width),
@@ -83,13 +103,23 @@ if (errs.length) out.firstError = errs[0];
 console.log(JSON.stringify(out, null, 1));
 
 if (shot) {
+  const box = async (sel, pad) =>
+    p.evaluate(({ sel, pad }) => {
+      const r = document.querySelector(sel).getBoundingClientRect();
+      return { x: Math.max(0, r.x - pad), y: Math.max(0, r.y - pad),
+               width: r.width + pad * 2, height: r.height + pad * 2 };
+    }, { sel, pad });
   // The scoreboard is left open by the forced update above; the strip is behind
   // it, so the two are photographed separately.
-  await p.screenshot({ path: `${shot}-scoreboard.png` });
+  await p.waitForTimeout(400);
+  await p.screenshot({ path: `${shot}-board.png`, clip: await box('.ow-sb-panel', 10) });
   await p.evaluate(() => {
     const ui = window.__ENGINE__.ctx.peek('ui');
-    for (let i = 0; i < 12; i++) ui.scoreboard.update(0.5, false, ui.round);
+    ui.scoreboard.update = ui.scoreboard._pinned;
+    ui.scoreboard._pinned = null;
   });
-  await p.screenshot({ path: `${shot}-strip.png` });
+  await p.waitForTimeout(400);
+  await p.screenshot({ path: `${shot}-strip.png`, clip: await box('.ow-round', 14) });
+  await p.screenshot({ path: `${shot}-full.png` });
 }
 await b.close();
