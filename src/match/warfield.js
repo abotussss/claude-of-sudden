@@ -211,10 +211,19 @@ const SWAP = [0.45, 1.25];
 const TRACER_FRAC = 0.55;
 /** Fraction of rounds that show where they landed. @see `farImpact`. */
 const IMPACT_FRAC = 0.5;
-/** Metres of frontage the flashes are spread over — a section, not a man. */
-const FRONTAGE = 7.0;
-/** Metres of scatter on the beaten zone at the far end. */
-const BEATEN = 5.0;
+/**
+ * Metres of frontage the flashes are spread over — a section, not a man.
+ *
+ * 7 -> 16, ON THE PHOTOGRAPHS. At 128 m a 7 m front subtends 3.1°, which at a
+ * 70° horizontal field on a 1600 px frame is about 70 px, and twenty rounds a
+ * second inside 70 px is not a firing line — it is a bonfire, and that is
+ * exactly what the first frame sequence out of `_warshots.mjs` showed. A
+ * section on a line holds fifteen to twenty-five metres of ground; 16 puts the
+ * same rate across 160 px and it reads as separate men.
+ */
+const FRONTAGE = 16.0;
+/** Metres of scatter on the beaten zone at the far end, widened with it. */
+const BEATEN = 8.0;
 /** Metres over the local ground a man's muzzle sits. */
 const MUZZLE_Y = 1.35;
 
