@@ -48,6 +48,7 @@ const page = await browser.newPage({ viewport: { width: 960, height: 600 } });
 const errs = [];
 page.on('pageerror', (e) => errs.push(String(e.message)));
 if (args.nofloor) await page.addInitScript(() => { window.__NOFLOOR__ = true; });
+if (args.clamp) await page.addInitScript((n) => { window.__CLAMP__ = n; }, Number(args.clamp));
 await page.goto(URL, { waitUntil: 'domcontentloaded' });
 await page.waitForFunction('window.__READY__===true', null, { timeout: 300000 });
 
@@ -104,6 +105,17 @@ const boot = await page.evaluate((drive) => {
    * and the render deficit cannot be compared between them.
    */
   if (window.__NOFLOOR__) b._farRoom = () => b._room('weapons', 0.85);
+  /**
+   * `--clamp=N` PINS THE RENDER GOVERNOR, exactly as `tools/audiotest.mjs
+   * --battle --clamp` does. Without it a `--nofloor` A/B is worthless: the term
+   * under test is what happens AT THE POOL FLOOR, and whether a given run
+   * reaches the floor is decided by how loaded the machine was that minute —
+   * measured, one pair of same-seed runs came out at pool 65 and pool 24.
+   */
+  if (window.__CLAMP__) {
+    a.field.cap = window.__CLAMP__;
+    a.field._trackRender = () => { a.field.cap = window.__CLAMP__; };
+  }
   const of = b.offerFar.bind(b);
   b.offerFar = (x, y, z, dist, prof) => {
     M.offerCalls++;
@@ -190,7 +202,7 @@ const boot = await page.evaluate((drive) => {
     if (wep > M.peakWeapons) M.peakWeapons = wep;
     if (far > M.peakFar) M.peakFar = far;
     M.samples.push({ used, wep, far, cap: f.cap, wcap: f.busCap('weapons'),
-      def: +(f.stats.deficit ?? 0).toFixed(3) });
+      def: +(f.stats.deficit ?? 0).toFixed(3), beh: +(f.behind ?? 0).toFixed(3) });
 
     const lp = f.listenerPos;
     const agents = ai?.agents ?? [];
@@ -266,6 +278,8 @@ const out = await page.evaluate((secs) => {
       farLoadMean: mean(M.samples.map((s) => s.far)),
       poolCapMean: mean(M.samples.map((s) => s.cap)),
       deficitMean: mean(M.samples.map((s) => s.def)),
+      behindMean: mean(M.samples.map((s) => s.beh)),
+      behindMax: Math.max(...M.samples.map((s) => s.beh)),
     },
     G_levels: {
       farGainMean: mean(M.farGains), farGainMed: med(M.farGains), farN: M.farGains.length,
