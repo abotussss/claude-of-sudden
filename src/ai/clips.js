@@ -297,11 +297,26 @@ const RUN = {
  *   lift/tuck  0.17 / 0.055, between the two: he is picking his feet up over
  *              ground, not strolling, and not high-kneeing either.
  *
- * The stride is 1.72 m per cycle (@see `Animator.update`) — longer than the
- * walk's 1.42 and shorter than the run's 2.05 — so 3.8 m/s is 2.2 strides a
- * second: a long flat purposeful pace rather than a scurry. `gait` is
- * stride-locked, so the feet plant at any speed by construction and
- * `src/ai/gaitcheck.mjs` is what says so rather than the eye.
+ * The stride is 1.60 m per cycle (@see `Animator.update`) — longer than the
+ * walk's 1.42 and shorter than the run's 2.05 — so 3.8 m/s is 2.4 strides a
+ * second: a long flat purposeful pace rather than a scurry.
+ *
+ * IT WAS 1.72 AND THE BENCH SENT IT BACK. `gait` is stride-locked, so the feet
+ * plant at any speed by construction — but the stance leg has to REACH the
+ * whole of the stance travel, and `duty * stride` is the longest of the three
+ * gaits by some way: 0.93 m against the walk's 0.87 and the run's 0.74, because
+ * the run buys its length with a float phase this one deliberately does not
+ * have. `gaitcheck` put `legReachFrac` at 0.99 — a knee locked straight at the
+ * extremes, with no margin left for a downslope, and this map is a bowl. 1.60
+ * puts the stance travel at 0.90 and the reach at 0.984, between the walk's
+ * 0.975 and where it was.
+ *
+ * MEASURED (`src/ai/gaitcheck.mjs --clip=advance --aim=1`, 2.7 and 3.8 m/s):
+ * slide 0.028-0.039 m per contact against the WALK's 0.053-0.058, flight
+ * fraction 0.000, double support 0.13-0.14, `ankleBelowPlant` 0. And the number
+ * this clip exists for — the vertical travel of the weapon hand across a
+ * stride: **0.042 m against the run's 0.086**. Half the muzzle bounce, and the
+ * hips 0.040 against 0.084.
  */
 const ADVANCE = {
   duty: 0.54, plantBias: 0.40, track: 0.086,

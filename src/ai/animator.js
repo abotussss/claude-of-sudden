@@ -304,7 +304,7 @@ export class Animator {
     const strideHz =
       clip === 'sprint' ? Math.max(1.3, st.speed / 2.55)
         : clip === 'run' ? Math.max(1.1, st.speed / 2.05)
-          : clip === 'advance' ? Math.max(0.75, st.speed / 1.72)
+          : clip === 'advance' ? Math.max(0.80, st.speed / 1.60)
             : clip === 'walk' ? Math.max(0.55, st.speed / 1.42)
               : clip === 'crouchWalk' ? Math.max(0.4, st.speed / 0.95)
                 : 0.19; // idle breathing rate

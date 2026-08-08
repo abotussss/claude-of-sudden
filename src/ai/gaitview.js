@@ -255,7 +255,7 @@ function strideHzFor(cfg) {
   if (cfg.clip === 'run') return Math.max(1.1, s / 2.05);
   // @see `ADVANCE` in clips.js. This table is `Animator.update`'s and has to
   // stay its twin, or `gaitcheck` measures a stride the game never plays.
-  if (cfg.clip === 'advance') return Math.max(0.75, s / 1.72);
+  if (cfg.clip === 'advance') return Math.max(0.80, s / 1.60);
   if (cfg.clip === 'walk') return Math.max(0.55, s / 1.42);
   if (cfg.clip === 'crouchWalk') return Math.max(0.4, s / 0.95);
   return 0.19;
