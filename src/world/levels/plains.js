@@ -187,14 +187,56 @@ const PADS = [
  * far up the face. Published as `PLAINS.fires` in WORLD space with a radius, so
  * `fx` (or the satellite-strike event, when somebody writes it) can put real
  * flame, smoke column and heat shimmer on a site without re-deriving it.
+ *
+ * `size` IS HOW HARD IT BURNS, and it exists because five identical fires read
+ * as five copies of one asset rather than as a ridge on fire. It drives the
+ * light, the number of glowing seams and the reach of the pool together, so a
+ * site is big or small in every channel at once instead of being bright and
+ * sparse. 「もっと山の燃えている感じはリアルに」 — a real fire line has a head and it
+ * has a tail, and the map is easier to navigate in the dark when the quarters
+ * are told apart by how much light is in them.
  */
 const FIRES = [
-  { id: 'FIRE-NW', bearing: -2.42, spread: 0.30, h: 0.62 },
-  { id: 'FIRE-N', bearing: -1.15, spread: 0.20, h: 0.48 },
-  { id: 'FIRE-E', bearing: 0.24, spread: 0.34, h: 0.70 },
-  { id: 'FIRE-SE', bearing: 1.36, spread: 0.22, h: 0.52 },
-  { id: 'FIRE-S', bearing: 2.62, spread: 0.28, h: 0.58 },
+  { id: 'FIRE-NW', bearing: -2.42, spread: 0.30, h: 0.62, size: 1.25 },
+  { id: 'FIRE-N', bearing: -1.15, spread: 0.20, h: 0.48, size: 0.72 },
+  { id: 'FIRE-E', bearing: 0.24, spread: 0.34, h: 0.70, size: 1.45 },
+  { id: 'FIRE-SE', bearing: 1.36, spread: 0.22, h: 0.52, size: 0.62 },
+  { id: 'FIRE-S', bearing: 2.62, spread: 0.28, h: 0.58, size: 1.05 },
 ];
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT A FIRE DOES BETWEEN FRAMES — 「燃えていて煌々と光るのを再現して」
+ * ────────────────────────────────────────────────────────────────────────────
+ * A point light held at a constant value is a lamp, and the difference between
+ * a lamp and a fire is almost entirely in the time domain. Combustion is not a
+ * sine: it is fast small-scale turbulence in the flame sheet, a slower swell as
+ * the whole body of it breathes, and every so often a FLARE when something
+ * catches — and a flare is one-sided. Fires surge and decay; they do not dip
+ * below their own level and come back.
+ *
+ * So this is three incommensurate sines for the body plus a rectified, clipped
+ * fourth for the flare, which spends about 7% of its period above zero and the
+ * rest of it doing nothing. Incommensurate matters: three rates with a common
+ * factor beat, and a beat is a pattern the eye locks onto in about four seconds.
+ *
+ * Driven by `ctx.time.elapsed` and NOT by `ctx.rng`, which is deliberate. A
+ * random walk would need per-fire state, would not survive a rewind, and would
+ * make `?capture=1` non-reproducible — two runs of the same probe would grade
+ * differently and every screenshot comparison in this file's history would stop
+ * meaning anything. This is a pure function of time: allocation-free, seedless,
+ * and identical on every machine and every replay.
+ */
+const FIRE_FLICKER = 0.30;
+function fireFlicker(t, p) {
+  const body =
+    Math.sin(t * 2.31 + p) * 0.52 +
+    Math.sin(t * 5.77 + p * 2.7) * 0.29 +
+    Math.sin(t * 11.31 + p * 5.1) * 0.15;
+  // Rectified and clipped: zero for ~93% of its cycle, a fast surge for the rest.
+  const flare = Math.max(0, Math.sin(t * 0.41 + p * 1.9) - 0.86) * 7.14;
+  return 1 + body * FIRE_FLICKER + flare * 0.42;
+}
 
 /**
  * Dev / free-roam spawns: [x, z, yaw, tag], in metres (this level's transform is
@@ -590,14 +632,52 @@ function scatterVegetation(A) {
  * a fixed slot budget; five fires fit inside it with room to spare, and the
  * ballast adopts a higher count on its own if a later pass adds more.
  *
- * The lights are given a very long range on purpose (180 m). A burning hillside
- * is not a lamp: the near half of the plain should carry a directional warm
- * gradient off it, and a 30 m radius would make it a campfire.
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE POOL IS THE POINT, AND THE OLD NUMBERS MADE A WASH INSTEAD
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「その燃えている光で夜なのにその周りは明るい、橙色に明るい雰囲気をそこに作る でも周りは
+ *   夜の闇にして」 is a CONTRAST spec: bright and orange AT the fire, night
+ * everywhere else. Five 600 cd lights reaching 240 m do not do that on a map
+ * that is 400 m across. They overlap in the middle, and a photograph from the
+ * south hollow came back with the entire plain — every blade of it, corner to
+ * corner — a flat saturated orange under a grey sky. There was no "everywhere
+ * else" left to be dark.
+ *
+ * Two numbers, moved in opposite directions, and the ratio between them is the
+ * whole fix:
+ *
+ *   `distance` 240 -> 150   Each light dies at 150 m. The five stand on a
+ *                           150 m ring, so the map CENTRE is exactly out of
+ *                           reach of all five and is lit by the moon alone —
+ *                           the dark that the pools have to be bright against
+ *                           has to exist somewhere, and this is where.
+ *   intensity  600 -> 1550  …times `size`. Paid for by the range: with the tail
+ *                           cut off, the near field can be four times hotter
+ *                           and still leave the middle of the map black.
+ *
+ * The gradient that falls out, against a moon now at 0.049 (`weather.nightLight`
+ * in `PLAINS` below took it down from 0.129, which is the other half of this):
+ *
+ *     60 m from the fire   0.34   7x the moon   — orange, and clearly lit
+ *    100 m                 0.088  1.8x          — warm, directional
+ *    130 m                 0.014  0.3x          — moonlight with a warm edge
+ *    150 m and past        0                    — night
+ *
+ * THE RENDERER'S OWN CULL RADIUS IS NOW WIDER THAN THE MAP, and that is a
+ * separate decision from the falloff above. `range` fades a light out by how
+ * far the CAMERA is from it, not how far the lit surface is, so at 240 it was
+ * dimming pools the player was looking straight at — measured mid-round at 0,
+ * 55.8 and 63.5 cd against a nominal 600 — and every one of those crossings is
+ * one of the recompiles the paragraph above is about. At 420 nothing crosses
+ * anywhere inside a ±200 m play box: the five are permanently resident, the
+ * slot count never changes, and what shapes the pool is the physical falloff
+ * alone.
  */
 function buildFires(A, out) {
   const r = new Rng(0x0f17e5);
   const geos = [];
-  for (const f of FIRES) {
+  for (let fi = 0; fi < FIRES.length; fi++) {
+    const f = FIRES[fi];
     const a0 = f.bearing;
     // Where the burning face sits: part way up the rim on this bearing.
     const rr = RIDGE_R0 + (RIDGE_R1 - RIDGE_R0) * f.h;
@@ -610,7 +690,7 @@ function buildFires(A, out) {
      * up the slope — not a decal and not a glowing sphere. The lit ones are the
      * seam, the dark ones in front of them are what makes it read as depth.
      */
-    const n = 90;
+    const n = Math.round(90 * f.size);
     for (let i = 0; i < n; i++) {
       const t = (i + r.float()) / n;
       const aa = a0 + (t - 0.5) * f.spread;
@@ -618,19 +698,43 @@ function buildFires(A, out) {
       const px = Math.cos(aa) * rad;
       const pz = Math.sin(aa) * rad;
       const py = plainsY(px, pz);
-      const lit = r.float() < 0.34;
+      /**
+       * The seam runs along the HEAD of the fire rather than being sprinkled
+       * over the whole patch. `t` is the position across the arc and this is a
+       * raised cosine on it, so the middle of each site is nearly all glowing
+       * rock and the two ends trail off into dark stone. A uniform 34% gave five
+       * even fields of orange confetti; a fire has a front.
+       */
+      const head = 0.5 - 0.5 * Math.cos(t * Math.PI * 2);
+      const lit = r.float() < 0.18 + 0.62 * head;
       const g = rockGeometry(r, r.range(0.9, 3.4), 1, r.range(0.45, 0.8));
       geos.push(g);
       A.add(lit ? 'mountain_lit' : 'mountain_rock', g, LL(IDENT, px, py - r.range(0.2, 1.4), pz, r.float() * 6.28, 1, 1, 1), {
         masks: [r.range(0.3, 0.95), r.range(0.3, 0.8), 0.3],
       });
       // …and the seam itself, glowing between them
-      if (lit && r.float() < 0.55) {
+      if (lit && r.float() < 0.78) {
         A.add(
           'ember',
           BOX_SOFT(A),
           LL(IDENT, px + r.range(-1.2, 1.2), py + r.range(-0.4, 0.9), pz + r.range(-1.2, 1.2), r.float() * 6.28,
             r.range(0.5, 2.2), r.range(0.3, 1.0), r.range(0.5, 2.2))
+        );
+      }
+      /**
+       * 煌々と光る. The seam above is a scatter of small emitters, and at 150 m
+       * a scatter of small emitters is a texture rather than a light source —
+       * the bloom has nothing wide enough to catch on. So the head of each fire
+       * also gets a few LARGE, low masses down in the rock: the body of the
+       * burn that the individual seams are the surface of. These are what read
+       * from the far side of the map and what the bloom actually blooms on.
+       */
+      if (lit && head > 0.55 && r.float() < 0.22) {
+        A.add(
+          'ember',
+          BOX_SOFT(A),
+          LL(IDENT, px + r.range(-2.0, 2.0), py - r.range(0.1, 1.1), pz + r.range(-2.0, 2.0), r.float() * 6.28,
+            r.range(3.4, 7.2), r.range(1.1, 2.4), r.range(3.4, 7.2))
         );
       }
     }
@@ -643,22 +747,52 @@ function buildFires(A, out) {
     const lz = Math.sin(a0) * (RIDGE_R0 - 26);
     const ly = plainsY(lx, lz) + 26;
     /**
-     * 600 cd, NOT 9. This is the number that decides whether the map is
-     * playable, and it is arrived at by comparison rather than by taste: the
-     * moon's own directional intensity at this hour is 0.129 (measured — see
-     * `hour` below), and a point light with `decay: 2` delivers
-     * `intensity / d²`, so 9 cd is 0.0025 at 60 m — three per cent of the
-     * moonlight, i.e. invisible. 600 cd is 0.17 at 60 m and 0.06 at 100 m:
-     * brighter than the moon out to ~68 m of the fire and still readable at
-     * half the map's width, which is exactly the "bright quarters and dark
-     * quarters" this is for.
+     * 1550 cd times `size`, over 150 m — @see the pool note in this function's
+     * header for where both numbers come from and what gradient they buy.
+     *
+     * THE HUE GOES THE OTHER WAY — 0xff8c33, which is LESS saturated than the
+     * 0xff6a24 it replaces, and the reason is the composite rather than the
+     * fire. `render` runs `NoToneMapping` and tonemaps in the composite, where
+     * the frame has already been multiplied by auto-exposure — 17.4x on this
+     * map — before AgX sees it. A light at 0xff5a12 is (1.00, 0.35, 0.07), and
+     * the first thing that happens to lit ground under it is that the red
+     * channel goes over the shoulder while green is still at a third and blue
+     * at nothing. The result photographs as BLOOD RED: not a warm quarter of a
+     * night map, a Mars. It is the same mechanism that was making the satellite
+     * crash's flames wash out to white, one channel further down.
+     *
+     * 0xff8c33 is (1.00, 0.55, 0.20), which is a ~1900 K brush fire — the
+     * physically right colour for what is burning here, and it is not a
+     * coincidence that it is also the one that survives the shoulder: with
+     * green at half, red clipping leaves amber behind it instead of red. The
+     * separation from the moon is unharmed; the moon is at (0.83, 0.92, 1.00)
+     * and the two are still at opposite ends of the frame.
      */
-    const light = new THREE.PointLight(0xff6a24, 600, 240, 2);
+    const light = new THREE.PointLight(0xff8c33, 900 * f.size, 78, 2);
     light.position.set(lx, ly, lz);
     light.castShadow = false;
-    A.light(light, { range: 240, priority: 1 });
+    /**
+     * 420, not 240 — wider than the map, so this never crosses and never
+     * recompiles. @see the header. It is the CAMERA-distance fade, and it has
+     * nothing to do with the shape of the pool, which `distance` above owns.
+     */
+    A.light(light, { range: 420, priority: 1 });
 
-    out.push({ id: f.id, position: new THREE.Vector3(cx, cy, cz), radius: (RIDGE_R1 - RIDGE_R0) * f.spread * 3, light });
+    out.push({
+      id: f.id,
+      position: new THREE.Vector3(cx, cy, cz),
+      radius: (RIDGE_R1 - RIDGE_R0) * f.spread * 3,
+      light,
+      /**
+       * What `PLAINS.update` needs to make it burn: the level it flickers about
+       * and a phase of its own, so five fires on one clock never pulse together.
+       * `fi * 2.399963` is the golden angle — successive phases are as far apart
+       * as five numbers on a circle can be, which is exactly the property wanted
+       * and is why it is not five hand-typed constants.
+       */
+      baseIntensity: 900 * f.size,
+      phase: fi * 2.399963,
+    });
   }
   disposeAll(geos);
 }
@@ -762,8 +896,35 @@ export const PLAINS = {
    * deep enough to hold the whole 46 m rim, and `coverage` puts enough cloud in
    * the sky for the moon to have something to light — a clear night sky is a
    * flat blue-black gradient and reads as a missing skybox.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * `nightLight` — 「夜なのに明るすぎる」
+   * ──────────────────────────────────────────────────────────────────────────
+   * The moon this sky ships is sized for the TOWN, and it is sized for it very
+   * deliberately: `MOON_ILLUMINANCE_NIGHT` is 0.30 instead of the physical 1e-5
+   * because that street has twenty-two sodium lamps in it and a weaker moon lost
+   * the cool/warm ratio that makes its night read as night. The reasoning is
+   * sound and it is written down in atmosphere.js. It just does not transfer.
+   *
+   * NACHTFELD has no lamps. It has five burning ridges and 400 m of open ground,
+   * and at 0.129 the moon lit every metre of that ground to within three stops
+   * of the fires — so the fires stopped being light sources and became texture,
+   * and the plain read as an overcast afternoon that happened to have a dark sky
+   * over it. What the map wants is the opposite: 「その燃えている光で夜なのにその周りは
+   * 明るい、橙色に明るい雰囲気をそこに作る でも周りは夜の闇にして」.
+   *
+   * 0.38 takes the moon to 0.049. It is still a real key — still directional,
+   * still casting, still enough to separate a man from the ground he is standing
+   * on at 200 m, which was measured and photographed rather than assumed — but
+   * it is now 7 stops under a fire at 60 m instead of 1.4, and the difference
+   * between a lit quarter and a dark one is something you can see from across
+   * the map. THE EXPOSURE IS NOT TOUCHED. Pulling it down would have taken the
+   * fires with it, and this map has already shipped one black boot.
+   *
+   * The dial is on `weather`, so it reaches exactly the levels that ask for it.
+   * The town passes no weather at all and cannot be moved by anything here.
    */
-  weather: { fogDensity: 5.2, fogHeight: 150, coverage: 0.34, shaftGain: 0.7 },
+  weather: { fogDensity: 5.2, fogHeight: 150, coverage: 0.34, shaftGain: 0.7, nightLight: 0.38 },
   spawns: SPAWNS,
 
   /** Published for the features still to come. @see the header. */
@@ -861,6 +1022,31 @@ export const PLAINS = {
    */
   publish(A, rec, physics) {
     return { demolitions: publishWorks(A, rec.works ?? [], physics) };
+  },
+
+  /**
+   * ──────────────────────────────────────────────────────────────────────────
+   * THE FIRES BURN — 「燃えていて煌々と光るのを再現して」
+   * ──────────────────────────────────────────────────────────────────────────
+   * Called from `WorldSystem.update`, which is the level's one per-frame seam.
+   * Five writes, no allocation, no state: `fireFlicker` is a pure function of
+   * `ctx.time.elapsed` and the site's own phase, so this survives a rewind, a
+   * pause and a `?capture=1` run identically. @see the note above `fireFlicker`.
+   *
+   * WRITING `intensity` EVERY FRAME IS SAFE, and specifically it is safe against
+   * the distance culler, which is a thing worth stating because getting it wrong
+   * is what put this map under a daylight sun for a week. `RenderSystem._cullLights`
+   * runs AFTER this, sees an intensity that is not the one it last wrote, and
+   * adopts it as the new base before applying its own fade — that is exactly the
+   * "flickering lamps" case its comment describes, and it now works for a light
+   * whose owner sets it once as well, which it did not before `552a964`.
+   */
+  update(dt, ctx) {
+    const t = ctx.time.elapsed;
+    for (let i = 0; i < this.fires.length; i++) {
+      const f = this.fires[i];
+      f.light.intensity = f.baseIntensity * fireFlicker(t, f.phase);
+    }
   },
 
   groundY: plainsY,

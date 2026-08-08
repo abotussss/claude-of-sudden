@@ -100,7 +100,9 @@ const NIGHT_AMBIENT_HUE = [0.35, 0.5, 1.0];
  *                                settings.exposureBias.
  *   sky.cloudShadowAt(x, z)      0..1 direct sunlight reaching a ground point
  *   sky.setWeather({ ... })      coverage, cirrus, turbidity, fogDensity,
- *                                fogHeight, windSpeed, windAngle, shaftGain
+ *                                fogHeight, windSpeed, windAngle, shaftGain,
+ *                                nightLight (scale on the whole moon budget —
+ *                                a level's dial on how dark its night is)
  *   sky.fog                      live fog tuning object (see _fog below)
  *
  * Events emitted on `ctx.events`:
@@ -161,6 +163,33 @@ export class SkySystem {
       windSpeed: 0.0042, // km/s at the cloud deck (~4 m/s)
       windAngle: 0.7,
       horizonMurk: 0.13,
+      /**
+       * SCALE ON THE ENTIRE MOON BUDGET, and the one dial a level has for how
+       * dark its night is. 1 is this sky's own night and is what every level
+       * that does not mention it gets — including the town, which passes no
+       * weather at all, so nothing here can reach its 01:30 shot.
+       *
+       * WHY A DIAL AND NOT A NUMBER. `MOON_ILLUMINANCE_NIGHT` is 0.30 rather
+       * than the physical 1e-5 for a reason that is written down in
+       * atmosphere.js and is entirely about the TOWN: that street has twenty-two
+       * sodium lamps at intensity 14 in it, and a moon any weaker than this lost
+       * the ratio — every surface took its colour from the practicals and the
+       * night came out warm from edge to edge. NACHTFELD has no sodium lamps.
+       * It has five burning ridges, it is 400 m across, and its brief is the
+       * opposite one: 「その燃えている光で夜なのにその周りは明るい、橙色に明るい雰囲気を
+       * そこに作る でも周りは夜の闇にして」 — bright and orange AT the fire, night
+       * everywhere else. A moon sized to hold its own against a lamppost fills
+       * that plain corner to corner and there is no "everywhere else" left.
+       *
+       * It scales the DIRECTIONAL moon and the irradiance handed to the sky
+       * LUT together, which is the whole point: the disc's radiance and the
+       * star levels are authored as RATIOS to the sky the LUT produces, so they
+       * follow on their own and 「moon disc : moonlit sky : moonlit ground」
+       * stays exactly as physical as it was. What changes is the level of the
+       * night, not its internal structure — and a fire that does not scale with
+       * it gains every stop the moon gives up.
+       */
+      nightLight: 1.0,
     };
 
     /**
@@ -437,6 +466,14 @@ export class SkySystem {
     this._applyFog();
     // Turbidity is baked into all three LUTs, so it needs the static bake too.
     if (patch.turbidity !== undefined) this.luts.bakeStatic();
+    /**
+     * `nightLight` is consumed inside `_updateCelestial`, which otherwise only
+     * runs on a time change — and `world` applies `level.hour` BEFORE
+     * `level.weather`, so without this the moon would keep the intensity it was
+     * given a moment ago at the default scale and the dial would do nothing at
+     * all on the one path every level actually uses.
+     */
+    if (patch.nightLight !== undefined) this._updateCelestial();
     this._skyDirty = true;
     this._envDirty = true;
     return this;
@@ -652,7 +689,11 @@ export class SkySystem {
     const mb = MT[2] * cool[2];
     const mmax = Math.max(1e-6, mr, mg, mb);
     this.moonLight.color.setRGB(mr / mmax, mg / mmax, mb / mmax);
-    let moonI = MOON_ILLUMINANCE_NIGHT * c.moonPhase * mmax * discM * keyRamp;
+    // @see `weather.nightLight` — the level's dial on how dark its night is.
+    // Applied here, before the fallback floor below, so no setting of it can
+    // ever hand the scene back to the renderer's daylight sun.
+    const nightK = this.weather.nightLight ?? 1;
+    let moonI = MOON_ILLUMINANCE_NIGHT * nightK * c.moonPhase * mmax * discM * keyRamp;
 
     // The renderer switches its own 4.3-intensity fallback sun back on if no
     // foreign directional light is brighter than 0.01. Keep a floor so that
@@ -660,7 +701,7 @@ export class SkySystem {
     if (Math.max(this._baseSunIntensity, moonI) < 0.03) moonI = 0.03;
     this.moonLight.intensity = moonI;
 
-    const moonIrr = MOON_ILLUMINANCE_NIGHT * c.moonPhase * keyRamp;
+    const moonIrr = MOON_ILLUMINANCE_NIGHT * nightK * c.moonPhase * keyRamp;
     s.uMoonIrradiance.value.set(moonIrr * cool[0], moonIrr * cool[1], moonIrr * cool[2]);
 
     // Day: a pale disc a little above the daytime sky, which is what the moon
