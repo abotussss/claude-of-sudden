@@ -352,8 +352,44 @@ const TOWER_ACT = {
    * t≈193 of a 430 s match and gets 240 s — TWICE the town's upper bound. The
    * precedent is about how much match a new point needs after it, not about the
    * fraction, and 240 s clears it by a factor of two.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * 0.30 -> 0.50, AND THIS ONE IS NOT A SCHEDULING ARGUMENT AT ALL
+   * ──────────────────────────────────────────────────────────────────────────
+   * 「管制塔は**５００で破壊**して 管制塔の一番上は衛星爆撃呼び出しボタンがあり
+   *  それにより敵占領サイトへの大型爆撃を可能にする
+   *  **そのため管制塔は破壊されないといけない**」
+   *
+   * Every paragraph above this one argues about WHEN a headline should land.
+   * This number has stopped being that. `scoreTarget` is 1000 on this map
+   * (`MAP_RULES.plains`) and `_matchProgress` is `max(elapsed/matchTime,
+   * leader/scoreTarget)`, so 0.50 IS 「５００で破壊」 written in the only unit this
+   * runner reads — five hundred points of a thousand-point game, reached by the
+   * leader, which is the sentence rather than a fraction near it.
+   *
+   * AND THE LAST LINE OF THE QUOTE IS WHAT THE ACT NOW MEANS. The cab at 26 m
+   * carries `SAT_STRIKE`'s console (@see below): until this act fires, whoever
+   * can stand at the top of this tower can drop 「大型爆撃」 on an enemy-held
+   * capture point. The tower is not scenery with a view any more, it is a
+   * WEAPON — and razing it is how the weapon is taken away. 「そのため管制塔は
+   * 破壊されないといけない」 is a causal claim about this act, and 0.50 is the
+   * moment the map disarms itself.
+   *
+   * WHAT IT COSTS THE SCHEDULE, STATED RATHER THAN HIDDEN. It moves Act I 0.20
+   * of progress later, so the 135 s the three acts cost now starts later too.
+   * The measured firings are in the commit and in `_nfacts.mjs`'s output. Act
+   * III is moving to 0.80 in the same pass (the satellite catastrophe), which is
+   * where the room comes from: the set still SPANS the band, it just spans a
+   * later part of it, and D now opens on the half-way point of the score rather
+   * than on its first third.
+   *
+   * WHAT IT COSTS ACT II, ALSO STATED. `FORT_ACT.progress` is 0.42 and is not
+   * this pass's to move, so it is now BEHIND Act I's threshold and can never be
+   * the thing that opens itself: the fortress will fire on `NF_GAP` alone, 26 s
+   * after the tower is spent, in every match. Its own note already says the gap
+   * sets it in practice; after this it sets it always.
    */
-  progress: 0.30,
+  progress: 0.50,
   lead: 10.0,
   /** Which of `PLAINS_RUNS` / `PLAINS_LINES` this act's aircraft fly. */
   run: 'CENTREWEST',
@@ -685,6 +721,224 @@ const CRASH_ACT = {
 
 /** THE ACTS, IN ORDER. `MatchSystem` walks this list and never indexes it by id. */
 export const NF_ACTS = [TOWER_ACT, FORT_ACT, CRASH_ACT];
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+/* THE SATELLITE UPLINK — the button at the top of the tower, and the ONE      */
+/* NAMED EXCEPTION to the rule that bombing may not fall on a capture circle   */
+/* ══════════════════════════════════════════════════════════════════════════ */
+/**
+ * 「管制塔は５００で破壊して 管制塔の一番上は衛星爆撃呼び出しボタンがあり
+ *  それにより敵占領サイトへの大型爆撃を可能にする
+ *  そのため管制塔は破壊されないといけない」
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * ⚠ THE RULE THIS BREAKS, IN THE PLAYER'S OWN WORDS, SO NOBODY "FIXES" IT ⚠
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「空爆は占領サイトに落とすのではなくそれ以外の平原にランダムに広範囲に一列爆撃に
+ *  して それを定期的に起こす」
+ * 「占領サイトへの直接はダメ ただし破壊オブジェ＋占領サイトの場所には落としてもいい」
+ *
+ * THAT RULE IS LIVE AND IT IS ENFORCED AT BOOT. `plainsOpenRuns` in
+ * `src/match/bomber.js` proves every candidate line against the RESOLVED
+ * capture circles + 24 m, both base pads + 46 m, and the real ground, and
+ * REJECTS the whole line if one impact fails. Its own note goes further and
+ * refuses the 破壊オブジェ carve-out for itself, on the grounds that a random
+ * bomb landing on the point is indistinguishable, to the man standing on it,
+ * from the rule being broken.
+ *
+ * THIS IS THE EXCEPTION, AND THE PLAYER JUST AUTHORED IT. 「敵占領サイトへの
+ * 大型爆撃を可能にする」 is a strike whose whole definition is the capture circle
+ * it lands in. It is legal HERE and nowhere else, and the difference is not a
+ * loosened gate — it is four properties the line bombardment does not have:
+ *
+ *   IT IS CALLED, NOT DRAWN.   A man stood at 26 m on the most exposed square
+ *                              metre on the map and held a key. Nothing lands
+ *                              on a capture point in this game by chance.
+ *   IT NAMES ITS TARGET FIRST. The console says which point before the key goes
+ *                              down; the HUD says it to everybody afterwards.
+ *   IT IS BOUNDED INWARD.      Every impact is proved to be INSIDE the target
+ *                              circle. @see `satProve` — the line bombardment's
+ *                              gate keeps impacts OUT of every circle, and this
+ *                              one keeps them IN one. That inversion is what
+ *                              makes it an exception rather than a hole: it
+ *                              cannot leak onto open ground, onto a neutral or
+ *                              friendly point, or onto a spawn.
+ *   IT DIES WITH THE TOWER.    `NF-TOWER-SATCALL` is `perishable`, so Act I at
+ *                              p 0.50 removes it. 「そのため管制塔は破壊されない
+ *                              といけない」 is implemented by that one flag.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHO MAY USE IT — the player, and the reason is geometry rather than taste
+ * ────────────────────────────────────────────────────────────────────────────
+ * A weapon only the human can reach is a different game from one both sides can
+ * use, and it was designed for the second. It is the first that shipped, and
+ * the constraint is `src/ai/nav.js`, which is a 2.5D height field with ONE
+ * floor per cell: a shaft with four storeys of dog-leg stair in it cannot be
+ * expressed in it at all. `plains-tower.js` publishes the two posts above the
+ * control room as `botReachable: false` for exactly that reason and
+ * `Caches.prove` never puts them in `botList`, so `_assignCacheLegs` cannot
+ * send anybody. Faking a `stand` cell at 26 m is the `_jitterOnto` bug that
+ * strands a man on a shaft slab for the rest of his life.
+ *
+ * SO THE ANSWER THE MAP GIVES INSTEAD IS THE ACT. The enemy cannot take the
+ * console away by climbing; the enemy takes it away by SURVIVING TO 500, at
+ * which point the tower is levelled with the button on it. That is the user's
+ * own causal chain and it is the whole of Act I's new meaning.
+ *
+ * THE ONE CHANGE THAT WOULD OPEN IT TO BOTS is a nav grid that can express a
+ * shaft, which is `src/ai`'s and is named here rather than half-done.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT THE OTHER SIDE SEES — nothing may kill from nowhere
+ * ────────────────────────────────────────────────────────────────────────────
+ * The line bombardment shows an airframe 2.4 s before release, an `airAlert`
+ * with a bearing arrow and a countdown, and an `airDanger` reticle on every
+ * crater. A SATELLITE HAS NO AEROPLANE, so it buys its telegraph three other
+ * ways and all three are in the world rather than only on the HUD:
+ *
+ *   `lead` 9.0 s   longer than a bomber's 4.1 s of visible run-in and only one
+ *                  second under `zoneBombardLead`, which is the map's proven
+ *                  "you have time to walk out of a circle" number.
+ *   `pulses`       THE DESIGNATOR. A light and a haze ring ON THE GROUND at the
+ *                  target, struck five times through the lead and accelerating,
+ *                  so a man inside the circle who is looking at his feet still
+ *                  knows. This is the aeroplane's replacement and it is the
+ *                  reason `pulses` is a table rather than a rate.
+ *   the strip      `ui.airAlert` names the point and counts down; one
+ *                  `ui.airDanger` reticle per impact, and there are twelve.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * HOW OFTEN, AND WHY IT CANNOT DECIDE THE MATCH ON ITS OWN
+ * ────────────────────────────────────────────────────────────────────────────
+ * A COOLDOWN, NOT A CHARGE COUNT, and no artificial cap — because the tower is
+ * the cap. `cooldown` 100 s against a plain that ends at t=430-470 and an Act I
+ * that removes the console at p 0.50 gives THREE calls in a fast match and
+ * fewer in a slow one, and each of them costs the climb: the cab is 26 m up
+ * four storeys of dog-leg with no cover on the last flight, and the way down is
+ * the same stair.
+ *
+ * WHAT ONE CALL IS WORTH. Twelve rounds at `radius` 18 / `damage` 260 walked
+ * over a 14 m circle over 6 s is lethal to a man who stands still and survivable
+ * by anybody who walks 15 m in nine seconds — deliberately the same bargain
+ * `_callZoneBombard` offers (`zoneBombardRadius` 16, `damage` 250, `lead` 10),
+ * scaled up to 「大型」 by being HALF AS BIG AGAIN IN COUNT rather than by being
+ * unsurvivable. It clears a point; it does not hold one. Nobody scores from it,
+ * no zone changes hands because of it, and the caller is not on the point he
+ * just emptied — he is 26 m up a tower on the other side of the map.
+ */
+export const SAT_STRIKE = {
+  id: 'NF-SAT',
+  name: 'ORBITAL BOMBARDMENT',
+  /** The post in `plains-tower.js`'s `STORES` this is bound to. */
+  post: 'NF-TOWER-SATCALL',
+  /**
+   * Seconds of HOLD at the console. Twice `RULES.cacheHoldTime`, because the
+   * one thing this position has no shortage of is people who can see you.
+   */
+  hold: 1.2,
+  /** Seconds between calls. @see the paragraph above for the arithmetic. */
+  cooldown: 100,
+  /** Seconds of telegraph before the first round. @see `pulses`. */
+  lead: 9.0,
+  shells: 12,
+  span: 6.0,
+  radius: 18,
+  damage: 260,
+  /**
+   * How far out an impact may fall, AS A FRACTION OF THE TARGET ZONE'S OWN
+   * RADIUS. Not a metre count: `captureRadius` is 8 on the town and 14 here,
+   * and a pattern authored in metres would be a pattern that is wrong on one of
+   * them. 0.86 of 14 m is 12.0 m, so the walk covers the circle to its lip and
+   * `satProve` can assert every point is inside it. @see the exception note.
+   */
+  spread: 0.86,
+  /**
+   * THE DESIGNATOR, in seconds after the call. Five strikes over the nine
+   * seconds of lead, accelerating into the impact — 0, 3.4, 6.0, 7.6, 8.5 — so
+   * the rhythm itself says how long is left. This is what a satellite has
+   * instead of an aeroplane and it is the reason a man standing on the point
+   * does not need to be looking at the HUD.
+   */
+  pulses: [0, 3.4, 6.0, 7.6, 8.5],
+  title: 'ORBITAL STRIKE INBOUND',
+  impactTitle: 'ORBITAL STRIKE ON TARGET',
+  /** Said to the man who called it, and to the man it is falling on. */
+  callerLine: 'UPLINK ACCEPTED',
+  ownLine: 'GET OFF THE POINT',
+};
+
+/** Per map. The town has no tower and therefore no uplink. @see `forMap`. */
+export const MAP_SAT = { town: null, plains: SAT_STRIKE };
+
+/**
+ * The impact pattern, solved ONCE at boot into two `Float32Array`s of FRACTIONS
+ * of the target's radius. Nothing about a strike is computed on the frame it is
+ * called: the frame multiplies twelve pairs by one radius and adds a centre.
+ *
+ * The shape is a walk that starts at the centre and spirals out by the golden
+ * angle, so consecutive rounds are never on the same bearing (the objection
+ * `climbAim` answers) and there is no safe metre left inside the circle by the
+ * end of it. The first round is dead centre because the centre is where a man
+ * who has not moved is standing.
+ *
+ * @param {object} spec `SAT_STRIKE`
+ * @param {object} rng  a `ctx.rng` fork — never `Math.random`
+ */
+export function bakeSatPattern(spec, rng) {
+  const n = spec.shells;
+  const u = new Float32Array(n);
+  const v = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    if (i === 0) { u[0] = 0; v[0] = 0; continue; }
+    const t = i / (n - 1);
+    const a = i * 2.39996 + 0.7;
+    // sqrt so the rounds are spread by AREA rather than crowded at the middle,
+    // then jittered by a tenth of the spread so the walk is not a diagram.
+    const r = Math.min(spec.spread, Math.sqrt(t) * spec.spread + rng.range(-0.06, 0.06));
+    u[i] = Math.cos(a) * r;
+    v[i] = Math.sin(a) * r;
+  }
+  return { u, v };
+}
+
+/**
+ * ⚠ THE GATE ON THE EXCEPTION. Run at boot, over every zone the strike could
+ * ever be pointed at, and it proves the INVERSE of what `plainsOpenRuns` proves:
+ * every impact of every pattern lands INSIDE the target's own capture circle,
+ * and no impact comes within `pads` metres of a base pad.
+ *
+ * A pattern that fails is a bug in `bakeSatPattern`, not a zone to skip — the
+ * offsets are the same for every zone — so this returns the worst case it found
+ * and `match` prints it. It is the line somebody reads in a boot log before
+ * they conclude the capture-circle rule has been quietly dropped.
+ *
+ * @param {object} spec  `SAT_STRIKE`
+ * @param {object} pat   what `bakeSatPattern` returned
+ * @param {Array}  zones the RESOLVED zones (`ensureReachable` has already moved
+ *                       them), each `{ id, position, radius }`
+ * @param {Array}  pads  `[[x, z], …]` base pad centres, world space
+ * @param {number} padClear  metres of clear air owed to a pad
+ * @returns {{ ok: boolean, worst: number, nearestPad: number, checked: number }}
+ *          `worst` is the largest impact radius seen as a fraction of the
+ *          zone's own radius — it must be < 1.
+ */
+export function satProve(spec, pat, zones, pads, padClear) {
+  let worst = 0;
+  let nearestPad = Infinity;
+  let checked = 0;
+  for (const z of zones ?? []) {
+    if (!z?.position) continue;
+    const R = z.radius ?? 14;
+    for (let i = 0; i < spec.shells; i++) {
+      const x = z.position.x + pat.u[i] * R;
+      const zz = z.position.z + pat.v[i] * R;
+      worst = Math.max(worst, Math.hypot(pat.u[i], pat.v[i]));
+      for (const p of pads ?? []) nearestPad = Math.min(nearestPad, Math.hypot(x - p[0], zz - p[1]));
+      checked++;
+    }
+  }
+  return { ok: worst < 1 && nearestPad >= padClear, worst, nearestPad, checked };
+}
 
 /**
  * The acts, per map. @see `forMap` in `src/match/geography.js` — `world.level.id`,

@@ -96,7 +96,10 @@ import { Reinforcements } from './reinforce.js';
 import { Civilians } from './civilians.js';
 import { HiddenSquad } from './hidden.js';
 import { forMap } from './geography.js';
-import { MAP_ACTS, bakeBarrage, NF_GAP, NF_ARMOUR_AFTER, SCORCH_CEIL } from './nachtfeld.js';
+import {
+  MAP_ACTS, bakeBarrage, NF_GAP, NF_ARMOUR_AFTER, SCORCH_CEIL,
+  MAP_SAT, bakeSatPattern, satProve,
+} from './nachtfeld.js';
 
 const PHASE = { WARMUP: 'warmup', FREEZE: 'freeze', LIVE: 'live', OVER: 'over', MATCH_OVER: 'matchover' };
 
@@ -1080,6 +1083,7 @@ export class MatchSystem {
     };
     this._bakeCathedralBarrage();
     this._bakeActs();
+    this._bakeSat();
 
     /* ---- events -------------------------------------------------------- */
     this._offs = [];
@@ -3570,6 +3574,13 @@ export class MatchSystem {
     this._bombardIn -= dt;
     if (this._bombardIn <= 0) this._callZoneBombard();
 
+    /* ---- and the one the player called from the top of the tower ------- */
+    /**
+     * A no-op on any map with no `MAP_SAT` entry, and a no-op on this one until
+     * somebody climbs 26 m and holds F. @see `SAT_STRIKE` in `nachtfeld.js`.
+     */
+    this._updateSat(dt);
+
     /* ---- the last event ----------------------------------------------- */
     if (!this._finalCalled && p >= RULES.finalCollapseProgress) {
       this._finalCalled = true;
@@ -5507,6 +5518,433 @@ export class MatchSystem {
     if (b.shot >= RULES.zoneBombardShells) b.zone = null;
   }
 
+  /* ═════════════════════════════════════════════════════════════════════════
+   * THE SATELLITE UPLINK — the button at the top of the control tower
+   * ═════════════════════════════════════════════════════════════════════════
+   * 「管制塔の一番上は衛星爆撃呼び出しボタンがあり それにより敵占領サイトへの
+   *  大型爆撃を可能にする そのため管制塔は破壊されないといけない」
+   *
+   * `SAT_STRIKE` in `nachtfeld.js` is the whole design and the whole argument —
+   * who may use it, how often, how the target is chosen, what the other side
+   * sees, and above all THE NAMED EXCEPTION it is to the rule that bombing may
+   * not fall on a capture circle. Read that note before touching anything here.
+   * This is only the runner.
+   *
+   * NOTHING IS SOLVED ON THE FRAME IT FIRES. The twelve impact offsets are baked
+   * once at boot as fractions of a radius (`bakeSatPattern`) and proved once at
+   * boot against every zone the strike can ever be pointed at (`satProve`); the
+   * call frame multiplies twelve pairs by one number and adds one centre.
+   * ═════════════════════════════════════════════════════════════════════════ */
+
+  /**
+   * Bake the pattern and PROVE THE EXCEPTION, once, at boot.
+   *
+   * The proof is the inverse of `plainsOpenRuns`': that gate keeps every
+   * randomised bomb OUT of every capture circle; this one proves every called
+   * round lands IN the one circle it was aimed at, and no nearer a base pad than
+   * the line bombardment's own `spawnClear`. It is printed whether it passes or
+   * fails, because the one thing this feature must never be is a quiet erosion
+   * of a rule the player set himself.
+   */
+  _bakeSat() {
+    /**
+     * `t` counts up from the call, `shot` is how many rounds have landed,
+     * `pulse` how many designator strikes have gone off, `readyAt` is
+     * `ctx.time.elapsed` the console is usable again. -1 is "nothing inbound".
+     * One clock, the shape `_nf` and `_cath` both prove.
+     */
+    this._sat = { spec: null, pat: null, zone: null, t: -1, shot: 0, pulse: 0, readyAt: 0, calls: 0 };
+    /** Reused world point for an impact. Callers copy out synchronously. */
+    this._satPos = new THREE.Vector3();
+    const world = this.ctx.peek('world');
+    const spec = forMap(MAP_SAT, world, 'satellite uplink');
+    if (!spec) return;
+    /**
+     * IS THE CONSOLE ACTUALLY ON THIS MAP? Asked of `caches.list` rather than
+     * assumed from the map id, for `_bakeActs`' stated reason: a spec whose post
+     * nobody published prints one line and never runs, instead of offering a
+     * prompt at a place that does not exist.
+     */
+    const post = this.caches?.list?.find((c) => c.id === spec.post) ?? null;
+    if (!post) {
+      console.warn(`[match] ${spec.id} "${spec.name}": no post ${spec.post} on this map — DROPPED`);
+      return;
+    }
+    const pat = bakeSatPattern(spec, this.rng.fork());
+    /**
+     * THE PADS ARE MEASURED, NOT AUTHORED. The mean of each side's own resolved
+     * spawn cluster — the same points `_safeSpawn` drops men onto — so this
+     * cannot go stale against a `geography.PLAINS` constant somebody moved.
+     */
+    const pads = [];
+    for (const k of ['attack', 'defend']) {
+      const list = this.spawns?.[k] ?? [];
+      if (!list.length) continue;
+      let x = 0, z = 0;
+      for (const s of list) { x += s.position.x; z += s.position.z; }
+      pads.push([x / list.length, z / list.length]);
+    }
+    /**
+     * EVERY ZONE, INCLUDING THE LOCKED ONE. D is not live at boot and is live
+     * after Act I, and a gate that only proved the zones that happened to be
+     * open at boot would be a gate with a hole in it exactly where this map's
+     * signature event puts a capture point.
+     */
+    const proof = satProve(spec, pat, this.allZones, pads, RULES.captureRadius + 32);
+    this._sat.spec = spec;
+    this._sat.pat = pat;
+    console.info(
+      `[match] ${spec.id} "${spec.name}" armed at ${spec.post} — ` +
+        `${spec.shells} rounds over ${spec.span}s from a ${spec.lead}s telegraph, ` +
+        `r${spec.radius}/${spec.damage}, one per ${spec.cooldown}s · ` +
+        `EXCEPTION PROVED over ${proof.checked} impacts on ${this.allZones.length} zones: ` +
+        `worst impact ${(proof.worst * 100).toFixed(1)}% of its own capture radius ` +
+        `(must be <100), nearest base pad ${proof.nearestPad.toFixed(1)} m — ` +
+        `${proof.ok ? 'PASS' : 'FAIL'}`
+    );
+    if (!proof.ok) {
+      console.error(
+        `[match] ${spec.id}: the capture-circle exception DID NOT PROVE. ` +
+          '「占領サイトへの直接はダメ ただし破壊オブジェ＋占領サイトの場所には落としてもいい」 — ' +
+          'this strike is only legal INSIDE the circle it names. DROPPED.'
+      );
+      this._sat.spec = null;
+    }
+  }
+
+  /**
+   * WHICH ENEMY POINT IT WOULD GO ON, asked every frame the player is standing
+   * at the console so the prompt can NAME it before the key goes down.
+   *
+   * 「敵占領サイトへの大型爆撃」 — enemy-held, and `owner` is compared against
+   * `this.playerTeam` and never against a raw team index, which is the rule
+   * every relative field on this HUD follows.
+   *
+   * HOW THE MAN KNOWS WHAT HE IS CALLING ON: HE IS LOOKING AT IT. The cab is
+   * glazed on all eight faces at 26 m and every capture point on the map is
+   * visible from it, so the target is whichever enemy-held point is nearest the
+   * bearing he is facing — inside ±75°, which is about the screen. If he is
+   * facing none of them the longest-held one is named instead, so the prompt
+   * always says a real answer and the key never does something unannounced.
+   *
+   * @returns {object|null} a live zone, or null when the enemy holds nothing
+   */
+  _satTarget() {
+    const me = this.playerTeam;
+    const now = this.ctx.time.elapsed;
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * FORWARD IS `(-sin yaw, -cos yaw)`, AND IT WAS MEASURED BECAUSE THE TWO
+     * FILES THAT STATE IT DISAGREE
+     * ──────────────────────────────────────────────────────────────────────
+     * `Spectator._follow` sets its chase offset to `(-sin, -cos)` under the
+     * comment "behind them, along their own facing", which reads as forward
+     * being `(+sin, +cos)`. `PlayerSystem`'s own sprint velocity is
+     * `(-sin, -cos)`. One of those two comments is wrong and reading harder
+     * does not say which.
+     *
+     * SO IT IS TAKEN OFF THE CAMERA'S WORLD MATRIX IN THE LIVE PAGE. `_nfsat.mjs`
+     * poses four known yaws through `player.teleport(eye, { x, y })` — the only
+     * way to set one, since `player.yaw` is a getter with no setter — and reads
+     * the -Z column back:
+     *
+     *   yaw  0.000   camera looks ( 0.00, -1.00)
+     *   yaw  1.571   camera looks (-1.00,  0.00)
+     *   yaw  3.142   camera looks ( 0.00,  1.00)
+     *   yaw -1.571   camera looks ( 1.00,  0.00)
+     *
+     * which is `(-sin yaw, -cos yaw)` on all four and `(+sin, +cos)` on none.
+     * The first cut of this method had the sign the other way and picked the
+     * zone BEHIND the man every time — a target selector that is exactly wrong
+     * is worse than one that is random, because it is reliable.
+     */
+    const yaw = this.player?.yaw ?? 0;
+    const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+    const px = this.player?.position?.x ?? 0;
+    const pz = this.player?.position?.z ?? 0;
+    let aimed = null, bestDot = -2;
+    let longest = null, longestHeld = -1;
+    for (const z of this.sites) {
+      if (z.owner < 0 || z.owner === me) continue;
+      const dx = z.position.x - px;
+      const dz = z.position.z - pz;
+      const d = Math.hypot(dx, dz) || 1e-4;
+      const dot = (dx * fx + dz * fz) / d;
+      if (dot > bestDot) { bestDot = dot; aimed = z; }
+      const held = now - z.ownedSince;
+      if (held > longestHeld) { longestHeld = held; longest = z; }
+    }
+    // cos 75°. Wider than the screen, so "the one I am looking at" is generous.
+    return bestDot >= 0.26 ? aimed : longest;
+  }
+
+  /**
+   * Impact `i` of a strike on `z`, in world space, written into the reused
+   * `_satPos`. Every caller copies out of it synchronously, exactly as
+   * `_actAim`'s and `_bombardPoint`'s callers do.
+   *
+   * The offsets are FRACTIONS of the target's own radius, so the same twelve
+   * baked pairs are correct on a 14 m circle here and an 8 m one on the town.
+   */
+  _satAim(z, i) {
+    const s = this._sat;
+    const R = z.radius ?? RULES.captureRadius;
+    return this._satPos.set(
+      z.position.x + s.pat.u[i] * R,
+      z.position.y + 0.4,
+      z.position.z + s.pat.v[i] * R
+    );
+  }
+
+  /**
+   * THE CALL. Returns null on success, or the REASON it refused — which the
+   * console then says out loud.
+   *
+   * A PROMPT THAT OFFERS SOMETHING IT WILL REFUSE IS A SHIPPED BUG HERE (two
+   * posts once advertised "PLANT BEACON · 60S FORWARD SPAWN" and then answered
+   * "READY IN 0S"), so every refusal below has a matching line in `_satConsole`
+   * that is up BEFORE the key goes down. This method is the backstop, not the
+   * notice.
+   */
+  _satCall() {
+    const s = this._sat;
+    if (!s.spec) return { title: 'UPLINK OFFLINE', sub: 'NO SATELLITE ON THIS MAP' };
+    const now = this.ctx.time.elapsed;
+    if (s.t >= 0) return { title: 'STRIKE ALREADY INBOUND', sub: `${Math.ceil(Math.max(0, s.spec.lead - s.t))}S` };
+    const wait = s.readyAt - now;
+    if (wait > 0) return { title: 'UPLINK RECHARGING', sub: `READY IN ${Math.ceil(wait)}S` };
+    const z = this._satTarget();
+    if (!z) return { title: 'NO ENEMY-HELD SITE', sub: 'NOTHING TO BOMBARD' };
+
+    s.zone = z;
+    s.t = 0;
+    s.shot = 0;
+    s.pulse = 0;
+    s.readyAt = now + s.spec.cooldown;
+    s.calls++;
+    this._announceSat(z);
+    console.info(
+      `[match] ${s.spec.id} CALLED on ${z.id} — held by ${TEAM_NAME[z.owner]}, ` +
+        `${s.spec.shells} rounds inside r${(z.radius ?? RULES.captureRadius).toFixed(0)} ` +
+        `after a ${s.spec.lead}s telegraph · call ${s.calls} · next in ${s.spec.cooldown}s`
+    );
+    return null;
+  }
+
+  /**
+   * THE TELEGRAPH. 「nothing may kill from nowhere」 — and a satellite has no
+   * aeroplane, so it says the same three things the line bombardment says and
+   * then buys a fourth in the world. @see `SAT_STRIKE.pulses`.
+   */
+  _announceSat(z) {
+    const s = this._sat.spec;
+    const h = this._airHud;
+    h.kind = 'SALVO';
+    h.title = s.title;
+    h.impactTitle = s.impactTitle;
+    h.name = `${z.id} · ${z.name}`;
+    h.lead = s.lead;
+    h.x = z.position.x;
+    h.y = z.position.y;
+    h.z = z.position.z;
+    this.ui.airAlert(h);
+    /**
+     * A RETICLE ON EVERY ONE OF THE TWELVE, not on every third. The acts mark
+     * every third aiming point because a sixteen-round climb walks 38 m up a
+     * shaft and three of them describe the area; these twelve are all inside one
+     * 14 m circle and the thing the defender needs to read is that THE WHOLE
+     * CIRCLE IS THE BEATEN ZONE. `ui.markers` pools its danger marks, so this is
+     * twelve pool takes and no allocation.
+     */
+    for (let i = 0; i < s.shells; i++) this.ui.airDanger(this._satAim(z, i), s.lead, 'ORBITAL');
+    /**
+     * WHOSE POINT IT IS, RELATIVE TO `RULES.playerTeam` AND NEVER TO A RAW TEAM
+     * INDEX. Today only the player can call this, so the first branch is the
+     * one that plays — but a strike is a strike whoever asked for it, and a
+     * banner that reads the caller instead of the reader is the bug this rule
+     * exists to stop.
+     */
+    const mine = z.owner === this.playerTeam;
+    this.ui.banner.show(
+      mine ? `${s.name} ON ${z.id}` : `${s.callerLine} — ${z.id}`,
+      mine ? `${z.name} · ${s.ownLine}` : `${z.name} · ${TEAM_NAME[z.owner]} · ${s.lead | 0}S`,
+      3.0
+    );
+  }
+
+  /**
+   * ONE DESIGNATOR PULSE — the thing this event has instead of an aeroplane.
+   *
+   * A light and a ring of haze ON THE GROUND at the centre of the target, struck
+   * five times through the nine seconds of lead and accelerating into the
+   * impact, so a man standing on the point who is looking at his feet still
+   * knows, and the RHYTHM says how long is left. Everything it uses is a call
+   * `_updateBombard` and the `magazine` beat already make; nothing is allocated.
+   *
+   * IT DOES NO DAMAGE. That is the whole distinction between a telegraph and a
+   * first round, and it is the reason this is a separate beat from `_satShell`.
+   */
+  _satPulse(z, i) {
+    const s = this._sat.spec;
+    const k = (i + 1) / s.pulses.length;
+    const at = this._satPos.set(z.position.x, z.position.y + 0.3, z.position.z);
+    const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
+    if (fx) {
+      // A ring that grows to the circle the rounds will fill, tightening in time.
+      fx.hazeRing?.(at.x, at.y + 0.6, at.z,
+        (z.radius ?? RULES.captureRadius) * s.spread * (0.45 + 0.55 * k), 40, 0.7, 2.4);
+      if (fx.lights) {
+        fx.lights.flash(at.x, at.y + 26, at.z, 0.72, 0.86, 1, 900 + 2600 * k, 0.42, 3.0, 150, 5);
+      }
+    }
+    const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+    /**
+     * `drone_lock` AND DELIBERATELY NOT `strike_jet`. The act sheets open with
+     * `strike_jet` because an act has an aeroplane in it; this one does not, and
+     * a turbine over an orbital strike is the telegraph lying about what is
+     * coming. `drone_lock` is the bank's "something has you" tone and it is the
+     * only voice in it that is a MACHINE DECIDING rather than a machine flying.
+     */
+    audio?.play?.('drone_lock', at, { level: 0.7 + 0.3 * k, dur: 0.5, maxDist: 240 });
+  }
+
+  /** Round `i` of the strike. Same shape as `_updateBombard`'s, one size up. */
+  _satShell(z, i) {
+    const s = this._sat.spec;
+    const at = this._satAim(z, i);
+    const p = this._blast;
+    // Head height, not crater floor. @see `RULES.blastBurstHeight`.
+    p.position = this._blastPos.copy(at).setY(at.y + RULES.blastBurstHeight);
+    p.radius = s.radius;
+    p.damage = s.damage;
+    /**
+     * `source: null` — NOBODY'S ROUND, WHICH MEANS IT KILLS BOTH SIDES. The
+     * same payload `_updateBombard` and the acts' barrages use, and here it is a
+     * design cost rather than an implementation detail: a man of the caller's
+     * own side contesting the point he just called on dies in it. That is what
+     * stops this being a free press of a button.
+     */
+    p.source = null;
+    this.ctx.events.emit('explosion', p);
+    const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
+    if (fx) {
+      fx.explosion?.({ position: at, radius: s.radius * 0.62 });
+      fx.scorch?.(at.x, at.y - 0.3, at.z, s.radius * 0.52);
+      fx.hazeRing?.(at.x, at.y, at.z, 3.4, 18, 0.55, 2.0);
+      if (fx.lights) fx.lights.flash(at.x, at.y + 1, at.z, 1, 0.72, 0.42, 1500, 0.62, 8, 60, 4);
+    }
+    const audio = this._audio ?? (this._audio = this.ctx.peek('audio'));
+    audio?.play?.('strike_tail', at, { level: 1.05, dur: 2.6, maxDist: 420, gain: 2.1, occlusion: 0.2 });
+    if (i === 0) this.ui.airImpact(`${s.impactTitle} — ${z.id}`);
+  }
+
+  /**
+   * The strike's clock. `pulse` and `shot` are monotone indices for
+   * `_updateAct`'s stated reason: a long frame plays the beats it skipped rather
+   * than dropping them.
+   */
+  _updateSat(dt) {
+    const s = this._sat;
+    if (!s?.spec || s.t < 0) return;
+    const spec = s.spec;
+    const z = s.zone;
+    s.t += dt;
+    while (s.pulse < spec.pulses.length && s.t >= spec.pulses[s.pulse]) this._satPulse(z, s.pulse++);
+    if (s.t >= spec.lead) {
+      const step = spec.span / spec.shells;
+      const due = Math.min(spec.shells, Math.floor((s.t - spec.lead) / step) + 1);
+      while (s.shot < due) this._satShell(z, s.shot++);
+    }
+    if (s.shot >= spec.shells) {
+      console.info(
+        `[match] ${spec.id} SPENT on ${z.id} — ${spec.shells} rounds landed, ` +
+          `next call in ${Math.ceil(Math.max(0, s.readyAt - this.ctx.time.elapsed))}s`
+      );
+      s.t = -1;
+      s.zone = null;
+    }
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * THE CONSOLE, FROM THE PLAYER'S SIDE — one key, and it is the same key
+   * ────────────────────────────────────────────────────────────────────────────
+   * `_updateCacheUse` hands this post straight here because it is not a cache
+   * (@see `NON_SUPPLY_KINDS` in `caches.js`): there is nothing to take, no
+   * beacon to plant and no cooldown of its own. What it shares with a cache is
+   * the only thing that matters to the man playing — HOLD F at a place — so the
+   * verb, the hold bar, the reach test and the world marker are the ones he has
+   * already learnt.
+   *
+   * IT IS A HOLD AND NOT A TAP, and it is twice `RULES.cacheHoldTime`. A tap is
+   * the beacon's verb everywhere else on this map and a weapon that fires on a
+   * key brushed while running past is a weapon nobody meant to fire; 1.2 s at
+   * the single most exposed square metre on the map is the price.
+   *
+   * EVERY REFUSAL IS UP BEFORE THE KEY GOES DOWN AND SAYS THE REAL REASON. The
+   * beacon prompt at these same two cab posts once advertised a forward spawn
+   * and then answered "READY IN 0S" on a cooldown that was never the problem;
+   * that is the bug this method is written against. There are four ways to be
+   * refused here and each has its own sentence.
+   */
+  _satConsole(c, dt, down, st, ui, h) {
+    const s = this._sat;
+    const spec = s?.spec ?? null;
+    const now = this.ctx.time.elapsed;
+
+    /* ---- the press ----------------------------------------------------- */
+    if (down) {
+      if (st.at !== c) { st.at = c; st.held = 0; st.done = false; }
+      st.held += dt;
+      const need = spec?.hold ?? RULES.cacheHoldTime;
+      if (!st.done && st.held >= need) {
+        st.done = true;
+        const denied = this._satCall();
+        if (denied) ui.pickup?.(denied.title, denied.sub, 'deny');
+        else {
+          const z = s.zone;
+          ui.pickup?.(spec.callerLine, `${spec.name} · ${z.id} · ${spec.lead | 0}S`, 'beacon');
+          this._cacheFeedback();
+        }
+      }
+    } else {
+      st.held = 0;
+      st.done = false;
+      st.at = null;
+    }
+    st.wasDown = down;
+
+    /* ---- the prompt ---------------------------------------------------- */
+    const p = this._cachePrompt;
+    p.text = 'CALL ORBITAL STRIKE';
+    const wait = spec ? s.readyAt - now : 0;
+    const target = spec && s.t < 0 && wait <= 0 ? this._satTarget() : null;
+    p.sub = !spec
+      ? 'UPLINK OFFLINE'
+      : s.t >= 0
+        ? `STRIKE INBOUND ON ${s.zone.id} · ${Math.ceil(Math.max(0, spec.lead - s.t))}S`
+        : wait > 0
+          ? `UPLINK RECHARGING · ${Math.ceil(wait)}S`
+          : target
+            ? `TARGET ${target.id} · ${target.name} · ${TEAM_NAME[target.owner]}`
+            : 'NO ENEMY-HELD SITE';
+    p.progress = st.at === c && !st.done ? Math.min(1, st.held / (spec?.hold ?? RULES.cacheHoldTime)) : 0;
+    /**
+     * NO SECOND ROW. `beacon: false` on this post already makes `_updateCacheUse`
+     * hand `alt` a null, and a console that offered a forward spawn it cannot
+     * plant is the exact shipped bug this whole method is written against.
+     */
+    p.alt = null;
+    ui.setPrompt(p);
+
+    h.near = c.id;
+    h.kind = c.kind;
+    h.hold = p.progress;
+    h.ready = !!spec && s.t < 0 && wait <= 0 && !!target;
+    h.cooldown = Math.max(0, wait);
+    h.grenadeCooldown = this.caches.grenadeCooldown(now);
+  }
+
   /* ------------------------------------------------------------- drones -- */
 
   /**
@@ -5962,6 +6400,27 @@ export class MatchSystem {
       return;
     }
 
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * A POST THAT IS NOT A SUPPLY POST LEAVES HERE BEFORE ANY OF THE CACHE
+     * VERBS RUN. @see `NON_SUPPLY_KINDS` in `caches.js`.
+     * ──────────────────────────────────────────────────────────────────────
+     * NACHTFELD's satellite uplink console at the top of the control tower is a
+     * place you HOLD F at, which is why it is a `caches` record at all — the
+     * reach test, the prompt, the hold bar, the world marker and the
+     * `perishable` death with its structure are all this file's and none of
+     * them wants a second implementation. What it is NOT is a crate: there is
+     * nothing to take, no beacon to plant and no per-post cooldown. Every line
+     * below this one is about those three things, so it goes out here rather
+     * than growing a fourth condition into each of them.
+     *
+     * `st` GOES WITH IT. One press state for one key: walking off the console
+     * with F held and onto a crate has to start a fresh press, and it does,
+     * because `_satConsole` keeps the same `st.at`/`st.held`/`st.done`
+     * bookkeeping this method does.
+     */
+    if (c.kind === 'satcall') { this._satConsole(c, dt, down, st, ui, h); return; }
+
     const ready = this.caches.ready(c, now);
     /**
      * `c.beacon !== false` IS PART OF "READY", AND LEAVING IT OUT SHIPPED A LIE.
@@ -6131,7 +6590,10 @@ export class MatchSystem {
           : c.kind === 'weapon' ? c.label || 'WEAPON'
             : c.kind === 'grenade' ? 'FRAGS'
               : c.kind === 'vantage' ? 'NEST'
-                : 'AMMO';
+                // The uplink console. @see `_satConsole` and the sixth glyph in
+                // `src/ui/markers.js` — a kind with no glyph draws an ammo crate.
+                : c.kind === 'satcall' ? 'ORBITAL UPLINK'
+                  : 'AMMO';
       v.position = c.position;
       v.ready = this.caches.ready(c, now);
       v.cooldown = Math.max(0, c.readyAt - now);
