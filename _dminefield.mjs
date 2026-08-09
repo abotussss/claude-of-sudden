@@ -20,6 +20,9 @@
  *      not a rule a bot could follow; it is here to say what perfect knowledge
  *      would be worth, so the gap between B and C is the honest cost of the
  *      information a man does not have
+ *   D  `Armour.armourAhead(team, x, z, maxD)` — C's information, published as
+ *      an API a bot CAN follow, with the bearer's own reach as the limit. A
+ *      and B measured 0 twice, C measured 7; D is the answer to why.
  *
  * Usage: BASE=http://127.0.0.1:4638/ MAP=plains node _dminefield.mjs [seed]
  */
@@ -35,7 +38,7 @@ const b = await chromium.launch({
 });
 
 for (const SEED of SEEDS) {
-  for (const RULE of ['A', 'B', 'C']) {
+  for (const RULE of ['A', 'B', 'C', 'D']) {
     const page = await b.newPage({ viewport: { width: 800, height: 520 } });
     const errs = [];
     page.on('pageerror', (e) => errs.push(String(e.message)));
@@ -96,7 +99,16 @@ for (const SEED of SEEDS) {
         for (const a of bearers) {
           for (let j = 0; j < 2; j++) {
             let ln = null;
-            if (RULE === 'A') {
+            if (RULE === 'D') {
+              /**
+               * THE PUBLISHED CALL, used the way the spec routes it: the ground
+               * a hostile hull is about to drive over, within the distance this
+               * man is willing to walk. `armourAhead` starts `MINE_LEAD` (35 m)
+               * in front of the hull for him, so nothing here has to reason
+               * about the arming delay.
+               */
+              ln = armour.armourAhead(a.team, a.position.x, a.position.z, 220);
+            } else if (RULE === 'A') {
               ln = armour.laneNear(a.position.x, a.position.z, 400, a.team);
             } else {
               // B: the nearest enemy lane point that is ALSO within 45 m of a

@@ -1596,6 +1596,14 @@ const WRECK_R = 4.2;
  */
 const LANE_STEP = 5.0;
 const LANE_CELL = 12.0;
+/**
+ * HOW FAR IN FRONT OF A HULL A MINE MUST GO, and how far ahead is still worth
+ * walking to. @see `armourAhead` — 35 m is `atmine.fuse` (6 s) times
+ * `SPEED_ADVANCE` (4.6 m/s) plus the man's own last few steps, because ground
+ * the hull crosses before the plate arms is ground the mine is not on.
+ */
+const MINE_LEAD = 35;
+const MINE_REACH = 140;
 
 const UP = new THREE.Vector3(0, 1, 0);
 /** Shared by every instance the atlas bound nothing to. */
@@ -2015,6 +2023,96 @@ export class Armour {
   /** How many lane points were baked. 0 means no wheel baked on this map. */
   get laneCount() {
     return this._laneX?.length ?? 0;
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE GROUND A HOSTILE HULL IS ABOUT TO DRIVE OVER — and this is the call
+   * that makes a minefield work at all
+   * ══════════════════════════════════════════════════════════════════════════
+   * MEASURED, AND THE MEASUREMENT IS THE WHOLE ARGUMENT. `_dminefield.mjs`
+   * lays the full ration — five men a side, two each — the moment armour rolls,
+   * by three rules, and watches for 220 s (seed 7, NACHTFELD):
+   *
+   *     A  the bearer's nearest ENEMY lane                 20 laid   0 tripped
+   *     B  the nearest enemy lane within 45 m of a ZONE    20 laid   0 tripped
+   *     C  the leg a hull is ACTUALLY ON, ahead of it      20 laid   7 tripped
+   *                                                       6 of 6 hulls dead,
+   *                                                       every one to a mine
+   *
+   * The plate is not the problem, the damage is not the problem and the
+   * emplacement is not the problem — C proves all three, completely. THE
+   * PROBLEM IS WHICH LEG. Six wheels of six legs is 36 baked routes and about
+   * five kilometres of centreline; a hull drives two or three of them in a
+   * match, a few hundred metres. Twenty point mines scattered over "somewhere
+   * armour could drive" is a fifth of a percent of coverage, and a fifth of a
+   * percent measures as zero twice.
+   *
+   * `laneNear` cannot close that gap and no amount of tuning it will: it
+   * answers a question about the MAP, and the missing information is about the
+   * hulls that are on it right now. Only this file has that — `legIx`, `s` and
+   * `legDir` are updated every frame by `_drive` and are meaningless outside
+   * it. So it is published.
+   *
+   * IT IS NOT X-RAY VISION, and that matters for a weapon that has to be fair:
+   * what it encodes is "there is a tank over there and it is going that way",
+   * which is what a man watching a 7 m hull cross open ground on a 260 m plain
+   * actually knows. `src/ai` should gate the CALL on the man having seen the
+   * hull (`armourWorth` / the vehicle list already decides that); this method
+   * holds no opinion about perception and will answer for a hull nobody can
+   * see. That is the caller's rule to apply, and the report says so.
+   *
+   * `MINE_LEAD` is why it starts ahead rather than at the hull: the mine takes
+   * `WEAPON_DEFS.atmine.fuse` (6 s) to arm and `SPEED_ADVANCE` is 4.6 m/s, so
+   * anything inside ~28 m is ground the hull has crossed before the plate is
+   * live. 35 m is that with the man's own last few steps in it.
+   *
+   * COST: live hostile hulls (at most three) x the samples between `MINE_LEAD`
+   * and `MINE_REACH` at `LANE_STEP` (21), so about 63 distance tests, no
+   * allocation, no ray. It is a decision a man makes every twenty seconds, not
+   * a frame cost.
+   *
+   * @param {number} team   the LAYER's side. Hostile hulls are the others.
+   * @param {number} x,z    where he is standing.
+   * @param {number} maxD   how far he will walk to it.
+   * @param {object} [out]  `{x, z, yaw, d, lead, id}`, written in place.
+   * @returns {object|null} `out`, or null when no hostile hull is heading
+   *          anywhere within `maxD` of him. `lead` is how far in front of the
+   *          hull the point is, so a caller can prefer a longer fuse margin.
+   */
+  armourAhead(team, x, z, maxD = 60, out = null) {
+    const o = out ?? this._aheadOut ??
+      (this._aheadOut = { x: 0, z: 0, yaw: 0, d: 0, lead: 0, id: '' });
+    let best = maxD * maxD;
+    let found = false;
+    for (const t of this.tanks) {
+      if (!t.alive || t.team === team || t.state === 'dead') continue;
+      const leg = t.legs[t.legIx];
+      if (!leg) continue;
+      for (let lead = MINE_LEAD; lead <= MINE_REACH; lead += LANE_STEP) {
+        const s = t.s + lead * t.legDir;
+        if (s < 0 || s > leg.length) continue;
+        // The sample nearest that arc length. `S` is monotonic and the legs are
+        // baked at `STEP`, so this is a divide rather than a search.
+        let i = Math.round((s / Math.max(1e-4, leg.length)) * (leg.n - 1));
+        if (i < 0) i = 0;
+        else if (i > leg.n - 1) i = leg.n - 1;
+        const dx = leg.X[i] - x;
+        const dz = leg.Z[i] - z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 >= best) continue;
+        best = d2;
+        found = true;
+        o.x = leg.X[i];
+        o.z = leg.Z[i];
+        o.yaw = leg.YAW[i];
+        o.lead = lead;
+        o.id = t.id;
+      }
+    }
+    if (!found) return null;
+    o.d = Math.sqrt(best);
+    return o;
   }
 
   /* --------------------------------------------------------------- route -- */
