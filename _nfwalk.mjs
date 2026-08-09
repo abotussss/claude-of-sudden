@@ -74,6 +74,14 @@ for (let f = 1; f < FLOORS.length + 1; f++) {
 /* out of the stair opening onto the cab floor, then west to the console */
 w([T.x + 1.28, T.z - 5.2], 'cab-floor');
 w([T.x - 4.3, T.z - 3.4], 'the-button');   // a metre off the desk's near face
+/**
+ * …AND BACK DOWN, on the same waypoints in reverse. A weapon at the top of a
+ * tower that razes at 500 points is only a weapon if a man can get up it, call,
+ * and be off it again, so the descent is timed with the climb and not assumed
+ * from it. Nothing is teleported: he turns round and walks.
+ */
+const UP_N = WP.length;
+for (let i = WP.length - 2; i >= 0; i--) w([WP[i].x, WP[i].z], `down-${WP[i].tag}`);
 
 const b = await chromium.launch({ headless: true, args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--mute-audio'] });
 const p = await b.newPage({ viewport: { width: 1280, height: 720 } });
@@ -113,8 +121,17 @@ await p.evaluate((route) => {
     i: 0, route, frames: 0, log: [], done: false, stopped: null,
     maxY: -1e9, sinceGain: 0, sinceWp: 0, arrived: [], shot: null,
   };
-  /** the landings the shutter fires on */
-  const SHOOT = /head$|arrival$|halflanding$|room-floor|cab-floor|the-button/;
+  /**
+   * The landings the shutter fires on. `room-floor` is NOT one of them and that
+   * is a measured exclusion, not tidiness: the control room's loose-stores
+   * scatter tests the doors, the four piers and the two supply posts but NOT the
+   * stair well, and it has dropped a 0.49 m and a 0.95 m prop onto the bottom of
+   * half-flight A. 0.49 m is over `maxStep` 0.45 AND over the 0.42 m stance
+   * step, so a man who STOPS at the foot cannot start again on that line — he
+   * has to mantle it or take the clear lane at x -2.1. A walk that pauses there
+   * for a photograph is measuring the harness, not the tower.
+   */
+  const SHOOT = /^(?!down-).*(head$|arrival$|halflanding$|room-door|cab-floor|the-button)/;
 
   const up = { x: 0, y: 1, z: 0 };
   const sample = () => {
@@ -187,6 +204,7 @@ await p.evaluate((route) => {
 
 const startedAt = Date.now();
 const shots = [];
+let atButton = null;
 for (let k = 0; k < 3000; k++) {
   const st = await p.evaluate(() => ({ f: window.__WALK__.frames, d: window.__WALK__.done,
     i: window.__WALK__.i, shot: window.__WALK__.shot }));
@@ -199,6 +217,37 @@ for (let k = 0; k < 3000; k++) {
     });
     await p.screenshot({ path: `${OUT}/${st.shot}.png` });
     shots.push({ tag: st.shot, ...pose });
+    /**
+     * THE ONE FRAME THIS WHOLE FILE IS FOR. He is at the desk: turn him to it
+     * with `controlEnabled` still TRUE (`Player.update` writes the camera from
+     * the rig every frame, so a pose set any other way is a pose that did not
+     * happen), read the prompt off `match._cachePrompt`, and photograph it.
+     */
+    if (st.shot === 'the-button') {
+      atButton = await p.evaluate(() => {
+        const e = window.__ENGINE__;
+        const m = e.ctx.peek('match');
+        const pl = e.ctx.peek('player');
+        const k = m.caches.list.find((q) => q.id === 'NF-TOWER-SATCALL');
+        const d = pl.position;
+        if (k) pl.movement.yaw = Math.atan2(-(k.position.x - d.x), -(k.position.z - d.z));
+        return { post: k ? [+k.position.x.toFixed(2), +k.position.y.toFixed(2), +k.position.z.toFixed(2)] : null };
+      });
+      await p.waitForTimeout(900);
+      Object.assign(atButton, await p.evaluate(() => {
+        const e = window.__ENGINE__;
+        const m = e.ctx.peek('match');
+        const pl = e.ctx.peek('player');
+        const c = e.camera; c.updateMatrixWorld(true);
+        return {
+          nearest: m.caches.nearest(pl.position)?.id ?? null,
+          prompt: { ...m._cachePrompt, alt: m._cachePrompt.alt ? 'SET' : null },
+          eye: [+c.position.x.toFixed(2), +c.position.y.toFixed(2), +c.position.z.toFixed(2)],
+          pitch: +c.rotation.x.toFixed(3), yaw: +c.rotation.y.toFixed(3),
+        };
+      }));
+      await p.screenshot({ path: `${OUT}/the-button-faced.png` });
+    }
     await p.evaluate(() => {
       window.__WALK__.shot = null; window.__WALK__.sinceWp = 0;
       window.__ENGINE__.input.down.add('KeyW');
@@ -235,9 +284,29 @@ for (const a of r.arrived) console.log(`  ${a.tag.padEnd(18)} t=${String(a.t).pa
 console.log(`\n  reached ${r.i}/${r.n} waypoints, highest feet y = ${r.maxY}, ended at ${JSON.stringify(r.at)}`);
 if (r.stopped) console.log(`  *** STOPPED: ${r.stopped}`);
 
-console.log('\n── THE BUTTON ──────────────────────────────────────────────────');
-console.log('  nearest cache =', r.nearest);
-console.log('  prompt        =', JSON.stringify(r.prompt));
+/**
+ * THE TIMINGS. `capture=1` pins every frame at exactly 1/60 s of simulated
+ * time, so frame counts ARE seconds — which is the only reason a number here
+ * means anything about what the tower costs a player. The tower razes at 500
+ * points and takes the button with it, so up-and-back is the figure that says
+ * whether the weapon is usable, not the climb on its own.
+ */
+const leg = (tag) => r.arrived.find((a) => a.tag === tag)?.t ?? null;
+const tUp = leg('the-button');
+const tDown = leg('down-apron') ?? leg('down-flightI-foot');
+console.log('\n── TIMINGS, IN SIMULATED SECONDS (capture=1 pins dt at 1/60) ───');
+console.log(`  apron -> the button      ${tUp} s`);
+console.log(`  the button -> the apron  ${tDown !== null && tUp !== null ? (tDown - tUp).toFixed(2) : '—'} s`);
+console.log(`  up and back              ${tDown ?? '—'} s   (walking, no sprint, with the shutter pauses in it)`);
+
+console.log('\n── THE BUTTON, AS HE STOOD AT IT ───────────────────────────────');
+if (!atButton) console.log('  NEVER REACHED');
+else {
+  console.log(`  post at ${JSON.stringify(atButton.post)} · eye ${JSON.stringify(atButton.eye)} ` +
+    `pitch ${atButton.pitch} yaw ${atButton.yaw}`);
+  console.log('  nearest cache =', atButton.nearest);
+  console.log('  prompt        =', JSON.stringify(atButton.prompt));
+}
 const callable = await p.evaluate(() => {
   const m = window.__ENGINE__.ctx.peek('match');
   const c = window.__ENGINE__.ctx;
@@ -253,8 +322,8 @@ console.log('\n── FRAMES, WITH THE POSE READ BACK OFF THE CAMERA ───�
 for (const s of shots) {
   console.log(`  ${s.tag.padEnd(18)} eye (${s.x}, ${s.y}, ${s.z}) pitch ${s.pitch} yaw ${s.yaw}  → ${OUT}/${s.tag}.png`);
 }
-const PASS = !r.stopped && r.i >= r.n && r.nearest === 'NF-TOWER-SATCALL' &&
-  !callable.denied && errs.length === 0;
+const PASS = !r.stopped && r.i >= r.n && atButton?.nearest === 'NF-TOWER-SATCALL' &&
+  /ORBITAL STRIKE/.test(atButton?.prompt?.text ?? '') && !callable.denied && errs.length === 0;
 console.log(`\n  WALK ${PASS ? 'PASS' : 'FAIL'} · wall clock ${((Date.now() - startedAt) / 1000).toFixed(1)} s · ` +
   `sim ${(r.frames / 60).toFixed(1)} s · pageerrors ${errs.length}${errs.length ? ' :: ' + errs[0] : ''}`);
 await b.close();
