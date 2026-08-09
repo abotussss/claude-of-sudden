@@ -50,7 +50,7 @@ const res = await page.evaluate(async () => {
   const armour = m.tank;
 
   const out = { lanes: armour.laneCount, laneSample: null, cases: [], probes: null };
-  const ln = armour.laneNear(0, 0, 200);
+  const ln = armour.laneNear(0, 0, 200, -1);
   if (ln) out.laneSample = { x: +ln.x.toFixed(1), z: +ln.z.toFixed(1), d: +ln.d.toFixed(1), yaw: +ln.yaw.toFixed(2) };
 
   // Roll every hull by hand so the run does not wait out the schedule.

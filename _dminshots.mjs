@@ -90,7 +90,7 @@ const mine = await page.evaluate(() => {
   const w = e.ctx.peek('weapons');
   const ph = e.ctx.peek('physics');
   // On a real lane, so the frame is ground armour actually drives over.
-  const ln = m.tank.laneNear(-60, -120, 200);
+  const ln = m.tank.laneNear(-60, -120, 200, -1);
   const y = ph.groundHeight(ln.x, ln.z, 60);
   w.layMine({ x: ln.x, y: y + 0.2, z: ln.z }, { team: 1, owner: null });
   return { x: ln.x, y, z: ln.z, yaw: ln.yaw };

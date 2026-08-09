@@ -1904,6 +1904,7 @@ export class Armour {
     const X = [];
     const Z = [];
     const YAW = [];
+    const TEAM = [];
     const step2 = LANE_STEP * LANE_STEP;
     for (const tank of this.tanks) {
       for (const leg of tank.legs) {
@@ -1918,12 +1919,15 @@ export class Armour {
           X.push(lx);
           Z.push(lz);
           YAW.push(leg.YAW[i]);
+          TEAM.push(tank.team);
         }
       }
     }
     this._laneX = new Float32Array(X);
     this._laneZ = new Float32Array(Z);
     this._laneYaw = new Float32Array(YAW);
+    /** WHICH SIDE'S ARMOUR DRIVES THIS POINT. @see the `enemyOf` filter. */
+    this._laneTeam = new Uint8Array(TEAM);
     this._laneGrid = new Map();
     for (let i = 0; i < X.length; i++) {
       const key = this._laneKey(X[i], Z[i]);
@@ -1932,7 +1936,7 @@ export class Armour {
       b.push(i);
     }
     /** Written by `laneNear`; the caller may pass its own instead. */
-    this._laneOut = { x: 0, z: 0, yaw: 0, d: 0 };
+    this._laneOut = { x: 0, z: 0, yaw: 0, d: 0, team: -1 };
     console.info(
       `[tank] ${X.length} lane points off ${this.tanks.reduce((a, t) => a + t.legs.length, 0)} ` +
         `baked legs, ${LANE_STEP} m apart, in ${this._laneGrid.size} cells — published as laneNear()`
@@ -1946,16 +1950,38 @@ export class Armour {
   /**
    * THE NEAREST POINT ON ANY BAKED TANK LANE to (x, z), or null past `maxD`.
    *
+   * ────────────────────────────────────────────────────────────────────────
+   * `enemyOf` IS THE HALF THAT WAS MISSING, AND IT WAS MEASURED
+   * ────────────────────────────────────────────────────────────────────────
+   * The first version of this took no team and answered "the nearest lane".
+   * `_dtankwar.mjs` then ran the specification against it over two full
+   * matches: TWENTY MINES LAID, TWENTY ARMED, **NOT ONE EVER TRIPPED**, and
+   * the reason is geometry rather than a bug in anything. A man is near HIS
+   * OWN SIDE'S ground for most of a match, the nearest lane to his own ground
+   * belongs to HIS OWN wheel, and a plate does not fire under the side that
+   * laid it (`armourFootprint`). Every mine on the map was buried on a road
+   * only friendly armour would ever use.
+   *
+   * So the question a mine-layer actually has is not "where is a lane" but
+   * "where is a lane THE OTHER SIDE'S ARMOUR DRIVES", and only this file can
+   * answer it: the team is a property of the WHEEL the leg belongs to and is
+   * not recoverable from a position. `enemyOf` filters to points driven by
+   * somebody other than that team. The six wheels converge on the five capture
+   * points, so on this map the answer is almost always "near the objective you
+   * are already fighting over", which is where a minefield belongs.
+   *
    * @param {number} x,z    world metres.
    * @param {number} maxD   how far to look, metres.
-   * @param {object} [out]  `{x, z, yaw, d}`, written in place. Omit to use the
-   *                        shared record, which is valid until the next call.
+   * @param {number} enemyOf  a team index: keep only lanes driven by the OTHER
+   *                        side's armour. -1 (the default) keeps all of them.
+   * @param {object} [out]  `{x, z, yaw, d, team}`, written in place. Omit to
+   *                        use the shared record, valid until the next call.
    * @returns {object|null} `out`, or null when there is no lane inside `maxD`.
    *          `yaw` is the leg's own heading there, in the `atan2(dx, dz)`
    *          convention `_bakePath` bakes — so a mine laid ACROSS the lane is
    *          laid at `yaw + PI/2`.
    */
-  laneNear(x, z, maxD = 12, out = null) {
+  laneNear(x, z, maxD = 12, enemyOf = -1, out = null) {
     if (!this._laneGrid || !this._laneX?.length) return null;
     const o = out ?? this._laneOut;
     const R = Math.ceil(maxD / LANE_CELL);
@@ -1969,6 +1995,7 @@ export class Armour {
         if (!b) continue;
         for (let k = 0; k < b.length; k++) {
           const i = b[k];
+          if (enemyOf >= 0 && this._laneTeam[i] === enemyOf) continue;
           const dx = this._laneX[i] - x;
           const dz = this._laneZ[i] - z;
           const d2 = dx * dx + dz * dz;
@@ -1980,6 +2007,7 @@ export class Armour {
     o.x = this._laneX[bi];
     o.z = this._laneZ[bi];
     o.yaw = this._laneYaw[bi];
+    o.team = this._laneTeam[bi];
     o.d = Math.sqrt(best);
     return o;
   }

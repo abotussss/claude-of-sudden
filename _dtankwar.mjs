@@ -58,7 +58,16 @@ for (const SEED of SEEDS) {
     const BEARERS = 5;
     const PER_MAN = 2;
     const GAP = 25;          // seconds between one man's two mines
-    const LANE_NEAR = 90;    // how far he will go to find a lane
+    /**
+     * HOW FAR HE WILL WALK TO A HOSTILE LANE, and it is the ONE number the
+     * first run of this file got wrong. At 90 m with no team filter every man
+     * found HIS OWN side's approach road, buried his mines on it, and twenty
+     * armed mines went the whole match without one hull touching one. The
+     * lane has to be a lane the OTHER side's armour drives (`enemyOf`), and
+     * the man has to actually be near it — 30 m is "the ground I am fighting
+     * over", not "somewhere on the map".
+     */
+    const LANE_NEAR = 30;
     const bearers = new Map(); // agent -> { left, next }
     const pick = () => {
       for (const t of [0, 1]) {
@@ -98,7 +107,7 @@ for (const SEED of SEEDS) {
           if (st.left <= 0) continue;
           if (!a.alive) continue;
           if (clock() < st.next) continue;
-          const ln = armour.laneNear(a.position.x, a.position.z, LANE_NEAR);
+          const ln = armour.laneNear(a.position.x, a.position.z, LANE_NEAR, a.team);
           if (!ln) continue;
           const y = e.ctx.peek('physics').groundHeight(ln.x, ln.z, a.position.y + 6);
           if (!Number.isFinite(y)) continue;
