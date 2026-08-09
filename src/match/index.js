@@ -95,6 +95,7 @@ import { Caches } from './caches.js';
 import { Reinforcements } from './reinforce.js';
 import { Civilians } from './civilians.js';
 import { HiddenSquad } from './hidden.js';
+import { MountainBattery } from './battery.js';
 import { forMap } from './geography.js';
 import {
   MAP_ACTS, bakeBarrage, NF_GAP, NF_ARMOUR_AFTER, SCORCH_CEIL,
@@ -753,6 +754,43 @@ export class MatchSystem {
     if (this.hidden) {
       this.hidden.onEmerge = (i, p, yaw, wave) => this._emergeHidden(i, p, yaw, wave);
       this.hidden.onWave = (wave, n, zone) => this._announceHidden(wave, n, zone);
+    }
+    /**
+     * ──────────────────────────────────────────────────────────────────────
+     * …AND THE PLAYER'S SIDE OF THE SAME DEADLOCK — 「味方にも山の上からの移動式
+     * 固定砲台車両を３台投入」
+     * ──────────────────────────────────────────────────────────────────────
+     * The EIGHTH arrival, and the only one whose trigger is another event
+     * rather than a clock, a progress fraction or a score. @see
+     * `src/match/battery.js` for the mountain, the two target gates and the
+     * capture-circle exception's proof; `_updateHiddenSquad` for the one line
+     * that arms it; `_bakeBattery` for the proof and the pads.
+     *
+     * DOMINATION ONLY, for the reason the squad it answers is: it is armed by
+     * `HiddenSquad.call` and by nothing else, so in a mode where that never
+     * happens this would be three vehicles nobody could ever cause.
+     *
+     * It DROPS ITSELF on any map with no mountain past `world.level.ridge.r0`,
+     * which today is the town, and says so.
+     */
+    /**
+     * Declared HERE and not in the scratch block below, because `_bakeBattery`
+     * runs on the next line and reads them. (It did not, once, and `init` threw
+     * on the plain before `__READY__` — a boot-order bug that a boot-only probe
+     * would have caught and a `_townround` did.)
+     */
+    this._battFoes = [];
+    this._battPads = [];
+    this.battery = this.domination
+      ? new MountainBattery(ctx, { rng: this.rng.fork() }).build()
+      : null;
+    if (this.battery) {
+      this.battery.onDeploy = (n) => this._announceBattery(n);
+      this.battery.onLay = (info) => this._batteryLay(info);
+      this.battery.onImpact = (info) => this._batteryImpact(info);
+      this.battery.onHome = (n) => this._batteryHome(n);
+      this._bakeBattery();
+      if (typeof window !== 'undefined') window.__BATTERY__ = this.battery;
     }
     /** The event has been armed this match. Latched: 「先に」 happens once. */
     this._hiddenArmed = false;
@@ -1414,6 +1452,7 @@ export class MatchSystem {
      * the level's and survive a restart, like the civilians' census.
      */
     this.hidden?.reset();
+    this.battery?.reset();
     this._hiddenArmed = false;
     this._hiddenTrigger = -1;
     this._hiddenOut = 0;
@@ -3204,6 +3243,22 @@ export class MatchSystem {
     this.strafe?.update(dt, live);
     this.tank?.update(dt, live);
     /**
+     * THE MOUNTAIN BATTERY, in every phase and with the live flag, on the same
+     * split `Crash` draws: the GUNS only lay and launch while the round is
+     * live, but a missile that is already in the air still has to land. It is
+     * given the LIVE zone list (which is what "an enemy-held capture site"
+     * means, and it includes D once the cathedral is down) and a fresh list of
+     * targetable hostiles — `_tankEnemies`, reused verbatim, because "who may
+     * this weapon shoot at" has exactly one answer in this file and a second
+     * copy of it is a second thing to get wrong.
+     */
+    if (this.battery?.ready) {
+      const foes = this._battFoes;
+      foes.length = 0;
+      if (this.battery.armed && live) this._tankEnemies(this.battery.team, foes);
+      this.battery.update(dt, live, this.sites, foes);
+    }
+    /**
      * …and the crash, in EVERY phase and with no `live` argument, because it
      * has no scheduler to gate: what it is running is an event somebody else
      * started, and a wreck that is still ploughing when the round ends still
@@ -4136,6 +4191,18 @@ export class MatchSystem {
       const beaten = this._hiddenDeficit >= RULES.hiddenSquadDeficit;
       const ok = !beaten && h.call(team);
       this._hiddenStoodDown = beaten;
+      /**
+       * ⚠ THE COUNTERWEIGHT, AND IT IS THIS ONE LINE AND NO OTHER CONDITION.
+       * 「隠し部隊が相手に登場した時は、味方にも山の上からの移動式固定砲台車両を
+       *  ３台投入」 — WHEN the squad appears. `ok` is exactly "five men are
+       * actually coming out of a building on the enemy's side", so a squad that
+       * stood down because the human is more than `hiddenSquadDeficit` behind
+       * (his own rule) takes the battery down with it. A weapon handed to a side
+       * whose opponent got nothing is not a counterweight, it is a comeback
+       * mechanic, and nothing here asked for one. `this.playerTeam` is the side
+       * — 「味方」 — read through `RULES.playerTeam` and never as an index.
+       */
+      if (ok) this.battery?.arm(this.playerTeam, this._batteryPads());
       console.info(
         `[match] ${TEAM_NAME[this._hiddenTrigger]} first past ${RULES.hiddenSquadScore} ` +
           `(${this.score[0]}-${this.score[1]}, t-${Math.max(0, this.roundClock).toFixed(0)}s) · ` +
@@ -4282,6 +4349,139 @@ export class MatchSystem {
       `[match] hidden squad wave ${wave}: ${n} ${TEAM_NAME[team]} out of the buildings ` +
         `by ${where} · score ${this.score[0]}-${this.score[1]} · ` +
         `t-${Math.max(0, this.roundClock).toFixed(0)}s`
+    );
+  }
+
+  /* ------------------------------------------------ the mountain battery -- */
+
+  /**
+   * ⚠ PROVE THE CAPTURE-CIRCLE EXCEPTION, ONCE, AT BOOT.
+   *
+   * 「占領サイトや敵に向けて…ミサイル射撃させて」 makes a capture circle a legal aim
+   * point, which is the THIRD case against a rule the player set himself:
+   *
+   *   「空爆は占領サイトに落とすのではなくそれ以外の平原にランダムに広範囲に一列爆撃に
+   *    して それを定期的に起こす」
+   *   「占領サイトへの直接はダメ ただし破壊オブジェ＋占領サイトの場所には落としてもいい」
+   *
+   * The first two cases are his 破壊オブジェ carve-out and the tower's orbital
+   * strike (@see `_bakeSat`, and `SAT_STRIKE`'s own exception block). This is
+   * the third and it is proved the same way and to the same standard: over
+   * EVERY zone the battery could ever be pointed at, INCLUDING THE LOCKED ONE,
+   * asserting that all thirty baked offsets fall inside the target's own radius
+   * and no impact comes within the line bombardment's `spawnClear` of a base
+   * pad. `plainsOpenRuns` keeps bombs OUT of every circle; this keeps rounds IN
+   * the one they name. A failure DROPS the feature — the one thing this must
+   * never be is a quiet erosion of that rule.
+   */
+  _bakeBattery() {
+    const b = this.battery;
+    if (!b?.ready) return;
+    const proof = b.proveAgainst(this.allZones, this._batteryPads());
+    if (!proof) return;
+    console.info(
+      `[match] ${b.spec.id} "${b.spec.name}" — EXCEPTION PROVED over ${proof.checked} impacts on ` +
+        `${this.allZones.length} zones: worst impact ${(proof.worst * 100).toFixed(1)}% of its own ` +
+        `capture radius (must be <100), nearest base pad ${proof.nearestPad.toFixed(1)} m ` +
+        `(owed ${b.spec.spawnClear}) — ${proof.ok ? 'PASS' : 'FAIL'}`
+    );
+  }
+
+  /**
+   * BOTH BASE PADS, MEASURED RATHER THAN AUTHORED — the mean of each side's own
+   * RESOLVED spawn cluster, which is the same computation `_bakeSat` makes and
+   * for its stated reason: these are the points `_safeSpawn` actually drops men
+   * onto, so the gate cannot go stale against a `geography.PLAINS` constant
+   * somebody moved. Computed once and kept.
+   */
+  _batteryPads() {
+    if (this._battPads.length) return this._battPads;
+    for (const k of ['attack', 'defend']) {
+      const list = this.spawns?.[k] ?? [];
+      if (!list.length) continue;
+      let x = 0, z = 0;
+      for (const sp of list) { x += sp.position.x; z += sp.position.z; }
+      this._battPads.push([x / list.length, z / list.length]);
+    }
+    return this._battPads;
+  }
+
+  /**
+   * THREE VEHICLES CAME OVER THE CREST. One banner, once, for the whole
+   * deployment — not one per round.
+   *
+   * `mine` is derived from `RULES.playerTeam` and not from a constant even
+   * though the battery is `playerTeam` by construction. That is the assertion,
+   * and it costs one compare; painting or wording by raw team index has shipped
+   * the wrong result twice in this project.
+   */
+  _announceBattery(n) {
+    const mine = this.battery.team === this.playerTeam;
+    this.ui.banner.show(
+      mine ? this.battery.spec.deployLine : 'ENEMY BATTERY DEPLOYING',
+      `${n} VEHICLES · ON THE RIDGE · ${RULES.mountainBatteryRounds} ROUNDS`,
+      3.0
+    );
+  }
+
+  /**
+   * A GUN HAS LAID ON SOMETHING AND WILL LAUNCH IN `info.lead` SECONDS.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * THE TELEGRAPH, AND WHY THE STRIP IS RATIONED AND THE RETICLE IS NOT
+   * ────────────────────────────────────────────────────────────────────────
+   * `ui.airDanger` is a WORLD mark on the impact point and it goes up for every
+   * single round, because 「nothing may kill from nowhere」 and this is the one
+   * channel that says exactly where. `markers.airPool` is eight and this
+   * feature can hold at most three of them at once (one per gun), which is
+   * inside what a bomber stick and a salvo already share.
+   *
+   * `ui.airAlert` is ONE STRIP and it holds for `lead + 2.2` s. Thirty takes at
+   * a round every ~4.5 s would own it for the rest of the match and stamp on
+   * the bomber's, the strafe's and the bombardment's warnings — so it is raised
+   * only when the round can actually reach the man reading it
+   * (`RULES.mountainBatteryAlert`, or he is inside the circle being shelled).
+   * Everything else this event says is IN THE WORLD and is unconditional: the
+   * `drone_lock` tone at the target, the haze ring tightening on the impact
+   * point, the launch flash on the skyline, the missile itself with its trail,
+   * and `strike_incoming` at the target for the last 2.2 s.
+   */
+  _batteryLay(info) {
+    this.ui.airDanger(this._v.set(info.x, info.y, info.z), info.lead, 'BATTERY');
+    const p = this.player;
+    if (p?.position && !p.dead) {
+      const d = Math.hypot(p.position.x - info.x, p.position.z - info.z);
+      const inside = info.zone
+        ? Math.hypot(p.position.x - info.zone.position.x, p.position.z - info.zone.position.z) <=
+          (info.zone.radius ?? RULES.captureRadius)
+        : false;
+      if (d <= RULES.mountainBatteryAlert || inside) {
+        const h = this._airHud;
+        h.kind = 'SALVO';
+        h.title = info.title;
+        h.impactTitle = info.impactTitle;
+        h.name = info.name;
+        h.lead = info.lead;
+        h.x = info.x;
+        h.y = info.y;
+        h.z = info.z;
+        this.ui.airAlert(h);
+      }
+    }
+  }
+
+  /** A round landed. `ui.airImpact` is a no-op unless the strip is up for it. */
+  _batteryImpact(info) {
+    this.ui.airImpact(`${info.impactTitle}${info.zone ? ` — ${info.name}` : ''}`);
+  }
+
+  /** 「３０発撃ったら帰還」 — the magazine is out and they are going back up. */
+  _batteryHome(n) {
+    const mine = this.battery.team === this.playerTeam;
+    this.ui.banner.show(
+      mine ? this.battery.spec.homeLine : 'ENEMY BATTERY WITHDRAWING',
+      `${n} ROUNDS FIRED`,
+      2.4
     );
   }
 
@@ -6883,6 +7083,12 @@ export class MatchSystem {
             `${this._hiddenDeficit} behind, at or past the ${RULES.hiddenSquadDeficit} point gate`
           : this.hidden.report()
       );
+      /**
+       * …AND WHAT THE ANSWER TO IT DID. Printed beside the squad's own line and
+       * only when the squad armed, because the battery cannot exist without it
+       * — the two lines together are the whole of "did the deadlock happen".
+       */
+      if (this.battery) console.info(this.battery.report());
     }
     this._setPhase(PHASE.OVER, RULES.roundOverTime);
   }
@@ -7241,6 +7447,7 @@ export class MatchSystem {
     if (this.ai && this.ai.vehicles === this.tank?.tanks) this.ai.vehicles = null;
     this.bomb?.dispose();
     this.hidden?.dispose();
+    this.battery?.dispose();
     this.ammoDrops?.dispose();
     this.marks?.dispose();
     this.caches?.dispose();
@@ -7257,6 +7464,7 @@ export class MatchSystem {
       if (window.__BOMBER__ === this.bomber) delete window.__BOMBER__;
       if (window.__STRAFE__ === this.strafe) delete window.__STRAFE__;
       if (window.__TANK__ === this.tank) delete window.__TANK__;
+      if (window.__BATTERY__ === this.battery) delete window.__BATTERY__;
     }
   }
 }
