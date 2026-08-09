@@ -903,6 +903,28 @@ const PREFER = ['blockhouse', 'silos', 'terrace', 'hall'];
  * @returns {Array} one `{ x, z, r, kind }` per shell, for the vegetation mask
  */
 export function buildRuinQuarter(A, groundY, isOpen, pads, sites) {
+  /**
+   * `?noruins` — build the plain WITHOUT this pass, so the before/after that
+   * justifies the file is measured against the SAME build.
+   *
+   * It is the reasoning `plains-cover.js`'s own `?nocover` is written under and
+   * it is worth restating, because the alternative is a git stash and a second
+   * `vite build`, which compares two different worlds: five other agents have
+   * live work in this tree and a baseline taken before their changes would
+   * credit this file with their occluders. This flag moves one variable.
+   *
+   * It is safe to return early. Everything here draws from its own `Rng` and
+   * nothing above it reads what it returns, so no station, wreck, berm,
+   * emplacement or boulder placed by any earlier pass moves. What DOES differ
+   * between the two runs, and only in one direction, is `dressPlain`: with the
+   * shells absent it grows grass where they would have stood.
+   */
+  try {
+    if (new URLSearchParams(globalThis.location?.search ?? '').has('noruins')) {
+      console.info('[world] nachtfeld ruins: SKIPPED (?noruins) — no buildings');
+      return [];
+    }
+  } catch { /* node has no `location`; every gate in tools/ would throw on the bare read */ }
   const rng = new Rng(0x7d31a9);
   const out = [];
 
