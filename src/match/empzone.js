@@ -353,7 +353,10 @@ const FIELD_FS = /* glsl */ `
     // rim, and the RIM IS THE PART THAT IS SPENT AT RANGE. Up close it drops to
     // an eighth and the lattice is what is left, which is a membrane you can see
     // a man through rather than a pane of glass you cannot.
-    float rim = mix(0.12, 1.0, prox);
+    // …AND THE FAR END OF THAT MIX CAME DOWN FROM 1.0 WHEN THERE STOPPED BEING
+    // TWO OF THESE. @see uFar below: the whole long-range budget was written
+    // for a map with one dome in the frame at a time.
+    float rim = mix(0.12, 0.72, prox);
     float a = 0.014
             + lat * 0.115
             + fine * 0.05 * (0.4 + 0.6 * grain)
@@ -364,7 +367,14 @@ const FIELD_FS = /* glsl */ `
     // PROXIMITY FADE EITHER. It is the thing that tells a man standing in one
     // where the edge is, which is precisely the read he needs at the range the
     // shell has to get out of his way at.
-    a = mix(a, 0.13 + lat * 0.20 + fine * 0.09 + sweep * 0.09, uGround);
+    // THE BAND CAME DOWN BY A THIRD FOR THE SAME REASON, and here it is a NEAR
+    // read rather than a far one: a 34 m circle put its mark 20 m from a man
+    // standing at the middle of it, and a 10 m one lays it 1.7 m in front of his
+    // boots and 2.5 m wide. PHOTOGRAPHED at 0.51: a sheet of white-green across
+    // the bottom third of the frame. It still carries none of the fresnel and
+    // still keeps its own proximity exemption — it is the thing that tells a man
+    // where the edge is — it is simply not the brightest thing on the map.
+    a = mix(a, 0.075 + lat * 0.13 + fine * 0.06 + sweep * 0.05, uGround);
 
     // ══════════════════════════════════════════════════════════════════════
     // AND IT IS NOT A LID — 「天井みたいな意味のわからないグラフィックが至る所」
@@ -423,7 +433,25 @@ const FIELD_FS = /* glsl */ `
     float over = 1.0 - smoothstep(1.2, 4.5, rise);
     float keep = min(lid, over);
 
-    float uFar = mix(1.0, 0.34, smoothstep(90.0, 300.0, d));
+    // ══════════════════════════════════════════════════════════════════════
+    // THE LONG RANGE IS MEASURED IN RADII NOW, BECAUSE THERE ARE TWENTY
+    // ══════════════════════════════════════════════════════════════════════
+    // PHOTOGRAPHED, shots/empframe/north-road-on.png: standing on the north
+    // gate road at (0, -102) — inside one r14 field with five more between 90
+    // and 200 m — the horizon was a continuous green wall and 13.5 % of the
+    // frame was a pixel the fields OWNED (green clearly over red and blue).
+    // A 34 m dome at 200 m subtends 9.7 degrees and is a landmark; a 10 m dome
+    // at 200 m subtends 2.9 and is a smear, and there are twenty of them.
+    //
+    // 90.0, 300.0 was written for two fields 314 m apart, where at most one
+    // was ever in shot. It is a distance in METRES against a shell whose whole
+    // read is angular, so the same constant makes a small field far too loud at
+    // a range where it is three degrees wide. In RADII it says the one thing
+    // that is actually true of every size: a field is the long-range read for a
+    // few of its own widths and after that it is somebody else's problem.
+    //
+    //   uR 24  full to 48 m, gone by 144      uR 10  full to 20 m, gone by 60
+    float uFar = mix(1.0, 0.07, smoothstep(uR * 2.0, uR * 6.0, d));
     float uNear = smoothstep(0.5, 4.0, d);
     a *= uFar * mix(uNear * mix(0.5, 1.0, prox), 1.0, uGround);
     // AND THE BAND LOSES ITS BLANKET EXEMPTION, because the sentence that earned
