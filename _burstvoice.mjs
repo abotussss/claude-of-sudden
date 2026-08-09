@@ -50,6 +50,7 @@ const errs = [];
 page.on('pageerror', (e) => errs.push(String(e.message)));
 if (args.clamp) await page.addInitScript((n) => { window.__CLAMP__ = n; }, Number(args.clamp));
 if (args.depth1) await page.addInitScript(() => { window.__DEPTH1__ = true; });
+if (args.bin6) await page.addInitScript(() => { window.__BIN6__ = true; });
 await page.goto(URL, { waitUntil: 'domcontentloaded' });
 await page.waitForFunction('window.__READY__===true', null, { timeout: 300000 });
 
@@ -241,6 +242,9 @@ if (MODE === 'burst') {
       rateShot: a._rate.shot, pool: f.emitters.length, cap: f.cap,
       space: { classified: a.stats.space, wetness: +a._wetness(a._space).toFixed(4),
         open: +(+a._space.open).toFixed(3), street: +(+a._space.street).toFixed(3) },
+      /* THE CREST. `horizon` 0 means the level has no distant reflector and the
+       * late tap does not exist; `crestMs` is when it answers. */
+      crest: { horizon: +(a._horizon ?? 0).toFixed(1), crestMs: +(((a._crest?.() ?? 0) * 1000)).toFixed(0) },
       bursts: R,
       audio: { errors: a.stats.errors, failed: !!a.failed },
     };
@@ -329,6 +333,16 @@ const boot = await page.evaluate((drive) => {
   const of = b.offerFar.bind(b);
   b.offerFar = (x, y, z, d, p) => { const r = of(x, y, z, d, p); if (r) M.farRoundsBinned++; return r; };
 
+  /**
+   * `--bin6` IS THE A/B CONTROL for the bin-overflow fix, same shape as
+   * `--depth1`: it clamps the rounds a coalesced voice may carry back to the
+   * shipped `BIN_ROUNDS` of 6 at the last point before the voice is built, so
+   * the before and after are one build, one seed and one machine minute.
+   */
+  if (window.__BIN6__) {
+    const pf0 = a.playFar.bind(a);
+    a.playFar = (x, y, z, o) => pf0(x, y, z, { ...o, rounds: Math.min(6, o.rounds ?? 1) });
+  }
   const pa = a._playAt.bind(a);
   a._playAt = (kind, x, y, z, o, bus, pri) => {
     const ok = pa(kind, x, y, z, o, bus, pri);
@@ -447,6 +461,7 @@ const out = await page.evaluate(() => {
       lostInBinOverflow: M.farRoundsBinned - M.farRounds - [...b._binN].reduce((s, n) => s + n, 0),
       voices: b.stats.farVoices, rounds: b.stats.farRounds },
     FIELD: { stolen: f.stats.stolen, dropped: f.stats.dropped, cap: f.cap, pool: f.emitters.length },
+    CREST: { horizon: +(a._horizon ?? 0).toFixed(1), crestMs: +(((a._crest?.() ?? 0) * 1000)).toFixed(0) },
     DAMAGE_GATES: {
       damageDealt: M.dmg, death: M.death, fleshImpact: M.flesh,
       impactVoices: M.impactPlayed, barkVoices: M.barkPlayed, bodyfallVoices: M.bodyfallPlayed,
