@@ -69,6 +69,32 @@ const WARM = +(args.warm ?? 120);
 const WINDOW = +(args.window ?? 150);
 const DRIVE = args.drive ?? 'plant';
 const TAG = args.tag ?? '';
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * WHICH CLOCK THE AI IS RUNNING ON — `--nocap` DROPS `capture=1`
+ * ═══════════════════════════════════════════════════════════════════════════
+ * The audio pass found `?capture=1` forces `rawDt` to EXACTLY 1/60 every frame
+ * (@see the `fake` clock in `src/dev/shots.js`), so headless at ~9 fps advances
+ * the simulation at 0.147x wall clock — and every gate in `src/audio` is carried
+ * on `actx.currentTime`, which is real. Those gates were under-stressed sevenfold
+ * and that finding is correct.
+ *
+ * IT DOES NOT TRANSFER TO THIS FILE, AND THE REASON IS WORTH WRITING DOWN.
+ * `Engine.step` calls `update(t.dt)` ONCE per frame — only `fixedUpdate`
+ * substeps — and `t.dt = rawDt * scale`, `t.elapsed += t.dt`. So `src/ai` is
+ * driven by, and this probe measures in, ONE clock: scaled simulation time.
+ * Under `capture=1` that clock ticks at a clean 60 Hz, which is the condition
+ * the player actually plays in. Without it, headless dt clamps to 0.1 s and the
+ * AI is run as a TEN FRAME PER SECOND game — `_shoot`'s `fired < 12` cap and its
+ * cooldown-shedding line start binding at dt=0.1 in a way they never do at 60.
+ *
+ * So for a burst measurement `capture=1` is the FAITHFUL harness and `--nocap`
+ * is the distorted one — the exact opposite of the audio case. Both are run and
+ * both are reported, because the claim above is an argument and the numbers are
+ * evidence. `simSpeed`, mean dt and effective fps are printed for each so the
+ * harness condition is never again something a reader has to take on trust.
+ */
+const NOCAP = args.nocap === true || args.nocap === 'true';
 
 const browser = await chromium.launch({
   headless: true,
@@ -80,10 +106,11 @@ for (const seed of SEEDS) {
   const page = await browser.newPage({ viewport: { width: 900, height: 520 } });
   const errs = [];
   page.on('pageerror', (e) => errs.push(String(e.message)));
-  await page.goto(`${URL}?capture=1&map=${MAP}&seed=${seed}`, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction('window.__READY__===true', null, { timeout: 600000 });
+  await page.goto(`${URL}?${NOCAP ? '' : 'capture=1&'}map=${MAP}&seed=${seed}`,
+    { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction('window.__READY__===true', null, { timeout: 900000 });
 
-  const out = await page.evaluate(async ({ WARM, WINDOW, DRIVE }) => {
+  const out = await page.evaluate(async ({ WARM, WINDOW, DRIVE, NOCAP }) => {
     const e = window.__ENGINE__;
     const m = e.ctx.peek('match');
     const ai = e.ctx.peek('ai');
@@ -94,7 +121,13 @@ for (const seed of SEEDS) {
     e.input.enabled = false;         // …and no real keyboard either
     const frame = () => new Promise((r) => requestAnimationFrame(r));
 
-    e.time.scale = 12;
+    /**
+     * THE WARM SCALE IS 1 WITHOUT `capture=1`, AND IT HAS TO BE. `t.dt =
+     * rawDt * scale` with `rawDt` clamped to 0.1, so scale 12 on a headless
+     * frame is a ONE POINT TWO SECOND AI step — the warm-up would not be a
+     * fast-forward of the match, it would be a different game.
+     */
+    e.time.scale = NOCAP ? 1 : 12;
     while (m.phase !== 'live' || ai.agents.length === 0) await frame();
     const t0 = m.roundClock;
     const t = () => t0 - m.roundClock;
@@ -127,6 +160,14 @@ for (const seed of SEEDS) {
       shooters: 0, relocations: 0, deaths: 0,
       perceptible: 0,   // enemy rounds passing within 2 m of his head
       playerHits: 0,    // rounds that actually connected with him
+      /**
+       * THE HARNESS CONDITION ITSELF, measured rather than assumed. `raw` is
+       * `Engine.step`'s unscaled wall clock and `elapsed` is the scaled sim
+       * clock, so `simSpeed` is sim seconds per wall second and `frames /
+       * simSecs` is the frame rate the AI was actually stepped at. A burst
+       * number taken at 10 Hz is not a burst number for a game played at 60.
+       */
+      wallSecs: 0, frames: 0, dtMax: 0,
       /** Distinct enemies who ever had him as their target. */
       everAimed: 0,
     };
@@ -301,12 +342,15 @@ for (const seed of SEEDS) {
     place(densest());
     let dry = 0;      // seconds since anybody last had eyes on him
     let strafeT = 0;
+    const raw0 = e.time.raw;
 
     while (t() < WARM + WINDOW && m.phase === 'live') {
       await frame();
       const dt = e.time.dt;
       const now = e.time.elapsed;
       S.windowSecs += dt;
+      S.frames++;
+      if (dt > S.dtMax) S.dtMax = dt;
 
       /* HE DOES NOT DIE. He is an instrument, not a competitor — a probe that
        * lets him fall over measures the roster's marksmanship, not its bursts. */
@@ -386,8 +430,9 @@ for (const seed of SEEDS) {
     e.ctx.events.off?.('damage:dealt', onDmg);
     e.input.down.clear();
     S.everAimed = aimedIds.size;
+    S.wallSecs = e.time.raw - raw0;
     return S;
-  }, { WARM, WINDOW, DRIVE });
+  }, { WARM, WINDOW, DRIVE, NOCAP });
 
   out.seed = seed;
   out.pageerrors = errs.length;
@@ -442,7 +487,18 @@ const block = (label, ps) => {
 };
 
 console.log(`\n═══ FIRE AT THE HUMAN${TAG ? ` [${TAG}]` : ''} — ${runs[0].level}, ` +
-  `drive=${runs[0].drive}, seeds ${runs.map((r) => r.seed).join(',')} ═══`);
+  `drive=${runs[0].drive}, seeds ${runs.map((r) => r.seed).join(',')}, ` +
+  `${NOCAP ? 'NO capture=1' : 'capture=1'} ═══`);
+{
+  const w = runs.reduce((s, r) => s + (r.wallSecs ?? 0), 0);
+  const simS = runs.reduce((s, r) => s + r.windowSecs, 0);
+  const fr = runs.reduce((s, r) => s + (r.frames ?? 0), 0);
+  console.log(`HARNESS: ${simS.toFixed(0)} s of simulation in ${w.toFixed(0)} s of wall clock ` +
+    `(simSpeed ${(simS / Math.max(1e-9, w)).toFixed(3)}x) · ${fr} AI frames = ` +
+    `${(fr / Math.max(1e-9, simS)).toFixed(1)} Hz of simulated time · ` +
+    `worst single AI step ${(Math.max(...runs.map((r) => r.dtMax ?? 0)) * 1000).toFixed(0)} ms`);
+  console.log('  Every number below is in SIMULATION time — the one clock `src/ai` is stepped on.');
+}
 console.log(`${manMin.toFixed(1)} man-minutes · ${rounds} rounds (${(rounds / manMin).toFixed(1)}/man-min) · ` +
   `AIMED ${pc(eyesRounds, rounds)} (${(eyesRounds / manMin).toFixed(1)}/man-min) · ` +
   `MOVING ${moving} abs (${(moving / manMin).toFixed(1)}/man-min, ${pc(moving, rounds)})`);

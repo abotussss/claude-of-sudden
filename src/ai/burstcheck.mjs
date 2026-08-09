@@ -59,6 +59,29 @@ const MAP = args.map ?? 'plains';
 const WARM = +(args.warm ?? 120);
 const WINDOW = +(args.window ?? 150);
 const TAG = args.tag ?? '';
+/**
+ * ───────────────────────────────────────────────────────────────────────────
+ * `--nocap` — RUN WITHOUT `capture=1`, BECAUSE THE HARNESS IS ALSO A SUSPECT
+ * ───────────────────────────────────────────────────────────────────────────
+ * `capture=1` forces `rawDt` to exactly 1/60 every frame (@see the `fake` clock
+ * in `src/dev/shots.js`), so a headless page rendering at ~9 fps advances the
+ * simulation at 0.147x wall clock. The audio pass found that every gate in
+ * `src/audio` is carried on `actx.currentTime` — REAL time — and was therefore
+ * under-stressed sevenfold by exactly this.
+ *
+ * THIS FILE IS NOT EXPOSED TO THAT, and the argument is short enough to check:
+ * `Engine.step` runs `update(t.dt)` once a frame (only `fixedUpdate` substeps),
+ * `t.dt = rawDt * scale` and `t.elapsed += t.dt` — so `src/ai` is driven by
+ * scaled simulation time and every clock in this file (`gapFor`, `dur`,
+ * `manSecs`) is that same simulation time. Under `capture=1` it is a clean 60 Hz,
+ * which is the rate the player's own game runs the AI at; WITHOUT it, headless
+ * dt clamps to 0.1 s and the AI is stepped as a ten-frame-per-second game, which
+ * is not a condition any player is ever in.
+ *
+ * The flag exists so that stays a measurement rather than an assertion. It is
+ * opt-in and changes nothing when absent.
+ */
+const NOCAP = args.nocap === true || args.nocap === 'true';
 
 const browser = await chromium.launch({
   headless: true,
@@ -70,10 +93,11 @@ for (const seed of SEEDS) {
   const page = await browser.newPage({ viewport: { width: 900, height: 520 } });
   const errs = [];
   page.on('pageerror', (e) => errs.push(String(e.message)));
-  await page.goto(`${URL}?capture=1&map=${MAP}&seed=${seed}`, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction('window.__READY__===true', null, { timeout: 600000 });
+  await page.goto(`${URL}?${NOCAP ? '' : 'capture=1&'}map=${MAP}&seed=${seed}`,
+    { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction('window.__READY__===true', null, { timeout: 900000 });
 
-  const out = await page.evaluate(async ({ WARM, WINDOW }) => {
+  const out = await page.evaluate(async ({ WARM, WINDOW, NOCAP }) => {
     const e = window.__ENGINE__;
     const m = e.ctx.peek('match');
     const ai = e.ctx.peek('ai');
@@ -84,7 +108,8 @@ for (const seed of SEEDS) {
     pl?.setControlEnabled?.(false);
     const frame = () => new Promise((r) => requestAnimationFrame(r));
 
-    e.time.scale = 12;
+    /* scale 12 on a clamped 0.1 s headless frame would be a 1.2 s AI step */
+    e.time.scale = NOCAP ? 1 : 12;
     while (m.phase !== 'live' || ai.agents.length === 0) await frame();
     const t0 = m.roundClock;
     const t = () => t0 - m.roundClock;
@@ -146,7 +171,10 @@ for (const seed of SEEDS) {
        * seed rather than this roster's marksmanship.
        */
       hitsMoving: 0, hitsStill: 0,
+      /** The harness condition itself — @see the `--nocap` note at the top. */
+      simSecs: 0, wallSecs: 0, frames: 0, dtMax: 0,
     };
+    const raw0 = e.time.raw;
     /** Open pull per agent id. */
     const open = new Map();
     /**
@@ -249,6 +277,9 @@ for (const seed of SEEDS) {
       await frame();
       const dt = e.time.dt;
       const now = e.time.elapsed;
+      S.simSecs += dt;
+      S.frames++;
+      if (dt > S.dtMax) S.dtMax = dt;
       for (let i = 0; i < ai.agents.length; i++) {
         const a = ai.agents[i];
         MEN.add(a);
@@ -310,8 +341,9 @@ for (const seed of SEEDS) {
     for (const [id, c] of [...contact]) closeContact(id, c, e.time.elapsed);
     ai.onAgentFire = fire0;
     e.ctx.events.off?.('damage:dealt', onDmg);
+    S.wallSecs = e.time.raw - raw0;
     return S;
-  }, { WARM, WINDOW });
+  }, { WARM, WINDOW, NOCAP });
 
   out.seed = seed;
   out.pageerrors = errs.length;
@@ -346,7 +378,20 @@ const dist = (ps) => {
   return b;
 };
 
-console.log(`\n═══ BURST SHAPE${TAG ? ` [${TAG}]` : ''} — ${runs[0].level}, seeds ${runs.map((r) => r.seed).join(',')} ═══`);
+console.log(`\n═══ BURST SHAPE${TAG ? ` [${TAG}]` : ''} — ${runs[0].level}, ` +
+  `seeds ${runs.map((r) => r.seed).join(',')}, ${NOCAP ? 'NO capture=1' : 'capture=1'} ═══`);
+{
+  const w = runs.reduce((s, r) => s + (r.wallSecs ?? 0), 0);
+  const simS = runs.reduce((s, r) => s + (r.simSecs ?? 0), 0);
+  const fr = runs.reduce((s, r) => s + (r.frames ?? 0), 0);
+  if (simS > 0) {
+    console.log(`HARNESS: ${simS.toFixed(0)} s simulated in ${w.toFixed(0)} s wall ` +
+      `(simSpeed ${(simS / Math.max(1e-9, w)).toFixed(3)}x) · ` +
+      `${(fr / simS).toFixed(1)} AI frames per simulated second · ` +
+      `worst step ${(Math.max(...runs.map((r) => r.dtMax ?? 0)) * 1000).toFixed(0)} ms.  ` +
+      'All times below are SIMULATION time.');
+  }
+}
 console.log(`${manMin.toFixed(1)} man-minutes · ${rounds} rounds (${(rounds / manMin).toFixed(1)}/man-min) · ` +
   `AIMED ${pc(eyesRounds, rounds)} (${(eyesRounds / manMin).toFixed(1)}/man-min) · ` +
   `MOVING ${moving} abs (${(moving / manMin).toFixed(1)}/man-min, ${pc(moving, rounds)})`);
