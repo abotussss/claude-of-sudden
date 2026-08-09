@@ -254,6 +254,8 @@ const DOORS = [
   { ax: 1, az: 0, yaw: -Math.PI / 2 },
 ];
 const DOOR_CLEAR = 2.6;
+/** The four internal piers that carry the storeys, in the tower's own frame. */
+const PIERS = [[-3.1, -3.1], [3.1, -3.1], [-3.1, 3.1], [3.1, 3.1]];
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -445,6 +447,130 @@ function placeFootStores() {
     // face back along the approach, i.e. at the man walking in
     s.yaw = Math.atan2(-c.tx, -c.tz);
   }
+}
+
+/**
+ * THE STAIR'S KEEP-OUT, AND IT IS THE WELL PLUS THE GROUND IN FRONT OF IT.
+ *
+ * The well itself is `WELL_X` by `WELL_Z0..WELL_Z1`, and the first cut of this
+ * kept crates out of exactly that — which moved the 0.49 m carton off the
+ * bottom step and put it down 1.1 m in FRONT of the bottom step, in the lane a
+ * man walks up to reach it. Measured, not reasoned: the relocated carton came
+ * back in the ray grid at z -3.7, and the route to the stair runs z -4.1 -> -2.6.
+ *
+ * `STAIR_APRON` is that lane. It is the floor every flight arrives onto and
+ * every flight is entered from — at the storeys above it is literally the
+ * arrival landing — so it is stair, not room, and nothing loose belongs on it.
+ */
+const STAIR_APRON = 1.4;
+function inStair(x, z, m = 0) {
+  return Math.abs(x - TOWER.x) < WELL_X + m
+    && z - TOWER.z > WELL_Z0 - STAIR_APRON - m && z - TOWER.z < WELL_Z1 + m;
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * A CRATE ON THE BOTTOM STEP — AND WHY THIS MOVES IT RATHER THAN DROPPING IT
+ * ════════════════════════════════════════════════════════════════════════════
+ * `controlRoom`'s loose-stores scatter has always tested the four doorways, the
+ * four piers and the two supply posts, and has never had an opinion about the
+ * one thing in that room that is not floor: the stair. Measured on the shipping
+ * build with a `MASK.CHARACTER` ray grid (`_nfwell.mjs`), the room floor at
+ * 6.74 carried
+ *
+ *     box_card_a  at (-1.39, -2.89)   0.49 m proud of the floor
+ *     barrel_rust at (-0.42, -2.45)   0.95 m proud of the floor
+ *
+ * and half-flight A starts at z -2.6 across x -2.43..-0.13, so both of those
+ * stand ON or immediately IN FRONT OF its bottom step. 0.49 m is over
+ * `NavGrid.maxStep` 0.45 AND over the 0.42 m standing stance step in
+ * `src/player/tuning.js`, which makes it a WALL and not a step: a man who stops
+ * at the foot of the stair cannot start again on that line. He has to mantle it
+ * or find the clear lane at about x -2.1, and the tower is now the map's one
+ * weapon with the climb as the whole of its cost.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE STREAM IS THE HARD PART, AND THE ANSWER IS THAT IT DOES NOT MOVE AT ALL
+ * ────────────────────────────────────────────────────────────────────────────
+ * The obvious fix — `if (inWell(px, pz)) continue;` — is the wrong one, and not
+ * by a little. That loop is `for (i < 90 && placed < 22)`: a rejection that does
+ * not increment `placed` makes the loop run MORE iterations, every extra
+ * iteration draws MORE from `rng`, and `rng` here is ONE stream shared with
+ * every prop authored after this room. Twenty 0.42-0.68 m props waking up
+ * somewhere else is 「石ころオブジェが移動の妨げです」 coming back, and it would
+ * come back on a map nobody re-photographed.
+ *
+ * So the candidate is RELOCATED, never rejected. Every draw is made, `placed`
+ * increments on exactly the iterations it did before, the loop runs exactly the
+ * same number of times, and the stream is BIT-IDENTICAL — proved rather than
+ * asserted: `_nfwell.mjs --json` checksums every instance of every prototype on
+ * the map at 1 cm and the two runs are diffed. The only positions that differ
+ * are the crates this function deliberately moved.
+ *
+ * THE LADDER IS A SWEEP IN BEARING AT THE CRATE'S OWN RADIUS, not a set of
+ * axis pushes. Four pushes out of a 12 m octagon that already holds a 2.2 m
+ * table, four piers, four doorways and a 5.2 m well mostly land on a pier or in
+ * a doorway and fall through to the one candidate that is legal and wrong —
+ * which is how the first cut put a carton in the lane instead of on the step.
+ * Turning round the room instead keeps the crate at the RADIUS the dice gave
+ * it and moves it the least angle that clears everything, so the room's density
+ * is where the stream put it. It is deterministic and draws nothing.
+ *
+ * A relocation is only accepted if it passes the SAME table / wall / door /
+ * pier / post tests the loop applies, so a crate can never be moved out of the
+ * stair into a doorway. If nothing on the ladder is legal the crate is dropped —
+ * `placed` still counts it, because that is what keeps the stream still — and
+ * one fewer crate in a room of twenty-two is the cheap side of that trade.
+ */
+function offWell(x, z, r) {
+  /**
+   * THE TRIGGER IS MEASURED TO THE CRATE'S EDGE, not to its centre, which is the
+   * rule this room's door test is already written under ("the circle is measured
+   * to the object's EDGE"): `r` is `footprintR + 0.15`, so `0.45 + r` demands
+   * 0.6 m of clear floor between the crate's own edge and the stair. Asking for
+   * `0.6 + r` instead charged the crate its radius twice and picked up a carton
+   * standing a metre clear of the far end of the well, which then had nowhere
+   * legal to go and was lost for nothing.
+   */
+  if (!inStair(x, z, 0.45 + r)) return { x, z };
+  const inR = SH_R - SH_WALL / 2;
+  const clear = DOORS.map((d) => ({
+    x: TOWER.x + d.ax * (SH_R + 0.4), z: TOWER.z + d.az * (SH_R + 0.4),
+  }));
+  const legal = (qx, qz) => {
+    const rad = Math.hypot(qx - TOWER.x, qz - TOWER.z);
+    if (rad < 2.2 + r || rad > inR - 0.7 - r) return false;   // the table, and the wall
+    if (inStair(qx, qz, 0.45 + r)) return false;              // …and the stair itself
+    for (const c of clear) if (Math.hypot(qx - c.x, qz - c.z) < DOOR_CLEAR + r) return false;
+    for (const [ax, az] of PIERS) {
+      if (Math.hypot(qx - TOWER.x - ax, qz - TOWER.z - az) < 0.85 + r) return false;
+    }
+    return !nearStore(qx, qz, ROOM_Y, 1.9 + r);
+  };
+  const u = x - TOWER.x, v = z - TOWER.z;
+  const a0 = Math.atan2(v, u);
+  const rad0 = Math.min(Math.max(Math.hypot(u, v), 2.4 + r), inR - 0.9 - r);
+  /**
+   * ITS OWN RADIUS FIRST, then in and out in 0.3-0.6 m steps. The ring the dice
+   * chose is tried all the way round before any other is tried at all, so the
+   * crate ends up as near as the room allows to where the stream put it; the
+   * wider list is what stops `offWell` returning null and losing a crate, which
+   * the first cut did three times in a room that has a table, four piers, four
+   * doorways, two posts and a 5.2 m well in it.
+   */
+  for (const dr of [0, 0.6, -0.5, 1.2, -0.9, 1.8, 0.3, -0.2, 2.4, 0.9, -1.3, 1.5]) {
+    const rad = rad0 + dr;
+    if (rad < 2.2 + r || rad > inR - 0.7 - r) continue;
+    for (let k = 1; k <= 24; k++) {
+      for (const s of [1, -1]) {
+        const a = a0 + s * k * (Math.PI / 12);
+        const qx = TOWER.x + Math.cos(a) * rad;
+        const qz = TOWER.z + Math.sin(a) * rad;
+        if (legal(qx, qz)) return { x: qx, z: qz };
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -2213,7 +2339,18 @@ function controlRoom(A, rng, y, lights) {
     // …and off the two supply posts, by the same edge-not-centre measure
     if (nearStore(px, pz, ROOM_Y, 1.9 + r)) ok = false;
     if (!ok) continue;
-    A.put(id, px, y(ROOM_Y) + 0.02, pz, rng.float() * 6.28, s);
+    /**
+     * …AND OFF THE STAIR, WHICH IS THE ONE THING IN THIS ROOM THAT IS NOT
+     * FLOOR. `offWell` MOVES the crate instead of skipping it, and the yaw is
+     * drawn before the call rather than inside the `A.put` argument list, so
+     * every iteration of this loop consumes exactly the draws it consumed
+     * before whatever `offWell` decides. THAT is what keeps `rng` — one stream,
+     * shared with every prop authored after this room — bit-identical.
+     * @see the note on `offWell` for the measurement and for the proof.
+     */
+    const ry = rng.float() * 6.28;
+    const q = offWell(px, pz, r);
+    if (q) A.put(id, q.x, y(ROOM_Y) + 0.02, q.z, ry, s);
     placed++;
   }
 
@@ -2341,7 +2478,29 @@ function shaftInterior(A, rng, y, lights) {
       y(fy - 0.14), { h: 1.05 });
     handrail(A, 'metal_rust', TOWER.x - WELL_X, TOWER.z + WELL_Z0, TOWER.x + WELL_X, TOWER.z + WELL_Z0,
       y(fy - 0.14), { h: 1.05 });
-    // a storey's worth of stores and a bulb
+    /**
+     * A storey's worth of stores and a bulb — AND ON THE LAST ONE THEY GO ON
+     * THE CAB FLOOR, BECAUSE THE LAST ONE HAS NO STOREY.
+     *
+     * `fy` is `ROOF_Y` 25.80 for `f === FLOORS.length`, and the cab floor slab
+     * runs 25.55..26.00 straight over it — the top "storey" is a 0.20 m gap
+     * inside a slab, not a room. Measured on the shipping build (`_nfwell.mjs`):
+     * three of these — two `box_card_b` and a `jerry_can` — stood at 25.82 with
+     * 0.16 m of air over them and the rest of each crate INSIDE the cab floor,
+     * i.e. poking up through the finished floor of the one room this whole
+     * feature is about. They go on `CAB_F` instead.
+     *
+     * AND THEY GO ON `LAYER.CLIP` WITH IT, for the reason the cab post and the
+     * roof array both carry: `NavGrid.build` drops one ray per cell under
+     * `MASK.WORLD`, which does not contain CLIP, so a `STATIC` crate standing on
+     * a clip floor at 26 m is a walkable island in the sky and a `_floatcheck`
+     * failure. Everything else up here is already clip; these join it.
+     *
+     * The well keep-out below is what keeps them out of the stair OPENING too —
+     * the opening is wholly inside that band. @see `HATCH_X0`.
+     */
+    const onCab = f === FLOORS.length;
+    if (onCab) A.clipProps = true;
     for (let i = 0; i < 5; i++) {
       const px = TOWER.x + (rng.float() < 0.5 ? -1 : 1) * rng.range(2.2, inR - 0.8);
       const pz = TOWER.z + rng.range(-inR + 0.8, inR - 0.8);
@@ -2351,10 +2510,10 @@ function shaftInterior(A, rng, y, lights) {
       if (nearStore(px, pz, fy, 2.2)) continue;
       // NOT OVER THE WELL. It is 5.2 m wide now, so the old 2.2 m stand-off
       // from the axis no longer clears it and a crate would hang in the stair.
-      if (Math.abs(px - TOWER.x) < WELL_X + 0.6 &&
-          pz - TOWER.z > WELL_Z0 - 0.6 && pz - TOWER.z < WELL_Z1 + 0.6) continue;
-      A.put(id, px, y(fy) + 0.02, pz, ry, sc);
+      if (inStair(px, pz, 0.6)) continue;
+      A.put(id, px, y(onCab ? CAB_F : fy) + 0.02, pz, ry, sc);
     }
+    if (onCab) A.clipProps = false;
     /**
      * …AND ON ONE OF THEM, THE RACK. Four storeys of stair is the price of the
      * map's second primary weapon, and that price is the point — it is the one
