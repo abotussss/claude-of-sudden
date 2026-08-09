@@ -87,6 +87,80 @@ const OWN_STEP_LEVEL = 1.05;
 
 /** Upward ray length for the remote-shooter enclosure test, metres. */
 const ROOF_PROBE = 12;
+/* ---------------------------------------------------------------------- */
+/* THE CREST ANSWERS — 「銃声が鳴り響く」                                      */
+/* ---------------------------------------------------------------------- */
+/**
+ * ══════════════════════════════════════════════════════════════════════════
+ * WHAT WAS MISSING ON A 352 m BOWL, AND WHY NO REVERB SETTING COULD ADD IT
+ * ══════════════════════════════════════════════════════════════════════════
+ * NACHTFELD is a bowl with a rock wall around it. The single most characteristic
+ * sound the place can make is the report coming back off that wall about a
+ * second later — and MEASURED, there was nothing in the graph at that time at
+ * all. The `open` IR's longest early tap is 620 ms; `distantFire`'s two façade
+ * taps reach ~760 ms at 200 m. The nearest wall is 105-175 m away, so its return
+ * lands at 610-1020 ms and every mechanism in the file had already finished.
+ *
+ * THE SEND COULD NOT HAVE FIXED IT AND NEITHER COULD THE IR. `_wetness(open)` is
+ * 0.10 and a near shot reaches the convolvers at 0.0239 — but turning that up
+ * makes a WASH, arriving immediately and never resolving into an event, which is
+ * the exact complaint 「リバーブが強いです、まだ」 that four reverb paths were already
+ * cut for. An echo off a cliff is not wetness. It is an ARRIVAL, at a time, and
+ * the only thing that produces one is a delay. Same argument, same technique and
+ * the same measurement as `weaponShot`'s layer 8 and `distantFire`'s façade
+ * taps; this is the third of them and the one at a hundred metres.
+ *
+ * ──────────────────────────────────────────────────────────────────────────
+ * IT IS GEOMETRY, NOT A MAP NAME — which is what keeps it silent on the town
+ * ──────────────────────────────────────────────────────────────────────────
+ * Eight horizontal rays, the same directions `_probeSpace` already casts, out to
+ * `HORIZON_DIST` instead of 40 m, and the answer is the NEAREST thing found
+ * beyond `HORIZON_MIN`. That is a measurement of the room the player is standing
+ * in, so no level has to declare anything, `src/world` is not imported, and a
+ * map with no distant reflector gets no tap by construction rather than by a
+ * name check that a new level would silently fail.
+ *
+ * MEASURED at a spread of standing positions on both maps (`_horizon.mjs`):
+ *
+ *   NACHTFELD  nearest hit beyond 90 m   105.1 / 108 / 115.8 / 130.8 / 142.3 /
+ *                                        157.4 / 175.0 m   -> 613-1020 ms
+ *   AL-MARIYA  nearest hit beyond 90 m   NONE at any in-bounds position; the
+ *                                        farthest façade any ray found was 61 m
+ *
+ * So one threshold separates them with 29 m of daylight on one side and 44 m on
+ * the other, and AL-MARIYA is bit for bit what it was.
+ *
+ * `HORIZON_MIN` is 90 rather than 60 for a reason that is about the ear and not
+ * about the maps: below it the return would land inside `weaponShot`'s own
+ * slapback set (55-260 ms outdoors) and read as thickening rather than as an
+ * answer. 90 m puts the earliest possible return at 525 ms, clear of everything.
+ */
+const HORIZON_DIST = 500;
+const HORIZON_MIN = 90;
+/**
+ * How often the horizon is re-measured, seconds. It is the shape of the LEVEL
+ * and not of the player's pose, so it changes slowly — this is deliberately
+ * three times the space probe's 0.45 s, which keeps the whole feature at ~5
+ * rays a second against the occlusion pass's fifty.
+ */
+const HORIZON_PERIOD = 1.5;
+/**
+ * Level of the crest return, as a fraction of the direct sound.
+ *
+ * TWO NUMBERS BECAUSE THE PHYSICS IS DIFFERENT AT THE TWO ENDS. For the player's
+ * own rifle the direct sound is a metre away and the return has travelled 210-350
+ * m, so it is far down — a real rifle echo off a cliff sits around -20 dB. For a
+ * far voice the direct has ALREADY travelled a comparable distance, so the
+ * return is proportionally much closer to it, which is why distant fire in a
+ * valley rolls and a rifle in your own hands merely answers once.
+ *
+ * Both are deliberately under the façade taps they sit beside (`weaponShot`'s
+ * first return is 0.3-0.62 of the direct, `distantFire`'s is 0.5): this is the
+ * farthest, weakest, darkest thing in the voice and it must read as the edge of
+ * the map answering, not as another gun.
+ */
+const CREST_LEVEL_OWN = 0.09;
+const CREST_LEVEL_FAR = 0.16;
 /** Wetness a shot gets with open sky over the muzzle, and with a low ceiling. */
 const WET_OUTDOOR = 0.12;
 const WET_INDOOR = 0.95;
@@ -384,6 +458,13 @@ export class AudioSystem {
     }
     this._probeDirs.push({ x: 0, y: 1, z: 0 });
     this._probeHits = new Float64Array(PROBE_RAYS);
+    /**
+     * Distance to the nearest thing beyond `HORIZON_MIN`, metres, or 0 when the
+     * player is not standing in anything that answers. @see HORIZON_DIST and
+     * `_probeHorizon`. Read by `_crest()`, which is the only consumer.
+     */
+    this._horizon = 0;
+    this._horizonNext = 0;
     this._space = {
       tight: 0, room: 0, street: 0.35, tunnel: 0, open: 0.65,
       enclosure: 0, meanFree: PROBE_DIST, ceiling: PROBE_DIST,
@@ -1202,6 +1283,7 @@ export class AudioSystem {
       for (let i = 0; i < PROBE_RAYS; i++) hits[i] = PROBE_DIST;
     }
     classifySpace(hits, PROBE_DIST, this._space);
+    this._probeHorizon(phys, x, y, z);
     this.mixer.setSpace(this._space, 0.4);
     this.ambience.setEnclosure(this._space.enclosure);
 
@@ -1210,6 +1292,57 @@ export class AudioSystem {
       if (this._space[k] > bv) { bv = this._space[k]; best = k; }
     }
     this.stats.space = best;
+  }
+
+  /**
+   * How far away the thing that answers is, metres, or 0 for nothing.
+   *
+   * Eight rays on the same bearings `_probeSpace` uses, cast to `HORIZON_DIST`,
+   * keeping the NEAREST hit beyond `HORIZON_MIN` — the first significant
+   * reflector, which is the one an ear latches onto; the ones behind it are
+   * later, weaker and already inside the tail. @see HORIZON_DIST for the whole
+   * argument and for the measurement on both maps.
+   *
+   * Runs on its own `HORIZON_PERIOD` timer rather than the space probe's,
+   * because this is the shape of the level and not of the player's pose. It
+   * allocates nothing and reuses `this._origin`, which `_probeSpace` has just
+   * finished with.
+   */
+  _probeHorizon(phys, x, y, z) {
+    const now = this.actx.currentTime;
+    if (now < this._horizonNext) return;
+    this._horizonNext = now + HORIZON_PERIOD;
+    if (!phys?.raycast) { this._horizon = 0; return; }
+    const mask = phys.MASK?.WORLD;
+    const o = this._origin;
+    o.x = x; o.y = y; o.z = z;
+    let near = 0;
+    // PROBE_RAYS - 1 because the last direction is straight up: a ceiling is
+    // not a crest, and on an open map that ray goes to the sky anyway.
+    for (let i = 0; i < PROBE_RAYS - 1; i++) {
+      const h = phys.raycast(o, this._probeDirs[i], HORIZON_DIST, mask);
+      if (!h?.hit) continue;
+      const d = h.distance;
+      if (d < HORIZON_MIN) continue;
+      if (near === 0 || d < near) near = d;
+    }
+    this._horizon = near;
+  }
+
+  /**
+   * When the crest answers, in seconds after the direct sound, or 0 for never.
+   *
+   * The extra path is out to the wall and back — `2 * horizon` — which is exact
+   * for the player's own rifle and an approximation for a shot fired somewhere
+   * else, where the true path is shooter to wall to listener. It is used for
+   * both, deliberately: the dominant late return for a man standing in a bowl is
+   * the wall around HIM, the error is a few tens of milliseconds on an event
+   * that is already 600-1000 ms late and 20 dB down, and carrying a per-source
+   * geometry would mean a raycast per voice, which is the cost `_wetnessAt` is
+   * documented as refusing for exactly this reason.
+   */
+  _crest() {
+    return this._horizon > 0 ? (2 * this._horizon) / SPEED_OF_SOUND : 0;
   }
 
   /* ================================================================ */
@@ -1296,6 +1429,24 @@ export class AudioSystem {
         return weaponShot(actx, bank, rng, o.profile ?? WEAPON_PROFILES.rifle, {
           when, distance: dist, firstPerson: o.firstPerson,
           echoBoost: o.echoBoost ?? this._wetness(this._space),
+          /**
+           * THE CREST, AND ONLY FOR HIS OWN RIFLE — @see HORIZON_DIST.
+           *
+           * `firstPerson` is `_playDry`: head-locked, outside the spatial pool,
+           * holding no emitter. A remote shot is not, and a return a second
+           * later would extend its voice from ~1.1 s to ~2.2 s, DOUBLING how
+           * long every near shot holds a weapons slot. At 16 shots a second
+           * against a bus quota of 10 at the pool floor that is the near path
+           * cannibalising itself — which is the precise failure `_rate.shot`
+           * was capped at 16 to avoid. The distant war gets its crest through
+           * `distantFire`, where the return fits inside a roll that is already
+           * running and costs no lifetime at all.
+           *
+           * So the echo is on the loudest, most-heard gunshot in the game and
+           * on the whole far layer, and off the one path that cannot afford it.
+           */
+          crest: o.firstPerson ? this._crest() : 0,
+          crestLevel: CREST_LEVEL_OWN,
         });
       /**
        * The war being fought somewhere else — several rounds on ONE emitter,
@@ -1307,6 +1458,10 @@ export class AudioSystem {
         return distantFire(actx, bank, rng, {
           when, distance: dist, profile: o.profile, rounds: o.rounds,
           spacing: o.spacing, level: o.level,
+          // The edge of the map answering the war. It lands inside the roll this
+          // voice already runs (1.3 s at 200 m), so it adds no lifetime and the
+          // emitter is held exactly as long as before. @see HORIZON_DIST.
+          crest: this._crest(), crestLevel: CREST_LEVEL_FAR,
         });
       case 'tankgun': return tankGun(actx, bank, rng, { when, distance: dist, level: o.level });
       /**
