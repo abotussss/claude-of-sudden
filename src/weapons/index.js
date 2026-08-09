@@ -14,7 +14,7 @@ import { buildRevolver } from './models/revolver.js';
 import { buildMpistol } from './models/mpistol.js';
 import { buildKnife } from './models/knife.js';
 import { buildGrenade } from './models/grenade.js';
-import { buildFlashbang, buildSmokeGrenade, buildMine } from './models/throwables.js';
+import { buildFlashbang, buildSmokeGrenade, buildMine, buildAtMine } from './models/throwables.js';
 import { ThrownGrenades } from './grenades.js';
 import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
 
@@ -98,7 +98,7 @@ const WEAPON_IDS = [
   'rifle', 'ak', 'sniper', 'lmg', 'smg',
   'pistol', 'revolver', 'mpistol',
   'knife',
-  'grenade', 'flashbang', 'smoke', 'mine',
+  'grenade', 'flashbang', 'smoke', 'mine', 'atmine',
 ];
 
 export class WeaponSystem {
@@ -272,6 +272,7 @@ export class WeaponSystem {
       flashbang: buildFlashbang,
       smoke: buildSmokeGrenade,
       mine: buildMine,
+      atmine: buildAtMine,
     };
     let tris = 0;
     for (const id of WEAPON_IDS) {
@@ -464,7 +465,10 @@ export class WeaponSystem {
 
   /** Seconds left on the fuze of the grenade being cooked, or 0. */
   get cookRemaining() {
-    return this._cooking ? Math.max(0, this._cookFuse) : 0;
+    // A `noCook` store holds `Infinity` — there is no clock to report and a
+    // HUD that prints one would print "Infinity". @see `startCook`.
+    if (!this._cooking || !Number.isFinite(this._cookFuse)) return 0;
+    return Math.max(0, this._cookFuse);
   }
 
   /** Grenades left, whatever is currently in the player's hands. */
@@ -792,6 +796,52 @@ export class WeaponSystem {
     if (take <= 0) return 0;
     s.mag += take;
     return take;
+  }
+
+  /* ====================================================================== */
+  /*  THE MINEFIELD — the published surface, and it is these three calls     */
+  /* ====================================================================== */
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * LAY AN ANTI-TANK MINE — 「敵味方が対戦車地雷を設置できるようにして」
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE ONE ENTRY POINT, for the player's own emplacement and for `src/ai`'s.
+   * The def is supplied HERE, from `WEAPON_DEFS.atmine`, and is not a parameter
+   * — a caller cannot lay a mine with a radius, a plate width, an arming delay
+   * or a damage figure of its own. That is the whole defence against the drift
+   * this subsystem has already paid for twice with the smoke can (radius, then
+   * drawing): there is one mine, and everybody who lays one lays that one.
+   *
+   * `src/ai` reaches it as `ctx.peek('weapons').layMine(...)` — a runtime get
+   * across a subsystem boundary, which is what ARCHITECTURE prescribes and what
+   * `ai` already does for `fx`, `audio` and `physics`.
+   *
+   * @param {THREE.Vector3|{x,y,z}} position  where. Y is snapped to the ground.
+   * @param {object} opts  `{ team, owner }` — the side that laid it (a plate
+   *        does not fire under its own armour) and the man who gets paid for
+   *        what it kills. Both optional; `team: -1` mines everybody.
+   * @returns {boolean} false only when the field is full (@see `MINE_MAX`).
+   */
+  layMine(position, opts = {}) {
+    if (!this.thrown || !position) return false;
+    return this.thrown.lay(position, WEAPON_DEFS.atmine, opts);
+  }
+
+  /**
+   * A TRACKED HULL'S FOOTPRINT IS HERE THIS FRAME. Called by `Armour` once per
+   * live hull per frame; returns how many mines it set off (0 on all but a few
+   * frames of a match). @see `ThrownGrenades.armourFootprint` for what it costs
+   * and for why the hull asks rather than the mine looking.
+   */
+  armourFootprint(team, x, z, sin, cos, halfW, halfL) {
+    if (!this.thrown) return 0;
+    return this.thrown.armourFootprint(team, x, z, sin, cos, halfW, halfL);
+  }
+
+  /** Laid / armed / tripped / refused / probes. @see `ThrownGrenades.stats`. */
+  get mineStats() {
+    return this.thrown?.stats ?? null;
   }
 
   /** True when at least one magazine-fed weapon is below its starting reserve. */
@@ -1157,7 +1207,15 @@ export class WeaponSystem {
     this.viewmodel.stopClip();
     this._cooking = true;
     this._cookStyle = style;
-    this._cookFuse = s.def.fuse ?? 3;
+    /**
+     * A MINE'S CLOCK IS NOT BURNING IN YOUR HAND. `def.fuse` on the anti-tank
+     * mine is an ARMING DELAY that starts when the thing is on the ground, not
+     * a fuze that started at the pin; holding the button therefore cannot cook
+     * it off, and `Infinity` is what says so to the countdown in `update` and
+     * to `_cookOff`. `_launchGrenade` reads the def's own figure back out.
+     * Every other throwable is unchanged — the frag still kills you.
+     */
+    this._cookFuse = s.def.noCook ? Infinity : s.def.fuse ?? 3;
     this.viewmodel.play('cook');
     return true;
   }
@@ -1211,7 +1269,23 @@ export class WeaponSystem {
     if (pv) vel.add(pv);
 
     s.mag--;
-    this.thrown.spawn(origin, vel, this._throwFuse, def, this.viewmodel.active?.meshes);
+    /**
+     * A MINE HAS NOT BEEN COUNTING DOWN. `_throwFuse` is `Infinity` for a
+     * `noCook` store (@see `startCook`), and what the mine actually wants is
+     * its own arming delay measured from the moment it is on the ground.
+     */
+    const fuse = Number.isFinite(this._throwFuse) ? this._throwFuse : def.fuse ?? 1;
+    /**
+     * WHOSE MINE IT IS. `team` keeps a plate from firing under his own side's
+     * armour and `owner` is what pays him for the hull it kills. Read through
+     * `peek` and only on a throw — `match` may not exist in a preview harness,
+     * and a `team` of -1 simply mines everybody, which is the honest default.
+     */
+    const team = this.ctx.peek('match')?.playerTeam ?? -1;
+    this.thrown.spawn(origin, vel, fuse, def, this.viewmodel.active?.meshes, {
+      team,
+      owner: this.player ?? null,
+    });
     // The hand is empty from this frame: hide the viewmodel copy or the player
     // throws a grenade and is still holding it.
     if (this.viewmodel.active) this.viewmodel.active.group.visible = false;

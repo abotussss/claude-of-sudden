@@ -451,6 +451,40 @@ export const RULES = {
    * from the other end.
    */
   grenadeResupplyCooldown: 60,
+
+  /* ---- the minefield ----------------------------------------------------- */
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * 「平原において戦車は最強すぎるから 敵味方が対戦車地雷を設置できるようにして
+   *  グレネードに代わって設置できるようにさせて ５人ずつ 一人につき2つ」
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE RATION, AND IT LIVES HERE BECAUSE IT IS A MATCH RULE RATHER THAN A
+   * WEAPON. `src/weapons` owns what a mine IS (`WEAPON_DEFS.atmine`) and
+   * `src/match/tank.js` owns what it does to armour; WHO CARRIES ONE is a
+   * question about the two sides' order of battle, which is this file's, and
+   * it is also the one number the player named out loud.
+   *
+   * FIVE MEN A SIDE AT TWO EACH. Twenty mines on the map at full strength
+   * against six hulls — `ThrownGrenades`' field is sized at 32, so the ration
+   * fits with slack. The five are a MINORITY of a side on purpose: the whole
+   * request is 「グレネードに代わって」, so a mine-bearer has given up his frag, and
+   * a side that has traded every frag away for anti-tank stores has no answer
+   * to infantry in a building.
+   *
+   * WHO READS IT. `src/ai` — which is another agent's file at the time of
+   * writing and is therefore SPECIFIED rather than edited. The exact routing is
+   * in the report and in the block over `Armour.laneNear`; the two fields are
+   * published here so that when it is routed, the number the player asked for
+   * is in one place and not spelled out twice in two subsystems.
+   *
+   * THE PLAYER IS NOT ONE OF THE FIVE, and that is a deliberate omission
+   * rather than an oversight: `weapons` gives him the PT-6 as a fifth
+   * throwable he can select on slot 4, carrying `WEAPON_DEFS.atmine.count`,
+   * and it does not take his frag away. Removing a weapon from the player's
+   * own hands is not a change to make without being asked in as many words.
+   */
+  mineBearersPerSide: 5,
+  minesPerBearer: 2,
   /**
    * Metres a cache is drawn on the HUD from. The features are INSIDE buildings
    * and on roofs, so a marker has to appear before the doorway or the player
@@ -1866,6 +1900,131 @@ export const RULES = {
    * so the programme stretches when the ground is not there.
    */
   hiddenSquadWaveGap: 10,
+
+  /* ══════════════════════════════════════════════════════════════════════ */
+  /* THE MOUNTAIN BATTERY — the player's side of the same deadlock          */
+  /* ══════════════════════════════════════════════════════════════════════ */
+  /**
+   * 「隠し部隊が相手に登場した時は、味方にも山の上からの移動式固定砲台車両を３台投入
+   *  占領サイトや敵に向けて１０数秒に１発ミサイル射撃させて ３０発撃ったら帰還」
+   *
+   * See `src/match/battery.js` for the mountain, the tracks, the telegraph and
+   * the CAPTURE-CIRCLE EXCEPTION AND ITS PROOF — read that file's exception
+   * block before touching any of the four targeting numbers. This is only the
+   * tuning, and every value below is read against the event it answers
+   * (`hiddenSquad*` immediately above) or against the clock the trigger actually
+   * lands on, rather than chosen.
+   *
+   * IT IS A PLAINS FEATURE AND IT DROPS ON THE TOWN, loudly, on the precedent
+   * `MAP_RULES`' own note sets for the tower, the fortress and the satellite:
+   * 「山の上からの」 needs a mountain and AL-MARIYA has none. The consequence is
+   * real and is not hidden — on the town the hidden squad has no counterweight.
+   */
+  /**
+   * 「３台」. Three, and it is `battery.js:PLAINS_BATTERY.berths` that decides
+   * where each one stands; this key exists so a probe can assert the count
+   * without importing the table.
+   */
+  mountainBatteryCount: 3,
+  /**
+   * ═══════════════════════════════════════════════════════════════════════
+   * 「３０発撃ったら帰還」 — AND IT IS THIRTY BETWEEN THEM, NOT THIRTY EACH
+   * ═══════════════════════════════════════════════════════════════════════
+   * THIRTY IS THE HIDDEN SQUAD'S OWN NUMBER. `hiddenSquadWaves` x
+   * `hiddenSquadSize` is 6 x 5 = 30, which is the figure `HIDDEN_NAMES`' note
+   * already computed for the same reason ("ARRIVALS over a match run to
+   * thirty"). One round for each man the mountain is answering. The player
+   * independently said 「３０発」, and the two agreeing is the whole balance
+   * argument — this is the squad's equal rather than its overmatch.
+   *
+   * NINETY WOULD NOT BE. Three vehicles x thirty rounds each, at the per-gun
+   * cadence below, is the same 130 s of engagement with THREE TIMES the
+   * ordnance: a round every 1.5 s for two minutes, which is not a battery
+   * supporting an attack, it is a carpet. The sentence reads 「３台投入…
+   * ３０発撃ったら帰還」 — the unit deploys and the unit withdraws — so the
+   * magazine is the unit's.
+   */
+  mountainBatteryRounds: 30,
+  /**
+   * ═══════════════════════════════════════════════════════════════════════
+   * 「１０数秒に１発」 — SECONDS BETWEEN TWO ROUNDS FROM ONE GUN
+   * ═══════════════════════════════════════════════════════════════════════
+   * PER GUN, AND THAT IS THE ONLY READING THAT FITS THE MEASURED CLOCK.
+   *
+   * `_battclock.mjs` walks real matches on the plain and reports when the
+   * hidden squad's crossing — which is this battery's trigger and its only one
+   * — actually happens, and how much match is left after it:
+   *
+   *     seed  7   BLUE past 450 at t+304s   match ended t+532s   228s left
+   *     seed 11   BLUE past 450 at t+332s   match ended t+612s   280s left
+   *     seed 13   BLUE past 450 at t+329s   match ended t+560s   231s left
+   *
+   * SO THE BUDGET IS ABOUT 230 SECONDS. Thirty rounds at one every ~13 s from
+   * the BATTERY is 390 s — the battery would still be laying its ninth round
+   * when the whistle went, which is 「２０秒で終わるイベント」 inverted and is the
+   * exact failure `hiddenSquadWaveGap`'s own note was written about. Thirty
+   * rounds at one every ~13 s from EACH OF THREE GUNS is ten rounds a gun,
+   * ~135 s of engagement, all thirty delivered with ninety seconds of match
+   * still to run — which matters, because the squad keeps arriving to the
+   * whistle and the deadlock has to still be a deadlock after the guns leave.
+   *
+   * IT IS A RANGE AND NOT A NUMBER so three guns on the same cycle do not
+   * converge into a three-round volley; the first lay of each is additionally
+   * staggered by a third of a cycle in `arm()`. The battery's own tempo works
+   * out at a round about every 4.5 s, spread over up to three different aim
+   * points.
+   */
+  mountainBatteryInterval: [12.5, 16.5],
+  /**
+   * SECONDS OF LAY BEFORE A LAUNCH — stage one of the telegraph. The hull
+   * traverses, a `drone_lock` tone sounds AT THE TARGET and a haze ring
+   * tightens onto the impact point. Added to the flight below this gives
+   * 6.8-9.1 s of total warning: longer than the bomber's 4.1 s of visible
+   * run-in, inside the band `zoneBombardLead` (10) and `SAT_STRIKE.lead` (9.0)
+   * have already proved is "you can walk out of the circle" on this map.
+   */
+  mountainBatteryLay: 2.6,
+  /**
+   * METRES A SECOND, and the two seconds of flight it is clamped between.
+   *
+   * A FIXED FLIGHT TIME WOULD LOOK WRONG AT ONE END OR THE OTHER: the berths
+   * are 190 m out and the targets are 60-330 m away, so one number is either a
+   * floating rocket over a near shot or a streak over a far one. A speed with a
+   * floor and a ceiling keeps the object readable at both and keeps the total
+   * lead inside a one-second band, which is what makes the warning learnable.
+   */
+  mountainBatterySpeed: 62,
+  mountainBatteryFlight: [4.2, 6.5],
+  /**
+   * THE ROUND ITSELF, AND IT IS DELIBERATELY THE SMALLEST DAMAGING ORDNANCE ON
+   * THE MAP. `zoneBombardRadius`/`Damage` are 16/250 and walk FIVE shells over a
+   * point; `SAT_STRIKE` is 18/260 and walks TWELVE. This is ONE round, so it is
+   * sized to be lethal to a man who ignores nine seconds of warning and
+   * survivable by one who moves — the same bargain, one round at a time.
+   */
+  mountainBatteryRadius: 14,
+  mountainBatteryDamage: 210,
+  /**
+   * HOW MANY ENEMIES MAKE 「敵」 WORTH A MISSILE, counted inside 18 m.
+   *
+   * Three, because a missile spent on one man is a missile not spent on the
+   * point that is printing the other side's score, and because the open-ground
+   * gate below already refuses anything near a capture circle — so a "cluster"
+   * out here is men crossing, not men fighting for something.
+   */
+  mountainBatteryCluster: 3,
+  /**
+   * METRES. Inside this of the local player, a round ALSO raises `ui.airAlert`.
+   *
+   * THE STRIP IS ONE STRIP AND IT HOLDS FOR `lead + 2.2` s. Thirty takes at a
+   * round every ~4.5 s would own it for the rest of the match and stamp on the
+   * bomber's, the strafe's and the bombardment's warnings — so the strip is
+   * raised only when the round can reach the man reading it, and every other
+   * channel (the tone, the ring, the launch on the skyline, the missile, the
+   * trail, the whistle at the target) is in the WORLD and runs for every round
+   * for everybody. 70 m is five times `mountainBatteryRadius`.
+   */
+  mountainBatteryAlert: 70,
 
   /* ══════════════════════════════════════════════════════════════════════ */
   /* THE SUICIDE DRONES                                                     */

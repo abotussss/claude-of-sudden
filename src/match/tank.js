@@ -1424,6 +1424,28 @@ const RETALIATE = 9.0;
  *  beats anybody less than 3.3x closer instead of 2x. 「補足したらすぐ打ち返して」
  *  is a statement about WHO as much as about how fast. */
 const RETALIATE_BIAS = 0.3;
+/** …and how much nearer ENEMY ARMOUR counts than it is. @see `_acquire`. */
+const ARMOUR_BIAS = 0.45;
+/**
+ * A shell that reaches a hull STOPS AT IT, as a radius round the hull centre.
+ *
+ * The three collider boxes are `LAYER.SHOOT_ONLY` and `MASK.WORLD` is
+ * `STATIC | PROP`, so `_mainGun`'s trace does not see another tank AT ALL — it
+ * passes through the target and lands wherever the ground is. Measured
+ * geometrically rather than in a match, because the arithmetic is exact: the
+ * muzzle is 2.4 m up and the gun lays on `target.position.y + 1.0`, so over a
+ * horizontal D the ray has dropped 1.4 m at the target and reaches the deck
+ * about D BEYOND it. At 60 m the round lands 60 m past the hull it was aimed
+ * at, which is well outside `tankMainRadius` 9 — a duel in which neither side
+ * can ever hit the other.
+ *
+ * 2.6 m is the hull's own bounding radius in plan and elevation (halfW 1.65,
+ * halfL 3.45, roof 2.35), which is what forty tonnes of steel stops a shell
+ * WITH. Only armour gets this: a man is not a wall, the round goes past him
+ * and the 9 m of splash is what kills him, and that is the existing behaviour
+ * of every main-gun round this file has ever fired.
+ */
+const SHELL_STOP = 2.6;
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
@@ -1496,8 +1518,84 @@ const FRAG_ORDNANCE = new Set(['grenade']);
 const FRAG_SHARE = 1 / 6;
 const fragMul = (damage) => (RULES.tankHealth * FRAG_SHARE) / Math.max(1, damage);
 
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「戦車が通ったら爆発 戦車を破壊するだけのダメージを出して」 — THE ANTI-TANK MINE
+ * ────────────────────────────────────────────────────────────────────────────
+ * A MINE UNDER A HULL DESTROYS IT. Not "hurts it badly", not "with a second
+ * one" — the request is one sentence and it is a kill, and the reason armour
+ * dominates this plain is precisely that nothing on the ground could ever
+ * answer it. So this multiplier is the one figure in the file that is allowed
+ * to be certain.
+ *
+ * …AND IT IS DERIVED, EXACTLY AS `airMul` AND `fragMul` ARE, so it stays true
+ * when `RULES.tankHealth` moves — which it has, twice, 2600 -> 4000. The
+ * derivation has one more term than theirs because a mine is UNDER the hull
+ * rather than beside it, and `_takeBlast`'s falloff is measured to a reference
+ * point 1.4 m up the hull's centreline:
+ *
+ *   the blast sits at the mine, lifted 0.14 m by `_explode`
+ *   the reference is `position.y + 1.4`, and `along` is clamped to HULL_HALF
+ *   so the WORST geometry a plate can produce is a mine under a track edge:
+ *   1.65 m off the centreline and 1.26 m below the reference — 2.08 m away.
+ *
+ * The multiplier is therefore the one that reaches `tankHealth` AT THAT WORST
+ * POINT. Under the belly it is 1.16x overkill; at the track edge it is exactly
+ * a kill; and a hull that is merely NEAR one — 4 m off, which no plate can
+ * trip — takes about half. `damage` cancels out of the product, which is what
+ * makes the promise independent of the mine's own anti-personnel figure:
+ *
+ *     amount = dmg x (1 - d/r) x mineMul(dmg, r) = tankHealth x (1-d/r)/(1-2.08/r)
+ *
+ * A DAMAGED HULL DIES FURTHER OUT, and a full-health one does not die to a
+ * mine it drove PAST. That is the whole shape of the weapon.
+ */
+const MINE_ORDNANCE = new Set(['atmine']);
+/** The worst point a track edge can put the charge, in metres. @see above. */
+const MINE_EDGE = Math.hypot(1.65, 1.4 - 0.14);
+const mineMul = (damage, radius) => {
+  const r = Math.max(MINE_EDGE + 0.5, radius || 0);
+  return RULES.tankHealth / Math.max(1, damage * (1 - MINE_EDGE / r));
+};
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「また戦車同士でも叩くようにして 認識して、お互いに」 — AND ONE HULL'S SHELL
+ * AGAINST ANOTHER
+ * ────────────────────────────────────────────────────────────────────────────
+ * A tank duel has to RESOLVE, and on `EXPLOSION_MUL` it does not. Measured
+ * arithmetic before this line existed: `tankMainDamage` 300 at contact x 1.35
+ * is 405 of 4000, so ten hits, at `tankMainReload` 5.5 s apiece — FIFTY-FIVE
+ * SECONDS of two hulls shelling each other at four metres a second, in which
+ * both of them are also being re-tasked every two seconds by `_wantZone`. That
+ * is not a duel, it is two vehicles ignoring each other loudly.
+ *
+ * A THIRD OF A HULL PER ROUND ON, so three rounds decide it — about seventeen
+ * seconds including the laying, which is long enough to be a fight the player
+ * can walk into the middle of and short enough that it ENDS. Derived off
+ * `tankHealth` like the other three multipliers, so it survives that line
+ * moving.
+ *
+ * IT IS KEYED ON `kind`, NOT ON `source`, and that matters: `_destroy` fires
+ * its own `explosion` with `source: tank` as the hull brews up, and reading
+ * "an explosion whose source is a tank" would make a dying hull's ammunition
+ * a third of a kill against every other hull in twelve metres. Only the main
+ * gun's own round carries `kind: 'tankmain'`. @see `_mainGun`.
+ */
+const TANK_SHARE = 1 / 3;
+const tankMul = (damage) => (RULES.tankHealth * TANK_SHARE) / Math.max(1, damage);
+
 /** Where the fracture ends up: the debris settles inside this radius, locally. */
 const WRECK_R = 4.2;
+
+/**
+ * THE LANE CLOUD — @see `_bakeLanes`. `LANE_STEP` is how far apart the
+ * published points are (the legs themselves are baked at `STEP` 1.25 m, which
+ * is four times finer than anything choosing a place to bury a mine needs);
+ * `LANE_CELL` is the uniform grid the lookup buckets them into.
+ */
+const LANE_STEP = 5.0;
+const LANE_CELL = 12.0;
 
 const UP = new THREE.Vector3(0, 1, 0);
 /** Shared by every instance the atlas bound nothing to. */
@@ -1538,6 +1636,21 @@ export class Armour {
     this._next = Infinity;
     this._sorties = 0;
     this._liveT = 0;
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * WHAT KILLS ARMOUR ON THIS MAP, as a ledger rather than a claim
+     * ══════════════════════════════════════════════════════════════════════
+     * 「平原において戦車は最強すぎる」 is a statement about a number that nobody had:
+     * how many hulls die, and to what. Three of four matches measured before
+     * this work destroyed NEITHER hull in 152-232 s of life apiece (@see the
+     * block on `tankAfterCathedral` in rules.js), which is what "too strong"
+     * means in the seat. Both halves of the answer — the minefield and hulls
+     * engaging each other — are counted here, keyed off `tank.lastOrd`, so
+     * "before and after" is a table.
+     *
+     * Reset per ROUND (`armRound`), not per sortie.
+     */
+    this.kills = { mine: 0, tank: 0, air: 0, frag: 0, round: 0, blast: 0 };
     /** Pending telegraphed launch: seconds left. */
     this._pending = -1;
     /** The cathedral's own sortie rolls through the dust. @see `armAfter`. */
@@ -1565,8 +1678,8 @@ export class Armour {
     this._targets = [];
     /** The hulls of the next wave. Reused; at most one per team. @see `_wave`. */
     this._waveBuf = [];
-    this._blast = { position: this._v2, radius: 0, damage: 0, source: null };
-    this._deathBlast = { position: this._v4, radius: 0, damage: 0, source: null };
+    this._blast = { position: this._v2, radius: 0, damage: 0, source: null, kind: null };
+    this._deathBlast = { position: this._v4, radius: 0, damage: 0, source: null, kind: null };
     this._ev = { phase: '', id: '', team: 0, position: this._v2 };
     this._ann = {
       kind: 'TANK',
@@ -1726,6 +1839,12 @@ export class Armour {
     ctx.events.on('damage:dealt', this._onDamage);
     ctx.events.on('actor:death', this._onActorDeath);
 
+    /**
+     * THE LANES, AS A POINT CLOUD — baked here, at BOOT, out of legs that have
+     * already been baked. @see `laneNear`, which is the whole reason it exists.
+     */
+    this._bakeLanes();
+
     this.ready = this.tanks.length > 0;
     this.buildMs = performance.now() - t0;
     console.info(
@@ -1748,6 +1867,126 @@ export class Armour {
       );
     }
     return this;
+  }
+
+  /* ---------------------------------------------------------- the lanes -- */
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * WHERE ARMOUR ACTUALLY DRIVES, PUBLISHED — 「積極的に対戦車地雷を仕掛けるように」
+   * ══════════════════════════════════════════════════════════════════════════
+   * A MINE OFF THE LANE IS A MINE NOTHING WILL EVER DRIVE OVER, and that is the
+   * whole difficulty of the bot behaviour this feature needs. NACHTFELD is
+   * 260 x 300 m of open ground; six hulls drive 36 baked legs off six hubs and
+   * they drive NOWHERE ELSE — a hull is posed along a centreline, it does not
+   * steer, it does not avoid and it does not improvise. So "lay it somewhere
+   * sensible" is not a heuristic a man can have about terrain; it is a lookup
+   * against geometry this file already owns and nothing else can see.
+   *
+   * `laneNear(x, z, maxD, out)` is that lookup: the nearest point on any baked
+   * leg to (x, z), or null past `maxD`. It is what `src/ai` should ask before
+   * it commits a man to walking somewhere to bury a mine, and it answers with
+   * the leg's own heading so a mine can be laid ACROSS the lane rather than
+   * beside it.
+   *
+   * BAKED AT BOOT, out of legs that are themselves baked at boot: every sample
+   * of every leg, thinned to `LANE_STEP` metres, into three flat typed arrays
+   * and a uniform cell grid. On the plain that is 36 legs of 60-250 m at 1.25 m
+   * per sample, thinned 4:1 — about 900 points, 22 KB, and it never changes
+   * again. Nothing about it is per-frame and nothing about it allocates: the
+   * query writes into an `out` object the caller owns.
+   *
+   * COST OF A QUERY: the cells within `maxD` of the point (9 at the default
+   * 5 m cell and a 5 m radius, 25 at 12 m), each a `Map.get` and a short walk.
+   * It is a decision a man makes every few seconds at most, not a frame cost.
+   */
+  _bakeLanes() {
+    const X = [];
+    const Z = [];
+    const YAW = [];
+    const step2 = LANE_STEP * LANE_STEP;
+    for (const tank of this.tanks) {
+      for (const leg of tank.legs) {
+        let lx = Infinity;
+        let lz = Infinity;
+        for (let i = 0; i < leg.n; i++) {
+          const dx = leg.X[i] - lx;
+          const dz = leg.Z[i] - lz;
+          if (dx * dx + dz * dz < step2) continue;
+          lx = leg.X[i];
+          lz = leg.Z[i];
+          X.push(lx);
+          Z.push(lz);
+          YAW.push(leg.YAW[i]);
+        }
+      }
+    }
+    this._laneX = new Float32Array(X);
+    this._laneZ = new Float32Array(Z);
+    this._laneYaw = new Float32Array(YAW);
+    this._laneGrid = new Map();
+    for (let i = 0; i < X.length; i++) {
+      const key = this._laneKey(X[i], Z[i]);
+      let b = this._laneGrid.get(key);
+      if (!b) this._laneGrid.set(key, (b = []));
+      b.push(i);
+    }
+    /** Written by `laneNear`; the caller may pass its own instead. */
+    this._laneOut = { x: 0, z: 0, yaw: 0, d: 0 };
+    console.info(
+      `[tank] ${X.length} lane points off ${this.tanks.reduce((a, t) => a + t.legs.length, 0)} ` +
+        `baked legs, ${LANE_STEP} m apart, in ${this._laneGrid.size} cells — published as laneNear()`
+    );
+  }
+
+  _laneKey(x, z) {
+    return (Math.floor(x / LANE_CELL) + 4096) * 8192 + (Math.floor(z / LANE_CELL) + 4096);
+  }
+
+  /**
+   * THE NEAREST POINT ON ANY BAKED TANK LANE to (x, z), or null past `maxD`.
+   *
+   * @param {number} x,z    world metres.
+   * @param {number} maxD   how far to look, metres.
+   * @param {object} [out]  `{x, z, yaw, d}`, written in place. Omit to use the
+   *                        shared record, which is valid until the next call.
+   * @returns {object|null} `out`, or null when there is no lane inside `maxD`.
+   *          `yaw` is the leg's own heading there, in the `atan2(dx, dz)`
+   *          convention `_bakePath` bakes — so a mine laid ACROSS the lane is
+   *          laid at `yaw + PI/2`.
+   */
+  laneNear(x, z, maxD = 12, out = null) {
+    if (!this._laneGrid || !this._laneX?.length) return null;
+    const o = out ?? this._laneOut;
+    const R = Math.ceil(maxD / LANE_CELL);
+    const cx = Math.floor(x / LANE_CELL);
+    const cz = Math.floor(z / LANE_CELL);
+    let best = maxD * maxD;
+    let bi = -1;
+    for (let gx = cx - R; gx <= cx + R; gx++) {
+      for (let gz = cz - R; gz <= cz + R; gz++) {
+        const b = this._laneGrid.get((gx + 4096) * 8192 + (gz + 4096));
+        if (!b) continue;
+        for (let k = 0; k < b.length; k++) {
+          const i = b[k];
+          const dx = this._laneX[i] - x;
+          const dz = this._laneZ[i] - z;
+          const d2 = dx * dx + dz * dz;
+          if (d2 < best) { best = d2; bi = i; }
+        }
+      }
+    }
+    if (bi < 0) return null;
+    o.x = this._laneX[bi];
+    o.z = this._laneZ[bi];
+    o.yaw = this._laneYaw[bi];
+    o.d = Math.sqrt(best);
+    return o;
+  }
+
+  /** How many lane points were baked. 0 means no wheel baked on this map. */
+  get laneCount() {
+    return this._laneX?.length ?? 0;
   }
 
   /* --------------------------------------------------------------- route -- */
@@ -2603,6 +2842,13 @@ export class Armour {
       /** When, so the crew can turn on somebody who is still shooting at it. */
       lastHitAt: -1e9,
       /**
+       * WHAT LANDED LAST — 'mine' | 'tank' | 'air' | 'frag' | 'blast' | 'round'.
+       * `_destroy` classifies the kill off it, which is how "how many hulls did
+       * the minefield take, how many did the other hulls take, how many
+       * everything else" becomes a count rather than a guess. @see `this.kills`.
+       */
+      lastOrd: 'round',
+      /**
        * ONE WOUND PER ROUND, remembered across the events of a single frame.
        * @see the `_takeRound` note on `oneWoundPerRound`.
        */
@@ -2636,6 +2882,10 @@ export class Armour {
         dupes: 0,
         blasts: 0, blastDmg: 0,
         frags: 0, fragDmg: 0,
+        /** Anti-tank mines driven onto, and what they were worth. */
+        mines: 0, mineDmg: 0,
+        /** …and the other side's main-gun rounds. @see `tankMul`. */
+        shells: 0, shellDmg: 0,
         liveT: 0, kills: 0, sorties: 0, deaths: 0,
         /** Prop instances this hull's GUN took off the map. */
         razed: 0,
@@ -4753,6 +5003,19 @@ export class Armour {
       this._drive(tank, dt);
       this._fight(tank, dt);
       this._pose(tank);
+      /**
+       * …AND WHAT IS UNDER THE TRACKS — 「戦車が通ったら爆発」.
+       *
+       * AFTER `_pose`, because `_pose` is what writes `tank.position` for this
+       * frame and a plate tested against last frame's centre is a plate the
+       * hull drives 76 mm past at `SPEED_ADVANCE`. One call per live hull per
+       * frame; the whole cost is in `ThrownGrenades.armourFootprint`, which
+       * short-circuits on an integer when no mine is armed. It is deliberately
+       * NOT gated on `state === 'advance'`: a mine emplaced under a hull that
+       * has arrived and is standing on a capture point is a mine that has to
+       * work, or the counter to armour is "wait for it to stop".
+       */
+      this._checkMines(tank);
       // Under power in `advance`; standing on its point in `hold`. Only the
       // first runs a man over. @see the `BODY_HALF_W` note.
       tank.crushing = tank.state === 'advance';
@@ -4779,6 +5042,43 @@ export class Armour {
     this._next -= dt;
     if (this._next > 0) return;
     this._scheduleNext();
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * HOW A MINE IS FOUND BY A HULL
+   * ══════════════════════════════════════════════════════════════════════════
+   * The hull publishes its own footprint and `weapons` answers. It is that way
+   * round on purpose: the mine is `src/weapons`' object and this file may not
+   * hold a list of them, while the hull's plan rectangle is this file's and is
+   * already published (`halfW`/`halfL`, for `ai`'s `_clearHulls` and for
+   * `_shovePlayer`). So nothing crosses the boundary but six numbers.
+   *
+   * WHAT IT COSTS, per frame, for the whole map: one `peek` (cached after the
+   * first call, exactly as `_fx`, `_audio` and `_player` are), then one call
+   * per LIVE hull — at most six on NACHTFELD, at most two on the town. Inside
+   * that call it is an integer compare when nothing is armed, and otherwise a
+   * dozen flops per armed mine. Six hulls x twenty mines is ~1.4 k flops, no
+   * allocation, no ray, no broad phase. @see `ThrownGrenades.armourFootprint`,
+   * which counts the pairs into `stats.probes` so this is measured.
+   *
+   * A WRECK DOES NOT SET ONE OFF. This is called only for a hull that is alive
+   * and out of `dead`/`parked` — the `continue`s above see to that — because a
+   * knocked-out hull sitting on a plate for the rest of the round would clear
+   * the ground it died on for the other side.
+   */
+  _checkMines(tank) {
+    const w = this._weapons ?? (this._weapons = this.ctx.peek('weapons'));
+    if (!w?.armourFootprint) return;
+    w.armourFootprint(
+      tank.team,
+      tank.position.x,
+      tank.position.z,
+      Math.sin(tank.yaw),
+      Math.cos(tank.yaw),
+      tank.halfW,
+      tank.halfL
+    );
   }
 
   _scheduleNext() {
@@ -5630,6 +5930,39 @@ export class Armour {
     const out = this._targets;
     out.length = 0;
     this.enemies?.(tank.team, out);
+    /**
+     * ══════════════════════════════════════════════════════════════════════
+     * 「また戦車同士でも叩くようにして 認識して、お互いに」 — AND THE OTHER SIDE'S
+     * ARMOUR IS ON THE LIST
+     * ══════════════════════════════════════════════════════════════════════
+     * WHY IT WAS NOT. `this.enemies` is installed by `match` and is
+     * `MatchSystem._tankEnemies`, which walks `_botsByTeam[foe]` and then adds
+     * the local player — men, and only men. There is no bug in it and no
+     * oversight either: it is the hostile list a CREW SHOOTING INFANTRY wants,
+     * it was written when there was one hull a side and the two were on
+     * opposite ends of one street, and a tank has never been in any list of
+     * things a tank could shoot. Measured consequence on NACHTFELD, where
+     * there are now six hulls: `_acquire` scored 0 hulls, ever, so two tanks
+     * 40 m apart with clear line drove past each other laying their guns on
+     * whichever rifleman happened to be nearer.
+     *
+     * SO THE CREW'S TARGET SET IS "WHAT `match` GAVE US, PLUS THE ENEMY
+     * ARMOUR WE CAN SEE", and the second half is appended HERE rather than
+     * asked for from `match` — this file owns `this.tanks`, `_tankEnemies` is
+     * not this file's to edit, and a hull is already everything the scoring
+     * loop below needs (`position`, and it is checked `alive`). Nothing else
+     * in `_acquire` changes: a hull still has to be inside `RULES.tankRange`,
+     * still has to pass the same single sight ray from the muzzle, and still
+     * competes on plain distance with every man in the list.
+     *
+     * A WRECK IS NOT A TARGET (`alive` goes false in `_destroy`), and neither
+     * is a hull still in its pocket — `state === 'parked'` hulls sit at the
+     * head of their route with `alive` false, so the one test covers both.
+     */
+    for (const t of this.tanks) {
+      if (t === tank || !t.alive || t.team === tank.team) continue;
+      out.push(t);
+    }
     if (!out.length) {
       tank.target = null;
       tank.snap = false;
@@ -5659,7 +5992,28 @@ export class Armour {
       if (!p) continue;
       const d = Math.hypot(p.x - tank.position.x, p.z - tank.position.z);
       if (d >= RULES.tankRange) continue;
-      const score = avengeOk && e === avenge ? d * RETALIATE_BIAS : d;
+      /**
+       * ARMOUR FIRST, and it is a preference rather than a rule — the same
+       * shape as `RETALIATE_BIAS` above and for the same kind of reason.
+       *
+       * WITHOUT IT, "tanks recognise each other" is true and inert. `_acquire`
+       * scores on plain distance and NACHTFELD is a plain: a rifleman at 25 m
+       * outscores an enemy hull at 45 m every time, so two tanks with a clear
+       * 45 m line lay their guns on infantry and drive past each other. The
+       * argument for the bias is not aesthetic — the other hull is the ONLY
+       * thing in range that can destroy this one, the main gun is the only
+       * weapon on the map that answers it, and the coax is still raking the
+       * men (@see `_coax`, which follows the same target but is a machine gun).
+       *
+       * 0.45: an enemy hull beats any man more than 2.2x closer than it is.
+       * It still has to be inside `tankRange`, still has to pass the sight ray,
+       * and a man who has just put a round on the hull still beats it
+       * (`RETALIATE_BIAS` is 0.3, which is the stronger claim — 「打たれたら
+       * すぐ打ち返して」 outranks everything).
+       */
+      let score = d;
+      if (e.isTank === true) score *= ARMOUR_BIAS;
+      if (avengeOk && e === avenge) score = d * RETALIATE_BIAS;
       if (score >= bestScore) continue;
       // one ray, and only for a candidate that is already the closest so far
       this._v.set(p.x - muzzle.x, p.y + 1.0 - muzzle.y, p.z - muzzle.z);
@@ -5711,7 +6065,24 @@ export class Armour {
     dir.z += tank.rng.range(-0.012, 0.012);
     dir.normalize();
     const hit = phys.raycast(from, dir, 220, phys.MASK.WORLD);
-    const dist = hit?.hit ? hit.distance : 220;
+    let dist = hit?.hit ? hit.distance : 220;
+    /**
+     * …AND IT STOPS ON ARMOUR. @see `SHELL_STOP` for why the world trace above
+     * cannot do this itself and for the 60-metres-past-the-target arithmetic
+     * it produces without this clause. Closest approach of the round to the
+     * hull's centre: two dot products, no allocation, and it runs only when
+     * the thing being shot at is a tank.
+     */
+    if (target?.isTank === true) {
+      const cx = target.position.x - from.x;
+      const cy = target.position.y + 1.2 - from.y;
+      const cz = target.position.z - from.z;
+      const t = cx * dir.x + cy * dir.y + cz * dir.z;
+      if (t > 0 && t < dist) {
+        const miss = Math.hypot(cx - dir.x * t, cy - dir.y * t, cz - dir.z * t);
+        if (miss < SHELL_STOP) dist = t;
+      }
+    }
     const at = this._v3;
     at.copy(from).addScaledVector(dir, dist);
 
@@ -5722,6 +6093,14 @@ export class Armour {
     b.radius = RULES.tankMainRadius;
     b.damage = RULES.tankMainDamage;
     b.source = tank;
+    /**
+     * WHAT IT IS — and only the MAIN GUN carries it. `_takeBlast` reads `kind`
+     * to give a hull's round its armour multiplier against another hull; the
+     * brew-up in `_destroy` fires its own `explosion` with `source: tank` and
+     * must NOT be read as a main-gun round, which is exactly why the test is
+     * on this field and not on the source's type. @see `tankMul`.
+     */
+    b.kind = 'tankmain';
     this.ctx.events.emit('explosion', b);
 
     /**
@@ -5925,6 +6304,7 @@ export class Armour {
     tank.lastHitBy = e.source ?? tank.lastHitBy;
     tank.stats.rounds++;
     tank.stats.roundDmg += amount;
+    tank.lastOrd = 'round';
     // `part` is the collider's own, set in `_buildColliders` and carried
     // through by `physics` — which box a shooter is actually finding is the
     // whole content of the armour table, so it is counted rather than assumed.
@@ -5971,6 +6351,15 @@ export class Armour {
      */
     const frag = e.kind === 'grenade' ||
       (typeof e.source === 'string' && FRAG_ORDNANCE.has(e.source));
+    /**
+     * A MINE AND A TANK'S OWN SHELL, on the same `kind` channel the bot frag
+     * opened. Both are read here rather than off `source` because `source` is
+     * the MAN (or the hull) that gets paid and must stay free to be one —
+     * @see the notes on `mineMul` and `tankMul`.
+     */
+    const mine = e.kind === 'atmine' ||
+      (typeof e.source === 'string' && MINE_ORDNANCE.has(e.source));
+    const shell = e.kind === 'tankmain';
     for (const tank of this.tanks) {
       if (!tank.alive) continue;
       if (e.source === tank) continue; // our own shell going off down the street
@@ -6018,13 +6407,32 @@ export class Armour {
        * could never catch it, because 0 is not nullish.
        */
       const dmg = e.damage > 0 ? e.damage : e.impulse > 0 ? e.impulse : (e.damage ?? 90);
-      const amount = dmg * (1 - d / r) * (air ? airMul(dmg) : frag ? fragMul(dmg) : EXPLOSION_MUL);
+      const mul = air ? airMul(dmg)
+        : mine ? mineMul(dmg, r)
+        : shell ? tankMul(dmg)
+        : frag ? fragMul(dmg)
+        : EXPLOSION_MUL;
+      const amount = dmg * (1 - d / r) * mul;
       tank.stats.blasts++;
       tank.stats.blastDmg += amount;
       if (frag) {
         tank.stats.frags++;
         tank.stats.fragDmg += amount;
       }
+      /**
+       * WHAT IS KILLING THE ARMOUR, counted per hull rather than inferred from
+       * a killfeed row — 「戦車同士でも叩くようにして」 and the minefield are both
+       * claims that only mean something as a number. `lastOrd` is the ordnance
+       * of the most recent wound, and `_destroy` reads it to classify the kill.
+       */
+      if (mine) {
+        tank.stats.mines++;
+        tank.stats.mineDmg += amount;
+      } else if (shell) {
+        tank.stats.shells++;
+        tank.stats.shellDmg += amount;
+      }
+      tank.lastOrd = mine ? 'mine' : shell ? 'tank' : air ? 'air' : frag ? 'frag' : 'blast';
       /**
        * A BOMB IS NOT AN ACTOR. `e.source` on air ordnance is the string that
        * named the system ('airstrike', 'bomber'), and `MatchSystem`'s own note
@@ -6086,6 +6494,9 @@ export class Armour {
     tank.health = 0;
     tank.stats.deaths++;
     tank.target = null;
+    // WHAT TOOK IT — the ordnance of the wound that finished it. @see `kills`.
+    const ord = tank.lastOrd ?? 'round';
+    if (this.kills[ord] !== undefined) this.kills[ord]++;
     for (const c of tank.colliders) c.c.enabled = false;
     // The hull's own meshes go; the baked wreck takes over in the same frame.
     for (const mesh of tank.meshes) mesh.visible = mesh === tank.wreck;
@@ -6128,6 +6539,8 @@ export class Armour {
         `(hull ${st.nHull}r/${st.hull.toFixed(0)} · turret ${st.nTurret}r/${st.turret.toFixed(0)} · ` +
         `deck ${st.nDeck}r/${st.deck.toFixed(0)}${st.dupes ? ` · ${st.dupes} dupes dropped` : ''}), ` +
         `${st.frags} frags for ${st.fragDmg.toFixed(0)}, ${st.blasts} blasts for ${st.blastDmg.toFixed(0)}, ` +
+        `${st.mines} AT mines for ${st.mineDmg.toFixed(0)}, ${st.shells} enemy shells for ${st.shellDmg.toFixed(0)}, ` +
+        `finished by ${ord.toUpperCase()}, ` +
         `${st.kills} kills, ${st.legs} legs driven, ${st.razed} props shelled off the map, ` +
         `${st.breaches} walls breached, ` +
         `last standing off ${tank.targetZone ?? 'the cathedral'}`
@@ -6181,6 +6594,7 @@ export class Armour {
     this._sorties = 0;
     this._liveT = 0;
     this._ignoreCoBusy = false;
+    for (const k in this.kills) this.kills[k] = 0;
     for (const t of this.tanks) {
       t.stats.kills = 0;
       t.stats.deaths = 0;

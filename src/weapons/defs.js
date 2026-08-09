@@ -1516,6 +1516,149 @@ export const WEAPON_DEFS = {
     swayScale: 1.2,
     bobScale: 1.15,
   },
+
+  /* ────────────────────────────────────────────────────────────────────────
+   * 「平原において戦車は最強すぎるから 敵味方が対戦車地雷を設置できるようにして
+   *  グレネードに代わって設置できるようにさせて ５人ずつ 一人につき2つ
+   *  戦車が通ったら爆発 戦車を破壊するだけのダメージを出して」
+   *
+   * THE ANTI-TANK MINE, AND IT IS THE PM-1'S MACHINERY WITH A DIFFERENT SENSOR
+   * ────────────────────────────────────────────────────────────────────────
+   * `throwKind: 'mine'` is the SAME string the PM-1 carries, so it runs the
+   * same three states in `ThrownGrenades._updateMine` — ARMING, ARMED,
+   * TRIPPED — the same `_trip` voice, the same `_retire`, the same `_explode`.
+   * There is no second mine anywhere in this subsystem. What separates the two
+   * is which sensor the ARMED state runs, and that is DATA rather than a
+   * branch on an id:
+   *
+   *   `beamRange`   a laser tripwire, broken by a MAN. The PM-1 has 9 m of it.
+   *                 ZERO here, and zero is what turns the beam off — an
+   *                 anti-tank mine is not a tripwire and must not kill the
+   *                 infantry that walks over it.
+   *   `trackWidth`  a PRESSURE PLATE, in metres of half-width, set off by a
+   *                 tracked hull's footprint and by nothing else. The PM-1
+   *                 does not carry the field and therefore has no plate.
+   *
+   * A MAN CANNOT SET THIS OFF AT ALL, which is the honest reading of 対戦車
+   * and is also what keeps it off the "kills from nowhere" list: nothing a man
+   * on foot DOES arms, trips or triggers it. He can still be killed BY one —
+   * `blastDamage` below reaches him through the same `_damageActors` every
+   * other blast in this file uses — but only when a tank sets it off, and a
+   * tank driving onto a mine is as telegraphed as ordnance on this map gets.
+   * ──────────────────────────────────────────────────────────────────────── */
+  atmine: {
+    id: 'atmine',
+    label: 'PT-6',
+    class: 'grenade',
+    modes: ['throw'],
+    throwKind: 'mine',
+    /**
+     * TWO — 「一人につき2つ」. `resetAmmo` at the spawn is the only refill, as
+     * it is for every other throwable, so two is a life's budget.
+     */
+    count: 2,
+    reserve: 0,
+    /**
+     * SIX SECONDS TO EMPLACE, and it is the arming delay rather than a fuze —
+     * @see the same field on the PM-1. It is long because it is the only thing
+     * standing between "a man lays mines" and "a man deletes a tank he can
+     * see": at `SPEED_ADVANCE` 4.6 m/s a hull covers 27 m in six seconds, so a
+     * mine has to be laid ON GROUND ARMOUR HAS NOT REACHED YET rather than
+     * under a hull that is already there. That is what makes it a minefield
+     * instead of a rocket launcher.
+     */
+    fuse: 6.0,
+    /**
+     * NO LASER. @see the block above — this is the field that turns the PM-1's
+     * tripwire off, and it is `0` rather than absent so `_updateMine` reads a
+     * number in both cases and never falls back to the PM-1's 9 m default.
+     */
+    beamRange: 0,
+    beamRadius: 0,
+    /**
+     * THE PLATE, as a half-width in metres. A hull whose footprint covers the
+     * mine sets it off; `Armour` publishes its own `halfW`/`halfL` and the
+     * test is that rectangle, so this is the slack ADDED to it — a track edge
+     * that clips the plate is a track edge that sets it off. Small: it is a
+     * plate, not a trigger radius.
+     */
+    trackWidth: 0.25,
+    /**
+     * 0.25 s FROM THE PLATE TO THE BANG, against the PM-1's whole second.
+     *
+     * The second on the PM-1 is a WARNING — 「人が触れると1秒後に爆発する」 — and
+     * it exists so a man who hears the pips can walk out of the radius. There
+     * is nobody to warn here: a tank cannot leave 8.5 m of ground in a second
+     * (4.6 m/s x 1 s = 4.6 m) and a crew has no evade. What a full second WOULD
+     * do is let the hull drive off the top of the charge so the blast lands
+     * behind it, which is the one geometry the whole feature is built to
+     * produce. A quarter of a second is long enough to hear the trip and short
+     * enough that the belly is still over it.
+     */
+    trigDelay: 0.25,
+    /**
+     * WHAT IT DOES TO A MAN, and it is a frag's numbers rather than a tank's.
+     *
+     * 8.5 m / 120 is the PM-1's radius with less damage in it, because the
+     * charge of an anti-tank mine is shaped DOWN into a belly rather than out
+     * into a street. A man standing on the plate when a hull rolls over it
+     * dies; a man 4 m away takes 30 and lives. THE FIGURE THAT KILLS THE TANK
+     * IS NOT HERE — @see `MINE_ORDNANCE` and `mineMul` in `src/match/tank.js`,
+     * where it is DERIVED from `RULES.tankHealth` exactly as the airstrike's
+     * and the frag's already are, so 「戦車を破壊するだけのダメージ」 stays true
+     * at any health that line is ever set to.
+     */
+    blastRadius: 8.5,
+    blastDamage: 120,
+    /**
+     * WHAT IT IS, said out loud on the blast payload. `Armour._takeBlast`
+     * reads `kind` — the field a bot's frag already added for exactly this
+     * reason — so the multiplier is picked without taking `source` off the
+     * event. @see `ThrownGrenades._explode`.
+     */
+    ordnance: 'atmine',
+    /**
+     * IT CANNOT COOK OFF IN THE HAND. Every other throwable's `fuse` is
+     * burning from the pin pull and `WeaponSystem._cookOff` kills you for
+     * holding it; this one's `fuse` is an arming delay that has not started,
+     * and a mine that detonates because you held the button is a mine nobody
+     * would ever carry. `startCook` reads this. @see `src/weapons/index.js`.
+     */
+    noCook: true,
+    /** Emplaced, not lobbed: it goes down where you are looking, close. */
+    throwSpeed: 6.5,
+    tossSpeed: 3.2,
+    throwLoft: 0.06,
+    /** Six kilos of steel and TNT. It does not bounce and it does not roll. */
+    bounce: 0.02,
+    ads: false,
+    adsTime: 0.16,
+    adsFov: 1,
+    viewFov: 1,
+    inspectTime: 2.2,
+    drawTime: 0.62,
+    holsterTime: 0.36,
+    cycleTime: 0.3,
+    cookTime: 0.42,
+    throwTime: 0.7,
+    releaseAt: 0.26,
+    spreadHip: 0,
+    spreadAds: 0,
+    spreadPerShot: 0,
+    spreadMax: 0,
+    spreadDecay: 1,
+    hipPos: [0.15, -0.12, -0.4],
+    hipRot: [0.05, -0.95, 0.55],
+    adsCant: [0, 0, 0],
+    /** The heaviest thing in the pouch by a factor of ten. */
+    moveScale: 1.05,
+    sprintPos: [0.1375, -0.1766, -0.2516],
+    sprintRot: [-2.27, -0.93, -1.45],
+    lowReadyPos: [0.1575, -0.1616, -0.2666],
+    lowReadyRot: [-2.11, -1.05, -1.72],
+    swayScale: 1.2,
+    bobScale: 1.15,
+  },
 };
 
 /**

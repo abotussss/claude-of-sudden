@@ -349,3 +349,115 @@ export function buildMine() {
     nodes: { muzzle: [0, 0, 0], ...HANDS },
   };
 }
+
+/* ========================================================================== */
+/*  anti-tank mine — the CARRIED canister                                     */
+/* ========================================================================== */
+
+/**
+ * ══════════════════════════════════════════════════════════════════════════
+ * PT-6 ANTI-TANK MINE — 「対戦車地雷を設置できるようにして」
+ * ══════════════════════════════════════════════════════════════════════════
+ * THIS IS THE THING IN THE HAND, AND IT IS NOT THE THING ON THE GROUND. That
+ * is a deliberate split and it is worth the paragraph, because "one weapon,
+ * two meshes" is normally a smell:
+ *
+ *   A REAL AT MINE IS 300 mm ACROSS. Every throwable in this file shares one
+ *   grip solve (`HANDS`) whose `gripCylinder` is r 28.5 mm, because the hand
+ *   closes on a 57 mm section — the frag's ball, the two cans' bodies, the
+ *   PM-1's wedge. A 300 mm disc handed to that solver puts the whole fist
+ *   INSIDE the mine: the fingers are solved onto a 28.5 mm cylinder that no
+ *   longer exists as a surface. Widening the solve for one weapon is how the
+ *   knife's grip note says these things go wrong.
+ *
+ *   SO THE CARRIED OBJECT IS THE CHARGE, ON THE SAME 57 mm WAIST every other
+ *   throwable has — a squat olive canister with a fuze well, a carrying strap
+ *   lug and an arming key. The hand solve is the frag's, verbatim, which is
+ *   the same argument the header already makes for the flashbang and the
+ *   smoke can: the pose is a property of the SECTION, not of the filling.
+ *
+ *   AND THE EMPLACED OBJECT IS THE MINE, 320 mm across and 90 mm proud, built
+ *   in `ThrownGrenades._atMesh` because its size, its lie and its ring marker
+ *   are world facts rather than viewmodel ones. A man emplacing a mine opens
+ *   it out; that is what 「設置」 means and it is what the two meshes say.
+ *
+ * NOTHING HERE IS A SECOND IMPLEMENTATION of anything: there is one mine
+ * record, one sensor, one trip voice and one blast, all in `grenades.js`, and
+ * bots and the player reach them through the same `WeaponSystem.layMine`.
+ */
+export function buildAtMine() {
+  const body = new Assembly('atmine');
+  const r = 0.0285;
+  const z0 = -0.052;
+  const z1 = 0.052;
+
+  /* ---- the charge body: a squat can with a rolled waist ------------------ */
+  const can = latheZ(
+    [
+      [0, 0],
+      [0, r - 0.005],
+      [0.004, r - 0.0012],
+      [0.011, r],
+      [0.03, r + 0.0016],
+      [(z1 - z0) - 0.03, r + 0.0016],
+      [(z1 - z0) - 0.011, r],
+      [(z1 - z0) - 0.004, r - 0.0012],
+      [(z1 - z0), r - 0.005],
+      [(z1 - z0), 0],
+    ],
+    24
+  );
+  body.add(can, 'enamel_od', { z: z0 });
+  can.dispose();
+  /** Two crimped hoops, so a plain lathe reads as pressed sheet at 0.3 m. */
+  for (const z of [z0 + 0.014, z1 - 0.014]) {
+    const hoop = ring(r - 0.0004, 0.0017, 22, 6);
+    body.add(hoop, 'steel_enamel', { z });
+    hoop.dispose();
+  }
+  /** The yellow-band stencil every anti-tank store carries. Flat lathe skin. */
+  const band = latheZ([[0, r + 0.0022], [0.013, r + 0.0022]], 24);
+  body.add(band, 'polymer_tan', { z: -0.0065 });
+  band.dispose();
+
+  /* ---- fuze well and arming key ----------------------------------------- */
+  const well = latheZ(
+    [
+      [0, 0],
+      [0, 0.0136],
+      [0.0062, 0.0136],
+      [0.0082, 0.0112],
+      [0.0082, 0],
+    ],
+    16
+  );
+  body.add(well, 'steel_enamel', { z: z1 });
+  well.dispose();
+  const throat = tubeZ(0.0096, 0.0072, 0.006, 14, 0.0004);
+  body.add(throat, 'cavity', { z: z1 + 0.006 });
+  throat.dispose();
+  const key = box(0.0038, 0.0026, 0.021, 0.0005, 1);
+  body.add(key, 'steel_bright', { x: 0.0122, y: 0.0034, z: z1 + 0.0074, ry: 0.32 });
+  key.dispose();
+  addScrew(body, 'steel', 0, -0.0158, z1 + 0.0026, 0.0021, 'z', 0.004);
+
+  /* ---- carrying lug on the flank, so it is not a smooth barrel ----------- */
+  const lug = box(0.0088, 0.0046, 0.013, 0.0009, 1);
+  body.add(lug, 'steel', { x: r + 0.0016, y: 0, z: 0, ry: Math.PI / 2 });
+  lug.dispose();
+  const grip = knurlBand(r + 0.0006, 0.016, 20, 0.0006, 3);
+  body.add(grip, 'steel_enamel', { z: 0.026 });
+  grip.dispose();
+
+  return {
+    id: 'atmine',
+    label: 'PT-6',
+    fxClass: 'melee',
+    wearScale: { enamel_od: 0.3, steel: 0.4, steel_enamel: 0.26, steel_bright: 0.5, polymer_tan: 0.35 },
+    body,
+    /** No pin. It is armed by being emplaced, not by a ring — the same
+     *  statement the PM-1 above makes, and `parts.pin` is guarded either way. */
+    moving: {},
+    nodes: { muzzle: [0, 0, 0], ...HANDS },
+  };
+}

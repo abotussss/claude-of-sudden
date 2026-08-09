@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BOX, BOX_FINE, BOX_SOFT, BOX_THIN, PANE, IDENT, LL } from '../kit.js';
-import { fbm3, rockGeometry, patchGeometry } from '../util.js';
+import { fbm3, paintMasks, rockGeometry, patchGeometry } from '../util.js';
 import { Rng } from '../../core/rng.js';
 import {
   RAMP_GRADE, octagon, edgeInfo, prism, wallRun, interiorVolume,
@@ -111,6 +111,50 @@ const ROOF_Y = 25.8;
 /** The cab, corbelled out over the shaft, and what stands on it. */
 const CAB_R = 8.6, CAB_CUT = 2.4, CAB_TOP = 31.0;
 const MAST_TOP = 38.5;
+/** The cab floor's own top and the soffit under it. @see `cabFloor`. */
+const CAB_F = ROOF_Y + 0.2, CAB_F_SOFFIT = CAB_F - 0.45;
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE HOLE IN THE CAB FLOOR — 「管制塔の上いけないじゃん なんで？」
+ * ════════════════════════════════════════════════════════════════════════════
+ * FOURTH time of asking on this staircase, and the first three all measured
+ * something that was not the thing. What decides whether a man gets up a stair
+ * is whether the real `CharacterController` gets up it, and it did not: driven
+ * from the apron with `KeyW` held (`_nfwalk.mjs`), it climbed twenty-three of
+ * twenty-six waypoints and stopped DEAD at
+ *
+ *     feet y 26.97 world = 23.77 level, on half-flight B of the top storey,
+ *     0.23 m of concrete over the head ray, five metres short of the top.
+ *
+ * 23.77 + 1.78 = 25.55, AND 25.55 IS `CAB_F - 0.45` — the underside of the cab
+ * floor. The cab floor was ONE SOLID OCTAGON 8.6 m across, `clip: true`, laid
+ * straight over the stair well; the shaft's own top slab sits at 25.80, i.e.
+ * INSIDE it. So the last half-flight of the dog-leg rose 2.3 m into a soffit
+ * and the top 2.05 m of it was solid mass. That is the ceiling in his frame,
+ * and it is why three passes of clearance arithmetic all came back clean: every
+ * one of them measured the shaft's own storeys against each other and NONE of
+ * them included the cab, which is a different function in a different scope.
+ *
+ * THE OPENING IS OVER THE WHOLE RUN OF HALF-FLIGHT B, and it has to be. The
+ * soffit is only 0.65 m above the slab the flight lands on while the flight
+ * itself climbs 2.3 m to get there, so a man is under the cab floor for the top
+ * 2.05 m of the run. A hatch over the head of the flight would have been the
+ * same wall 1.5 m further on. @see `_nfwalk.mjs` for the walk that says so.
+ *
+ * He arrives on the arrival landing at 25.80 inside the opening and steps 0.20 m
+ * up onto the cab floor at 26.00 — one coaming step, against `stepHeight` 0.42
+ * and `maxStep` 0.45.
+ *
+ * AND THE TWO CAB POSTS MOVE WEST, because they stood on the lid: both were on
+ * x 0 at z ±2.4, which is the middle of the well. The stair now comes up the
+ * EAST half of the cab and the consoles stand on the WEST half — the pair is
+ * still 4.8 m apart on the same bearing it always faced. @see `STORES`.
+ */
+const HATCH_X0 = -0.35, HATCH_X1 = 3.05;
+const HATCH_Z0 = -3.10, HATCH_Z1 = 2.35;
+/** …and where the two posts go now that the stair comes up where they stood. */
+const CAB_POST_X = -4.3;
 
 /** Total footprint radius including the two external flights — @see `apron`. */
 export const TOWER_R = 25.4;
@@ -320,8 +364,14 @@ const STORES = [
     id: 'NF-TOWER-RACK', kind: 'weapon', x: -3.55, z: 0, h: FLOORS[1], yaw: Math.PI / 2,
     perishable: true, botReachable: false, beacon: false,
   },
+  /**
+   * ON `CAB_POST_X`, WHICH IS THE WEST HALF OF THE CAB, because the middle of
+   * it is now the stair well. Both cab posts stood on x 0 and the well is
+   * x ±2.6 — they were standing on the lid that stopped the climb. @see the
+   * note on `HATCH_X0` and `_nfwalk.mjs`. The bearing each faces is unchanged.
+   */
   {
-    id: 'NF-TOWER-CAB', kind: 'vantage', x: 0, z: 2.4, h: ROOF_Y + 0.32, yaw: Math.PI,
+    id: 'NF-TOWER-CAB', kind: 'vantage', x: CAB_POST_X, z: 2.4, h: ROOF_Y + 0.32, yaw: Math.PI,
     perishable: true, botReachable: false, beacon: false, clip: true,
   },
   /**
@@ -343,6 +393,13 @@ const STORES = [
    * `RULES.cacheUseRadius` 2.6, so `Caches.nearest` can never be ambiguous
    * between them and neither is inside `nearStore`'s 2.6 m keep-out of the other.
    *
+   * IT STANDS ON `CAB_POST_X`, NOT ON x 0, AND THAT IS THE WHOLE OF 「爆撃機を
+   * 呼ぶのできないじゃんこれじゃ」. x 0 is the middle of the stair well: this desk,
+   * its 1.25 m lit deck ring and the man standing at it were all on the lid the
+   * climb could not get through, and the opening that lets him up now occupies
+   * the ground the console used to. It is 4.3 m west of the tower's axis, still
+   * on the cab floor at 26.12, still facing +Z. @see `HATCH_X0`, `_nfwalk.mjs`.
+   *
    * `perishable: true` IS THE DESIGN AND NOT BOOKKEEPING. 「そのため管制塔は
    * 破壊されないといけない」 — Act I at p 0.50 razes the shell this stands on and
    * `Caches.update` disables the post on that frame. The weapon is gone because
@@ -361,7 +418,7 @@ const STORES = [
    * and no consoles.
    */
   {
-    id: 'NF-TOWER-SATCALL', kind: 'satcall', x: 0, z: -2.4, h: ROOF_Y + 0.32, yaw: 0,
+    id: 'NF-TOWER-SATCALL', kind: 'satcall', x: CAB_POST_X, z: -2.4, h: ROOF_Y + 0.32, yaw: 0,
     perishable: true, botReachable: false, beacon: false, clip: true,
   },
 ];
@@ -2319,6 +2376,74 @@ function shaftInterior(A, rng, y, lights) {
  * because a canted pane never mirrors the sky back at you the way a vertical one
  * does. Above it: the dish array, the anemometer and the beacon.
  */
+/**
+ * THE CAB FLOOR, WITH THE STAIR OPENING IN IT. @see the note on `HATCH_X0` for
+ * what it is for and for the walk that found it missing.
+ *
+ * This is `plains-works.prism` with one `THREE.Path` pushed into the shape's
+ * `holes`, and it is written out here rather than added to `prism` because the
+ * cab floor is the only mass on this map that has to have a hole in it. Every
+ * convention is `prism`'s and is kept deliberately identical:
+ *
+ *   · the trace is negated in z and REVERSED (`polyPrism` extrudes along +Z and
+ *     `rotateX(-π/2)` maps (x,y,z) -> (x,z,-y), so an (x,z) trace handed over
+ *     straight builds the whole cab mirrored through the origin — 32 m off
+ *     centre that is a podium standing on the capture point);
+ *   · the hole goes through the SAME negation, or it opens on the wrong side of
+ *     the tower, which is a hole a man cannot find and a lid where he stands;
+ *   · the paint is the same shuttered-concrete pass, so the floor of the cab and
+ *     the roof over it still read as one pour;
+ *   · and it is `clipGeo`, not `collideGeo`. The whole cab is `LAYER.CLIP`:
+ *     `NavGrid.build` drops one ray per cell under `MASK.WORLD`, which does not
+ *     contain CLIP, so a corbelled floor at 26 m does not become the floor of
+ *     every cell under it. `MASK.CHARACTER` does contain CLIP, which is why the
+ *     player stands on it — and why the solid version stopped him.
+ *
+ * `ExtrudeGeometry` normalises hole winding against the outer contour itself
+ * (`ShapeUtils.isClockWise`), so the opening's four points may be given in
+ * either order and its side walls face INTO the hole either way. That matters
+ * here more than usual: this shaft has already shipped once as a closed solid
+ * whose faces all pointed outward, so from the inside every one of them was a
+ * back face and the sky came through the walls.
+ */
+function cabFloor(A, y0, y1) {
+  const flat = CAB.map(([x, z]) => [x, -z]).reverse();
+  const shape = new THREE.Shape();
+  shape.moveTo(flat[0][0], flat[0][1]);
+  for (let i = 1; i < flat.length; i++) shape.lineTo(flat[i][0], flat[i][1]);
+  shape.closePath();
+
+  const hx0 = TOWER.x + HATCH_X0, hx1 = TOWER.x + HATCH_X1;
+  const hz0 = -(TOWER.z + HATCH_Z0), hz1 = -(TOWER.z + HATCH_Z1);
+  const hole = new THREE.Path();
+  hole.moveTo(hx0, hz0);
+  hole.lineTo(hx1, hz0);
+  hole.lineTo(hx1, hz1);
+  hole.lineTo(hx0, hz1);
+  hole.closePath();
+  shape.holes.push(hole);
+
+  const g = new THREE.ExtrudeGeometry(shape, {
+    depth: y1 - y0, bevelEnabled: false, bevelThickness: 0, bevelSize: 0, bevelSegments: 1, steps: 1,
+  });
+  g.rotateX(-Math.PI / 2);
+  g.computeVertexNormals();
+  g.computeBoundingBox();
+  paintMasks(g, (x, gy, z, nx, ny, nz, out) => {
+    const up = ny > 0.7;
+    const n = fbm3(x * 0.09 + 11.3, gy * 0.11, z * 0.09, 3);
+    const m = fbm3(x * 0.55, gy * 0.6 + 4.1, z * 0.55, 2);
+    const lift = Math.abs((gy % 1.2) - 0.6) / 0.6;
+    out[0] = Math.min(1, (up ? 0.26 : 0.22) + n * (up ? 0.24 : 0.4) + (1 - lift) * 0.18);
+    out[1] = Math.min(1, (up ? 0.5 : 0.42) + m * 0.36 + (1 - lift) * 0.2);
+    out[2] = Math.min(1, (up ? 0.3 : 0.24) + (1 - Math.min(1, gy / 2.2)) * 0.4 + n * 0.15);
+  });
+  const mx = LL(IDENT, 0, y0, 0, 0, 1, 1, 1);
+  A.add('concrete_dark', g, mx);
+  A.clipGeo('concrete', g, mx);
+  g.dispose();
+}
+
 function buildCab(A, rng, y, lights) {
   const box = BOX(A);
   // the brackets that carry the overhang
@@ -2329,9 +2454,9 @@ function buildCab(A, rng, y, lights) {
     A.add('concrete_dark', box, LL(IDENT, px, y(ROOF_Y - 0.75), pz, -a, 0.5, 1.5, 3.0, 0, 0.42),
       { masks: [0.6, 0.4, 0.25] });
   }
-  // the cab floor and its collision
-  const cf = ROOF_Y + 0.2;
-  prism(A, 'concrete_dark', CAB, y(cf - 0.45), y(cf), { surface: 'concrete', clip: true });
+  // the cab floor, its collision, AND THE HOLE THE STAIR COMES UP — @see `cabFloor`
+  const cf = CAB_F;
+  cabFloor(A, y(CAB_F_SOFFIT), y(cf));
 
   for (let i = 0; i < CAB.length; i++) {
     const e = edgeInfo(CAB, i);
@@ -2355,9 +2480,22 @@ function buildCab(A, rng, y, lights) {
     A.add('metal_dark', BOX_SOFT(A), LL(IDENT, e.mx + e.nx * 0.55, y(cf + gh + 0.3), e.mz + e.nz * 0.55,
       e.yaw, 1.5, 0.42, e.len + 0.5), { masks: [0.75, 0.55, 0.2] });
   }
-  // the cab's own floor plate and the consoles round the front of it
-  A.add('floor_concrete', box, LL(IDENT, TOWER.x, y(cf + 0.06), TOWER.z, 0, CAB_R * 1.8, 0.12, CAB_R * 1.8),
-    { masks: [0.5, 0.4, 0.3] });
+  /**
+   * The cab's own screed, IN FOUR PIECES ROUND THE STAIR OPENING. It was one
+   * 15.48 m plate over the whole floor and it carries no collision, so on the
+   * frame the opening was cut it would have become a 0.12 m lid drawn across
+   * the hole the player has to come up through — an opening you can see the
+   * far side of and still cannot use is the same defect in a thinner coat.
+   * The four pieces have the plate's own extent, key, thickness and masks.
+   */
+  const sc = CAB_R * 0.9;
+  for (const [x0, x1, z0, z1] of [
+    [-sc, HATCH_X0, -sc, sc], [HATCH_X1, sc, -sc, sc],
+    [HATCH_X0, HATCH_X1, -sc, HATCH_Z0], [HATCH_X0, HATCH_X1, HATCH_Z1, sc],
+  ]) {
+    A.add('floor_concrete', box, LL(IDENT, TOWER.x + (x0 + x1) / 2, y(cf + 0.06), TOWER.z + (z0 + z1) / 2,
+      0, x1 - x0, 0.12, z1 - z0), { masks: [0.5, 0.4, 0.3] });
+  }
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2;
     if (i === 4) continue; // the hatch

@@ -22,6 +22,39 @@ const MAX_LIVE = 6;
 
 /**
  * ══════════════════════════════════════════════════════════════════════════
+ * THE MINEFIELD — 「敵味方が対戦車地雷を設置できるようにして ５人ずつ 一人につき2つ」
+ * ══════════════════════════════════════════════════════════════════════════
+ * FIVE MEN A SIDE AT TWO EACH IS TWENTY LIVE MINES, and `MAX_LIVE` is SIX.
+ * That is the whole reason there is a second pool in this file rather than four
+ * more slots in the first one: `this.pool` is the THROW pool — a rigid body, a
+ * bounce, a fuze, a viewmodel proxy per slot — and it is sized for what can be
+ * in the air at once. A mine that has finished arming is not in the air; it is
+ * a sensor on the ground that lives until something drives over it or the round
+ * ends, and twenty of those would wedge the throw pool shut for everybody.
+ *
+ * So an anti-tank mine EMPLACES: at the end of its arming delay it leaves the
+ * throw slot (`_emplace`), the rigid body goes, the canister proxy is handed
+ * back, and it takes a `field` slot with the laid mesh. The throw slot is free
+ * again on the same frame. THE PM-1 DOES NOT DO THIS and nothing about it
+ * moves — it has `count: 1`, it is a tripwire rather than a plate, and it stays
+ * in the throw slot it has always lived in. @see `_updateMine`.
+ *
+ * 32 rather than 20: `layMine` is a public entry point and the ration is
+ * `src/ai`'s to spend, so the pool is sized for the ask plus the slack a
+ * resupply or a second wave would want. Preallocated at construction; nothing
+ * below allocates once the first mine has been laid.
+ */
+const MINE_MAX = 32;
+/** The laid mine, in metres — @see `_atMesh`. Under `NavGrid`'s 0.42 m
+ *  trip-hazard floor by a factor of four, and it carries no collider at all. */
+const AT_R = 0.165;
+const AT_H = 0.075;
+/** The marker ring on the ground round an ARMED mine. @see `_drawRing`. */
+const AT_RING_IN = 0.30;
+const AT_RING_OUT = 0.345;
+
+/**
+ * ══════════════════════════════════════════════════════════════════════════
  * THE SCREEN IS ABOUT EIGHT METRES — 「スモークの煙の範囲を広げて ８メートルくらい」
  * ══════════════════════════════════════════════════════════════════════════
  * The FALLBACK only: `weapons/defs.js:smoke.smokeRadius` is the authority and
@@ -99,6 +132,24 @@ class Thrown {
     this.len = 1;
     this.dir = new THREE.Vector3(0, 0, 1);
     this.beam = null;
+    /**
+     * ANTI-TANK STATE. Three more fields on the same record, for the same
+     * reason the four above are here: an AT mine is not a different class, it
+     * is a mine whose ARMED state runs a pressure plate instead of a laser.
+     *
+     *   team   who laid it. A plate does not go off under the hull of the side
+     *          that buried it — @see `armourFootprint`.
+     *   owner  the man, for kill credit on `damage:dealt` and on the tank's own
+     *          `lastHitBy`. Null means the environment.
+     *   mesh   the LAID object, which is not the canister that was thrown.
+     *   ring   its marker on the ground. @see `_drawRing`.
+     */
+    this.team = -1;
+    this.owner = null;
+    this.mesh = null;
+    this.ring = null;
+    /** True on a record that lives in `field` rather than in `pool`. */
+    this.laid = false;
   }
 }
 
@@ -107,12 +158,25 @@ export class ThrownGrenades {
     this.ctx = ctx;
     this.pool = [];
     for (let i = 0; i < MAX_LIVE; i++) this.pool.push(new Thrown());
+    /** The LAID mines — @see `MINE_MAX`. Preallocated; never grows. */
+    this.field = [];
+    for (let i = 0; i < MINE_MAX; i++) {
+      const f = new Thrown();
+      f.laid = true;
+      this.field.push(f);
+    }
+    /** How many field slots are ARMED. The whole detection short-circuits on
+     *  it, so a match with no mines in it pays one integer compare a frame. */
+    this._armedN = 0;
     this._proxies = [];
     this._v = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
     this._seg = new THREE.Vector3();
     this._pt = new THREE.Vector3();
     this._pt2 = new THREE.Vector3();
+    /** Where a mine went off, held across `_retire` — that call clears the
+     *  record and `_detonate` still has to be told where it was. */
+    this._det = new THREE.Vector3();
     this._blast = {
       position: new THREE.Vector3(),
       radius: 7.5,
@@ -137,6 +201,10 @@ export class ThrownGrenades {
       damage: 0,
       impulse: 0,
       source: 'grenade',
+      /** WHAT ordnance it is, for anything that has to tell one blast from
+       *  another — `Armour._takeBlast` does. Rewritten on every detonation.
+       *  @see `_explode`. */
+      kind: null,
     };
     this._dmg = {
       target: null, amount: 0, headshot: false, part: 'torso',
@@ -146,12 +214,36 @@ export class ThrownGrenades {
     this._beams = [];
     this._beamGeo = null;
     this._beamMat = null;
+    /**
+     * THE LAID ANTI-TANK MINE — geometry and materials built ONCE on the first
+     * emplacement and shared by every mine on the map, meshes reused per field
+     * slot. Same pattern, same reason and the same `dispose` as the beam above.
+     */
+    this._atGeo = null;
+    this._atPlateGeo = null;
+    this._atMat = null;
+    this._atPlateMat = null;
+    this._ringGeo = null;
+    this._ringMat = null;
+    /** Preallocated for `_layFlat` — a mine is emplaced flat, not at the
+     *  tumble the canister happened to come to rest at. */
+    this._flat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
     /** Distinct actors found inside one blast. Preallocated; never grows. */
     this._hits = [];
     for (let i = 0; i < 24; i++) {
       this._hits.push({ owner: null, d: 0, x: 0, y: 0, z: 0, mx: 0, my: 0, mz: 0 });
     }
-    this.stats = { thrown: 0, detonated: 0, live: 0 };
+    this.stats = {
+      thrown: 0, detonated: 0, live: 0,
+      /** Mines: laid, currently armed, and how many a hull has driven onto. */
+      laid: 0, armed: 0, tripped: 0, refused: 0,
+      /**
+       * THE COST OF THE DETECTION, as a count rather than a claim. One tick
+       * per (hull, armed mine) pair tested this frame — @see
+       * `armourFootprint`, and `_dtankmine.mjs` divides it by the frames.
+       */
+      probes: 0,
+    };
     /**
      * The bounce is audible: the `impact` voice with a metal surface is the
      * same one a round makes on sheet steel, which is what a 400 g steel ball
@@ -182,7 +274,7 @@ export class ThrownGrenades {
    * @param {object} def           the weapon def (radius, damage, bounce)
    * @param {THREE.Object3D[]} meshes  viewmodel meshes to clone the prop from
    */
-  spawn(pos, vel, fuse, def, meshes) {
+  spawn(pos, vel, fuse, def, meshes, opts = {}) {
     let g = null;
     for (const p of this.pool) if (!p.live) { g = p; break; }
     if (!g) return null;
@@ -194,6 +286,10 @@ export class ThrownGrenades {
     g.armed = false;
     g.tripped = false;
     g.trig = 0;
+    /** Whose it is, so a mine that emplaces off this throw carries the side
+     *  that laid it and the man who gets paid for what it kills. */
+    g.team = opts.team ?? -1;
+    g.owner = opts.owner ?? null;
     g.len = 1;
     g.dir.set(0, 0, 1);
     g.pos.copy(pos);
@@ -232,13 +328,13 @@ export class ThrownGrenades {
    * rigid body, the bounce, the fuze — is shared, because physically it is the
    * same act.
    */
-  _detonate(position, def) {
+  _detonate(position, def, owner = null) {
     switch (def?.throwKind) {
       case 'flash': return this._flash(position, def);
       case 'smoke': return this._smoke(position, def);
       // A mine is a frag with a longer story; when it finally goes off it goes
       // off exactly like one.
-      default: return this._explode(position, def);
+      default: return this._explode(position, def, owner);
     }
   }
 
@@ -275,6 +371,10 @@ export class ThrownGrenades {
     b.radius = def.blastRadius ?? 4.5;
     b.damage = 0;
     b.impulse = 60;
+    // `_blast` is shared; both fields are re-stated rather than left over from
+    // whatever went off last. @see the same two lines in `_explode`.
+    b.kind = null;
+    b.source = 'grenade';
     this.ctx.events.emit('explosion', b);
 
     const radius = def.flashRadius ?? 16;
@@ -394,10 +494,30 @@ export class ThrownGrenades {
       }
       g.fuse -= dt;
       if (g.fuse > 0) continue;
+      // Read before the retire: `_retire` clears the record.
+      const def = g.def;
+      const owner = g.owner;
+      const pos = this._det.copy(g.pos);
       this._retire(g);
-      this._detonate(g.pos, g.def);
+      this._detonate(pos, def, owner);
     }
     this.stats.live = live;
+
+    /**
+     * …AND THE MINEFIELD, which is a SECOND list rather than more slots in the
+     * first — @see `MINE_MAX`. A laid mine has no body and no fuze; the only
+     * clocks on it are its arming delay and, once a hull is on the plate,
+     * `trigDelay`. `_updateMine` is the SAME method the throw pool runs, so
+     * there is exactly one mine state machine in this subsystem.
+     */
+    let armed = 0;
+    for (const g of this.field) {
+      if (!g.live) continue;
+      this._updateMine(g, dt);
+      if (g.armed && g.live) armed++;
+    }
+    this._armedN = armed;
+    this.stats.armed = armed;
   }
 
   /* ----------------------------------------------------------------- mine -- */
@@ -423,19 +543,51 @@ export class ThrownGrenades {
    * mine's own position so it is positional for everyone: the man who walked
    * into it hears it at his feet and the man across the street hears which
    * doorway it came from.
+   *
+   * ──────────────────────────────────────────────────────────────────────────
+   * …AND THE ANTI-TANK MINE IS THE SAME THREE STATES WITH A DIFFERENT SENSOR
+   * ──────────────────────────────────────────────────────────────────────────
+   * `def.trackWidth` is what says which — @see the block over `atmine` in
+   * defs.js. The ARMING and TRIPPED states are shared verbatim; the ARMED state
+   * is where they part, and the part is that an AT mine DOES NOTHING HERE. Its
+   * plate is polled by `armourFootprint`, which the hull calls once a frame
+   * with its own footprint, so an armed minefield costs this loop one boolean
+   * per mine and no cast at all. The tripwire's two queries below are the
+   * PM-1's and are unchanged.
    */
   _updateMine(g, dt) {
     const phys = this.physics;
+    /** A plate, not a tripwire. One field read; no branch on an id. */
+    const plate = (g.def?.trackWidth ?? 0) > 0;
     if (!g.armed) {
       g.fuse -= dt;
       if (g.fuse > 0) return;
+      /**
+       * IT EMPLACES. A thrown AT mine that has finished arming leaves the
+       * THROW pool for a field slot and this record is done — @see `_emplace`
+       * and the `MINE_MAX` block. `g.laid` is true on a record that is already
+       * in the field (a bot's, or one that got here the frame before), and
+       * that record arms in place.
+       */
+      if (plate && !g.laid) {
+        this._emplace(g);
+        return;
+      }
       g.armed = true;
-      // Settle the beam along whatever direction the mine came to rest facing.
-      if (g.body?.quaternion) g.dir.set(0, 0, 1).applyQuaternion(g.body.quaternion);
-      else g.dir.set(0, 0, 1);
-      g.dir.y = 0;
-      if (g.dir.lengthSq() < 1e-6) g.dir.set(0, 0, 1);
-      g.dir.normalize();
+      if (plate) {
+        // Flat on the ground with its marker ring lit. A mine that came to
+        // rest at whatever tumble the canister happened to end on is a mine
+        // standing on its rim.
+        this._layFlat(g);
+        this._drawRing(g, false);
+      } else {
+        // Settle the beam along whatever direction the mine came to rest facing.
+        if (g.body?.quaternion) g.dir.set(0, 0, 1).applyQuaternion(g.body.quaternion);
+        else g.dir.set(0, 0, 1);
+        g.dir.y = 0;
+        if (g.dir.lengthSq() < 1e-6) g.dir.set(0, 0, 1);
+        g.dir.normalize();
+      }
       // A click as it arms — the same mechanical voice a dry trigger makes.
       this.ctx.peek('audio')?.play?.('dryfire', g.pos, { level: 0.5 });
       return;
@@ -443,12 +595,24 @@ export class ThrownGrenades {
 
     if (g.tripped) {
       g.trig -= dt;
-      this._drawBeam(g, true);
+      if (plate) this._drawRing(g, true);
+      else this._drawBeam(g, true);
       if (g.trig > 0) return;
+      const def = g.def;
+      const pos = this._det.copy(g.pos);
+      const owner = g.owner;
       this._retire(g);
-      this._detonate(g.pos, g.def);
+      this._detonate(pos, def, owner);
       return;
     }
+
+    /**
+     * ARMED AND ANTI-TANK: nothing. The plate is not a query this file makes —
+     * it is one the HULL makes, once a frame, through `armourFootprint`. There
+     * is no cast, no allocation and no draw here; the ring was placed when it
+     * armed and does not move.
+     */
+    if (plate) return;
 
     /* ---- cast the beam and look down it ---------------------------------
      * TWO DIFFERENT QUERIES, because they answer two different questions and
@@ -609,14 +773,282 @@ export class ThrownGrenades {
     }
   }
 
+  /* ------------------------------------------------------------ the field -- */
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * LAY ONE. THIS IS THE PUBLIC ENTRY POINT AND THERE IS ONLY THIS ONE.
+   * ══════════════════════════════════════════════════════════════════════════
+   * 「敵味方が対戦車地雷を設置できるようにして」 — BOTH sides, which means the bots
+   * lay them, which means there must be exactly one implementation for a bot's
+   * mine and the player's. The smoke can is the cautionary tale this file
+   * already carries at length: two independent throwables drifted twice, first
+   * on radius and then on drawing, and the fix both times was to make one of
+   * them read the other's numbers. A mine is not going to be allowed to start
+   * down that road, so `src/ai` does not get a mine of its own to keep in step
+   * — it gets this call, and what comes out is the same record, in the same
+   * pool, with the same sensor, the same trip voice, the same arming delay and
+   * the same blast as the one the player emplaces.
+   *
+   * `WeaponSystem.layMine` is the wrapper `ai` actually reaches (`weapons` is
+   * the subsystem id; this class is not published); it fills `def` in from
+   * `WEAPON_DEFS.atmine` so a caller cannot lay a mine with numbers of its own.
+   *
+   * @param {THREE.Vector3|{x,y,z}} position  where. Y is snapped to the ground.
+   * @param {object} def   the weapon def — `atmine`, supplied by the wrapper.
+   * @param {object} opts  { team, owner }. `team` is the side that laid it and
+   *                       is what keeps a plate from going off under its own
+   *                       armour; `owner` is the man, for kill credit.
+   * @returns {boolean} false when the field is full, which is the only failure.
+   */
+  lay(position, def, opts = {}) {
+    let g = null;
+    for (const f of this.field) if (!f.live) { g = f; break; }
+    if (!g) {
+      this.stats.refused++;
+      if (!this._fullWarned) {
+        this._fullWarned = true;
+        console.warn(`[weapons] minefield full at ${MINE_MAX}; further mines refused`);
+      }
+      return false;
+    }
+    g.live = true;
+    g.def = def;
+    g.kind = 'mine';
+    g.armed = false;
+    g.tripped = false;
+    g.trig = 0;
+    g.fuse = Math.max(0.05, def?.fuse ?? 6);
+    g.team = opts.team ?? -1;
+    g.owner = opts.owner ?? null;
+    g.pos.set(position.x, position.y, position.z);
+    this._ground(g.pos);
+    this._layFlat(g);
+    this.stats.laid++;
+    return true;
+  }
+
+  /**
+   * A THROWN mine has finished its arming delay: hand it from the THROW pool to
+   * the FIELD. @see the `MINE_MAX` block for why this is not one pool.
+   *
+   * The canister's rigid body and viewmodel proxy are given back here rather
+   * than kept alive under the laid mesh — the thing on the ground from this
+   * frame on is the emplaced mine, not the object that was in the air.
+   */
+  _emplace(g) {
+    const ok = this.lay(g.pos, g.def, { team: g.team, owner: g.owner });
+    this._retire(g);
+    // A refused mine is a mine that never armed; the player is out a store and
+    // there is nothing on the ground. `stats.refused` is the count.
+    return ok;
+  }
+
+  /** Drop `p.y` onto the ground under it. One raycast, at emplacement only. */
+  _ground(p) {
+    const phys = this.physics;
+    if (!phys?.groundHeight) return p;
+    const y = phys.groundHeight(p.x, p.z, p.y + 2.0);
+    if (Number.isFinite(y)) p.y = y;
+    return p;
+  }
+
+  /**
+   * THE LAID MINE, FLAT ON THE GROUND — 「設置」.
+   *
+   * The mesh is NOT the canister the player threw (@see `buildAtMine` in
+   * models/throwables.js for why the carried object and the emplaced object are
+   * two different things), and it is not posed off a rigid body: a mine lies
+   * flat, and a mine that came to rest at whatever tumble a sphere ended on is
+   * a mine standing on its rim. One quaternion, set at construction.
+   *
+   * 97 mm proud of the ground, all in — `AT_R`/`AT_H` plus the plate. `NavGrid`
+   * refuses nothing under `maxStep` 0.45 and the trip-hazard band starts at
+   * 0.42 (「石ころオブジェが移動の妨げです」), so this is a quarter of the way to
+   * being a problem. IT ALSO CARRIES NO COLLIDER AT ALL: nothing walks into it,
+   * nothing paths round it, and `physics` never sees it.
+   */
+  _layFlat(g) {
+    let m = g.mesh;
+    if (!m) {
+      m = this._atMesh();
+      this.ctx.scene.add(m);
+      g.mesh = m;
+    }
+    m.visible = true;
+    m.position.copy(g.pos);
+    m.quaternion.copy(this._flat);
+    m.updateMatrix();
+    m.updateMatrixWorld(true);
+  }
+
+  /**
+   * Geometry and materials for the laid mine, built ONCE and shared by every
+   * mine on the map. One `Group` per field slot, reused for the life of the
+   * match; nothing here allocates after the first emplacement.
+   */
+  _atMesh() {
+    if (!this._atGeo) {
+      // Body: a shallow truncated cone, flat top, laid on its face. Built
+      // along +Z (the model convention) and turned by `_flat`.
+      this._atGeo = new THREE.CylinderGeometry(AT_R, AT_R + 0.012, AT_H, 20, 1);
+      this._atGeo.rotateX(Math.PI / 2);
+      this._atGeo.translate(0, 0, AT_H * 0.5);
+      this._atPlateGeo = new THREE.CylinderGeometry(AT_R * 0.62, AT_R * 0.66, 0.022, 16, 1);
+      this._atPlateGeo.rotateX(Math.PI / 2);
+      this._atPlateGeo.translate(0, 0, AT_H + 0.011);
+      this._atMat = new THREE.MeshStandardMaterial({
+        color: 0x3e4432, roughness: 0.86, metalness: 0.22,
+      });
+      this._atPlateMat = new THREE.MeshStandardMaterial({
+        color: 0x1a1c18, roughness: 0.7, metalness: 0.5,
+      });
+    }
+    const grp = new THREE.Group();
+    grp.name = 'atmine-laid';
+    grp.matrixAutoUpdate = false;
+    const body = new THREE.Mesh(this._atGeo, this._atMat);
+    body.castShadow = true;
+    body.receiveShadow = true;
+    const plate = new THREE.Mesh(this._atPlateGeo, this._atPlateMat);
+    plate.castShadow = true;
+    grp.add(body, plate);
+    return grp;
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * WHAT A MAN CAN SEE OF ONE — 「弾がどこからともなく飛んでくる」 is the failure this
+   * engine is built not to have, and a buried mine is the closest thing to it
+   * ══════════════════════════════════════════════════════════════════════════
+   * A 330 mm disc lying on the ground of a night map is, honestly, invisible at
+   * any range a tank matters at. So an ARMED mine carries a marker ring on the
+   * ground round it — 300-345 mm, additive amber, flat, drawn once when it arms
+   * and never touched again until it trips, when it blinks at the same 8 Hz off
+   * the same game clock the tripwire's beam already uses.
+   *
+   * THE RING IS NOT TEAM-COLOURED, DELIBERATELY. Every threat colour in this
+   * game is relative to `RULES.playerTeam` and painting one by raw team index
+   * has shipped the wrong colour twice; the way not to ship it a third time is
+   * not to paint by team at all. There is also nothing to express: an AT mine
+   * cannot be set off by a man of EITHER side, so "whose is it" changes nothing
+   * a man on foot can do about it. One colour, no index, no bug.
+   */
+  _drawRing(g, tripped) {
+    let m = g.ring;
+    if (!m) {
+      if (!this._ringGeo) {
+        this._ringGeo = new THREE.RingGeometry(AT_RING_IN, AT_RING_OUT, 30, 1);
+        this._ringGeo.rotateX(-Math.PI / 2);
+        this._ringMat = new THREE.MeshBasicMaterial({
+          color: 0xffa02a,
+          transparent: true,
+          opacity: 0.45,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          toneMapped: false,
+        });
+      }
+      m = new THREE.Mesh(this._ringGeo, this._ringMat);
+      m.frustumCulled = false;
+      m.userData.owNoShadow = true;
+      m.userData.owNoPrepass = true;
+      this.ctx.scene.add(m);
+      g.ring = m;
+    }
+    m.visible = true;
+    m.position.set(g.pos.x, g.pos.y + 0.03, g.pos.z);
+    if (tripped) {
+      const on = Math.sin(this.ctx.time.elapsed * 50) > 0;
+      m.material.opacity = on ? 0.95 : 0.12;
+    }
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE PLATE — how a mine is found by a hull, and what it costs
+   * ══════════════════════════════════════════════════════════════════════════
+   * 「戦車が通ったら爆発」. The hard part of this feature was never the bang; it
+   * is that a 330 mm object on the ground has to be found by a 6.9 m hull that
+   * is posed along a baked centreline and is not simulated against anything.
+   *
+   * WHO ASKS WHOM. The hull asks. `Armour` calls this ONCE PER LIVE HULL PER
+   * FRAME with its own footprint — the same rectangle `_shovePlayer` already
+   * carries — and this file answers. The other direction (the mine looking for
+   * tanks) would have had `weapons` reaching into `match`'s tank roster every
+   * frame, which is a subsystem boundary this file does not cross for anything
+   * else. The hull publishes its own geometry and nothing more.
+   *
+   * WHAT IT COSTS, and this is a count rather than an estimate.
+   *   - `_armedN === 0` is one integer compare, and that is the whole cost for
+   *     every match that has no mines in it and every second before the first
+   *     one is laid.
+   *   - Otherwise: one pass over `field` (32 slots, fixed), skipping any slot
+   *     that is not live-and-armed on one boolean. For each ARMED mine: one
+   *     team compare, two subtractions, four multiply-adds to put the mine in
+   *     the hull's frame, and two absolute compares. About a dozen flops.
+   *   - Six hulls x 20 armed mines is 120 of those a frame — roughly 1.4 k
+   *     flops, no allocation, no raycast, no Map lookup and no broad phase.
+   *     `stats.probes` counts the pairs so the figure is measured.
+   * A grid or a hash was considered and rejected on arithmetic: at these counts
+   * six hulls x nine cells of Map lookups is more work than 120 float compares,
+   * and it would add an index to keep in step with a pool that already moves.
+   *
+   * NO TEAM KILLS ITS OWN ARMOUR. A plate laid by team 0 does not fire under a
+   * team 0 hull. That is a game rule rather than physics and it is the same one
+   * `RULES.friendlyFire` states everywhere else: without it, every hub on this
+   * map is on the mining side's own half and three of a side's own hulls would
+   * drive out over their own minefield in the first thirty seconds.
+   *
+   * @param {number} team  the hull's side.
+   * @param {number} x,z   hull centre.
+   * @param {number} sin,cos  sin/cos of the hull's yaw.
+   * @param {number} halfW,halfL  the hull's plan rectangle.
+   * @returns {number} mines tripped by this call — 0 on all but a few frames.
+   */
+  armourFootprint(team, x, z, sin, cos, halfW, halfL) {
+    if (this._armedN === 0) return 0;
+    let n = 0;
+    for (let i = 0; i < this.field.length; i++) {
+      const g = this.field[i];
+      if (!g.live || !g.armed || g.tripped) continue;
+      if (g.team === team) continue;
+      this.stats.probes++;
+      const pad = g.def?.trackWidth ?? 0;
+      if (pad <= 0) continue;
+      const ox = g.pos.x - x;
+      const oz = g.pos.z - z;
+      // Into the hull's own frame: +Z forward is (sin, cos), +X right is
+      // (cos, -sin). The same transform `Armour._shovePlayer` makes.
+      const along = ox * sin + oz * cos;
+      if (along > halfL + pad || along < -halfL - pad) continue;
+      const across = ox * cos - oz * sin;
+      if (across > halfW + pad || across < -halfW - pad) continue;
+      g.tripped = true;
+      g.trig = g.def?.trigDelay ?? 0.25;
+      this.stats.tripped++;
+      this._trip(g);
+      n++;
+    }
+    return n;
+  }
+
   _retire(g) {
     g.live = false;
     g.armed = false;
     g.tripped = false;
+    g.owner = null;
+    g.team = -1;
     if (g.beam) {
       g.beam.visible = false;
       g.beam = null;
     }
+    // The laid mesh and its ring STAY BOUND to the field slot — they are
+    // reused by whatever is emplaced there next, exactly as the throw pool
+    // reuses its proxies. Hidden, not discarded.
+    if (g.mesh) g.mesh.visible = false;
+    if (g.ring) g.ring.visible = false;
     if (g.body && this.physics?.removeRigidBody) this.physics.removeRigidBody(g.body);
     g.body = null;
     if (g.group) {
@@ -628,7 +1060,7 @@ export class ThrownGrenades {
 
   /* ---------------------------------------------------------------- blast -- */
 
-  _explode(position, def) {
+  _explode(position, def, owner = null) {
     const radius = def?.blastRadius ?? 7.5;
     const damage = def?.blastDamage ?? 165;
     const b = this._blast;
@@ -647,8 +1079,29 @@ export class ThrownGrenades {
     b.radius = radius;
     b.damage = 0;
     b.impulse = damage * 0.9;
+    /**
+     * WHAT ORDNANCE THIS IS, on the payload — `def.ordnance`, which only the
+     * anti-tank mine carries. `Armour._takeBlast` already reads `kind` (a bot's
+     * frag added the field for exactly this reason: to be recognised without
+     * taking `source` and therefore the kill off the event) and it is the
+     * channel the mine's armour multiplier is picked on. ASSIGNED EVERY TIME,
+     * including to `null`: `_blast` is one reused object and a `kind` left over
+     * from the last mine would make the next frag an anti-tank round.
+     */
+    b.kind = def?.ordnance ?? null;
+    /**
+     * …AND WHO LAID IT. A mine emplaced by a bot has to pay that bot for the
+     * hull it kills — `Armour._takeBlast` hands a non-string `source` straight
+     * to `_wound`, which is `lastHitBy` and therefore the killfeed and the 30
+     * points. The player's own mines fall back to the string this event has
+     * always carried, and `_takeBlast` credits him through `lastHitBy` the same
+     * way the frag already does. `damage` is still 0 on this payload, so
+     * carrying an actor here cannot wound anybody team-blind through `ai`'s own
+     * listener — @see the note on `_blast.damage`.
+     */
+    b.source = owner ?? 'grenade';
     this.ctx.events.emit('explosion', b);
-    this._damageActors(position, radius, damage);
+    this._damageActors(position, radius, damage, owner);
     this._damagePlayer(position, radius, damage);
     this.stats.detonated++;
   }
@@ -668,7 +1121,7 @@ export class ThrownGrenades {
    * `MASK.EXPLOSION` (the same mask `ai` and `player` test the C4 with, so a
    * wall stops a frag exactly as it stops the round-ending charge).
    */
-  _damageActors(position, radius, damage) {
+  _damageActors(position, radius, damage, owner = null) {
     const phys = this.physics;
     if (!phys?.colliders) return;
     const ACTOR = phys.LAYER?.ACTOR ?? 0;
@@ -705,7 +1158,13 @@ export class ThrownGrenades {
         hits[slot].mz = this._pt2.z;
       }
     }
-    const player = this.ctx.peek('player') ?? 'player';
+    /**
+     * WHO DEALT IT. The player, unless a mine names its own man — `ai` gates
+     * `damage:dealt` on `RULES.friendlyFire` using exactly this field, so a
+     * bot's mine that goes off among his own side wounds nobody and the same
+     * mine kills the other side's men.
+     */
+    const player = owner ?? this.ctx.peek('player') ?? 'player';
     for (let k = 0; k < n; k++) {
       const h = hits[k];
       this._pt.set(h.x, h.y, h.z);
@@ -810,8 +1269,16 @@ export class ThrownGrenades {
     return group;
   }
 
+  /**
+   * Everything in the air and everything in the ground. `match` calls this at
+   * a round boundary, and a minefield that survived one would be the previous
+   * round's mines under this round's armour.
+   */
   clear() {
     for (const g of this.pool) if (g.live) this._retire(g);
+    for (const g of this.field) if (g.live) this._retire(g);
+    this._armedN = 0;
+    this.stats.armed = 0;
   }
 
   dispose() {
@@ -820,6 +1287,24 @@ export class ThrownGrenades {
     this._proxies.length = 0;
     for (const b of this._beams) b.removeFromParent();
     this._beams.length = 0;
+    for (const f of this.field) {
+      f.mesh?.removeFromParent();
+      f.ring?.removeFromParent();
+      f.mesh = null;
+      f.ring = null;
+    }
+    this._atGeo?.dispose();
+    this._atPlateGeo?.dispose();
+    this._atMat?.dispose();
+    this._atPlateMat?.dispose();
+    this._ringGeo?.dispose();
+    this._ringMat?.dispose();
+    this._atGeo = null;
+    this._atPlateGeo = null;
+    this._atMat = null;
+    this._atPlateMat = null;
+    this._ringGeo = null;
+    this._ringMat = null;
     this._beamGeo?.dispose();
     this._beamMat?.dispose();
     this._beamGeo = null;
