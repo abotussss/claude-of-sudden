@@ -579,7 +579,7 @@ export class ThrownGrenades {
         // rest at whatever tumble the canister happened to end on is a mine
         // standing on its rim.
         this._layFlat(g);
-        this._drawRing(g, false);
+        this._drawRing(g);
       } else {
         // Settle the beam along whatever direction the mine came to rest facing.
         if (g.body?.quaternion) g.dir.set(0, 0, 1).applyQuaternion(g.body.quaternion);
@@ -595,7 +595,7 @@ export class ThrownGrenades {
 
     if (g.tripped) {
       g.trig -= dt;
-      if (plate) this._drawRing(g, true);
+      if (plate) this._drawRing(g);
       else this._drawBeam(g, true);
       if (g.trig > 0) return;
       const def = g.def;
@@ -933,8 +933,16 @@ export class ThrownGrenades {
    * not to paint by team at all. There is also nothing to express: an AT mine
    * cannot be set off by a man of EITHER side, so "whose is it" changes nothing
    * a man on foot can do about it. One colour, no index, no bug.
+   *
+   * AND IT DOES NOT BLINK, which the tripwire's beam does. Two reasons and the
+   * second is the real one: `trigDelay` here is 0.25 s, which is one and a bit
+   * blinks at the beam's 8 Hz and communicates nothing (the `mine_trip` voice
+   * is the signal, and it is positional); and the material is SHARED by every
+   * ring on the map — exactly as `_beamMat` is by every beam — so writing
+   * `material.opacity` for one tripped mine would blink the whole minefield.
+   * With one mine live that never showed. With twenty it would.
    */
-  _drawRing(g, tripped) {
+  _drawRing(g) {
     let m = g.ring;
     if (!m) {
       if (!this._ringGeo) {
@@ -959,10 +967,6 @@ export class ThrownGrenades {
     }
     m.visible = true;
     m.position.set(g.pos.x, g.pos.y + 0.03, g.pos.z);
-    if (tripped) {
-      const on = Math.sin(this.ctx.time.elapsed * 50) > 0;
-      m.material.opacity = on ? 0.95 : 0.12;
-    }
   }
 
   /**
@@ -1270,12 +1274,29 @@ export class ThrownGrenades {
   }
 
   /**
-   * Everything in the air and everything in the ground. `match` calls this at
-   * a round boundary, and a minefield that survived one would be the previous
-   * round's mines under this round's armour.
+   * EVERYTHING IN THE AIR — and NOT the minefield, which is the whole point of
+   * the two methods.
+   *
+   * `WeaponSystem.resetAmmo` calls this, and `match` calls THAT ON EVERY
+   * PLAYER RESPAWN as well as at the round boundary ("as if you had just
+   * walked out of spawn"). That was right when this pool held nothing but the
+   * six things the player could have in the air; it is catastrophically wrong
+   * for a minefield, because the field is mostly OTHER PEOPLE'S mines and the
+   * player dying would sweep both sides' anti-armour off the map. Caught by
+   * reading the call sites rather than by a probe, which would have shown it
+   * as "the mines are gone" long after the cause.
    */
   clear() {
     for (const g of this.pool) if (g.live) this._retire(g);
+  }
+
+  /**
+   * …AND THE GROUND. A ROUND boundary only: a minefield that survived one
+   * would be the last round's mines under this round's armour. `Armour.reset`
+   * is the caller, because that is the method `match` already runs exactly
+   * once per round to put the hulls back in their pockets.
+   */
+  clearMines() {
     for (const g of this.field) if (g.live) this._retire(g);
     this._armedN = 0;
     this.stats.armed = 0;
@@ -1283,6 +1304,7 @@ export class ThrownGrenades {
 
   dispose() {
     this.clear();
+    this.clearMines();
     for (const p of this._proxies) p.removeFromParent();
     this._proxies.length = 0;
     for (const b of this._beams) b.removeFromParent();

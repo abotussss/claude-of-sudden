@@ -6650,6 +6650,19 @@ export class Armour {
 
   reset() {
     this.disarm();
+    /**
+     * …AND THE MINEFIELD GOES WITH THE HULLS.
+     *
+     * `weapons` cannot do this for itself on the right clock. Its own
+     * `resetAmmo` — which is what calls `ThrownGrenades.clear()` — is run by
+     * `match` ON EVERY PLAYER RESPAWN as well as at a round boundary, and
+     * sweeping both sides' anti-armour off the map every time the player dies
+     * is not a rule anybody asked for. This method is the one `match` runs
+     * exactly once per round for exactly this purpose, so the field is cleared
+     * from here and `clear()` was left meaning what it has always meant.
+     */
+    const w = this._weapons ?? (this._weapons = this.ctx.peek('weapons'));
+    w?.clearMines?.();
     // Every stall the guns took off the map goes back up before the next round.
     this._restoreRaze();
     // …and every free-standing block the hulls drove through. @see

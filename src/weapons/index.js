@@ -844,6 +844,16 @@ export class WeaponSystem {
     return this.thrown?.stats ?? null;
   }
 
+  /**
+   * TAKE THE WHOLE FIELD UP. A ROUND boundary, and nothing else — `resetAmmo`
+   * deliberately does NOT do this, because `match` runs that on every player
+   * respawn and the field is mostly other people's mines. `Armour.reset` is
+   * the caller. @see `ThrownGrenades.clearMines`.
+   */
+  clearMines() {
+    this.thrown?.clearMines?.();
+  }
+
   /** True when at least one magazine-fed weapon is below its starting reserve. */
   get needsAmmo() {
     for (const s of this.states.values()) {
