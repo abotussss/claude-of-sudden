@@ -26,6 +26,13 @@ const URL = arg('url', 'http://127.0.0.1:4634/?map=plains');
 const SEEDS = arg('seeds', '7,11,13').split(',');
 const SCALE = +arg('scale', 10);
 const WALL = +arg('wall', 240);
+/**
+ * `--off` DISABLES THE BATTERY AFTER BOOT AND BEFORE THE TRIGGER, so the same
+ * seed can be run with and without it. That A/B is the only honest way to ask
+ * "does it balance the hidden squad" — the score at the crossing and the score
+ * at the whistle, on one seed, with one thing moved.
+ */
+const OFF = process.argv.includes('--off');
 
 const b = await chromium.launch({
   headless: true,
@@ -43,6 +50,10 @@ for (const seed of SEEDS) {
   const url = `${URL}${URL.includes('?') ? '&' : '?'}seed=${seed}`;
   await p.goto(url, { waitUntil: 'domcontentloaded' });
   await p.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
+  if (OFF) await p.evaluate(() => {
+    const b = window.__ENGINE__.ctx.peek('match').battery;
+    if (b) b.enabled = false;
+  });
   await p.evaluate((s) => { window.__ENGINE__.ctx.time.scale = s; }, SCALE);
   const t0 = Date.now();
   let last = null;
@@ -61,10 +72,15 @@ for (const seed of SEEDS) {
         armed: !!m._hiddenArmed,
         stood: !!m._hiddenStoodDown,
         batt: m.battery ? {
+          ready: m.battery.ready,
           armed: m.battery.armed,
-          fired: m.battery.stats?.rounds ?? 0,
-          t: m.battery.stats?.armedAt ?? -1,
-          home: m.battery.stats?.homeAt ?? -1,
+          rounds: m.battery.stats.rounds,
+          atSite: m.battery.stats.atSite,
+          atBodies: m.battery.stats.atBodies,
+          liveWorst: +m.battery.stats.liveWorst.toFixed(3),
+          liveOut: m.battery.stats.liveOut,
+          armedAt: m.battery.stats.armedAt,
+          homeAt: m.battery.stats.homeAt,
         } : null,
       };
     });

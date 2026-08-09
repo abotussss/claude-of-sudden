@@ -247,23 +247,36 @@ const PLAINS_BATTERY = {
    * fire support, and support arrives over its own rear. `PLAINS.BASE_N` is
    * (-14, -150), i.e. bearing -95.3°, and the three berths straddle it.
    *
-   * NOT ON A BURNING RIDGE. `plains.js` puts five fires at bearings -139, -66,
-   * +14, +78 and +150, each with a 600 cd light and a real fire on it. A vehicle
-   * silhouetted in a bonfire is a vehicle nobody can see arrive, and the
-   * arrival is half the telegraph — `warfield.js` chose its own rim bearings on
-   * the same argument and for the same reason. -122/-102/-82 sits in the
-   * seventy-three degree unlit gap between the fires at -139 and -66, clearing
-   * the nearer of them by 16-17° (54-57 m of arc at this radius).
+   * NOT ON A BURNING RIDGE, AND THAT IS ABOUT THE WHOLE TRACK RATHER THAN THE
+   * BERTH. `plains.js` puts five fires at bearings -139, -66, +14, +78 and +150,
+   * each with a 600 cd light and a real fire on it, and `warfield.js` chose its
+   * own rim bearings between them on the argument that a flash inside a bonfire
+   * is a spark in a bonfire.
+   *
+   * MEASURED, AND THE FIRST TABLE GOT IT WRONG. Berths at -122/-102/-82 clear
+   * both fires by 16°, but a track RUNS from `berth - traverse` to `berth`, so
+   * the middle gun crested at -136° — three degrees off the fire at -139 — and
+   * `_battshots.mjs`'s first frame is a vehicle arriving inside a burning ridge
+   * with the exposure blown out by the 600 cd light beside it.
+   *
+   * SO THE FOOTPRINT IS SIZED AND THEN CENTRED. It is `traverse + the berth
+   * spread` = 24 + 28 = 52°, and the unlit gap between -139 and -66 is 73°, so
+   * centring on the gap's midpoint (-102.5) leaves 10.5° — about 37 m of arc at
+   * this radius — of dark rock either side. It also still straddles
+   * `PLAINS.BASE_N`'s own bearing of -95.3°, which is the other constraint:
+   * 「味方にも」, and support arrives over its own rear.
    */
-  berths: [-122, -102, -82],
+  berths: [-104, -90, -76],
   /**
    * DEGREES OF ARC THE DESCENT COVERS, and this is what makes it a road rather
    * than a fall. `rTop` to `rBerth` is 24 m of radius and about 32 m of drop; a
    * radial descent would be 53°, which is the face's own pitch and is not
-   * something a vehicle drives. 34° of arc at r~202 is 120 m of run, so the
-   * grade is ~15° and the whole descent is broadside to the map.
+   * something a vehicle drives. 24° of arc at r~202 is 85 m of run, so the mean
+   * grade is ~20° and the whole descent is broadside to the map. It is 24 and
+   * not 34 because the three tracks together have to fit the unlit gap between
+   * two burning ridges — @see `berths`.
    */
-  traverse: 34,
+  traverse: 24,
   /**
    * WHERE THE TRACK STARTS AND WHERE IT ENDS, metres from the middle.
    *
@@ -344,7 +357,7 @@ const LAUNCH_PITCH = 38 * DEG;
 /** Metres a second down the mountain track, and back up it. */
 const DRIVE_SPEED = 7.5;
 /** Metres a second on the scoot between two berths. Slower — it is a shuffle. */
-const SHIFT_SPEED = 3.4;
+const SHIFT_SPEED = 5.0;
 /** Metres of run-in over which the hull levels itself into a berth. */
 const LEVEL_IN = 8;
 /** Track samples either side of `k` the ride pitch is measured over. @see `_bakeTrack`. */
@@ -481,6 +494,15 @@ export class MountainBattery {
     this.vehicles = [];
     this._shots = [];
     this._pads = [];
+    /**
+     * ROUNDS DELIVERED ON EACH CAPTURE POINT, `zone.id` -> count. It does two
+     * jobs and both are stated where they are used: it RANKS the enemy's held
+     * points so thirty rounds are spread over them rather than dumped on one
+     * (@see `_pickTarget`), and it INDEXES the baked pattern per zone, so each
+     * circle gets its own walk from the middle outward instead of inheriting
+     * whatever offset the battery's global round counter happened to be on.
+     */
+    this._zoneShots = new Map();
 
     /* ---- scene ---------------------------------------------------------- */
     this.group = null;
@@ -517,6 +539,15 @@ export class MountainBattery {
     this.stats = {
       rounds: 0, atSite: 0, atBodies: 0,
       refusedNoTarget: 0, refusedNearCircle: 0, refusedNearPad: 0,
+      /**
+       * ⚠ THE LIVE COUNTERPART OF THE BOOT PROOF. The worst impact actually
+       * delivered onto a named capture circle, as a fraction of that circle's
+       * own radius. `batteryProve` asserts this at boot over every zone; this
+       * is the same assertion re-made on every round that is really fired, and
+       * it is what a probe reads to say the exception held for a whole match
+       * rather than for a pattern. It must stay under 1.
+       */
+      liveWorst: 0, liveOut: 0,
       armedAt: -1, homeAt: -1, shifts: 0,
       log: [],
     };
@@ -614,7 +645,7 @@ export class MountainBattery {
     for (let i = 0; i < MAX_INFLIGHT; i++) {
       this._shots.push({
         live: false, t: 0, flight: 1, trail: 0, whistled: false,
-        gun: 0, round: 0, what: '', zoneId: '',
+        gun: 0, round: 0, what: '', zoneId: '', zone: null,
         ax: 0, ay: 0, az: 0, bx: 0, by: 0, bz: 0, apex: 0,
       });
     }
@@ -823,7 +854,7 @@ export class MountainBattery {
 
     const lib = ctx.peek('materials');
     const patcher = ctx.peek('render')?.patcher ?? null;
-    const mk = (name, tint, rough, metal) => {
+    const mk = (name, tint, rough, metal, glow, glowI) => {
       const set = lib?.getTextureSet?.(name) ?? null;
       const mat = new THREE.MeshStandardMaterial({
         color: tint, roughness: rough, metalness: metal, dithering: true,
@@ -834,20 +865,55 @@ export class MountainBattery {
         mat.normalMap = set.normal;
         mat.roughnessMap = set.orm;
       }
+      if (glow !== undefined) {
+        mat.emissive = new THREE.Color(glow);
+        mat.emissiveIntensity = glowI;
+      }
       patcher?.patch(mat);
       this.materials.push(mat);
       return mat;
     };
+    /**
+     * ════════════════════════════════════════════════════════════════════════
+     * ⚠ WHY THESE GLOW, AND IT IS A MEASUREMENT RATHER THAN A STYLE ⚠
+     * ════════════════════════════════════════════════════════════════════════
+     * NACHTFELD is a NIGHT map (`hour` 21.65, `nightLight` 0.38) and the
+     * mountain past r 186 is the darkest surface on it — `warfield.js` chose its
+     * rim bearings between the burning ridges precisely because unlit rock with
+     * a lit horizon behind it is where a flash reads.
+     *
+     * THE FIRST BUILD PAINTED THESE 0x4a5148 UNLIT AND THEY WERE INVISIBLE.
+     * Photographed at 23 m and at 106 m with `_battshots.mjs`: nothing in frame.
+     * Re-photographed with a magenta emissive forced from the driver
+     * (`_battvis.mjs`): three vehicles, correctly placed, correctly posed, and
+     * completely unreadable in their shipping paint. THAT IS NOT A COSMETIC
+     * DEFECT HERE — the arrival over the crest is the deployment's telegraph
+     * (@see the file header), and a telegraph nobody can see is the exact
+     * failure `ui.airAlert` exists to answer: "the three air weapons fired
+     * correctly for weeks while the player reported that they never happened."
+     *
+     * SO THE TEAM PANEL IS THE THING THAT READS. Not the hull — a glowing hull
+     * is a lantern on a mountain and would be worse than invisible. Two 4.4 m
+     * marker panels down the flanks and a roof plate, in `RULES.playerTeam`'s
+     * own colour, which is how a friendly vehicle is identified at night in the
+     * thing this is imitating. The hull gets a sixteenth of that, purely so the
+     * silhouette separates from the rock behind it.
+     *
+     * NO `LightPool` SLOT IS SPENT ON ANY OF IT. Emissive is a material term and
+     * costs nothing from the four lights the whole game shares; `warfield.js`
+     * already lost that argument for the burning ridge and this file is not
+     * going to re-open it for paint.
+     */
     /**
      * THE TEAM COLOUR IS `RULES.playerTeam`'S AND IS READ THROUGH IT.
      * 「味方にも」 — these are the human's. `TEAM_COLOR[RULES.playerTeam]` rather
      * than `TEAM_COLOR[0]`, because painting by raw index has shipped the wrong
      * colour twice in this project. Flip `playerTeam` and the paint follows.
      */
-    const mHull = mk('metal_painted', 0x4a5148, 0.74, 0.32);
-    const mTeam = mk('metal_painted',
-      new THREE.Color(TEAM_COLOR[RULES.playerTeam] ?? TEAM_COLOR[0]).multiplyScalar(0.72).getHex(),
-      0.55, 0.28);
+    const team0 = new THREE.Color(TEAM_COLOR[RULES.playerTeam] ?? TEAM_COLOR[0]);
+    const mHull = mk('metal_painted', 0x4a5148, 0.74, 0.32, 0x20241d, 1.0);
+    const mTeam = mk('metal_painted', team0.clone().multiplyScalar(0.72).getHex(),
+      0.55, 0.28, team0.getHex(), 2.6);
 
     this._hullMesh = new THREE.InstancedMesh(gHull, mHull, n);
     this._teamMesh = new THREE.InstancedMesh(gTeam, mTeam, n);
@@ -874,7 +940,12 @@ export class MountainBattery {
     }
     const gMis = mergeGeometries(mis);
     this.geometries.push(gMis);
-    const mMis = mk('metal_painted', 0xd8d2c4, 0.5, 0.3);
+    /**
+     * THE MISSILE IS A BURNING MOTOR, so its glow is the one thing here that is
+     * not a compromise with the dark — it is what the object physically is, and
+     * it is the half of the telegraph that crosses the sky. @see the header.
+     */
+    const mMis = mk('metal_painted', 0xd8d2c4, 0.5, 0.3, 0xffa860, 3.2);
     this._missileMesh = new THREE.InstancedMesh(gMis, mMis, MAX_INFLIGHT);
 
     this.group = new THREE.Group();
@@ -992,10 +1063,13 @@ export class MountainBattery {
     if (this._missileMesh) this._missileMesh.count = 0;
     const st = this.stats;
     st.rounds = st.atSite = st.atBodies = 0;
+    st.liveWorst = 0;
+    st.liveOut = 0;
     st.refusedNoTarget = st.refusedNearCircle = st.refusedNearPad = 0;
     st.armedAt = st.homeAt = -1;
     st.shifts = 0;
     st.log.length = 0;
+    this._zoneShots.clear();
   }
 
   /* ==================================================================== */
@@ -1188,7 +1262,23 @@ export class MountainBattery {
   _pickTarget(v, zones, foes) {
     const now = this.ctx.time?.elapsed ?? 0;
     /* ---- 1. an enemy-held site ----------------------------------------- */
+    /**
+     * THE LEAST-SHELLED OF THE ENEMY'S POINTS FIRST, LONGEST-HELD TO BREAK THE
+     * TIE — and the ordering of those two tests is the whole of it.
+     *
+     * MEASURED THE OTHER WAY ROUND (`_battfire.mjs`, seed 7): longest-held
+     * alone put 22 of 30 rounds inside ONE 14 m circle over 190 s and left the
+     * other enemy point with four. That is a siege of one square of ground, not
+     * a battery supporting a counter-attack, and it makes the capture-circle
+     * exception's footprint as concentrated as it can possibly be — which is
+     * the wrong direction for something that is an exception at all.
+     * Least-shelled-first spreads the thirty over whatever the enemy actually
+     * holds; longest-held is still what decides between two points that have had
+     * the same treatment, which is `_callZoneBombard`'s own rule and the honest
+     * definition of the point that is costing this side the match.
+     */
     let best = null;
+    let bestShots = Infinity;
     let bestHeld = -1;
     for (const z of zones ?? []) {
       if (!z || z.owner < 0 || z.owner === this.team) continue;
@@ -1197,11 +1287,23 @@ export class MountainBattery {
         if (o !== v && o.lay > 0 && o.targetIsSite && o.target === z) taken = true;
       }
       if (taken) continue;
+      const shots = this._zoneShots.get(z.id) ?? 0;
       const held = now - (z.ownedSince ?? now);
-      if (held > bestHeld) { bestHeld = held; best = z; }
+      if (shots < bestShots || (shots === bestShots && held > bestHeld)) {
+        bestShots = shots;
+        bestHeld = held;
+        best = z;
+      }
     }
     if (best) {
-      const i = this.stats.rounds % this.pat.u.length;
+      /**
+       * THE PATTERN INDEX IS THIS ZONE'S OWN ROUND COUNT, so every circle is
+       * walked from the middle outward by the rounds that actually fall on it.
+       * The offsets are proved for EVERY index against EVERY zone at boot
+       * (@see `batteryProve`), so which index a circle is on cannot make a
+       * round legal or illegal — only where inside the circle it lands.
+       */
+      const i = bestShots % this.pat.u.length;
       const R = best.radius ?? RULES.captureRadius;
       this._aim.set(
         best.position.x + this.pat.u[i] * R,
@@ -1260,8 +1362,10 @@ export class MountainBattery {
     this.stats.rounds++;
     v.rounds++;
     v.firedHere++;
-    if (v.targetIsSite) this.stats.atSite++;
-    else this.stats.atBodies++;
+    if (v.targetIsSite) {
+      this.stats.atSite++;
+      this._zoneShots.set(v.target.id, (this._zoneShots.get(v.target.id) ?? 0) + 1);
+    } else this.stats.atBodies++;
 
     /**
      * THE RAIL'S MUZZLE, IN WORLD SPACE. The model's +Z is forward and the rail
@@ -1281,6 +1385,8 @@ export class MountainBattery {
     slot.round = this.stats.rounds;
     slot.what = v.targetIsSite ? 'site' : 'bodies';
     slot.zoneId = v.targetIsSite ? v.target.id : '';
+    /** Kept so the impact can PROVE itself against the circle it named. */
+    slot.zone = v.targetIsSite ? v.target : null;
     slot.ax = mx; slot.ay = my; slot.az = mz;
     slot.bx = v.aimX; slot.by = v.aimY; slot.bz = v.aimZ;
     const range = Math.hypot(slot.bx - slot.ax, slot.bz - slot.az);
@@ -1403,6 +1509,27 @@ export class MountainBattery {
      * spending a light slot the impact has already taken.
      */
     this.ctx.events.emit('explosion', p);
+    /**
+     * ⚠ THE EXCEPTION, RE-PROVED ON THE ROUND THAT WAS ACTUALLY FIRED. The boot
+     * gate proves the PATTERN; this proves the DELIVERY, on live zones whose
+     * radius and centre are read at the moment of impact. An impact outside the
+     * circle it named would be the capture-circle rule broken for real, so it
+     * is counted and shouted rather than left for somebody to notice.
+     */
+    let frac = -1;
+    if (s.zone?.position) {
+      const R = s.zone.radius ?? RULES.captureRadius;
+      frac = Math.hypot(s.bx - s.zone.position.x, s.bz - s.zone.position.z) / R;
+      this.stats.liveWorst = Math.max(this.stats.liveWorst, frac);
+      if (frac >= 1) {
+        this.stats.liveOut++;
+        console.error(
+          `[batt] round ${s.round} landed ${(frac * 100).toFixed(1)}% of the way out of ` +
+            `${s.zoneId}'s own capture circle — 「占領サイトへの直接はダメ ただし…」 ` +
+            'this weapon is only legal INSIDE the circle it names.'
+        );
+      }
+    }
     const a = this._ann;
     a.title = this.spec.title;
     a.impactTitle = this.spec.impactTitle;
@@ -1417,6 +1544,9 @@ export class MountainBattery {
     this.stats.log.push({
       t: this._matchSecond(), round: s.round, gun: s.gun,
       what: s.what, zone: s.zoneId,
+      x: +s.bx.toFixed(1), z: +s.bz.toFixed(1),
+      /** Fraction of the named circle's radius, or -1 for an open-ground round. */
+      frac: frac < 0 ? -1 : +frac.toFixed(3),
     });
   }
 
@@ -1494,6 +1624,8 @@ export class MountainBattery {
       `deferred: nothing legal ${s.refusedNoTarget}, ` +
       `too near a circle ${s.refusedNearCircle}, too near a pad ${s.refusedNearPad} · ` +
       `${s.shifts} berth shifts · armed at t+${s.armedAt}s, home at t+${s.homeAt}s (${span}s) · ` +
+      `EXCEPTION HELD LIVE: worst delivered impact ${(s.liveWorst * 100).toFixed(1)}% of its own ` +
+      `capture radius, ${s.liveOut} outside (must be 0) · ` +
       s.log.map((e) => `r${e.round}@${e.t}s g${e.gun} ${e.zone || e.what}`).join(' | ')
     );
   }
