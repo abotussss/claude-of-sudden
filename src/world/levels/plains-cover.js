@@ -5,6 +5,15 @@ import {
 } from '../util.js';
 import { Rng } from '../../core/rng.js';
 import { wallRun, debrisField, drawDebris, fallenMember } from './plains-works.js';
+/**
+ * `RIDGE_DEG`, `ridgePrism` and `RUBBLE_CELL` LIVED HERE AND HAVE MOVED, and the
+ * move is the whole of the change to them — same angle, same prism, same cell.
+ * `plains-ruins.js` is built out of them from its first line (every wall it
+ * emits is a box that stops short with one of these on it), and a 58° that means
+ * "past `NavGrid`'s 46° limit" stated twice is the class of thing this map has
+ * already been bitten by. @see the note on `RIDGE_DEG` over there.
+ */
+import { RIDGE_DEG, ridgePrism, RUBBLE_CELL, buildRuinQuarter } from './plains-ruins.js';
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -172,12 +181,9 @@ function coverFlag(name) {
  */
 const TALL = 2.55;
 
-/** Cell of the relaxed rubble fields. @see `debrisField`. */
-const RUBBLE_CELL = 2.2;
-
 /**
  * ────────────────────────────────────────────────────────────────────────────
- * THE ANGLE THAT KEEPS THE MAP ONE COMPONENT
+ * THE ANGLE THAT KEEPS THE MAP ONE COMPONENT — `RIDGE_DEG`, imported above
  * ────────────────────────────────────────────────────────────────────────────
  * `NavGrid` refuses a cell whose floor normal is under `cos(46°)`, and THIS MAP
  * IS THE REACTION TO WHAT HAPPENS OTHERWISE: the town carries 36 820 walkable
@@ -193,7 +199,6 @@ const RUBBLE_CELL = 2.2;
  * is comfortably past 46° with room for the ground under a piece to tilt it a
  * few degrees the wrong way and still be refused.
  */
-const RIDGE_DEG = 58;
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
@@ -239,32 +244,6 @@ function deckCrown(A, surface, x, y, z, sx, sz, yaw, pitch = 0.5) {
   g.computeVertexNormals();
   A.collideGeo(surface, g, newTrs(x, y, z, yaw));
   return capH;
-}
-
-/**
- * A triangular prism, ridge along local Z, apex over the middle — the collision
- * cap that stops a flat top being a floor.
- *
- * `halfW` is half the thickness it has to cover and the apex height follows
- * from `RIDGE_DEG`, so the caller cannot accidentally author a shallow one: the
- * only way to cover a wider top is to stand a taller ridge on it.
- */
-function ridgePrism(halfW, len) {
-  const capH = halfW * Math.tan((RIDGE_DEG * Math.PI) / 180);
-  const h = len / 2;
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute([
-    0, capH, -h, -halfW, 0, -h, halfW, 0, -h,
-    0, capH, h, -halfW, 0, h, halfW, 0, h,
-  ], 3));
-  g.setIndex([
-    0, 1, 4, 0, 4, 3,   // one face
-    0, 3, 5, 0, 5, 2,   // the other
-    0, 2, 1, 3, 4, 5,   // the two ends
-  ]);
-  g.computeVertexNormals();
-  g.userData.capH = capH;
-  return g;
 }
 
 /** The walkable disc. `RIDGE_R0` is 176; three metres in is where scatter stops. */
@@ -1966,6 +1945,34 @@ export function buildCover(A, groundY, isOpen, pads, ctx) {
   const ring = zoneWorks(A, groundY, isOpen, pads);
   for (const s of ring) sites.push(s);
 
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * …AND THE BUILDINGS — 「また平原はもっと建物増やして 廃墟を」
+   * ────────────────────────────────────────────────────────────────────────
+   * The third report, and the first one that names the thing rather than the
+   * symptom. Everything above this line is cover at ONE height — 1.35 m of
+   * sandbag, 2.4 m of hull, 2.55 m of spoil — and `TALL` is the ceiling on all
+   * of it because a hull rides over anything under 2.6 m. A building is the
+   * other thing: it breaks the sightline from the footings to eleven metres, it
+   * is somewhere you go INSIDE, and at 200 m on a night map it is the only class
+   * of mass that stands against the sky rather than against the ground.
+   * @see `plains-ruins.js`, which owns the shells, the anchors and the
+   * measurement that keeps sixteen of them off six baked armour wheels.
+   *
+   * ITS OWN FIXED-SEED STREAM, and it runs HERE — after the two solvers, before
+   * `dressPlain` — for one reason: the ground pass keys its vegetation off
+   * `sites`, and grass growing up the inside of a ruin is the bug this ordering
+   * exists to avoid. It draws nothing from `rng`, so not one station, wreck,
+   * berm or emplacement placed above it moves. What DOES move is what
+   * `dressPlain` does after it, and only in one direction: the extra sites
+   * reject more swards, tussocks and grit. Every one of those is instanced
+   * foliage and gravel with NO collision declared on its prototype (@see the
+   * `dressPlain` header), so nothing that `boundcheck`, `stuckcheck` or
+   * `_dscatterblock` can see has moved at all.
+   */
+  const shells = buildRuinQuarter(A, groundY, isOpen, pads, sites);
+  for (const s of shells) sites.push(s);
+
   /* ---- and the ground it is all standing on ---------------------------- */
   const ground = dressPlain(A, rng, groundY, isOpen, sites, PLAIN_R);
 
@@ -2008,8 +2015,8 @@ export function buildCover(A, groundY, isOpen, pads, ctx) {
   }
 
   console.info(
-    `[world] nachtfeld cover: ${sites.length - ring.length} stations on ${CROSSINGS.length} crossings ` +
-    `+ ${ring.length} on the objectives — ` +
+    `[world] nachtfeld cover: ${sites.length - ring.length - shells.length} stations on ${CROSSINGS.length} crossings ` +
+    `+ ${ring.length} on the objectives + ${shells.length} ruined buildings — ` +
     `${counts.ruin} ruins, ${counts.wreck} wreck sites, ${counts.berm} berms, ${counts.emplace} emplacements · ` +
     `${chosen.length} smoke banks at ${rate.toFixed(1)}/s (${Math.round(rate * SMOKE_LIFE)} live sprites each)` +
     `${root ? '' : ' — NO WORLD ROOT, SMOKE SKIPPED'} · ground ${ground.sward} sward, ` +
