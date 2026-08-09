@@ -818,7 +818,14 @@ export class ThrownGrenades {
     g.armed = false;
     g.tripped = false;
     g.trig = 0;
-    g.fuse = Math.max(0.05, def?.fuse ?? 6);
+    /**
+     * THE ARMING DELAY IS SPENT ONCE, NOT TWICE. A mine that got here from
+     * `_emplace` has ALREADY counted `def.fuse` down in the throw pool — it
+     * passes `fuse: 0` and arms on the next frame, so the player's total is
+     * the six seconds the def states rather than twelve. A mine laid directly
+     * (`layMine`, which is what `src/ai` calls) pays it here.
+     */
+    g.fuse = Math.max(0.02, opts.fuse ?? def?.fuse ?? 6);
     g.team = opts.team ?? -1;
     g.owner = opts.owner ?? null;
     g.pos.set(position.x, position.y, position.z);
@@ -837,7 +844,7 @@ export class ThrownGrenades {
    * frame on is the emplaced mine, not the object that was in the air.
    */
   _emplace(g) {
-    const ok = this.lay(g.pos, g.def, { team: g.team, owner: g.owner });
+    const ok = this.lay(g.pos, g.def, { team: g.team, owner: g.owner, fuse: 0 });
     this._retire(g);
     // A refused mine is a mine that never armed; the player is out a store and
     // there is nothing on the ground. `stats.refused` is the count.
