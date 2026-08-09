@@ -468,32 +468,47 @@ function uplinkConsole(A, x, y, z, yaw) {
       x + Math.sin(a) * 1.25, y + 0.03, z + Math.cos(a) * 1.25, a, 0.42, 0.02, 0.1));
   }
 
-  // ---- the desk ------------------------------------------------------------
+  /**
+   * ---- the desk -----------------------------------------------------------
+   * `LL(pm, x, y, z, ry, sx, sy, sz, rx, rz)` composes an Euler in 'YXZ', so
+   * after the yaw: `rx` PITCHES about the desk's own right-hand axis (a rake
+   * toward the operator) and `rz` ROLLS it sideways. The first cut of this
+   * console raked its top and its instrument face with `rz` and PHOTOGRAPHED as
+   * two white slabs leaning over at 13° and 28° across the desk — a rake about
+   * the wrong axis is not subtle from a metre away. @see `shots/satcall`.
+   */
   A.add('metal_dark', box, LL(IDENT, px(0, 0.55), y + 0.5, pz(0, 0.55), yaw, 2.0, 1.0, 0.85),
     { masks: [0.8, 0.5, 0.15] });
   A.clipBox('metal', px(0, 0.55), y + 0.5, pz(0, 0.55), 2.0, 1.0, 0.85, yaw);
-  // the raked top, so it reads as a desk rather than as a crate
-  A.add('metal_dark', BOX_SOFT(A), LL(IDENT, px(0, 0.42), y + 1.03, pz(0, 0.42), yaw, 2.1, 0.09, 1.05, 0, 0.22),
+  // a flat working top, proud of the body on every side
+  A.add('metal_dark', BOX_SOFT(A), LL(IDENT, px(0, 0.55), y + 1.03, pz(0, 0.55), yaw, 2.12, 0.08, 0.95),
     { masks: [0.85, 0.45, 0.1] });
-  // the instrument face under the rake — amber, like every other panel in here
-  A.add('window_glow', BOX_FINE(A), LL(IDENT, px(0, 0.16), y + 0.92, pz(0, 0.16), yaw, 1.45, 0.26, 0.06, 0, -0.5),
+  /**
+   * the instrument screen, standing at the BACK of the desk and raked back
+   * toward the man — amber, like the eight ordinary consoles round the wall, so
+   * the one red thing on this desk is the only red thing in the cab
+   */
+  A.add('metal_dark', box, LL(IDENT, px(0, 0.93), y + 1.35, pz(0, 0.93), yaw, 1.7, 0.66, 0.1, -0.28),
+    { masks: [0.85, 0.5, 0.1] });
+  A.add('window_glow', BOX_FINE(A), LL(IDENT, px(0, 0.885), y + 1.35, pz(0, 0.885), yaw, 1.5, 0.5, 0.05, -0.28),
     { masks: [0.2, 0.3, 0] });
 
   // ---- the button, and it is the only red thing in the cab ------------------
-  // the guard: a red-painted horseshoe standing proud of the desk top
-  for (const r of [-0.34, 0.34]) {
-    A.add('metal_rust', BOX(A), LL(IDENT, px(r, 0.62), y + 1.16, pz(r, 0.62), yaw, 0.09, 0.22, 0.42),
+  // the plinth it sits on, near the operator's edge of the top
+  A.add('metal_dark', box, LL(IDENT, px(0, 0.32), y + 1.11, pz(0, 0.32), yaw, 0.66, 0.1, 0.54),
+    { masks: [0.85, 0.5, 0.1] });
+  // the guard: a red-painted horseshoe open toward the man
+  for (const r of [-0.36, 0.36]) {
+    A.add('metal_rust', BOX(A), LL(IDENT, px(r, 0.36), y + 1.25, pz(r, 0.36), yaw, 0.08, 0.24, 0.46),
       { masks: [0.95, 0.4, 0.05] });
   }
-  A.add('metal_rust', BOX(A), LL(IDENT, px(0, 0.83), y + 1.16, pz(0, 0.83), yaw, 0.77, 0.22, 0.09),
+  A.add('metal_rust', BOX(A), LL(IDENT, px(0, 0.57), y + 1.25, pz(0, 0.57), yaw, 0.8, 0.24, 0.08),
     { masks: [0.95, 0.4, 0.05] });
-  // the housing and the lit dome in it
-  A.add('metal_dark', box, LL(IDENT, px(0, 0.6), y + 1.09, pz(0, 0.6), yaw, 0.62, 0.12, 0.5),
-    { masks: [0.85, 0.5, 0.1] });
-  A.add('ember', BOX_SOFT(A), LL(IDENT, px(0, 0.6), y + 1.17, pz(0, 0.6), yaw, 0.4, 0.09, 0.32));
+  // …and the lit dome inside it
+  A.add('ember', BOX_SOFT(A), LL(IDENT, px(0, 0.33), y + 1.22, pz(0, 0.33), yaw, 0.44, 0.12, 0.36));
   // the two strips down the desk cheeks, so the console has an outline at night
-  for (const r of [-0.94, 0.94]) {
-    A.add('ember', BOX_SOFT(A), LL(IDENT, px(r, 0.55), y + 0.55, pz(r, 0.55), yaw, 0.05, 0.66, 0.07));
+  for (const r of [-0.99, 0.99]) {
+    A.add('ember', BOX_SOFT(A), LL(IDENT, px(r, 0.55), y + 0.55, pz(r, 0.55), yaw, 0.05, 0.7, 0.09));
   }
 
   /**
@@ -504,7 +519,7 @@ function uplinkConsole(A, x, y, z, yaw) {
    * operator (-forward) needs `ry = yaw + π/2`. Checked against `signBand`,
    * where the same relation holds between `e.yaw` and the outward normal.
    */
-  uplinkGlyph(A, px(0, 0.11), y + 0.62, pz(0, 0.11), yaw + Math.PI / 2, 0.5);
+  uplinkGlyph(A, px(0, 0.105), y + 0.6, pz(0, 0.105), yaw + Math.PI / 2, 0.56);
 
   // ---- and the cable that ties it to the mast ------------------------------
   A.add('metal_rust', BOX_THIN(A), LL(IDENT, px(-0.98, 0.9), y + 0.36, pz(-0.98, 0.9), yaw, 0.09, 0.72, 0.09),
@@ -531,20 +546,31 @@ function uplinkGlyph(A, mx, my, mz, ry, w) {
    * `edgeInfo`, where `e.yaw = atan2(dx, dz)` and the tangent is `(dx, dz)`.
    */
   const tx = Math.sin(ry), tz = Math.cos(ry);
-  const bar = (v, dy, sy, sz, roll = 0) =>
-    A.add('ember', BOX_SOFT(A), LL(IDENT, mx + tx * v, my + dy, mz + tz * v, ry, 0.055, sy, sz, 0, roll));
+  /**
+   * `rake` GOES IN AS `rx` AND NOT AS `rz`, AND THE FIRST CUT PUT IT IN `rz`.
+   * The Euler is 'YXZ', so after `ry` the local axes are: +X the plate's own
+   * normal, +Y up, +Z along the face. A mark rotated IN ITS OWN PLANE — which
+   * is what a chevron is — turns about the NORMAL, i.e. `rx`. `rz` turns it
+   * about the width axis, which tips it out of the wall instead, and the first
+   * photograph of this glyph at 150 m was six horizontal bars in a blob where
+   * six diagonals were meant to be. @see `shots/satcall/03b-tower-150m-crop.png`.
+   */
+  const bar = (v, dy, sy, sz, rake = 0) =>
+    A.add('ember', BOX_SOFT(A), LL(IDENT, mx + tx * v, my + dy, mz + tz * v, ry, 0.055, sy, sz, rake, 0));
   // the satellite: a body with two panels
-  bar(0, w * 0.62, w * 0.2, w * 0.24);
-  bar(-w * 0.38, w * 0.62, w * 0.1, w * 0.34);
-  bar(w * 0.38, w * 0.62, w * 0.1, w * 0.34);
-  // three chevrons coming down, each a pair of raked bars
-  for (let k = 0; k < 3; k++) {
-    const dy = w * (0.28 - k * 0.22);
-    bar(-w * 0.17, dy, w * 0.09, w * 0.36, 0.62);
-    bar(w * 0.17, dy, w * 0.09, w * 0.36, -0.62);
+  bar(0, w * 0.60, w * 0.22, w * 0.26);
+  bar(-w * 0.40, w * 0.60, w * 0.11, w * 0.36);
+  bar(w * 0.40, w * 0.60, w * 0.11, w * 0.36);
+  // two chevrons coming down, each a pair of raked bars meeting on the axis
+  for (let k = 0; k < 2; k++) {
+    const dy = w * (0.22 - k * 0.28);
+    // rake signs chosen so the pair meets at the BOTTOM: it is a thing coming
+    // DOWN, and the first photograph of it had two chevrons pointing up.
+    bar(-w * 0.21, dy, w * 0.1, w * 0.46, 0.62);
+    bar(w * 0.21, dy, w * 0.1, w * 0.46, -0.62);
   }
   // …and the ground it is coming down onto
-  bar(0, -w * 0.5, w * 0.09, w * 0.92);
+  bar(0, -w * 0.52, w * 0.1, w * 0.98);
 }
 
 /**
@@ -592,26 +618,39 @@ function uplinkBand(A, y) {
      * under it. A light on a night map has to have a thing holding it up.
      */
     A.add('metal_dark', BOX(A), LL(IDENT, e.mx + e.nx * 0.46, y(bandY), e.mz + e.nz * 0.46, e.yaw,
-      0.16, 2.2, 3.4), { masks: [0.85, 0.45, 0.1] });
+      0.16, 2.8, 3.4), { masks: [0.85, 0.45, 0.1] });
     for (const s of [-1, 1]) {
-      A.add('metal_rust', BOX_THIN(A), LL(IDENT, e.mx + ox, y(bandY) + s * 1.13, e.mz + oz, e.yaw,
+      A.add('metal_rust', BOX_THIN(A), LL(IDENT, e.mx + ox, y(bandY) + s * 1.43, e.mz + oz, e.yaw,
         0.09, 0.14, 3.4), { masks: [0.9, 0.6, 0.05] });
     }
-    uplinkGlyph(A, e.mx + ox, y(bandY), e.mz + oz, e.yaw, 1.6);
+    /**
+     * 1.6 -> 1.9. MEASURED AT THE RANGE IT HAS TO WORK AT: at 150 m on a
+     * 1600 px frame this map renders about 22.8 px per degree, so a 1.6 m mark
+     * is 14 px and a 1.9 m one is 17 px — and the first photograph
+     * (`shots/satcall/03b-tower-150m-crop.png`) came back with the supply row's
+     * three 1.5 m glyphs legible and this single one a blob above them, which is
+     * the wrong way round for the more important of the two signs.
+     */
+    uplinkGlyph(A, e.mx + ox, y(bandY), e.mz + oz, e.yaw, 1.9);
     /**
      * …AND THE LINE UP TO THE CAB. From the top frame of this plate to the
      * underside of the cab floor, on the face's own centreline. It is the only
      * part of the sign that says WHERE, and it is why this is a band on the
      * shaft rather than a plate on the cab: from the ground you cannot see the
      * top of the tower and the sign in one glance unless something joins them.
+     *
+     * 0.13 -> 0.34 WIDE, FOR THE SAME MEASUREMENT. 0.13 m at 150 m is 1.2 px —
+     * it did not appear in the photograph at all. 0.34 is 3 px over 4.2 m of
+     * height, which is a continuous vertical stroke rather than a dashed one,
+     * and the ticks are 0.9 m so they are 8 px and read as direction.
      */
-    const y0 = bandY + 1.2, y1 = ROOF_Y - 0.4;
+    const y0 = bandY + 1.5, y1 = ROOF_Y - 0.4;
     A.add('ember', BOX_SOFT(A), LL(IDENT, e.mx + ox, y((y0 + y1) / 2), e.mz + oz, e.yaw,
-      0.05, y1 - y0, 0.13));
+      0.05, y1 - y0, 0.34));
     // three ticks up it, so the line reads as a direction and not as a seam
     for (let k = 1; k <= 3; k++) {
       const ty = y0 + (k / 4) * (y1 - y0);
-      A.add('ember', BOX_SOFT(A), LL(IDENT, e.mx + ox, y(ty), e.mz + oz, e.yaw, 0.05, 0.1, 0.52));
+      A.add('ember', BOX_SOFT(A), LL(IDENT, e.mx + ox, y(ty), e.mz + oz, e.yaw, 0.05, 0.12, 0.9));
     }
   }
 }

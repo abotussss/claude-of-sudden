@@ -1331,6 +1331,24 @@ export class MatchSystem {
         this._nf.gap = 0;
         for (const a of this._acts ?? []) a.called = false;
       }
+      /**
+       * …AND THE UPLINK. A strike caught in its lead when the round ended would
+       * otherwise resume mid-telegraph on the next one — `_updateSat` is only
+       * called from `case PHASE.LIVE`, so a `t >= 0` survives the gap and the
+       * first frame of the new round drops twelve rounds on a zone nobody has
+       * taken yet. The COOLDOWN is cleared with it: it is a clock about this
+       * round, and `_bombardIn` two lines below is reset for the same reason.
+       * The console itself is `perishable` and comes back with its structure or
+       * does not, which is `Caches.update`'s business and not this block's.
+       */
+      if (this._sat) {
+        this._sat.t = -1;
+        this._sat.zone = null;
+        this._sat.shot = 0;
+        this._sat.pulse = 0;
+        this._sat.readyAt = 0;
+        this._sat.calls = 0;
+      }
       this._districtsFired = 0;
       this._districtGap = 0;
       this._finalCalled = false;
