@@ -136,15 +136,25 @@ const LOOK = [AT[0], groundY + 12, AT[1]];
 console.log('first contact', AT.join(', '), '· ground', groundY.toFixed(2), '· looking at', LOOK.map((v) => v.toFixed(1)).join(', '));
 
 console.log('\nfired:', await page.evaluate(() => window.__ENGINE__.ctx.peek('match').crash.fire()));
+/**
+ * THE CLOCK IS THE FRAME INDEX AND NOT `_sky._t`, AND THAT IS NOT A STYLE
+ * CHOICE. `_t` goes back to -1 the instant the wreck settles (t=24.6), so a
+ * loop that pumps "until `_t` >= 26" pumps for ever — measured, at 720 000
+ * frames, on the first run of this file. `?capture=1` runs a fixed 1/60 clock
+ * with `time.scale` at 1, so act seconds and engine frames are the same thing
+ * and the frame index only ever goes up.
+ */
+const fireFrame = await page.evaluate(() => window.__ENGINE__.time.frame);
+const frameNow = () => page.evaluate(() => window.__ENGINE__.time.frame);
 
 let done = 0;
 for (const [mtag, target] of MOMENTS) {
-  /** Pump to one frame short of the moment, then one frame per vantage. */
-  for (let guard = 0; guard < 4000; guard++) {
-    const t = await page.evaluate(() => window.__ENGINE__.ctx.peek('match').crash._sky._t);
-    if (t >= target - 1 / 60) break;
-    const need = Math.max(1, Math.min(180, Math.floor((target - 1 / 60 - t) * 60)));
-    await pump(need);
+  /** Pump to `EYES.length` frames short: each vantage below consumes one. */
+  const want = fireFrame + Math.round(target * 60) - EYES.length;
+  for (let guard = 0; guard < 200; guard++) {
+    const cur = await frameNow();
+    if (cur >= want) break;
+    await pump(Math.min(240, want - cur));
   }
   for (const [etag, from, eye, fov] of EYES) {
     const pose = await place(from, eye, fov, LOOK);
