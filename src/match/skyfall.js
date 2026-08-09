@@ -35,14 +35,19 @@
  * ────────────────────────────────────────────────────────────────────────────
  * HOW BIG THE CARRIER ACTUALLY IS
  * ────────────────────────────────────────────────────────────────────────────
- * 82 m from the nose to the trailing edge of the fin, 78 m across the wing as
- * it was built (61 m as it arrives, because the starboard outer panel is gone
- * and is lying in the fire 34 m away), and the fin tops out 24 m over the
- * fuselage centreline. Sat on the plain that is a six-storey building lying on
- * its side across the west, and it is 5.5 times the satellite in every
- * dimension — the satellite's fuselage is 15 m. For scale in the other
- * direction: zone A and zone C are 190 m apart, so this wreck is nearly half
- * the distance between two capture points.
+ * MEASURED off the built geometry (`_sfseat.mjs`, which reads the bounding box
+ * of the merged mesh rather than adding up the boxes in `_buildMother`):
+ *
+ *   86.6 m from the nose to the trailing edge of the fin
+ *   62.8 m across the wing AS IT ARRIVES — the starboard outer panel is torn
+ *         off at the root and is lying in the fire 34 m away, a further 29.6 m
+ *         of wing, so the aeroplane was about 85 m across before it came apart
+ *   32.1 m from the belly of the outboard nacelle to the top of the fin
+ *
+ * The satellite's fuselage is 15 m, so this is 5.8 times it end to end and
+ * something over a hundred times its volume. For scale in the other direction:
+ * zone A and zone C are 190 m apart, so the wreck alone is 46 % of the distance
+ * between two capture points, and its fin is eight storeys.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * 「一部マップが通行不可」 — WHAT IMPASSABLE MEANS, MECHANICALLY
@@ -338,8 +343,11 @@ export class Skyfall {
     this._tick = 0;
     this._cook = 0;
     this._light = 0;
-    /** Seconds since the carrier's last trail puff. */
+    /** Seconds since the carrier's last trail puff, and the squadron's. */
     this._puff = 0;
+    this._dpuff = 0;
+    /** Which of the five gets the next puff. @see `_droneTrail`. */
+    this._dnext = 0;
     /** Which drones have already struck. */
     this._hit = [false, false, false, false, false];
     /** The carrier's plough voice, `{ drive, stop }` or null. @see `Crash`. */
@@ -363,6 +371,7 @@ export class Skyfall {
     this._m = new THREE.Matrix4();
     this._sc = new THREE.Vector3(1, 1, 1);
     this._eul = new THREE.Euler();
+    this._dv = new THREE.Vector3();
     this._blast = { position: null, radius: 0, damage: 0, source: 'crash' };
   }
 
@@ -468,7 +477,7 @@ export class Skyfall {
       boxGeo(0.5, 1.9, 1.8, 2.3, 1.2, -2.7, 0, -0.22),
       boxGeo(1.6, 1.0, 3.2, 0, -0.9, -1.2),         // the weapons pallet
     ]);
-    const mat = this._hullMaterial('metal_dark', 0x35322e, 0x030100);
+    const mat = this._hullMaterial('metal_dark', 0x35322e, 0x1a0702);
     this._droneGeo = geo;
     this._droneMat = mat;
     this.drones = [];
@@ -552,12 +561,12 @@ export class Skyfall {
       boxGeo(6.0, 3.0, 9.0, -3.0, 6.4, -14, 0.4),   // plating torn off the spine
       boxGeo(4.0, 2.4, 7.0, 4.2, 5.6, -2, -0.6),
     ];
-    /** Nose at local z +37, fin trailing edge at -49: 86 m of aeroplane. */
-    this._mLen = 86;
-    /** Port tip -39, starboard root +22 as it arrives; 78 m as it was built. */
-    this._mSpan = 78;
-    /** Fin top over the fuselage centreline. */
-    this._mTall = 24;
+    /** MEASURED off the merged geometry by `_sfseat.mjs`, not added up here. */
+    this._mLen = 86.6;
+    /** As it ARRIVES. The torn starboard panel is a further 29.6 m. */
+    this._mSpan = 62.8;
+    /** Outboard nacelle belly to the top of the fin. */
+    this._mTall = 32.1;
     const geo = mergeGeometries(parts);
     const mat = this._hullMaterial('metal_rust', 0x3f3931, 0x030100);
     const mesh = new THREE.Mesh(geo, mat);
@@ -1139,6 +1148,8 @@ export class Skyfall {
     if (!this.ready) return false;
     this._t = 0;
     this._puff = 0;
+    this._dpuff = 0;
+    this._dnext = 0;
     this.busy = true;
     for (let i = 0; i < this._hit.length; i++) this._hit[i] = false;
     this._stopPlough();
@@ -1212,7 +1223,9 @@ export class Skyfall {
       const s = t * (1.0 + i * 0.17);
       this._eul.set(-this._dPitch[i] + Math.sin(s * 1.7) * 0.9, s * 0.8 + i, s * 2.3, 'YXZ');
       this._pose(this.drones[i], this._v, this._eul);
+      if (i === this._dnext) this._dv.copy(this._v);
     }
+    this._droneTrail(dt, t);
 
     /* ---- wave three: the carrier --------------------------------------- */
     if (t >= MOTHER_IN) this._motherUpdate(dt, t);
@@ -1341,6 +1354,39 @@ export class Skyfall {
     audio?.play?.('strike_jet', at, {
       level: 1.6, dur: 0.7, maxDist: 1100, gain: 5.0, occlusion: 0.05,
     });
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE SQUADRON'S TRAIL, ROUND-ROBIN, BECAUSE THE POOL IS FOUR LIGHTS
+   * ────────────────────────────────────────────────────────────────────────
+   * PHOTOGRAPHED from zone A at t=5.5 on the first build: one object visible in
+   * the whole sky, and it was the carrier. The five were there — 13.8 m of dark
+   * grey airframe at 400 m subtends two degrees and carries no light of its
+   * own, so against a night sky they were nothing at all, and 「見えるように」
+   * is the entire design of this act.
+   *
+   * The satellite's own `Crash._trail` is the answer and it cannot simply be
+   * run five times: it takes a `LightPool` slot every 0.25 s and the pool is
+   * FOUR LIGHTS for the whole game. So the five share ONE emitter at the
+   * satellite's own rate and take it in turn — each drone lights every 0.85 s,
+   * the light pressure is exactly one trail's, and what the eye reads is a
+   * group of burning objects flickering across the sky rather than five steady
+   * flares, which is closer to the truth anyway: they are tumbling.
+   */
+  _droneTrail(dt, t) {
+    this._dpuff -= dt;
+    if (this._dpuff > 0) return;
+    this._dpuff = 0.17;
+    const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
+    const at = this._dv;
+    this._dnext = (this._dnext + 1) % DRONE_HIT.length;
+    if (!fx || at.y < -100) return;
+    fx.addSmokeColumn?.(at.x, at.y, at.z, {
+      duration: 0.1, rate: 14, radius: 1.6, rise: 4.0, dark: 0.18,
+      life: 5.0, growth: 5.0, ember: 0.9, haze: 0.4,
+    });
+    if (fx.lights) fx.lights.flash(at.x, at.y, at.z, 1, 0.5, 0.18, 1600, 0.4, 1.4, 220, 5);
   }
 
   /**
