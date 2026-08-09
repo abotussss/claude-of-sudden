@@ -5,7 +5,7 @@ import {
   RAMP_GRADE, octagon, edgeInfo, prism, wallRun, ramp, interiorVolume,
   debrisField, drawDebris, ladder, handrail, practical, embrasure,
 } from './plains-works.js';
-import { post, dressPost } from './plains-stores.js';
+import { post, dressPost, supplySign } from './plains-stores.js';
 import {
   wireBelt, dragonTeeth, gabionRun, camoNet, mortarPit, searchlight,
   antennaMast, fuelBund, boomBarrier, fieldCable, stencilBoard,
@@ -146,26 +146,67 @@ const isGate = (e) => Math.abs(e.nz) > 0.9;
  * with a magazine, a barrack, seven ammunition revetments and a courtyard full
  * of crates handed over NOTHING — every one of those was scenery.
  *
- * Eight posts now, and every one is on ground `interiorVolumes` or the ramps
+ * SIXTEEN POSTS NOW, and every one is on ground `interiorVolumes` or the ramps
  * already put a bot on, so this is not the town's player-only balcony problem:
  *
- *   the depot     ammo + frags, under the camouflage netting in the open yard
- *   the magazine  ammo, indoors, and it dies with the magazine (it is in the
- *                 shell scope, so a strike takes the crate with the building)
+ *   the depot     ammo + frags under the camouflage netting, AND A SECOND
+ *                 WEAPON RACK at the open end of the dump
+ *   the magazine  ammo + frags, indoors, and both die with the magazine (they
+ *                 are in the shell scope, so a strike takes them with it)
  *   the mortar    frags at the gun pit
+ *   the command   frags at the foot of the antenna mast
  *   the aid post  the med kit, +50 HP, either side
  *   the barrack   THE WEAPON RACK — and unlike the tower's this one is on the
  *                 ground floor of a room a bot can walk into, which is the
  *                 first rack on either map a bot could theoretically reach
+ *   the NW bay    ammunition against the inner face of the west curtain
  *   both gates    a vantage on the walk over each passage, covering the road
+ *   both roads    an ammunition point OUTSIDE the wall at each gate mouth,
+ *                 beside the teeth — the first thing a man arriving meets, and
+ *                 the only two posts on this fortress you do not have to go
+ *                 through an arch to reach
+ *   both north    a vantage on each of the two bastion gun positions that look
+ *   bastions      at zone D and the tower, i.e. at the fight
  *
- * `x`/`z` are world/level, `h` is height over the fortress's own datum.
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHY EIGHT MORE, AND WHY THEY ARE WHERE THEY ARE
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「物資豊富にしろ」, twice. The plain now carries 23 posts against the town's 24,
+ * and the fortress carries 16 of them — which is what a supply dump, a magazine,
+ * an armoury and two gate check points is when it is stocked rather than
+ * decorated. Every new one is on a floor that already exists in the height field
+ * (courtyard, walk, magazine, glacis road); NOT ONE is on a gatehouse top, a
+ * magazine roof or anything else this file has deliberately kept player-only,
+ * because a post a bot cannot reach is a post that is worth nothing to the
+ * thirty-nine other men in the match.
+ *
+ * `x`/`z` are world/level, `h` is height over the fortress's own datum, and
+ * `grade: true` means "sit on the plain's own ground here" — the two road posts
+ * stand outside the trace, and while they happen to be inside the FORT pad's
+ * flat r0 today, a post that reads its own floor cannot be left in the air by
+ * somebody retuning a pad. @see `postY`.
  */
 const STORES = [
   { id: 'NF-FORT-DUMP-ammo', kind: 'ammo', x: 5.4, z: 58.0, h: 0.02, yaw: Math.PI / 2 },
   { id: 'NF-FORT-DUMP-frag', kind: 'grenade', x: 11.8, z: 58.0, h: 0.02, yaw: -Math.PI / 2 },
+  /**
+   * THE SECOND RACK, at the open end of the dump — the end with no gabion
+   * revetment on it, which is where a working party actually draws weapons. It
+   * is under the net (3.05 m) and the rack is 1.8 m, and the two pallets whose
+   * rows would have stood in it are dropped by `nearStore` after their draws.
+   */
+  { id: 'NF-FORT-DEPOT-rack', kind: 'weapon', x: 8.5, z: 62.0, h: 0.02, yaw: 0 },
   { id: 'NF-FORT-MAG-ammo', kind: 'ammo', x: 0, z: 45.0, h: MAG.floor + 0.02, yaw: 0, perishable: true },
+  /**
+   * …and the frags, off-centre so the 1.9 m doorway at either end of the
+   * magazine keeps its approach: the nearest corner of this post's bay is 3.5 m
+   * from the north door and 2.9 m off its axis. 「props in doorways」 is five
+   * separate shipped bugs in this repo and the magazine's own note counts them.
+   */
+  { id: 'NF-FORT-MAG-frag', kind: 'grenade', x: -4.2, z: 48.2, h: MAG.floor + 0.02, yaw: Math.PI / 2, perishable: true },
   { id: 'NF-FORT-MORTAR-frag', kind: 'grenade', x: -14.0, z: 45.4, h: 0.02, yaw: Math.PI },
+  { id: 'NF-FORT-CP-frag', kind: 'grenade', x: 21.0, z: 36.0, h: 0.02, yaw: -1.05 },
+  { id: 'NF-FORT-NW-ammo', kind: 'ammo', x: -16.0, z: 34.0, h: 0.02, yaw: 0.85 },
   { id: 'NF-FORT-AID-med', kind: 'medic', x: -9.0, z: 66.0, h: 0.02, yaw: 2.67 },
   { id: 'NF-FORT-SHED-rack', kind: 'weapon', x: -15.7, z: 61.0, h: 0.04, yaw: 1.92 },
   /**
@@ -181,6 +222,27 @@ const STORES = [
    */
   { id: 'NF-FORT-GATE-N', kind: 'vantage', x: 11.5, z: 21.5, h: WALK_Y + 0.02, yaw: Math.PI },
   { id: 'NF-FORT-GATE-S', kind: 'vantage', x: -11.5, z: 74.5, h: WALK_Y + 0.02, yaw: 0 },
+  /**
+   * THE TWO NORTH BASTION GUN POSITIONS. `outworks` already puts a searchlight
+   * at the middle of the north-east bastion's walk (`e.n * (BASTION - 3.0)`), so
+   * these stand 4.0 m along the tangent from it and 3.9 m in from the trace —
+   * behind the parapet, which is where a firing position belongs. The parapet's
+   * own sandbag line and the bastion's ammunition crates both gained a
+   * `nearStore` test AFTER their draws so nothing is heaped into the horseshoe;
+   * @see `parapets` and `outworks`, and the shed's note for why the skip is
+   * after and not before.
+   */
+  { id: 'NF-FORT-BAST-NE', kind: 'vantage', x: 30.59, z: 23.07, h: WALK_Y + 0.02, yaw: 2.356 },
+  { id: 'NF-FORT-BAST-NW', kind: 'vantage', x: -30.59, z: 23.07, h: WALK_Y + 0.02, yaw: -2.356 },
+  /**
+   * OUTSIDE THE WALL, ON EACH GATE ROAD. Outboard of the dragon's teeth (whose
+   * staggered field reaches x 8.73 either side of the lane) and 5 m short of the
+   * revetment, so the 8.4 m lane the outworks pass leaves open is not narrowed
+   * by a metre. A man who has walked 150 m to this fortress gets rounds BEFORE
+   * he has to decide whether to go through the arch.
+   */
+  { id: 'NF-FORT-ROAD-N', kind: 'ammo', x: 11.0, z: 12.5, h: 0.02, yaw: Math.PI, grade: true },
+  { id: 'NF-FORT-ROAD-S', kind: 'ammo', x: -11.0, z: 83.5, h: 0.02, yaw: 0, grade: true },
 ];
 
 /**
@@ -217,11 +279,19 @@ function nearStore(x, z, h, r = 2.6) {
   return false;
 }
 
+/**
+ * Where a post's own floor is. Everything inside the trace stands on the
+ * fortress's datum; `grade: true` reads the plain instead. @see `STORES`.
+ */
+function postY(s, y, groundY) {
+  return s.grade && groundY ? groundY(s.x, s.z) + s.h : y(s.h);
+}
+
 /** Build and dress the posts standing on level `h`. */
-function buildStores(A, rng, y, h) {
+function buildStores(A, rng, y, h, groundY) {
   for (const s of STORES) {
     if (Math.abs(s.h - h) > 0.6) continue;
-    dressPost(A, rng, s.kind, s.x, y(s.h), s.z, s.yaw);
+    dressPost(A, rng, s.kind, s.x, postY(s, y, groundY), s.z, s.yaw);
   }
 }
 
@@ -250,6 +320,7 @@ export function buildFort(A, groundY) {
   A.endScope();
 
   curtain(A, rng, y);
+  supplySigns(A, y);
   volumes.push(...gates(A, rng, y));
   courtyardRamps(A, rng, y);
   /** The barrack shed is a room now, and a room has to be published. */
@@ -277,7 +348,7 @@ export function buildFort(A, groundY) {
    */
   const fw = new Rng(0x50f7c1);
   outworks(A, fw, y, groundY);
-  depot(A, fw, y);
+  depot(A, fw, y, groundY);
 
   return {
     interiorVolumes: volumes,
@@ -301,7 +372,7 @@ export function buildFort(A, groundY) {
        * @see the header of `plains-stores.js` for why it rides here rather than
        * on `world.features`, and `STORES` above for what each one is.
        */
-      caches: STORES.map((s) => post(s.id, s.kind, s.x, y(s.h), s.z, s.yaw, {
+      caches: STORES.map((s) => post(s.id, s.kind, s.x, postY(s, y, groundY), s.z, s.yaw, {
         botReachable: s.botReachable, perishable: s.perishable, beacon: s.beacon,
       })),
     },
@@ -409,16 +480,27 @@ function outworks(A, rng, y, groundY) {
       () => y(WALK_Y), { courses: 1, cell: 1.0 });
     // the searchlight goes on the bastion facing the plain's centre
     if (e.nz < -0.5 && e.nx > 0.5) searchlight(A, wx, y(WALK_Y), wz, e.yaw + Math.PI / 2);
-    // ammunition for the gun position, and the range card pinned beside it
+    /**
+     * Ammunition for the gun position, and the range card pinned beside it —
+     * EVERY DRAW TAKEN BEFORE ANYTHING IS SKIPPED, which is the discipline this
+     * whole file is written under. The two north bastions now carry a `vantage`
+     * post (@see `STORES`) and a crate dropped into its sandbag horseshoe is the
+     * same defect as a barrel in a doorway; skipping AFTER the draws keeps `rng`
+     * on the sequence it was on, so the other two bastions do not move.
+     */
     for (let k = 0; k < 4; k++) {
-      A.put(rng.pick(['crate_b', 'crate_a', 'box_card_a']),
-        wx + e.tx * rng.range(-3.2, 3.2) - e.nx * 3.4, y(WALK_Y) + 0.02, wz + e.tz * rng.range(-3.2, 3.2) - e.nz * 3.4,
-        rng.float() * 6.28, rng.range(0.9, 1.1));
+      const id = rng.pick(['crate_b', 'crate_a', 'box_card_a']);
+      const ox = rng.range(-3.2, 3.2), oz = rng.range(-3.2, 3.2);
+      const ry = rng.float() * 6.28, sc = rng.range(0.9, 1.1);
+      const px = wx + e.tx * ox - e.nx * 3.4, pz = wz + e.tz * oz - e.nz * 3.4;
+      if (nearStore(px, pz, WALK_Y + 0.02, 2.4)) continue;
+      A.put(id, px, y(WALK_Y) + 0.02, pz, ry, sc);
     }
   }
 
-  /** …and the two firing positions on the walk over the gates. */
-  buildStores(A, rng, y, WALK_Y + 0.02);
+  /** …and the four firing positions on the walk: the two over the gates and
+   *  the two on the north bastions. @see `STORES`. */
+  buildStores(A, rng, y, WALK_Y + 0.02, groundY);
 }
 
 /**
@@ -435,7 +517,7 @@ function outworks(A, rng, y, groundY) {
  * reward for being in this courtyard, and every one of them is on ground the
  * bots already hold.
  */
-function depot(A, rng, y) {
+function depot(A, rng, y, groundY) {
   const gy = () => y(0.02);
 
   // the hardstanding, and the netting over it
@@ -546,8 +628,9 @@ function depot(A, rng, y) {
     }
   }
 
-  // and the posts themselves, on the courtyard's own floor
-  buildStores(A, rng, y, 0.02);
+  // and the posts themselves — the courtyard's own floor, and the two on the
+  // gate roads outside the wall, which read the plain's grade. @see `postY`.
+  buildStores(A, rng, y, 0.02, groundY);
 }
 
 /**
@@ -748,6 +831,52 @@ function curtain(A, rng, y) {
   }
 }
 
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHAT IS IN HERE, SAID FROM 150 m — 「物資豊富にしろ」, THE OTHER HALF OF IT
+ * ════════════════════════════════════════════════════════════════════════════
+ * Sixteen supply posts are sixteen posts nobody knows about. `Caches.nearby`
+ * marks at 26 m on a 300 m map (@see the note over `supplySign` in
+ * `plains-stores.js`, and the two tower posts that were never once marked for
+ * anybody), so between 26 m and the horizon this fortress has to say what is in
+ * it the way the tower does: three lit glyphs on a plate, on the wall.
+ *
+ * SIX PLATES, ON THE CURTAIN AND NOT ON THE GATEHOUSES, and that is the whole of
+ * the placement argument. The gatehouses are in `shell:NF-FORT` and come off in
+ * the act; the curtain is deliberately not (@see the scope note in `buildFort`)
+ * — and the posts that survive the strike are exactly the ones outside the
+ * shell, i.e. thirteen of the sixteen. A sign that dies with the crown would
+ * stop advertising a fortress that is still full of stores.
+ *
+ *   the two GATE faces   one plate either side of each passage, 7.0 m off the
+ *                        axis, which is the read straight down each approach
+ *                        road — the two bearings men actually arrive on.
+ *   the two SIDE curtains one plate each, for the flank rotations.
+ *
+ * 2.9 m up: over the 0.34 m glacis berm and well under the 4.4 m coping, so
+ * nothing on this fortress occludes it from the field. The plate is set at
+ * `0.99` off the trace because that is where the revetment's own outer face is
+ * at that height — 0.55 of half-thickness plus 0.374 of `wallRun`'s batter — so
+ * it is a board bolted to a wall rather than a slab of light in the air, which
+ * is the failure the tower's stair pylons were photographed making.
+ *
+ * NO `rng` DRAW ANYWHERE IN HERE, so it can be called between two passes that
+ * share a stream without moving one instance of either.
+ */
+function supplySigns(A, y) {
+  const SIGN_Y = 2.9;
+  for (let i = 0; i < TRACE.length; i++) {
+    const e = edgeInfo(TRACE, i);
+    if (!isFlat(e)) continue;
+    const offs = isGate(e) ? [-7.0, 7.0] : [0];
+    for (const t of offs) {
+      const px = e.mx + e.tx * t + e.nx * 0.99;
+      const pz = e.mz + e.tz * t + e.nz * 0.99;
+      supplySign(A, px, y(SIGN_Y), pz, e.nx, e.nz, e.yaw, 1.2, 1.9);
+    }
+  }
+}
+
 /** Shuttered concrete with a splayed batter's shadow. @see `prism`'s own paint. */
 function rampartPaint(base) {
   return (x, yy, z, nx, ny, nz, out) => {
@@ -833,14 +962,20 @@ function parapets(A, rng, y) {
       const t = (k + 0.5) / n - 0.5;
       const px = ox - e.nx * 1.0 + e.tx * e.len * t;
       const pz = oz - e.nz * 1.0 + e.tz * e.len * t;
+      /** …unless a firing position stands here. Same test and same discipline
+       *  as the bastion crates in `outworks`: every draw is taken either way. */
+      const foul = nearStore(px, pz, WALK_Y + 0.02, 2.2);
       for (let s = 0; s < 3; s++) {
-        A.put(rng.pick(['sandbag_a', 'sandbag_b', 'sandbag_c']),
-          px + rng.range(-0.35, 0.35), y(WALK_Y) + 0.09 + (s % 2) * 0.19, pz + rng.range(-0.35, 0.35),
-          e.yaw + rng.range(-0.2, 0.2), rng.range(0.95, 1.15));
+        const id = rng.pick(['sandbag_a', 'sandbag_b', 'sandbag_c']);
+        const jx = rng.range(-0.35, 0.35), jz = rng.range(-0.35, 0.35);
+        const ry = e.yaw + rng.range(-0.2, 0.2), sc = rng.range(0.95, 1.15);
+        if (foul) continue;
+        A.put(id, px + jx, y(WALK_Y) + 0.09 + (s % 2) * 0.19, pz + jz, ry, sc);
       }
       if (rng.float() < 0.5) {
-        A.put(rng.pick(['crate_b', 'crate_a', 'box_card_a']), px - e.nx * 1.3, y(WALK_Y) + 0.02,
-          pz - e.nz * 1.3, rng.float() * 6.28, rng.range(0.9, 1.1));
+        const id = rng.pick(['crate_b', 'crate_a', 'box_card_a']);
+        const ry = rng.float() * 6.28, sc = rng.range(0.9, 1.1);
+        if (!foul) A.put(id, px - e.nx * 1.3, y(WALK_Y) + 0.02, pz - e.nz * 1.3, ry, sc);
       }
     }
   }
@@ -1139,6 +1274,9 @@ function magazine(A, rng, y) {
     const sc = rng.range(0.9, 1.15);
     const r = (A.footprintR(id, sc) ?? 0.4) + 0.2;
     let ok = true;
+    // …and off the two supply posts on this floor. The working-bay skip above
+    // covers the middle of the room; the frag post's bay reaches past it.
+    if (nearStore(px, pz, MAG.floor + 0.02, 2.0 + r)) ok = false;
     for (const d of doors) if (Math.hypot(px - d.x, pz - d.z) < 3.2 + r) ok = false;
     // …and 1.1 m of gangway between one stack and the next, so a man fits
     for (const q of put) if (Math.hypot(px - q.x, pz - q.z) < q.r + r + 1.1) ok = false;

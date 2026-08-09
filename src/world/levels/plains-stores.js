@@ -104,6 +104,56 @@ export function post(id, kind, x, y, z, yaw = 0, opts = {}) {
   };
 }
 
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * A STORE NOBODY CAN FIND IS NOT A STORE — the sign, and what it costs the map
+ * ════════════════════════════════════════════════════════════════════════════
+ * `Caches.nearby` is the only thing that puts a supply post on the HUD and it
+ * marks at 26 m on a 300 m map, dropping anything more than 8 m overhead. That
+ * is a decision about clutter and it is `src/match`'s to make; what it means for
+ * a level is that EVERYTHING BEYOND 26 m HAS TO BE SAID IN THE WORLD. It cost
+ * the tower two posts to learn: its weapon rack at 21.2 m and its cab at 26 m
+ * had never once been marked for anybody, and the answer was a lit band on each
+ * shaft face, photographed legible at 150 m.
+ *
+ * This is that band, lifted out of `plains-tower.js` so the fortress can carry
+ * the same three glyphs — an aid post, a stack of rounds, a rifle — instead of a
+ * second copy of them. It is EMISSION and not a light, for the reason stated
+ * there: `render` bakes the visible punctual count into every material's program
+ * cache key, so six lamps on a curtain wall would recompile the map.
+ *
+ * AND IT HAS A PLATE BEHIND IT. The tower's own note has the photograph: a strip
+ * of emission on an unlit night map is a slab of orange hanging in the air with
+ * nothing under it, which is the shape of the complaint about this map's
+ * graphics rather than the answer to it. A light has to have a thing holding it
+ * up.
+ *
+ * @param {number} w   one mark's height, metres. 1.2 m at 2.9 m up on a 4.4 m
+ *                     curtain is 8-10 px at 150 m on a 1600 px frame, which is
+ *                     the range the tower's 1.5 m mark was measured at.
+ * @param {number} gap metres from the middle mark to each of its neighbours.
+ */
+export function supplySign(A, x, y, z, nx, nz, yaw, w = 1.2, gap = 1.9) {
+  const tx = -nz, tz = nx;
+  const plateW = gap * 2 + w * 2.0;
+  // the plate, then the frame that gives it an edge in raking moonlight
+  A.add('metal_dark', BOX(A), LL(IDENT, x, y, z, yaw, 0.14, w * 1.7, plateW), { masks: [0.85, 0.45, 0.1] });
+  for (const s of [-1, 1]) {
+    A.add('metal_rust', BOX_THIN(A), LL(IDENT, x + nx * 0.05, y + s * w * 0.86, z + nz * 0.05, yaw,
+      0.08, 0.12, plateW), { masks: [0.9, 0.6, 0.05] });
+  }
+  const mark = (v, sy, sz, dy = 0) =>
+    A.add('ember', BOX_SOFT(A), LL(IDENT, x + nx * 0.09 + tx * v, y + dy, z + nz * 0.09 + tz * v, yaw, 0.05, sy, sz));
+  // ---- the cross ------------------------------------------------------------
+  mark(-gap, w, w * 0.3);
+  mark(-gap, w * 0.3, w);
+  // ---- the rounds: three bars in a stack ------------------------------------
+  for (let k = -1; k <= 1; k++) mark(0, w * 0.2, w * 0.92, k * w * 0.36);
+  // ---- the rifle: a long bar with its magazine under the middle of it --------
+  mark(gap, w * 0.18, w, w * 0.16);
+  mark(gap + w * 0.12, w * 0.42, w * 0.2, -w * 0.2);
+}
+
 // ───────────────────────────────────────────────────────────────── dressing ──
 /**
  * A painted hardstanding square under a post, so the ground itself says a post
