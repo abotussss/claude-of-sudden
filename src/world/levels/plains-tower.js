@@ -324,6 +324,46 @@ const STORES = [
     id: 'NF-TOWER-CAB', kind: 'vantage', x: 0, z: 2.4, h: ROOF_Y + 0.32, yaw: Math.PI,
     perishable: true, botReachable: false, beacon: false, clip: true,
   },
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE BUTTON — 「管制塔の一番上は衛星爆撃呼び出しボタンがあり」
+   * ══════════════════════════════════════════════════════════════════════════
+   * THE HIGHEST THING ON THE MAP A MAN CAN STAND AT, and that is the price
+   * rather than a flourish. 26.12 m, on the cab floor, four storeys of dog-leg
+   * above the control room, glazed on all eight faces, with the only way down
+   * being the stair he came up. `src/match/nachtfeld.js`'s `SAT_STRIKE` is what
+   * it does; this line is where it is.
+   *
+   * FACING +Z, i.e. AT ZONE D AND AT THE WHOLE SOUTHERN HALF OF THE PLAIN. The
+   * tower stands at z -32 and D at z 0, so a man at this console is looking
+   * over the point the tower overlooks — which is the answer to "how does he
+   * know what he is calling on": he is looking at it, and `_satTarget` picks by
+   * the bearing he is facing. The existing `NF-TOWER-CAB` vantage post is at
+   * z +2.4 facing the other way; 4.8 m apart is well outside
+   * `RULES.cacheUseRadius` 2.6, so `Caches.nearest` can never be ambiguous
+   * between them and neither is inside `nearStore`'s 2.6 m keep-out of the other.
+   *
+   * `perishable: true` IS THE DESIGN AND NOT BOOKKEEPING. 「そのため管制塔は
+   * 破壊されないといけない」 — Act I at p 0.50 razes the shell this stands on and
+   * `Caches.update` disables the post on that frame. The weapon is gone because
+   * the building is gone. @see `TOWER_ACT.progress`.
+   *
+   * `botReachable: false` is the same measured fact the rack and the cab post
+   * carry: `src/ai/nav.js` is a 2.5D height field and cannot express a shaft, so
+   * `Caches.prove` never puts any of the three in `botList`. @see the long note
+   * on `SAT_STRIKE` for why that makes this the player's weapon and what the
+   * enemy's answer to it is.
+   *
+   * `clip: true` FOR THE REASON THE CAB POST HAS IT — every surface up here is
+   * on `LAYER.CLIP` and a `STATIC` proxy standing on a clip floor at 26 m is a
+   * walkable island in the sky and a `_floatcheck` failure. It is dressed by
+   * `uplinkConsole` rather than by `dressPost`, which knows four kinds of crate
+   * and no consoles.
+   */
+  {
+    id: 'NF-TOWER-SATCALL', kind: 'satcall', x: 0, z: -2.4, h: ROOF_Y + 0.32, yaw: 0,
+    perishable: true, botReachable: false, beacon: false, clip: true,
+  },
 ];
 
 /**
@@ -370,8 +410,209 @@ function buildStores(A, rng, y, h) {
   for (const s of STORES) {
     if (Math.abs(s.h - h) > 0.6) continue;
     if (s.clip) A.clipProps = true;
-    dressPost(A, rng, s.kind, TOWER.x + s.x, y(s.h), TOWER.z + s.z, s.yaw, { clip: s.clip });
+    /**
+     * `dressPost` KNOWS FOUR KINDS OF CRATE AND NO CONSOLES, and it lives in
+     * `plains-stores.js`, which is shared with the fortress. The uplink is one
+     * object in one place on one map, so it is dressed here rather than by
+     * teaching the shared dresser a fifth vocabulary — and a `kind` it does not
+     * recognise falls through its `if` chain and dresses NOTHING AT ALL, which
+     * is a silent no-op and this codebase's signature defect. Named, not
+     * defaulted.
+     */
+    if (s.kind === 'satcall') uplinkConsole(A, TOWER.x + s.x, y(s.h), TOWER.z + s.z, s.yaw);
+    else dressPost(A, rng, s.kind, TOWER.x + s.x, y(s.h), TOWER.z + s.z, s.yaw, { clip: s.clip });
     if (s.clip) A.clipProps = false;
+  }
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE SATELLITE UPLINK CONSOLE — what the button actually looks like
+ * ════════════════════════════════════════════════════════════════════════════
+ * 「管制塔の一番上は衛星爆撃呼び出しボタンがあり」
+ *
+ * A desk with one guarded red button on it, and everything about it is drawn to
+ * be READ FROM THE HATCH — a man arriving at the top of a dog-leg stair in the
+ * dark has to know which of the two posts in this cab is the weapon. So the
+ * console is the only thing up here that is RED: the eight ordinary consoles
+ * round the cab wall are `window_glow` (the map's amber), and this is `ember`
+ * under a red-painted guard, with a lit ARC on the deck under it.
+ *
+ * EVERY PIECE IS ON `LAYER.CLIP` and that is not cosmetic — `A.clipProps` is
+ * set by `buildStores` round this call for the reason the cab post's own note
+ * gives, and `solid` below is `A.clipBox` and never `A.box`. A `STATIC` proxy
+ * on a clip floor at 26 m is a walkable island in the sky.
+ *
+ * NO LIGHT SLOT. `world`'s punctual count forces every material's program cache
+ * key on this renderer, so a lamp here would recompile the map — the same
+ * argument `stairMarks` and `signBand` are both built on. It is emission.
+ */
+function uplinkConsole(A, x, y, z, yaw) {
+  const c = Math.cos(yaw), s = Math.sin(yaw);
+  /** post-local (right, forward) -> world. `forward` is the way the operator looks. */
+  const px = (r, f) => x + c * r + s * f;
+  const pz = (r, f) => z - s * r + c * f;
+  const box = BOX(A);
+
+  /**
+   * ---- the deck ring: a dashed lit circle you stand inside -----------------
+   * The other seven posts on this tower are announced by `bay()`'s painted
+   * hardstanding, which is 2 cm of unlit paint and is invisible in a cab at
+   * 21.65 hours. `LL`'s local +X at angle `a` is `(cos a, -sin a)`, i.e.
+   * perpendicular to the radius, so `sx` is the arc length of one dash and `sz`
+   * its radial thickness.
+   */
+  for (let i = 0; i < 8; i++) {
+    const a = yaw + (i / 8) * Math.PI * 2;
+    A.add('ember', BOX_THIN(A), LL(IDENT,
+      x + Math.sin(a) * 1.25, y + 0.03, z + Math.cos(a) * 1.25, a, 0.42, 0.02, 0.1));
+  }
+
+  // ---- the desk ------------------------------------------------------------
+  A.add('metal_dark', box, LL(IDENT, px(0, 0.55), y + 0.5, pz(0, 0.55), yaw, 2.0, 1.0, 0.85),
+    { masks: [0.8, 0.5, 0.15] });
+  A.clipBox('metal', px(0, 0.55), y + 0.5, pz(0, 0.55), 2.0, 1.0, 0.85, yaw);
+  // the raked top, so it reads as a desk rather than as a crate
+  A.add('metal_dark', BOX_SOFT(A), LL(IDENT, px(0, 0.42), y + 1.03, pz(0, 0.42), yaw, 2.1, 0.09, 1.05, 0, 0.22),
+    { masks: [0.85, 0.45, 0.1] });
+  // the instrument face under the rake — amber, like every other panel in here
+  A.add('window_glow', BOX_FINE(A), LL(IDENT, px(0, 0.16), y + 0.92, pz(0, 0.16), yaw, 1.45, 0.26, 0.06, 0, -0.5),
+    { masks: [0.2, 0.3, 0] });
+
+  // ---- the button, and it is the only red thing in the cab ------------------
+  // the guard: a red-painted horseshoe standing proud of the desk top
+  for (const r of [-0.34, 0.34]) {
+    A.add('metal_rust', BOX(A), LL(IDENT, px(r, 0.62), y + 1.16, pz(r, 0.62), yaw, 0.09, 0.22, 0.42),
+      { masks: [0.95, 0.4, 0.05] });
+  }
+  A.add('metal_rust', BOX(A), LL(IDENT, px(0, 0.83), y + 1.16, pz(0, 0.83), yaw, 0.77, 0.22, 0.09),
+    { masks: [0.95, 0.4, 0.05] });
+  // the housing and the lit dome in it
+  A.add('metal_dark', box, LL(IDENT, px(0, 0.6), y + 1.09, pz(0, 0.6), yaw, 0.62, 0.12, 0.5),
+    { masks: [0.85, 0.5, 0.1] });
+  A.add('ember', BOX_SOFT(A), LL(IDENT, px(0, 0.6), y + 1.17, pz(0, 0.6), yaw, 0.4, 0.09, 0.32));
+  // the two strips down the desk cheeks, so the console has an outline at night
+  for (const r of [-0.94, 0.94]) {
+    A.add('ember', BOX_SOFT(A), LL(IDENT, px(r, 0.55), y + 0.55, pz(r, 0.55), yaw, 0.05, 0.66, 0.07));
+  }
+
+  /**
+   * ---- the mark on the desk face, so it says WHAT it is --------------------
+   * ON THE FACE THE OPERATOR WALKS UP TO, which is the near one at forward
+   * 0.125, and turned to face him. `LL`'s local +X is `(cos ry, -sin ry)` and
+   * `uplinkGlyph` puts the plate's thin axis on it, so a plate that faces the
+   * operator (-forward) needs `ry = yaw + π/2`. Checked against `signBand`,
+   * where the same relation holds between `e.yaw` and the outward normal.
+   */
+  uplinkGlyph(A, px(0, 0.11), y + 0.62, pz(0, 0.11), yaw + Math.PI / 2, 0.5);
+
+  // ---- and the cable that ties it to the mast ------------------------------
+  A.add('metal_rust', BOX_THIN(A), LL(IDENT, px(-0.98, 0.9), y + 0.36, pz(-0.98, 0.9), yaw, 0.09, 0.72, 0.09),
+    { masks: [0.9, 0.5, 0.05] });
+}
+
+/**
+ * THE MARK. A satellite over three descending chevrons over the ground line —
+ * "something comes down from up there onto here". It is the ONE glyph in this
+ * file that is not about supply, it is drawn wherever the uplink is announced
+ * (the shaft band at 20 m, the cab fascia at 29 m, the console's own desk) and
+ * it is deliberately the same shape at all three ranges so the thing you read
+ * from 150 m is the thing you find when you arrive.
+ *
+ * `w` is the mark's own width; everything else is a fraction of it, so one call
+ * draws it at 0.5 m on a desk and at 1.6 m on a wall.
+ */
+function uplinkGlyph(A, mx, my, mz, ry, w) {
+  /**
+   * `LL(pm, x, y, z, ry, sx, sy, sz, rx, rz)` puts local +Z on `(sin ry, cos ry)`
+   * and local +X on `(cos ry, -sin ry)`. So `sx` is the plate's thickness along
+   * its own normal, `sz` is its width along the face, and the marks step along
+   * `(sin ry, cos ry)` — the same convention `supplyMarks` reads out of
+   * `edgeInfo`, where `e.yaw = atan2(dx, dz)` and the tangent is `(dx, dz)`.
+   */
+  const tx = Math.sin(ry), tz = Math.cos(ry);
+  const bar = (v, dy, sy, sz, roll = 0) =>
+    A.add('ember', BOX_SOFT(A), LL(IDENT, mx + tx * v, my + dy, mz + tz * v, ry, 0.055, sy, sz, 0, roll));
+  // the satellite: a body with two panels
+  bar(0, w * 0.62, w * 0.2, w * 0.24);
+  bar(-w * 0.38, w * 0.62, w * 0.1, w * 0.34);
+  bar(w * 0.38, w * 0.62, w * 0.1, w * 0.34);
+  // three chevrons coming down, each a pair of raked bars
+  for (let k = 0; k < 3; k++) {
+    const dy = w * (0.28 - k * 0.22);
+    bar(-w * 0.17, dy, w * 0.09, w * 0.36, 0.62);
+    bar(w * 0.17, dy, w * 0.09, w * 0.36, -0.62);
+  }
+  // …and the ground it is coming down onto
+  bar(0, -w * 0.5, w * 0.09, w * 0.92);
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * HOW A PLAYER FINDS OUT THERE IS A BUTTON AT ALL
+ * ════════════════════════════════════════════════════════════════════════════
+ * THE PRECEDENT AND THE FAILURE IT ANSWERS ARE BOTH ALREADY IN THIS FILE.
+ * `Caches.nearby` is the only thing that marks a post, it marks at
+ * `RULES.cacheMarkerRange` 26 m on a 300 m map, and it drops anything more than
+ * `dy > 8` overhead — so the weapon rack and the cab post were never once
+ * marked for anybody in the whole of their existence. The answer to that was
+ * `signBand`: lit marks at 18.6 m, photographed legible from 150 m. A button
+ * that decides whether a capture point can be held has to clear the same bar.
+ *
+ * SO IT GETS ITS OWN BAND, ABOVE THE SUPPLY ONE, AND NOT A FOURTH SUPPLY GLYPH.
+ * Two reasons, and the second is the load-bearing one:
+ *
+ *   1. It is not supply. A fourth mark in the row of three says "there is
+ *      another crate up there", which is the wrong sentence.
+ *   2. NOTHING THAT IS ALREADY PHOTOGRAPHED MOVES. `supplyMarks` is spaced and
+ *      sized against `shots/tzraze/02-intact-150m-west`; re-spacing three marks
+ *      to fit a fourth would change a frame somebody has already reviewed, for
+ *      a mark that wants to be different anyway.
+ *
+ * WHERE THE CLEAR WALL IS, measured off `shaftFaces`'s own slit table rather
+ * than guessed: the slits are at `FLOORS[f] + 1.35 ± 0.82`, so the bands of
+ * clear concrete on a shaft face are 13.77-16.93 (which `signBand` fills) and
+ * 18.57-21.73. This sits in the middle of the second one.
+ *
+ * AND IT POINTS. A lit line runs from the top of this plate up the face to the
+ * underside of the cab, so the sign is not just a symbol on a wall — it is an
+ * arrow at the thing it is about, from the one bearing a man reads it on.
+ */
+function uplinkBand(A, y) {
+  /** Between the second and third slit windows: 18.57 .. 21.73 of clear wall. */
+  const bandY = (FLOORS[2] + 1.35 + 0.82 + (FLOORS[3] + 1.35 - 0.82)) / 2;
+  for (let i = 0; i < SH.length; i++) {
+    const e = edgeInfo(SH, i);
+    const isDoor = DOORS.some((d) => Math.abs(e.nx - d.ax) < 0.05 && Math.abs(e.nz - d.az) < 0.05);
+    if (!isDoor) continue;
+    const ox = e.nx * 0.52, oz = e.nz * 0.52;
+    /**
+     * THE BACKING PLATE, for `signBand`'s reason: a strip of emission on a dark
+     * post at 32 m is a slab of orange light hanging in the air with nothing
+     * under it. A light on a night map has to have a thing holding it up.
+     */
+    A.add('metal_dark', BOX(A), LL(IDENT, e.mx + e.nx * 0.46, y(bandY), e.mz + e.nz * 0.46, e.yaw,
+      0.16, 2.2, 3.4), { masks: [0.85, 0.45, 0.1] });
+    for (const s of [-1, 1]) {
+      A.add('metal_rust', BOX_THIN(A), LL(IDENT, e.mx + ox, y(bandY) + s * 1.13, e.mz + oz, e.yaw,
+        0.09, 0.14, 3.4), { masks: [0.9, 0.6, 0.05] });
+    }
+    uplinkGlyph(A, e.mx + ox, y(bandY), e.mz + oz, e.yaw, 1.6);
+    /**
+     * …AND THE LINE UP TO THE CAB. From the top frame of this plate to the
+     * underside of the cab floor, on the face's own centreline. It is the only
+     * part of the sign that says WHERE, and it is why this is a band on the
+     * shaft rather than a plate on the cab: from the ground you cannot see the
+     * top of the tower and the sign in one glance unless something joins them.
+     */
+    const y0 = bandY + 1.2, y1 = ROOF_Y - 0.4;
+    A.add('ember', BOX_SOFT(A), LL(IDENT, e.mx + ox, y((y0 + y1) / 2), e.mz + oz, e.yaw,
+      0.05, y1 - y0, 0.13));
+    // three ticks up it, so the line reads as a direction and not as a seam
+    for (let k = 1; k <= 3; k++) {
+      const ty = y0 + (k / 4) * (y1 - y0);
+      A.add('ember', BOX_SOFT(A), LL(IDENT, e.mx + ox, y(ty), e.mz + oz, e.yaw, 0.05, 0.1, 0.52));
+    }
   }
 }
 
@@ -1515,6 +1756,8 @@ function buildShaft(A, rng, y, lights) {
   shaftFaces(A, rng, y);
   shaftLining(A, rng, y);
   signBand(A, y);
+  /** …and the one above it, which is about the button rather than the stores. */
+  uplinkBand(A, y);
   controlRoom(A, rng, y, lights);
   shaftInterior(A, rng, y, lights);
 

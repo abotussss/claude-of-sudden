@@ -173,6 +173,42 @@ const KINDS = new Set(['ammo', 'weapon', 'grenade', 'vantage']);
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
+ * THE KINDS THAT ARE NOT SUPPLY — a post that hands over nothing at all
+ * ════════════════════════════════════════════════════════════════════════════
+ * `satcall` is NACHTFELD's satellite uplink console at the top of the control
+ * tower (`NF-TOWER-SATCALL`, @see `SAT_STRIKE` in `src/match/nachtfeld.js`). It
+ * is in this list because it is a PLACE THE PLAYER WALKS UP TO AND HOLDS F ON,
+ * which is the one thing this file knows how to be — the prompt, the reach
+ * test, the world marker, the `perishable` death with its structure — and
+ * building a second proximity/prompt system beside this one to serve one post
+ * is how two of them end up disagreeing about what "in reach" means.
+ *
+ * IT IS NOT A CACHE, AND EVERY VERB IN THIS FILE REFUSES IT BY NAME RATHER THAN
+ * BY FALLING THROUGH:
+ *
+ *   `take`            returns a `_deny`, never the `else` branch. The `else` in
+ *                     that method is "ammo and vantage — both are a box of
+ *                     rounds", and an unlisted kind reaching it is a console
+ *                     that hands out magazines. The silent no-op / silent
+ *                     wrong-op is this codebase's signature defect and this is
+ *                     exactly its shape.
+ *   `takeForBot`      the same, and it can never be asked anyway: the post is
+ *                     `botReachable: false`, so `prove()` never puts it in
+ *                     `botList` and `nearestBotCache` cannot see it.
+ *   the beacon        `beacon: false` on the post. `plantBeacon` refuses and the
+ *                     prompt does not offer. @see the note on `beaconReady` in
+ *                     `MatchSystem._updateCacheUse`.
+ *   `ready`/`readyAt` untouched and unused — the uplink's cooldown is
+ *                     `SAT_STRIKE.cooldown` and lives on `match`, because it is
+ *                     ONE clock for the whole side rather than one per crate.
+ *
+ * WHAT DOES SERVE IT is `MatchSystem._satConsole`, which this file hands the
+ * post to and knows nothing else about.
+ */
+const NON_SUPPLY_KINDS = new Set(['satcall']);
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
  * THE MEDICAL ZONE — "医療ゾーンを作り、そこで医療キットをFで取得したら体力を５０
  * 回復するようにして 医療ゾーンは基本、敵味方関係なく使えるようにして"
  * ════════════════════════════════════════════════════════════════════════════
@@ -428,7 +464,7 @@ export class Caches {
       const toWorld = typeof w?.levelToWorld === 'function' ? w.levelToWorld.bind(w) : null;
       for (const d of w?.demolitions ?? []) {
         for (const f of d.caches ?? []) {
-          if (!f || !KINDS.has(f.kind) && f.kind !== 'medic') continue;
+          if (!f || (!KINDS.has(f.kind) && f.kind !== 'medic' && !NON_SUPPLY_KINDS.has(f.kind))) continue;
           const p = toWorld
             ? toWorld(f.level.x, f.level.y, f.level.z, new THREE.Vector3())
             : new THREE.Vector3(f.level.x, f.level.y, f.level.z);
@@ -458,6 +494,7 @@ export class Caches {
             rec.label = weapons.states.get(rec.weaponId)?.def?.label ?? rec.weaponId;
           }
           if (f.kind === 'medic') { rec.label = 'MED KIT'; this.medicCount++; }
+          if (f.kind === 'satcall') rec.label = 'SATELLITE UPLINK';
           this.list.push(rec);
           if (rec.work) this.workCaches.push(rec);
         }
@@ -691,6 +728,14 @@ export class Caches {
    */
   take(c, now) {
     this.denied = null;
+    /**
+     * A POST THAT IS NOT A SUPPLY POST IS REFUSED BY NAME. @see
+     * `NON_SUPPLY_KINDS`. Without this line the uplink console falls all the way
+     * through to the `else` at the bottom of this method — "ammo and vantage,
+     * both are a box of rounds" — and a satellite fire-control desk hands out
+     * magazines. `MatchSystem._satConsole` owns this post and never calls here.
+     */
+    if (c && NON_SUPPLY_KINDS.has(c.kind)) return this._deny('NOT A SUPPLY POST', c.label || c.id);
     const wp = this.weapons;
     if (!wp) return null;
     if (!this.ready(c, now)) {
@@ -867,6 +912,11 @@ export class Caches {
    */
   takeForBot(c, actor, ai, now) {
     if (!c || !actor || !ai || !this.ready(c, now)) return null;
+    /** @see `NON_SUPPLY_KINDS` and `take`'s own guard. Unreachable today —
+     *  every such post is `botReachable: false` and never enters `botList` —
+     *  and written anyway, because "unreachable" is a property of the post
+     *  table and not of this method. */
+    if (NON_SUPPLY_KINDS.has(c.kind)) return null;
     /**
      * A BOT CANNOT BE HANDED A MED KIT, AND THAT IS A BOUNDARY RATHER THAN AN
      * OMISSION. `Agent.health` is `src/ai`'s state and there is no `ai.heal`

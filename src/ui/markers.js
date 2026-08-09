@@ -149,6 +149,34 @@ function medicGlyph(parent) {
 }
 
 /**
+ * THE SIXTH KIND, AND IT IS THE ONE THING UP THERE THAT IS NOT SUPPLY.
+ * `medicGlyph`'s note ends "anything `match` invents from here on gets a glyph
+ * or gets a bug report", and `satcall` is the first thing invented since: the
+ * satellite uplink console at the top of NACHTFELD's control tower. Falling
+ * through to `?? 1` would draw an AMMUNITION CRATE on the map's only weapon of
+ * this kind, which is precisely the failure that note was written about.
+ *
+ * The same shape the tower itself is signed with — a satellite over descending
+ * chevrons over a ground line (@see `uplinkGlyph` in `plains-tower.js`) — so
+ * the mark on the HUD and the lit mark on the shaft at 20 m are one symbol.
+ * `currentColor` throughout, unlike the med cross, because this one is never
+ * about a thing you are short of.
+ */
+function uplinkGlyph(parent) {
+  const s = svg('svg', { viewBox: '0 0 16 16' }, parent);
+  // the satellite: a body with two panels
+  svg('rect', { x: 6.9, y: 1.4, width: 2.2, height: 2.2, fill: 'currentColor' }, s);
+  svg('rect', { x: 3.1, y: 1.9, width: 3.2, height: 1.2, fill: 'currentColor' }, s);
+  svg('rect', { x: 9.7, y: 1.9, width: 3.2, height: 1.2, fill: 'currentColor' }, s);
+  // two chevrons coming down
+  svg('path', { d: 'M4.4 5.6 8 8.6l3.6-3M4.4 9.1 8 12.1l3.6-3', fill: 'none',
+    stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'square' }, s);
+  // …and the ground it is coming down onto
+  svg('rect', { x: 3.2, y: 13.4, width: 9.6, height: 1.4, fill: 'currentColor' }, s);
+  return s;
+}
+
+/**
  * The impact reticle: a bracketed cross on the point that is about to stop
  * existing. Deliberately NOT the grenade glyph — a grenade is a thing you look
  * for on the floor, a strike is an AREA you have to not be in, and the two
@@ -324,7 +352,7 @@ export class WorldMarkers {
       () => {
         const node = el('div', 'ow-cache');
         const gl = el('div', 'ow-cache-glyph', node);
-        const glyphs = [rackGlyph(gl), crateGlyph(gl), fragGlyph(gl), nestGlyph(gl), medicGlyph(gl)];
+        const glyphs = [rackGlyph(gl), crateGlyph(gl), fragGlyph(gl), nestGlyph(gl), medicGlyph(gl), uplinkGlyph(gl)];
         for (const g of glyphs) g.style.display = 'none';
         const chev = chevron(el('div', 'ow-cache-chev', node));
         const label = el('div', 'ow-cache-label', node, '');
@@ -342,7 +370,7 @@ export class WorldMarkers {
      * this table stopped being allowed to have a miss case that draws a crate:
      * anything `match` invents from here on gets a glyph or gets a bug report.
      */
-    this._cacheGlyph = { weapon: 0, ammo: 1, grenade: 2, vantage: 3, medic: 4 };
+    this._cacheGlyph = { weapon: 0, ammo: 1, grenade: 2, vantage: 3, medic: 4, satcall: 5 };
 
     /* -------------------------------------------------------- armour ---
      * THE HULL. 「戦車は相手チームの場合はハイライトしてわかりやすいように」
