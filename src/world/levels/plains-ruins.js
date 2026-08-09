@@ -901,7 +901,17 @@ const ANCHORS = [
   [66, -48],    //   82    12.6   1.1 m   …and its second building
   [84, -34],    //   91    11.6   1.3 m   the east centre
   [132, -30],   //  135    18.2   2.1 m   the east foot — the widest hole on the map
-  [86, 20],     //   88    13.1   2.6 m   east of the fortress
+  /**
+   * IT WAS (86, 20) AND THAT COST BLUE-E'S SPOKE TO E. 13.1 m off RED-E's
+   * diagonal to C, which is enough on its own — but a pinch is a question about
+   * BOTH sides of the lane, and with a berm already on the far shoulder
+   * `_bakePath` came back "pinch 3.5 m at sample 43 (86,16)", four metres off
+   * this shell's south wall. The lesson is the one `plains-cover.js` records
+   * about `trenchKeepOut` feeding `plainsOpen`: clearance to a centreline is a
+   * necessary test and not a sufficient one, and the gate is the boot log.
+   * (96, 24) is 19.6 m off the nearest lane and 61 m off the fortress.
+   */
+  [96, 24],     //   99    19.6   2.4 m   east of the fortress
   [114, 60],    //  129    14.0   2.5 m   between B and E
   [40, 22],     //   46     9.7   1.6 m   the closest to D anything may stand
   [84, 80],     //  116    14.0   2.9 m   south-east of the fortress, short of B
@@ -941,7 +951,7 @@ const ANCHORS = [
  */
 const CAPS = [
   7.4, 6.4, 7.4, 12.1, 5.3, 10.5, 9.7, 6.8, 9.5, 8.6, 7.6, 14.2,
-  9.1, 10.0, 5.7, 10.0, 13.3, 11.8, 11.8, 10.6, 10.3, 7.4, 6.3,
+  15.6, 10.0, 5.7, 10.0, 13.3, 11.8, 11.8, 10.6, 10.3, 7.4, 6.3,
 ];
 
 /**
@@ -968,6 +978,15 @@ const SHELLS = [
   { kind: 'blockhouse', w: 9.5, d: 8.2, r: 6.3, mass: 5.8 },
   { kind: 'silos', n: 2, w: 10.4, d: 5.4, r: 5.9, mass: 5.2 },
   { kind: 'blockhouse', w: 8, d: 7, r: 5.3, mass: 4.9 },
+  /**
+   * The bottom of the ladder, and it exists because of one anchor. (−14, −110)
+   * is the flattest ground on the map and 9.3 m off RED-C's approach, which
+   * leaves `cap` 5.3 — exactly the smallest shell there was, so it had 1.5 m of
+   * slide and nowhere to spend it, and the anchor dropped. Six and a half metres
+   * by five and a half still has a 5.4 × 4.6 m room inside it and still stands
+   * to eleven; what it does not have is a footprint that needs a hole.
+   */
+  { kind: 'blockhouse', w: 6.4, d: 5.6, r: 4.3, mass: 3.9 },
 ];
 /** Which kind each anchor asks for first. Rotated, so no two neighbours match. */
 const PREFER = ['blockhouse', 'silos', 'terrace', 'hall'];
@@ -1096,16 +1115,25 @@ export function buildRuinQuarter(A, groundY, isOpen, pads, sites) {
        * about where the crossing solver's hundred stations landed, because those
        * are placed by a search of their own against the same ground.
        *
-       * HOW FAR IT MAY SLIDE IS NOT A TASTE NUMBER. `cap` is the half-diagonal
-       * this anchor can spend before its outermost wall comes within six metres
-       * of an armour centreline. A shell whose own half-diagonal is `S.r` is
-       * therefore free to move `cap − S.r` in ANY direction and still hold that
-       * margin — a blockhouse in a hole sized for a hall gets seven metres of
-       * search, a hall in the same hole gets none. Plus two, because six metres
-       * is already three times the 3.55 m of total span `_bakePath` needs and
-       * the gate that decides this is `[tank] 36/36`, not this arithmetic.
+       * HOW FAR IT MAY SLIDE IS NOT A TASTE NUMBER, IT IS THE REST OF THE
+       * BUDGET. `cap` is `lane − 4`: the half-diagonal this anchor can spend
+       * before its outermost wall comes within four metres of an armour
+       * centreline. A shell of half-diagonal `S.r` has `cap − S.r` of that
+       * budget left, and spending it on movement is exactly as good as spending
+       * it on size — so a blockhouse in a hole sized for a hall gets metres of
+       * search and a hall in the same hole gets none, which is right.
+       *
+       * IT WAS `max(4, cap − S.r) + 2` AND THAT IS HOW THE FLOOR AND THE PLUS
+       * TWO GET PAID FOR. A three-silo range wanted the anchor at (−44, 104),
+       * 14.6 m off BLUE-W's spoke to zone B with `S.r` 8.2 and `cap` 10.6 — 2.4 m
+       * of slide left. The floor gave it six, it took 5.4 of them, and the wall
+       * ended up 1.0 m off the centreline: `_dtankdiag` came back with the leg
+       * still baked and its narrowest street down from 7.5 m to 4.0 m, against a
+       * 3.55 m pinch. Half a metre of margin on a gate that has to read 36/36
+       * is not margin. The budget is the budget; a shell that cannot move is a
+       * shell that takes the next size down and moves instead.
        */
-      const slide = Math.max(4, cap - S.r) + 2;
+      const slide = Math.max(1.5, cap - S.r);
       for (let att = 0; att < 96 && !placed; att++) {
         const rad = att === 0 ? 0 : slide * Math.sqrt((att % 12) / 12);
         const ang = att * 2.399963;
