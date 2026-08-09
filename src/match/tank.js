@@ -6349,8 +6349,6 @@ export class Armour {
      * `kind` is the field that says what it is without taking the attacker off
      * the payload, and either channel is accepted here.
      */
-    const frag = e.kind === 'grenade' ||
-      (typeof e.source === 'string' && FRAG_ORDNANCE.has(e.source));
     /**
      * A MINE AND A TANK'S OWN SHELL, on the same `kind` channel the bot frag
      * opened. Both are read here rather than off `source` because `source` is
@@ -6360,6 +6358,17 @@ export class Armour {
     const mine = e.kind === 'atmine' ||
       (typeof e.source === 'string' && MINE_ORDNANCE.has(e.source));
     const shell = e.kind === 'tankmain';
+    /**
+     * …AND A MINE IS NOT A FRAG. Measured, not foreseen: an unowned mine's
+     * payload named 'grenade' in `source` (that is the string `grenades.js`
+     * falls back to when no man laid it), so the FIRST run of `_dtankmine.mjs`
+     * printed the kill as "1 frags for 4294" beside "1 AT mines for 4294" —
+     * the multiplier was right, the ledger counted it twice. `grenades.js` now
+     * falls back to `def.ordnance` instead, and this clause is the belt to that
+     * brace: whatever a mine calls itself, it is not counted as a frag.
+     */
+    const frag = !mine && (e.kind === 'grenade' ||
+      (typeof e.source === 'string' && FRAG_ORDNANCE.has(e.source)));
     for (const tank of this.tanks) {
       if (!tank.alive) continue;
       if (e.source === tank) continue; // our own shell going off down the street

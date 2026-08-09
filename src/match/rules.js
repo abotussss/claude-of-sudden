@@ -1957,16 +1957,19 @@ export const RULES = {
    *
    *     seed  7   BLUE past 450 at t+304s   match ended t+532s   228s left
    *     seed 11   BLUE past 450 at t+332s   match ended t+612s   280s left
-   *     seed 13   BLUE past 450 at t+329s   match ended t+560s   231s left
    *
-   * SO THE BUDGET IS ABOUT 230 SECONDS. Thirty rounds at one every ~13 s from
-   * the BATTERY is 390 s — the battery would still be laying its ninth round
-   * when the whistle went, which is 「２０秒で終わるイベント」 inverted and is the
-   * exact failure `hiddenSquadWaveGap`'s own note was written about. Thirty
-   * rounds at one every ~13 s from EACH OF THREE GUNS is ten rounds a gun,
-   * ~135 s of engagement, all thirty delivered with ninety seconds of match
-   * still to run — which matters, because the squad keeps arriving to the
-   * whistle and the deadlock has to still be a deadlock after the guns leave.
+   * SO THE BUDGET IS 228-280 SECONDS. Thirty rounds at one every ~13 s from the
+   * BATTERY is 390 s — it would still be laying its eighteenth round when the
+   * whistle went, which is 「２０秒で終わるイベント」 inverted and is the exact
+   * failure `hiddenSquadWaveGap`'s own note was written about. Thirty rounds at
+   * one every ~13 s from EACH OF THREE GUNS is ten rounds a gun. MEASURED
+   * end-to-end with `_battfire.mjs` at these numbers: per-gun mean gaps of
+   * 13.99 / 14.02 / 14.20 s, a battery round every 4.66 s, and 175 SECONDS from
+   * the first vehicle cresting the ridge to the last one going back over it —
+   * including the 21 s descent and the six berth shifts. All thirty delivered
+   * with 50-105 s of match still to run, which matters: the squad keeps
+   * arriving to the whistle and the deadlock has to still be a deadlock after
+   * the guns leave.
    *
    * IT IS A RANGE AND NOT A NUMBER so three guns on the same cycle do not
    * converge into a three-round volley; the first lay of each is additionally
@@ -1974,7 +1977,7 @@ export const RULES = {
    * out at a round about every 4.5 s, spread over up to three different aim
    * points.
    */
-  mountainBatteryInterval: [12.5, 16.5],
+  mountainBatteryInterval: [11.5, 14.5],
   /**
    * SECONDS OF LAY BEFORE A LAUNCH — stage one of the telegraph. The hull
    * traverses, a `drone_lock` tone sounds AT THE TARGET and a haze ring

@@ -1099,7 +1099,7 @@ export class ThrownGrenades {
      * carrying an actor here cannot wound anybody team-blind through `ai`'s own
      * listener — @see the note on `_blast.damage`.
      */
-    b.source = owner ?? 'grenade';
+    b.source = owner ?? def?.ordnance ?? 'grenade';
     this.ctx.events.emit('explosion', b);
     this._damageActors(position, radius, damage, owner);
     this._damagePlayer(position, radius, damage);
