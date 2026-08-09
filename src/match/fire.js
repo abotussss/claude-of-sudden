@@ -36,17 +36,41 @@
  * by geometry — is verbatim, comments included, and the notes in it are the
  * measurements that produced those numbers. Do not tune them here for one of
  * the two fires; give that fire an attribute.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * `uBlast` — THE SHOCKWAVE, AND IT IS THE ONLY WAY TO SPEND THE FIRE THAT IS
+ * ALREADY THERE INSTEAD OF DISPLACING IT
+ * ────────────────────────────────────────────────────────────────────────────
+ * 「大爆発演出はド派手にしないと」. When the carrier lands there is already an
+ * 8 546 m² conflagration and a 157 m scar burning on this plain, and both of
+ * them are made of THIS material. A detonation that only draws new things has
+ * to draw them ON TOP of that; a detonation that drives one more uniform makes
+ * 2 700 quads that are already on screen, already paid for and already in
+ * exactly the right place LEAN AWAY FROM IT AND FLARE.
+ *
+ * `uBlast` is `vec4(x, z, wavefront radius, strength)` in world space. A quad
+ * within `WAVE_W` of the wavefront is pushed over and brightened, on a gaussian
+ * so the front has no edge. Ten instructions on a vertex shader that already
+ * runs, on a mesh that already draws, with no new instance, no new draw call,
+ * no particle-ring slot and no light.
+ *
+ * DEFAULT IS `w = 0`, which multiplies the whole term out — the scar's
+ * fragments are bit-identical to what they were when it was the only fire, and
+ * both fires still share ONE program because the source is one string.
  */
 import * as THREE from 'three';
 
 /**
- * @param {object} uniforms  `{ uT, uFade, uGain }`, each a `{ value }` box the
- *                           caller keeps and drives. `uGain` may be omitted and
- *                           defaults to 1.0, which is what the scar passes.
+ * @param {object} uniforms  `{ uT, uFade, uGain, uBlast }`, each a `{ value }`
+ *                           box the caller keeps and drives. `uGain` and
+ *                           `uBlast` may be omitted; they default to the
+ *                           identity, which is what the scar passed before
+ *                           either existed.
  * @returns {THREE.ShaderMaterial}
  */
 export function makeFireMaterial(uniforms) {
   if (!uniforms.uGain) uniforms.uGain = { value: 1 };
+  if (!uniforms.uBlast) uniforms.uBlast = { value: new THREE.Vector4(0, 0, -1, 0) };
   const mat = new THREE.ShaderMaterial({
     uniforms,
     transparent: true,
@@ -58,6 +82,7 @@ export function makeFireMaterial(uniforms) {
         attribute vec4 aFire;   // x light-at, y phase, z height, w flicker
         attribute float aKind;  // 0 tongue, 1 bed
         uniform float uT;
+        uniform vec4 uBlast;   // xz centre, z wavefront radius, w strength
         varying vec2 vUv;
         varying float vHot;
         varying float vKind;
@@ -76,11 +101,37 @@ export function makeFireMaterial(uniforms) {
           float w = aAt.w * ( 0.92 + f * 0.12 );
           vHot = 0.55 + f * 0.45;
           /**
+           * THE WAVEFRONT PASSES. uBlast.w is 0 for the whole match except for
+           * the second and a half after the carrier lands, so this branch is
+           * UNIFORM -- every invocation in every warp takes the same side of it
+           * and it costs nothing when there is no blast.
+           *
+           * The fire is dragged OUTWARD along its own bearing from the centre,
+           * whipped taller and flared, on a gaussian 14 m wide so the front has
+           * no edge to give it away. It is the base that moves and not the tip:
+           * a wave that bent the tips would read as wind, and this is a wall of
+           * air arriving.
+           *
+           * (No backticks in here. This comment lives inside a JS template
+           * literal and one backtick ends the shader.)
+           */
+          vec3 fpos = aAt.xyz;
+          float bs = 0.0;
+          if ( uBlast.w > 0.0 ) {
+            vec2 rd = fpos.xz - uBlast.xy;
+            float rl = length( rd ) + 1e-4;
+            float dw = ( rl - uBlast.z ) / 14.0;
+            bs = exp( -dw * dw ) * uBlast.w;
+            fpos.xz += ( rd / rl ) * bs * 8.0;
+            h *= 1.0 + bs * 1.7;
+            vHot *= 1.0 + bs * 1.3;
+          }
+          /**
            * THE BILLBOARD, BUILT IN VIEW SPACE. The base goes through the model
            * view once; the corners are then offset on the view axes, so the quad
            * faces the camera from every bearing and still stands on its base.
            */
-          vec4 base = modelViewMatrix * vec4( aAt.xyz, 1.0 );
+          vec4 base = modelViewMatrix * vec4( fpos, 1.0 );
           /**
            * WHY THE FIRE WENT PALE AT EIGHTY METRES, AND IT IS NOT THE COLOUR.
            *

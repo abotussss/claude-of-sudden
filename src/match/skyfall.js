@@ -120,7 +120,8 @@
  * discipline `Airstrike._bakeSettled` uses for the settled pose of a building.
  */
 import * as THREE from 'three';
-import { mergeGeometries } from './airstrike.js';
+import { chunkGeometry, makeChunkMaterial, mergeGeometries } from './airstrike.js';
+import { BlastBuilder, KIND, makeBlastMaterial } from '../fx/detonation.js';
 import { makeFireMaterial } from './fire.js';
 import { layoutFor } from './sites.js';
 
@@ -201,6 +202,122 @@ const MOTHER_BLAST_R = 52;
 const MOTHER_BLAST_D = 300;
 /** Seconds after the carrier stops before this file goes idle. */
 const TAIL = 0.8;
+
+/* ─────────────────────────────────────────────────────── the detonation ── */
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * 「母艦大爆発してないね？？？」「大爆発演出はド派手にしないと」
+ * ════════════════════════════════════════════════════════════════════════════
+ * WHAT WAS ACTUALLY HAPPENING AT t=18.4, MEASURED ON THE SHIPPING BUILD BEFORE
+ * ANY OF THIS WAS WRITTEN (`_sfbang.mjs`, which counts what is DRAWN rather
+ * than timing it, because `_sfcost.mjs` had already reported that the two extra
+ * waves cost 0.2 ms and that there was no spike at t=18.4 at all):
+ *
+ *   t=18.383    2 lit    3 add   43 decals 0   <- an ordinary frame
+ *   t=18.400   99 lit   63 add   43 decals     <- THE CARRIER LANDS
+ *   t=18.417    2 lit    2 add    0            <- and it is over
+ *
+ * ONE HUNDRED AND SIXTY-TWO PARTICLES, on one frame, and the biggest number in
+ * the row was the 43 scorch DECALS. Two things made it that:
+ *
+ *   1. `explode()` IS A FIXED-SIZE RECIPE. `nFire = round(12*pScale)+5` — there
+ *      is no `R` in any count in that file, only in the sizes. So the 86 m
+ *      carrier and a rifle grenade emit the same eleven fireball sprites, and
+ *      the carrier's are 36-60 m across. Eleven overlapping 50 m pale sprites
+ *      is not a large explosion, it is a SMOOTH CREAM DISC, and that is exactly
+ *      what it photographed as at 83 m. `_motherHit` was also calling it TWICE
+ *      — once through the damage event and once directly — so the disc was
+ *      drawn on top of itself.
+ *   2. BOTH RINGS WERE ALREADY FULL. `liveLit 2805/2805`, `liveAdd 2295/2295`,
+ *      pinned there by this file's own conflagration. Every sprite the
+ *      detonation emitted OVERWROTE one of the fire it was landing in, so
+ *      emitting harder could only ever have traded the fire for the explosion.
+ *
+ * And at 151 m it was a cream smudge dimmer than the street lamp beside it; at
+ * 240 m — which `_sfstand.mjs` measures as the farthest a man can stand from
+ * this impact, because the plain is a 176 m disc and first contact is 83 m from
+ * its centre — NOTHING HAPPENED AT ALL. `LightPool.register` asks the renderer
+ * for `range: 90`, and the renderer's own distance fade switches a light off
+ * past ~1.15x of that, so the 15 000 candela flash at first contact IS NOT LIT
+ * FOR ANY PLAYER MORE THAN ~103 m AWAY. A point light cannot be the light this
+ * event casts on the map. Only geometry that is its own glow can be.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * SO IT IS BAKED, AND THAT IS WHY IT CAN BE EXTRAVAGANT
+ * ────────────────────────────────────────────────────────────────────────────
+ * 1 728 quads and 180 airframe chunks, allocated at BOOT, drawn from four
+ * instanced buffers that never change, moved by closed-form motion in a vertex
+ * shader off ONE uniform each. The frame it fires assigns two floats and does
+ * two memcpys. It takes NO particle-ring slot, so it displaces nothing — and
+ * the count it does displace went DOWN, because the second `fx.explosion` call
+ * is gone and the first one now draws its debris at `bodyR` instead of at a
+ * 52 m fireball. @see `src/fx/detonation.js` and `bodyR` in
+ * `src/fx/explosions.js`.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT CARRIES AT WHICH RANGE, WHICH IS THE WHOLE DESIGN
+ * ────────────────────────────────────────────────────────────────────────────
+ *    30 m  you are inside it. The core, the airframe tearing apart over your
+ *          head, and the DUST WALL arriving — a 240-quad ground front that
+ *          reaches you 0.4 s after the flash. It must not white out: the body
+ *          of the fireball is nearly pure red in source for the reason
+ *          `src/match/fire.js` states twice.
+ *   150 m  the SHAPE. A 60 m fireball with a dark shroud rolling off it, 520
+ *          burning fragments arcing out to 150 m, and the blast ring crossing
+ *          the plain towards you.
+ *   240 m  the COLUMN. 260 quads climbing to 120 m — eight times the height of
+ *          anything else in the event — because at a 1.7 m eye a ground-level
+ *          fireball is behind the terrain rise and a column is not. This is the
+ *          same argument this file already makes for the flames' height, and it
+ *          is the only part of the event that is visible from the far spawn.
+ */
+/** The core: white for a tenth of a second, and never wider than this. */
+const DET_CORE = 48;
+/** The fireball proper — the mass, and the thing that reads at 150 m. */
+const DET_BALL = 360;
+/** The column. @see the range note above: this is the 240 m read. */
+const DET_COLUMN = 260;
+/** Dark smoke boiling off it. Alpha-blended: additive cannot make a silhouette. */
+const DET_SHROUD = 300;
+/** The ground front. 240 quads thrown radially at up to 150 m/s. */
+const DET_WALL = 240;
+/** Burning fragments. The only part of the event that is small and numerous. */
+const DET_EMBER = 520;
+/**
+ * PER-QUAD RADIANCE, AND IT IS A FRACTION FOR THE SAME REASON THE FIRE'S IS.
+ * The composite multiplies this frame by ~14x before AgX, so a crowd argument
+ * has to be made in radiance and not in count. @see `FIRE_GAIN`, and the note
+ * in `src/match/fire.js` about what (1.0, 0.15, 0.012) looks like on a screen.
+ */
+const DET_GAIN = 0.58;
+const DET_SMOKE_GAIN = 0.50;
+/** Seconds the detonation's own clock runs before the meshes go back to idle. */
+const DET_S = 9.5;
+
+/** Metres the shockwave reaches, and the seconds it takes. ~260 m/s off the mark. */
+const WAVE_R = 210;
+const WAVE_S = 1.6;
+
+/**
+ * THE AIRFRAME COMES APART, AND IT USES THE TOWER'S OWN SHADER.
+ *
+ * `Airstrike.makeChunkMaterial` is a `MeshStandardMaterial` with an
+ * `onBeforeCompile` that rewrites `project_vertex` into closed-form ballistic
+ * motion off `uT` — 3 365 chunks of the NACHTFELD tower ride it, `bomber.js`
+ * already imports it for crater debris, and its own doc comment says why there
+ * must not be a second copy. So this is that, at 180 chunks: the fin, the
+ * tailplane, the nacelles, the spine plating and the skin, thrown off the
+ * carrier ON THE FRAME OF CONTACT while the fuselage core ploughs on for
+ * another 96 m. It is LIT geometry, which matters — the wreck's own note is
+ * that what makes it read is the fire AROUND it and the darkness ON it, and an
+ * unlit chunk at night is a black hole in the fireball.
+ *
+ * 180 and not 3 365 because these are not masonry: an aeroplane sheds panels
+ * and structure, and 3 000 pieces of a 300 t airframe would be sand.
+ */
+const CHUNKS = 180;
+/** Seconds after contact by which every chunk is down. @see `_settleChunks`. */
+const CHUNK_S = 5.0;
 
 /* ────────────────────────────────────────────────────────────────── the fire ── */
 /** Metres between fire cells. 7.5 gives ~150 cells over 8 546 m². */
@@ -326,6 +443,14 @@ export class Skyfall {
   constructor(ctx, opts = {}) {
     this.ctx = ctx;
     this.rng = opts.rng ?? ctx.rng.fork();
+    /**
+     * THE SATELLITE'S FIRE UNIFORM, handed in by `Crash.build()`. The only
+     * thing ever written on it here is `uBlast`, so the carrier's shockwave
+     * crosses the scar as well as this file's own region — the two fires MEET
+     * by construction (@see the header) and a wave that stopped at the seam
+     * between them would draw the seam. Null on any map that has no scar.
+     */
+    this._scarFire = opts.scarFire ?? null;
     this.ready = false;
     this.buildMs = 0;
     /** True while anything of these two waves is in the air or ploughing. */
@@ -350,6 +475,14 @@ export class Skyfall {
     this._dnext = 0;
     /** Which drones have already struck. */
     this._hit = [false, false, false, false, false];
+    /**
+     * The detonation's own clock, seconds since first contact, and -1 when
+     * there is not one. It is the ONLY thing the fireball, the column, the
+     * shroud, the dust wall, the embers and the shockwave are functions of.
+     */
+    this._det = -1;
+    /** True until the chunks' settled pose has been memcpy'd back. */
+    this._chunksFlying = false;
     /** The carrier's plough voice, `{ drive, stop }` or null. @see `Crash`. */
     this._plough = null;
     /** Persistent smoke tags, so `reset`/`dispose` can hand them back. */
@@ -430,6 +563,8 @@ export class Skyfall {
     this._buildDrones(physics);
     this._buildMother(physics);
     this._buildFlames(physics);
+    this._buildDetonation(physics);
+    this._buildBreakup(physics);
     this._park();
     ctx.scene.add(this.group);
 
@@ -448,6 +583,13 @@ export class Skyfall {
         `${(2 * (this._sLen * 0.5 + REGION_R)).toFixed(0)} x ${(2 * REGION_R).toFixed(0)} m ` +
         `(${(Math.PI * REGION_R * REGION_R + 2 * this._sLen * REGION_R).toFixed(0)} m2) in ` +
         `${this._cells} cells, ${this._quads} quads, burns ${BURN_S}s at ${BURN_DPS} dps`
+    );
+    console.info(
+      `[skyfall] the detonation: ${this._detAdd} additive + ${this._detSmoke} alpha quads and ` +
+        `${CHUNKS} airframe chunks, all baked, all closed-form off one uniform each; ` +
+        `the fireball reaches ${this._detR.toFixed(0)} m, the column ${this._detTop.toFixed(0)} m up, ` +
+        `the front ${WAVE_R} m in ${WAVE_S}s; ${this._chunkFloat.toFixed(2)} m is the highest ` +
+        'chunk centre over its own ground at rest'
     );
     return this;
   }
@@ -843,6 +985,401 @@ export class Skyfall {
   }
 
   /* ====================================================================== */
+  /*  THE DETONATION, BAKED AT BOOT                                         */
+  /* ====================================================================== */
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * SIX THINGS, ONE CLOCK, TWO DRAW CALLS, AND NOT ONE PARTICLE SLOT
+   * ────────────────────────────────────────────────────────────────────────
+   * @see the block comment on `DET_CORE` for what was there before this and
+   * how it was measured; @see `src/fx/detonation.js` for the shader. Every
+   * number below is authored HERE, because this file is the one that knows how
+   * big the aeroplane is and where it lands.
+   *
+   * The six are ordered the way a real detonation is ordered, and the order IS
+   * the effect:
+   *
+   *   CORE     0.0-0.4 s   white-hot, ~30 m, and gone before the eye settles
+   *   FIREBALL 0.0-2.6 s   the mass, expanding on a decelerating curve and
+   *                        rising on its own heat, cooling red as it goes
+   *   WALL     0.0-5.2 s   the ground front, thrown radially at up to 150 m/s
+   *   EMBERS   0.0-5.2 s   520 burning fragments on ballistic arcs
+   *   SHROUD   0.1-9.4 s   dark smoke rolling off it — the SILHOUETTE, and the
+   *                        only part of this that is not additive
+   *   COLUMN   0.05-5.9 s  and then it goes UP, which is the 240 m read
+   *
+   * THE ORIGIN IS FIRST CONTACT AND NOT THE WRECK. `TRACK.from` is where the
+   * nose hits at t=18.4; the wreck finishes 96 m further on at t=23.8. The
+   * detonation belongs to the ground contact, and it stays where the ground
+   * contact was while the aeroplane goes on without most of itself.
+   */
+  _buildDetonation(physics) {
+    const rng = this.rng;
+    const TAU = Math.PI * 2;
+    const ax = TRACK.from[0];
+    const az = TRACK.from[1];
+    const ay = this._ay;
+    const add = new BlastBuilder(DET_CORE + DET_BALL + DET_COLUMN + DET_EMBER);
+    const dark = new BlastBuilder(DET_SHROUD + DET_WALL);
+    let reach = 0;
+    let top = 0;
+    /** Terminal displacement of one quad, closed form, for the report only. */
+    const note = (r, vy, k, accel, life, y0) => {
+      const F = (1 - Math.exp(-k * life)) / k;
+      if (r > reach) reach = r;
+      const h = y0 - ay + vy * F + (accel / k) * (life - F);
+      if (h > top) top = h;
+    };
+
+    /* ---- the core ------------------------------------------------------ */
+    for (let i = 0; i < DET_CORE; i++) {
+      const a = rng.range(0, TAU);
+      const r = Math.pow(rng.float(), 0.6) * 7;
+      const sp = rng.range(4, 26);
+      add.push({
+        x: ax + Math.cos(a) * r, y: ay + rng.range(1.5, 9.0), z: az + Math.sin(a) * r,
+        vx: Math.cos(a) * sp, vy: rng.range(6, 26), vz: Math.sin(a) * sp,
+        r0: rng.range(5, 11), r1: rng.range(14, 26),
+        birth: rng.range(0, 0.05), life: rng.range(0.18, 0.40),
+        drag: 3.4, accel: 6,
+        /**
+         * THE ONE PLACE WHITE IS ALLOWED. A fuel-air detonation genuinely has a
+         * white centre for a tenth of a second and this is it — 48 quads, gone
+         * by 0.4 s. What it may not have is a white BODY, which is what the
+         * shipping build had at every range. @see `src/match/fire.js`.
+         */
+        cr: 1.0, cg: rng.range(0.44, 0.62), cb: rng.range(0.14, 0.26),
+        peak: rng.range(2.4, 4.0),
+        kind: KIND.FIRE, seed: rng.float(), aCurve: 0.55, sCurve: 0.30,
+      });
+    }
+
+    /* ---- the fireball -------------------------------------------------- */
+    for (let i = 0; i < DET_BALL; i++) {
+      const a = rng.range(0, TAU);
+      const r = Math.pow(rng.float(), 0.55) * 26;
+      const sp = rng.range(8, 44);
+      const life = rng.range(0.9, 2.6);
+      const k = rng.range(1.5, 2.6);
+      /** Inner puffs are hotter. A fireball with one colour is a balloon. */
+      const hot = 1 - r / 26;
+      add.push({
+        x: ax + Math.cos(a) * r, y: ay + rng.range(0.5, 18), z: az + Math.sin(a) * r,
+        vx: Math.cos(a) * sp, vy: rng.range(4, 34), vz: Math.sin(a) * sp,
+        r0: rng.range(5, 12), r1: rng.range(15, 32),
+        birth: rng.range(0, 0.22), life, drag: k, accel: 7,
+        cr: 1.0, cg: 0.095 + hot * 0.215, cb: 0.005 + hot * 0.038,
+        peak: rng.range(0.9, 1.8),
+        kind: KIND.FIRE, seed: rng.float(), aCurve: 0.95, sCurve: 0.34,
+      });
+      note(r + (sp * (1 - Math.exp(-k * life))) / k, 20, k, 7, life, ay + 9);
+    }
+
+    /* ---- the column ---------------------------------------------------- */
+    for (let i = 0; i < DET_COLUMN; i++) {
+      const a = rng.range(0, TAU);
+      const r = Math.pow(rng.float(), 0.7) * 14;
+      const vy = rng.range(40, 95);
+      const k = rng.range(0.9, 1.25);
+      const life = rng.range(2.2, 5.0);
+      const y0 = ay + rng.range(2, 22);
+      add.push({
+        x: ax + Math.cos(a) * r, y: y0, z: az + Math.sin(a) * r,
+        vx: Math.cos(a) * rng.range(2, 14), vy, vz: Math.sin(a) * rng.range(2, 14),
+        r0: rng.range(6, 14), r1: rng.range(20, 44),
+        /**
+         * IT LEAVES OVER NEARLY A SECOND, NOT ON ONE FRAME. A column whose every
+         * quad is born at t=0 is a rod that appears; one that is fed for 0.9 s
+         * is a column that CLIMBS, which is the thing a man 240 m away actually
+         * watches happen.
+         */
+        birth: rng.range(0.05, 0.9), life, drag: k, accel: 3.0,
+        cr: 1.0, cg: rng.range(0.075, 0.175), cb: rng.range(0.005, 0.022),
+        peak: rng.range(0.7, 1.3),
+        kind: KIND.FIRE, seed: rng.float(), aCurve: 1.25, sCurve: 0.45,
+      });
+      note(r, vy, k, 3.0, life, y0);
+    }
+
+    /* ---- the embers ---------------------------------------------------- */
+    for (let i = 0; i < DET_EMBER; i++) {
+      const a = rng.range(0, TAU);
+      const el = rng.range(0.12, 1.25);
+      const sp = rng.range(35, 130);
+      const k = rng.range(0.25, 0.6);
+      const life = rng.range(1.4, 5.2);
+      add.push({
+        x: ax + Math.cos(a) * rng.range(0, 12), y: ay + rng.range(1.5, 16),
+        z: az + Math.sin(a) * rng.range(0, 12),
+        vx: Math.cos(a) * Math.cos(el) * sp, vy: Math.sin(el) * sp,
+        vz: Math.sin(a) * Math.cos(el) * sp,
+        r0: rng.range(0.5, 1.9), r1: rng.range(0.2, 0.9),
+        birth: rng.range(0, 0.35), life, drag: k, accel: -19,
+        cr: 1.0, cg: rng.range(0.30, 0.55), cb: rng.range(0.03, 0.12),
+        peak: rng.range(5, 17),
+        kind: KIND.EMBER, seed: rng.float(), aCurve: 0.6, sCurve: 0.7,
+      });
+      note((Math.cos(el) * sp * (1 - Math.exp(-k * life))) / k, 0, k, 0, life, ay);
+    }
+
+    /* ---- the shroud ---------------------------------------------------- */
+    for (let i = 0; i < DET_SHROUD; i++) {
+      const a = rng.range(0, TAU);
+      const r = Math.pow(rng.float(), 0.6) * 34;
+      dark.push({
+        x: ax + Math.cos(a) * r, y: ay + rng.range(2, 30), z: az + Math.sin(a) * r,
+        vx: Math.cos(a) * rng.range(3, 24), vy: rng.range(8, 52), vz: Math.sin(a) * rng.range(3, 24),
+        r0: rng.range(8, 18), r1: rng.range(30, 64),
+        birth: rng.range(0.1, 1.4), life: rng.range(3.5, 8.0),
+        drag: rng.range(0.7, 1.2), accel: 1.6,
+        /**
+         * NEARLY BLACK IN SOURCE, and it has to be: this is the only part of the
+         * event drawn with `NormalBlending`, so it is the only part that can put
+         * a HOLE in the sky. An additive detonation has no silhouette at all —
+         * which is half of why the shipping one read as weather.
+         */
+        cr: 0.045, cg: 0.038, cb: 0.035, peak: rng.range(0.75, 1.15),
+        kind: KIND.SMOKE, seed: rng.float(), aCurve: 1.5, sCurve: 0.5,
+      });
+    }
+
+    /* ---- the ground front ---------------------------------------------- */
+    for (let i = 0; i < DET_WALL; i++) {
+      /**
+       * EVENLY SPACED AND ONLY SLIGHTLY JITTERED, unlike everything else here.
+       * A ring is the one shape in this event whose whole meaning is that it is
+       * CONTINUOUS: a wall of dust with gaps in it is a scatter of dust.
+       */
+      const a = (i / DET_WALL) * TAU + rng.range(-0.05, 0.05);
+      const sp = rng.range(70, 150);
+      const k = rng.range(0.85, 1.25);
+      const life = rng.range(2.6, 5.2);
+      dark.push({
+        x: ax + Math.cos(a) * rng.range(4, 16), y: ay + rng.range(0.4, 5.0),
+        z: az + Math.sin(a) * rng.range(4, 16),
+        vx: Math.cos(a) * sp, vy: rng.range(1.5, 9), vz: Math.sin(a) * sp,
+        r0: rng.range(4, 9), r1: rng.range(22, 48),
+        birth: rng.range(0, 0.12), life, drag: k, accel: -1.4,
+        cr: 0.115, cg: 0.090, cb: 0.066, peak: rng.range(0.7, 1.0),
+        kind: KIND.DUST, seed: rng.float(), aCurve: 1.6, sCurve: 0.45,
+      });
+      note((sp * (1 - Math.exp(-k * life))) / k, 0, k, 0, life, ay);
+    }
+
+    this._detR = reach;
+    this._detTop = top;
+    this._detAdd = add.i;
+    this._detSmoke = dark.i;
+
+    const centre = new THREE.Vector3(ax, ay + 45, az);
+    /**
+     * ONE `uT` BOX, TWO MATERIALS. The uniform object is SHARED, so the frame
+     * this fires writes one float and both meshes move. Two `uGain`s, because
+     * the smoke's alpha and the fire's radiance are not the same quantity.
+     */
+    this._detU = { uT: { value: -1 }, uGain: { value: DET_GAIN } };
+    this._detSU = { uT: this._detU.uT, uGain: { value: DET_SMOKE_GAIN } };
+
+    const matA = makeBlastMaterial(this._detU, { blending: THREE.AdditiveBlending });
+    matA.name = 'skyfall_blast_add';
+    const matS = makeBlastMaterial(this._detSU, { blending: THREE.NormalBlending });
+    matS.name = 'skyfall_blast_smoke';
+
+    const mk = (geo, mat, order, name) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.name = name;
+      m.frustumCulled = false;
+      m.matrixAutoUpdate = false;
+      m.renderOrder = order;
+      /**
+       * VISIBLE, WITH ONE INSTANCE. @see `BlastBuilder.finish` — three compiles
+       * a program the first time an object is DRAWN and `renderer.compile`
+       * walks `traverseVisible`, so a mesh hidden until t=18.4 is a shader
+       * compile ON the frame this file exists to keep cheap. Instance 0 is a
+       * core quad whose birth is in the future while `uT` is -1, so it collapses
+       * to zero width and discards: one draw call, two triangles, no pixels.
+       */
+      m.visible = true;
+      this.group.add(m);
+      return m;
+    };
+    /** Smoke first: the fire is additive and has to land ON it, not under it. */
+    this._blastSmoke = mk(dark.finish(centre, 300), matS, 5, 'match_skyfall_blast_smoke');
+    this._blastAdd = mk(add.finish(centre, 300), matA, 7, 'match_skyfall_blast_add');
+    this.blastMats = [matA, matS];
+  }
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE AIRFRAME COMES APART, ON THE TOWER'S OWN SHADER
+   * ────────────────────────────────────────────────────────────────────────
+   * @see `CHUNKS`. `instanceMatrix` holds the pose each chunk has ON THE FRAME
+   * OF CONTACT — which is a rigid transform of the carrier and therefore
+   * perfectly knowable at boot — and `aOff`/`aAxis`/`aMot` carry it to a
+   * settled place on ground probed at boot. `_settleChunks` then memcpys the
+   * settled matrices in and switches the animation off, exactly as
+   * `Airstrike._bakeSettled` does.
+   *
+   * NOTHING FLOATS, BY CONSTRUCTION AND NOT BY INSPECTION. Floating rubble has
+   * shipped four times on this project, once badly enough that a tank climbed
+   * it into the sky, and every one of those was found by looking. A chunk's
+   * settled CENTRE is put at `ground + 0.22 * largest half-extent`, so its
+   * lowest point is under the turf whatever the tumble does to its attitude —
+   * the same reasoning as the wreck's belly being 2.5 m under the mean ground
+   * ("a thing this heavy does not rest ON a field, it is IN one"). `build()`
+   * prints the worst case and `_sfblast.mjs` measures it again on the settled
+   * state, because neither `_floatcheck` nor `_nffloating` can see any of this:
+   * these chunks carry NO COLLISION and they are not in the `world` group.
+   */
+  _buildBreakup(physics) {
+    const rng = this.rng;
+    this._chunkU = { uT: { value: -1 }, uAnim: { value: 1 } };
+    const mat = makeChunkMaterial(this.ctx, this._lib, 'metal_rust', this._chunkU);
+    mat.name = 'skyfall_chunk';
+    /**
+     * AND IT IS ON FIRE, WHICH IS WHY IT IS NOT BLACK — AND THAT IS AS FAR AS
+     * IT GOES. PHOTOGRAPHED at 151 m on the first build of this: the chunks
+     * were flat BLACK QUADRILATERALS tumbling out of an orange fireball, and
+     * they were right to be — the only punctual light this event has is culled
+     * at `range: 90` from the camera, so at 151 m nothing lights them at all and
+     * a flat-shaded box in night ambient is a silhouette. A silhouette of an
+     * aeroplane panel is indistinguishable from a hole in the fireball.
+     *
+     * 0x0a0200 is (0.039, 0.008, 0) — under the composite's ~14x that is a dim
+     * ember, not a light, and it is the same order as the wreck's own 0x030100.
+     * The wreck can afford less because it is 86 m of continuous surface with
+     * the fire behind it; a 4 m chunk in the air has nothing behind it but sky.
+     */
+    mat.emissive = new THREE.Color(0x0a0200);
+    const mesh = new THREE.InstancedMesh(chunkGeometry(), mat, CHUNKS);
+    mesh.name = 'match_skyfall_chunks';
+    mesh.frustumCulled = false;
+    mesh.matrixAutoUpdate = false;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.userData.owNoShadow = true;
+
+    const mot = new Float32Array(CHUNKS * 4);
+    const off = new Float32Array(CHUNKS * 3);
+    const axis = new Float32Array(CHUNKS * 3);
+    const uv = new Float32Array(CHUNKS * 3);
+    this._chunkStart = new Float32Array(CHUNKS * 16);
+    this._chunkSettled = new Float32Array(CHUNKS * 16);
+
+    /** The carrier's pose on the frame of contact. @see `_motherUpdate`. */
+    const cq = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(-this._mPitch, this._yaw, this._mRestRoll, 'YXZ')
+    );
+    const cp = new THREE.Vector3(
+      TRACK.from[0] - this._hx * 37, this._mContactY, TRACK.from[1] - this._hz * 37
+    );
+    const cm = new THREE.Matrix4().compose(cp, cq, new THREE.Vector3(1, 1, 1));
+
+    /**
+     * WHERE A CHUNK COMES FROM IS A VERTEX OF THE AEROPLANE, not a point in a
+     * box around it. `motherGeo` is the merged hull, so sampling its positions
+     * puts every piece on a surface that is actually there — the fin, a
+     * nacelle, the deck hump — and the shed mass reads as the aeroplane rather
+     * than as a cloud that happened to be near it.
+     */
+    const src = this.motherGeo.getAttribute('position');
+    const nv = src.count;
+    const local = new THREE.Vector3();
+    const start = new THREE.Vector3();
+    const settle = new THREE.Vector3();
+    const q = new THREE.Quaternion();
+    const q2 = new THREE.Quaternion();
+    const sc = new THREE.Vector3();
+    const ax3 = new THREE.Vector3();
+    const m4 = new THREE.Matrix4();
+    const mR = new THREE.Matrix4();
+    const mT1 = new THREE.Matrix4();
+    const mT2 = new THREE.Matrix4();
+    const tint = new THREE.Color();
+    const px = -this._hz;
+    const pz = this._hx;
+    /** The wreck's own palette. @see `_hullMaterial` — dark, because it is night. */
+    const palette = [0x3f3931, 0x332e28, 0x4a4239, 0x2a2622];
+    let float = -1e9;
+
+    for (let i = 0; i < CHUNKS; i++) {
+      const j = Math.min(nv - 1, (rng.float() * nv) | 0);
+      local.set(src.getX(j), src.getY(j), src.getZ(j));
+      start.copy(local).applyMatrix4(cm);
+      sc.set(rng.range(1.0, 4.8), rng.range(0.6, 2.6), rng.range(1.0, 5.5));
+      q.copy(cq).multiply(
+        q2.setFromAxisAngle(
+          ax3.set(rng.signed(), rng.signed(), rng.signed()).normalize(),
+          rng.range(-0.5, 0.5)
+        )
+      );
+      m4.compose(start, q, sc);
+      m4.toArray(this._chunkStart, i * 16);
+
+      /**
+       * IT LANDS IN THE FIRE. Thrown outward from first contact, biased ALONG
+       * the plough — the aeroplane had 40 m/s of forward speed when it came
+       * apart and its pieces keep it — and every settled point is inside or on
+       * the edge of the region that is about to be denied, so the debris field
+       * and the impassable ground are the same place.
+       */
+      const a = rng.range(0, Math.PI * 2);
+      const rr = rng.range(12, 95);
+      const u = Math.cos(a) * rr + rng.range(6, 54);
+      const v = Math.sin(a) * rr * 0.7;
+      settle.set(
+        TRACK.from[0] + this._hx * u + px * v, 0,
+        TRACK.from[1] + this._hz * u + pz * v
+      );
+      const half = Math.max(sc.x, sc.y, sc.z) * 0.5;
+      const g = physics.groundHeight(settle.x, settle.z, 400);
+      settle.y = g + half * 0.44;
+      if (settle.y - g > float) float = settle.y - g;
+
+      off[i * 3] = settle.x - start.x;
+      off[i * 3 + 1] = settle.y - start.y;
+      off[i * 3 + 2] = settle.z - start.z;
+      ax3.set(rng.signed(), rng.signed(), rng.signed()).normalize();
+      axis[i * 3] = ax3.x; axis[i * 3 + 1] = ax3.y; axis[i * 3 + 2] = ax3.z;
+      const ang = rng.range(4, 26) * (rng.float() < 0.5 ? -1 : 1);
+      mot[i * 4] = rng.range(0, 0.4);
+      mot[i * 4 + 1] = rng.range(1.6, 4.4);
+      mot[i * 4 + 2] = rng.range(8, 48);
+      mot[i * 4 + 3] = ang;
+      uv[i * 3] = rng.float();
+      uv[i * 3 + 1] = rng.float();
+      uv[i * 3 + 2] = rng.range(0.5, 1.4);
+
+      /**
+       * THE SETTLED MATRIX IS THE SHADER'S OWN ARITHMETIC, SOLVED ON THE CPU.
+       * `project_vertex` ends at `piv + R(axis, ang)*(v - piv) + aOff`, so the
+       * pose the GPU stops at and the pose memcpy'd in at `_settleChunks` are
+       * the same matrix and there is no snap on the frame the animation ends.
+       */
+      mR.makeRotationAxis(ax3, ang);
+      mT1.makeTranslation(-start.x, -start.y, -start.z);
+      mT2.makeTranslation(settle.x, settle.y, settle.z);
+      m4.fromArray(this._chunkStart, i * 16);
+      m4.premultiply(mT1).premultiply(mR).premultiply(mT2);
+      m4.toArray(this._chunkSettled, i * 16);
+
+      tint.setHex(palette[(rng.float() * palette.length) | 0]);
+      mesh.setColorAt(i, tint);
+    }
+    this._chunkFloat = float;
+
+    mesh.geometry.setAttribute('aMot', new THREE.InstancedBufferAttribute(mot, 4));
+    mesh.geometry.setAttribute('aOff', new THREE.InstancedBufferAttribute(off, 3));
+    mesh.geometry.setAttribute('aAxis', new THREE.InstancedBufferAttribute(axis, 3));
+    mesh.geometry.setAttribute('aUv', new THREE.InstancedBufferAttribute(uv, 3));
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    this.group.add(mesh);
+    this.chunks = mesh;
+    this.chunkMat = mat;
+  }
+
+  /* ====================================================================== */
   /*  THE NAVIGATION, BAKED AND PROVED AT BOOT                              */
   /* ====================================================================== */
 
@@ -1169,6 +1706,22 @@ export class Skyfall {
   update(dt) {
     if (!this.ready) return;
 
+    /**
+     * ---- the detonation, on its own clock ------------------------------
+     * NOT on `_t`. `_t` ends 0.8 s after the wreck stops, at 24.6, and the
+     * shroud is still rising at 27.9 — a smoke column that vanished because the
+     * airframe had finished ploughing would be the event admitting it was an
+     * animation. Four assignments and one closed-form radius per frame.
+     */
+    if (this._det >= 0) {
+      this._det += dt;
+      this._detU.uT.value = this._det;
+      this._chunkU.uT.value = this._det;
+      this._wave(this._det);
+      if (this._chunksFlying && this._det >= CHUNK_S) this._settleChunks();
+      if (this._det >= DET_S) this._endDetonation();
+    }
+
     /* ---- the west, still burning --------------------------------------- */
     if (this._burn > 0) {
       this._burn -= dt;
@@ -1403,6 +1956,8 @@ export class Skyfall {
     p.position = this._v2.set(x, y + 1.4, z);
     p.radius = DRONE_BLAST_R;
     p.damage = DRONE_BLAST_D;
+    /** @see `_motherHit` — only the carrier draws its own fireball. */
+    p.bodyR = undefined;
     p.source = 'crash';
     this.ctx.events.emit('explosion', p);
     const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
@@ -1443,20 +1998,75 @@ export class Skyfall {
    * probes, allocates or compiles.
    */
   _motherHit() {
+    /* ---- the picture, which is 1 728 baked quads and 180 baked chunks --- */
+    this._det = 0;
+    this._detU.uT.value = 0;
+    this._chunkU.uT.value = 0;
+    this._chunkU.uAnim.value = 1;
+    this._blastAdd.geometry.instanceCount = this._detAdd;
+    this._blastSmoke.geometry.instanceCount = this._detSmoke;
+    this.chunks.instanceMatrix.array.set(this._chunkStart);
+    this.chunks.instanceMatrix.needsUpdate = true;
+    this.chunks.count = CHUNKS;
+    this._chunksFlying = true;
+    this._wave(0);
+
     const at = this._v2.set(TRACK.from[0], this._ay + 3.0, TRACK.from[1]);
     const p = this._blast;
     p.position = at;
     p.radius = MOTHER_BLAST_R;
     p.damage = MOTHER_BLAST_D;
+    /**
+     * THE DAMAGE IS STILL 52 m AND THE PICTURE IS NOW 14. @see `bodyR` in
+     * `src/fx/explosions.js`: that recipe's particle COUNT does not scale with
+     * its radius, so asking it for 52 m bought eleven 40-60 m pale sprites that
+     * merged into the cream disc this whole rewrite exists to delete. At 14 m
+     * the same call still lays the ground dust ring, the debris cone, the
+     * embers and the crater plume exactly where they belong — at the FOOT of
+     * the fireball, which is drawn above by things that are actually 60 m wide.
+     *
+     * The second `fx.explosion({ radius: 42 })` that used to sit below this is
+     * GONE: it was a second copy of the same disc drawn over the first. Net
+     * particle-ring pressure on the frame of first contact goes DOWN.
+     */
+    p.bodyR = 14;
     p.source = 'crash';
     this.ctx.events.emit('explosion', p);
     const fx = this._fx ?? (this._fx = this.ctx.peek('fx'));
     if (fx) {
-      fx.explosion?.({ position: at, radius: 42 });
       fx.scorch?.(at.x, at.y - 3.0, at.z, 30);
-      fx.hazeRing?.(at.x, at.y, at.z, 16, 150, 2.2, 4.0);
-      fx.haze?.(at.x, at.y + 18, at.z, 34, 60, 6.5, 2.4);
-      if (fx.lights) fx.lights.flash(at.x, at.y + 10, at.z, 1, 0.58, 0.22, 15000, 3.2, 2.2, 420, 9);
+      /**
+       * THE REFRACTION FRONT, on the same curve as `uBlast` and reaching the
+       * same 210 m. `HazeSystem` is a screen-space pass with its own 240-sprite
+       * pool that neither particle ring can be spent on, so this is the one
+       * shockwave that distorts what is BEHIND it — the smoke banks, the burning
+       * ridge and both fires — rather than drawing over them. Two slots.
+       */
+      fx.hazeRing?.(at.x, at.y + 2, at.z, 18, WAVE_R, WAVE_S, 5.0);
+      fx.haze?.(at.x, at.y + 26, at.z, 46, 90, 7.5, 2.8);
+      /**
+       * ONE LIGHT, AND IT IS THE SAME ONE SLOT THIS EVENT ALREADY TOOK.
+       *
+       * `LightPool` is four lights for the whole game and this asks at priority
+       * 9, above everything, for two seconds — unchanged in kind. What changed
+       * is the number, and it changed because of what a light IS here:
+       * `LightPool.register` asks the renderer for `range: 90` and the
+       * renderer's distance fade switches a light off past ~1.15x of that, so
+       * this flash does not exist for anybody more than ~103 m away and cannot
+       * ever be "the light on the whole map". Inside 103 m it was 15 000 cd,
+       * which PHOTOGRAPHED at 30 m as a pure white screen — every channel over
+       * AgX's shoulder, no fireball in it at all. 6 000 lights the ground and
+       * the men standing on it and leaves the detonation its own colour; the
+       * light at range is the 1 188 additive quads, which have no range limit
+       * because they are geometry.
+       *
+       * 15 000 -> 6 000 -> 3 600, and the last step was taken because 6 000
+       * still photographed the 86 m hull twenty metres away as a flat white
+       * cut-out at t+0.5 s. The composite's auto-exposure takes about a second
+       * to adapt, so anything this bright inside the first half second is over
+       * AgX's shoulder whatever its colour was.
+       */
+      if (fx.lights) fx.lights.flash(at.x, at.y + 10, at.z, 1, 0.54, 0.20, 3600, 2.0, 3.0, 420, 9);
       /**
        * THE SMOKE WALL, and it is the half of "you can see where you may not
        * go" that survives daylight-adapted eyes at 250 m. Twelve persistent
@@ -1523,7 +2133,9 @@ export class Skyfall {
     this._deny(true);
     console.info(
       `[skyfall] THE CARRIER IS DOWN at (${at.x.toFixed(0)}, ${at.z.toFixed(0)}) — ` +
-        `${MOTHER_BLAST_R} m blast, ${this._cells} cells alight, ` +
+        `${MOTHER_BLAST_R} m blast over a ${this._detAdd + this._detSmoke} quad detonation ` +
+        `(${this._detR.toFixed(0)} m across, ${this._detTop.toFixed(0)} m up), ${CHUNKS} chunks of ` +
+        `airframe thrown, a ${WAVE_R} m front through both fires, ${this._cells} cells alight, ` +
         `${(Math.PI * REGION_R * REGION_R + 2 * this._sLen * REGION_R).toFixed(0)} m2 of the west ` +
         `is impassable for ${BURN_S}s`
     );
@@ -1602,8 +2214,71 @@ export class Skyfall {
     p.position = this._v2.set(this._cx[i], this._cy[i] + 1.6, this._cz[i]);
     p.radius = COOK_R;
     p.damage = COOK_D;
+    /** @see `_motherHit` — only the carrier draws its own fireball. */
+    p.bodyR = undefined;
     p.source = 'crash';
     this.ctx.events.emit('explosion', p);
+  }
+
+  /* ====================================================================== */
+  /*  THE DETONATION AT RUNTIME — three writes and a radius                 */
+  /* ====================================================================== */
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────
+   * THE SHOCKWAVE, DRIVEN THROUGH THE FIRE THAT IS ALREADY BURNING
+   * ────────────────────────────────────────────────────────────────────────
+   * The carrier lands INSIDE an 8 546 m² conflagration that has been alight
+   * for four seconds, 40 m from the end of a 157 m scar that is still burning,
+   * and 「大爆発演出はド派手にしないと」 is answered better by making 2 700 quads
+   * that are already on screen react than by drawing 2 700 more.
+   *
+   * `uBlast` is `vec4(x, z, wavefront radius, strength)` and BOTH fires get it
+   * — this file's region and, through `opts.scarFire`, the satellite's scar.
+   * The radius is the plough's own curve, `1 - (1-u)²`, which leaves at 262 m/s
+   * and decelerates to nothing at `WAVE_R`; the strength falls off with it, and
+   * on the frame it reaches zero the shader's branch turns off for good.
+   *
+   * Cost: one closed-form radius, two `Vector4.set`. No instance, no draw call,
+   * no particle slot, no light. @see the `uBlast` note in `src/match/fire.js`.
+   */
+  _wave(t) {
+    const u = Math.min(1, t / WAVE_S);
+    const r = WAVE_R * (1 - (1 - u) * (1 - u));
+    const s = u >= 1 ? 0 : Math.pow(1 - u, 1.3);
+    this._fireU.uBlast.value.set(TRACK.from[0], TRACK.from[1], r, s);
+    const scar = this._scarFire?.uBlast;
+    if (scar) scar.value.set(TRACK.from[0], TRACK.from[1], r, s);
+  }
+
+  /**
+   * THE DEBRIS IS DOWN. Hand the settled pose back to `instanceMatrix` and
+   * switch the animation off — `Airstrike._bakeSettled` verbatim, and for its
+   * reason: the vertex shader stops rotating 180 chunks about their own pivots
+   * for the rest of the match, and the pose it stops at is bit-identical to the
+   * one memcpy'd in. @see `_buildBreakup` for why those two are the same matrix.
+   */
+  _settleChunks() {
+    this._chunksFlying = false;
+    this.chunks.instanceMatrix.array.set(this._chunkSettled);
+    this.chunks.instanceMatrix.needsUpdate = true;
+    this._chunkU.uAnim.value = 0;
+  }
+
+  /**
+   * The fireball is out. Both blast meshes go back to ONE instance — they stay
+   * VISIBLE and keep their program (@see `_buildDetonation`) — and the clock
+   * stops. The CHUNKS DO NOT MOVE: they are the aftermath, they are lying in
+   * the fire, and they stay there until the round resets.
+   */
+  _endDetonation() {
+    this._det = -1;
+    this._detU.uT.value = -1;
+    this._blastAdd.geometry.instanceCount = 1;
+    this._blastSmoke.geometry.instanceCount = 1;
+    this._fireU.uBlast.value.set(0, 0, -1, 0);
+    const scar = this._scarFire?.uBlast;
+    if (scar) scar.value.set(0, 0, -1, 0);
   }
 
   /* ====================================================================== */
@@ -1641,6 +2316,34 @@ export class Skyfall {
     this._pose(this._panel, this._v, this._eul);
     this._panel.visible = false;
     this._hitMother = false;
+    /**
+     * THE DETONATION GOES BACK TO ONE INSTANCE AND THE DEBRIS UNDER THE MAP.
+     *
+     * The two blast meshes stay VISIBLE with `instanceCount = 1` — that is the
+     * whole prewarm argument and undoing it here would put the shader compile
+     * back on the event's own frame. The 180 chunks are different: they are
+     * `InstancedMesh`es whose rest pose is a real place on the plain, so
+     * `count = 1` plus one parked matrix is what keeps the program alive
+     * without leaving a piece of aeroplane lying in the west of a round that
+     * has not had the crash yet. @see `src/match/reinforce.js`, same idiom.
+     */
+    this._det = -1;
+    this._chunksFlying = false;
+    if (this._detU) {
+      this._detU.uT.value = -1;
+      this._blastAdd.geometry.instanceCount = 1;
+      this._blastSmoke.geometry.instanceCount = 1;
+    }
+    if (this.chunks) {
+      this._chunkU.uT.value = -1;
+      this._chunkU.uAnim.value = 1;
+      this._m.makeTranslation(0, PARKED_Y, 0).toArray(this.chunks.instanceMatrix.array, 0);
+      this.chunks.instanceMatrix.needsUpdate = true;
+      this.chunks.count = 1;
+    }
+    if (this._fireU) this._fireU.uBlast.value.set(0, 0, -1, 0);
+    const scar = this._scarFire?.uBlast;
+    if (scar) scar.value.set(0, 0, -1, 0);
   }
 
   /**
@@ -1672,6 +2375,12 @@ export class Skyfall {
     this._panelGeo?.dispose();
     this.fireGeo?.dispose();
     this.fireMat?.dispose();
+    this._blastAdd?.geometry.dispose();
+    this._blastSmoke?.geometry.dispose();
+    for (const m of this.blastMats ?? []) m.dispose();
+    this.chunks?.geometry.dispose();
+    this.chunkMat?.dispose();
+    this.chunks?.dispose?.();
     this.group.parent?.remove(this.group);
   }
 }

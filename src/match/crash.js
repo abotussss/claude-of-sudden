@@ -334,8 +334,17 @@ export class Crash {
      * `Skyfall` bakes five drones, an 86 m carrier, 118 cells of fire and BOTH
      * connected-component labellings of the nav grid here, so that the frame
      * this act fires is still nothing but assignments. @see skyfall.js.
+     *
+     * IT IS HANDED THE SCAR'S OWN FIRE UNIFORM. The carrier lands 40 m from the
+     * end of this satellite's plough and the two fires MEET — the header of
+     * `skyfall.js` says so and it is the whole reason the region is where it is
+     * — so when the carrier's shockwave goes out it has to cross THIS fire as
+     * well as its own, or the plain has a wave that stops at a line no player
+     * can see. `_fireU` exists by now (`_buildFlames` is four lines up) and it
+     * is one `{ value }` box; `Skyfall` only ever writes `uBlast` on it, for
+     * 1.5 s, once. @see the `uBlast` note in src/match/fire.js.
      */
-    this._sky = new Skyfall(ctx, { rng: this.rng.fork() }).build();
+    this._sky = new Skyfall(ctx, { rng: this.rng.fork(), scarFire: this._fireU }).build();
     this.ready = true;
     this.buildMs = performance.now() - t0;
     console.info(

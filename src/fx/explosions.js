@@ -21,7 +21,26 @@ export function explode(fx, o) {
   const rng = fx.rng;
   const q = fx.pScale;
   const p = o.position ?? o;
-  const R = Math.max(0.6, o.radius ?? 5);
+  /**
+   * `bodyR` — THE RADIUS THE PICTURE IS DRAWN AT, WHEN IT IS NOT THE RADIUS THE
+   * DAMAGE IS DONE AT. Optional, defaults to `radius`, so every existing caller
+   * is bit-identical and this line is the only place the two can differ.
+   *
+   * It exists because this recipe's particle COUNT does not scale with `R` — it
+   * is `round(12*pScale)+5` fireball puffs whether R is 4 or 52 — so asking it
+   * for a 52 m explosion does not give you a bigger explosion, it gives you
+   * eleven 40 m pale sprites that merge into one smooth cream disc. MEASURED at
+   * the carrier's first contact (`_sfbang.mjs`): 162 particles on the frame,
+   * both rings already full, and photographed at 83 m it was a featureless
+   * cream dome smaller than the EMP field beside it.
+   *
+   * A caller that draws its own fireball therefore passes a SMALL `bodyR` and
+   * keeps the parts of this recipe that are still exactly right at the foot of
+   * a big detonation — the ground dust ring, the debris cone, the embers and
+   * the crater plume — at a size that reads as debris rather than as weather.
+   * @see src/fx/detonation.js.
+   */
+  const R = Math.max(0.6, o.bodyR ?? o.radius ?? 5);
   const up = o.up ?? { x: 0, y: 1, z: 0 };
   const px = p.x;
   const py = p.y;
