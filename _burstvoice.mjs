@@ -49,7 +49,6 @@ const page = await browser.newPage({ viewport: { width: 960, height: 600 } });
 const errs = [];
 page.on('pageerror', (e) => errs.push(String(e.message)));
 if (args.clamp) await page.addInitScript((n) => { window.__CLAMP__ = n; }, Number(args.clamp));
-if (args.burstshot) await page.addInitScript((n) => { window.__BURSTSHOT__ = n; }, Number(args.burstshot));
 if (args.depth1) await page.addInitScript(() => { window.__DEPTH1__ = true; });
 await page.goto(URL, { waitUntil: 'domcontentloaded' });
 await page.waitForFunction('window.__READY__===true', null, { timeout: 300000 });
@@ -105,7 +104,7 @@ if (MODE === 'burst') {
         playFarCalls: 0, playFarOk: 0,
         acqOk: 0, acqNull: 0, stolen: 0,
         farRoundsCarried: 0, farVoiceRounds: [], farVoiceSpacing: [],
-        onsets: [], spans: [],
+        onsets: [], spans: [], sendArg: [], sendNode: [],
       };
 
       const alw = a._allow.bind(a);
@@ -165,7 +164,21 @@ if (MODE === 'burst') {
         const r = hold(em, node, end, send);
         // Voice LENGTH — the thing that decides whether two rounds overlap into
         // a roll or arrive as two taps. `end` is the voice's own last sample.
-        if (mine.has(em)) { M.spans.push(+(end - (em.startAt ?? 0)).toFixed(4)); mine.delete(em); }
+        if (mine.has(em)) {
+          M.spans.push(+(end - (em.startAt ?? 0)).toFixed(4));
+          /**
+           * THE TAIL, AND HOW MUCH OF IT IS THE ROOM — 「銃声が鳴り響く感じは実装
+           * していないの？」. `send` is the voice's own authored wetness after
+           * `weaponShot` has multiplied it by the weapon's character, the
+           * distance term and `echoBoost`; `sendGain.gain.value` is what
+           * `_applySend` finally puts in front of the convolvers. The two
+           * together say whether the plain has a room or only an IR nobody is
+           * feeding.
+           */
+          M.sendArg.push(+(send ?? 0).toFixed(5));
+          M.sendNode.push(+(em.sendGain?.gain?.value ?? -1).toFixed(5));
+          mine.delete(em);
+        }
         return r;
       };
 
@@ -204,7 +217,9 @@ if (MODE === 'burst') {
       M.voicesPerSec = +(on.length / Math.max(0.001, M.burstSeconds)).toFixed(2);
       M.roundsPerVoiceHeard = +(rounds / Math.max(1, on.length)).toFixed(2);
       M.spanTotal = +sum(M.spans).toFixed(2);
-      delete M.onsets; delete M.spans;
+      M.sendArgMed = med(M.sendArg);
+      M.sendNodeMed = med(M.sendNode);
+      delete M.onsets; delete M.spans; delete M.sendArg; delete M.sendNode;
       R.push(M);
     }
 
@@ -224,6 +239,8 @@ if (MODE === 'burst') {
       level: ctx.peek('world').level.id,
       phase: ctx.peek('match')?.phase ?? '?',
       rateShot: a._rate.shot, pool: f.emitters.length, cap: f.cap,
+      space: { classified: a.stats.space, wetness: +a._wetness(a._space).toFixed(4),
+        open: +(+a._space.open).toFixed(3), street: +(+a._space.street).toFixed(3) },
       bursts: R,
       audio: { errors: a.stats.errors, failed: !!a.failed },
     };
