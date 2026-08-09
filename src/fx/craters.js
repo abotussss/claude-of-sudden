@@ -160,15 +160,44 @@ const FOOT_MAX = 6.0;
  *  purpose: what the eye reads is the YOUNG puff. @see the header. */
 const GROWTH = 2.0;
 /**
- * How pale. 0.58, one notch under `plains-cover.js`'s measured 0.62, because a
- * column has sky behind it where a bank has ground. `_puff` writes this value
- * straight into a LIT particle's colour, and on a 50 %-night map anything near
- * the can's daytime 0.04 is simply not there. The composite multiplies by
- * auto-exposure (~14x) before AgX, so this is a long way from clipping: three
- * channels over the shoulder read white whatever their ratio, and 0.58 x 14 is
- * still inside the toe for smoke standing in shadow.
+ * ────────────────────────────────────────────────────────────────────────────
+ * HOW PALE, AND HOW OPAQUE — MEASURED, AGAINST THE MAP'S OWN SMOKE
+ * ────────────────────────────────────────────────────────────────────────────
+ * `_puff` writes `dark` straight into a LIT particle's colour, and a LIT
+ * particle is shaded by the sky's ambient and the sun ALONE — never by the
+ * fires, which on a 50 %-night map are most of the light on the ground. So the
+ * smoke is dark while the ground beside it is not, and the axis is not
+ * reasonable-about: the composite multiplies by auto-exposure before AgX, and
+ * three channels over the shoulder are white whatever their ratio.
+ *
+ * `_crateref.mjs` is the measurement, and it is built so the answer cannot be
+ * an artefact of the vantage: it stands where one of `plains-cover.js`'s six
+ * permanent `nf-smoke` banks is PROVED in shot — line-of-sight raycast, NDC
+ * printed — puts craters 18 m either side of it at the same range, and shoots
+ * the same frame at five values while the bank sits in the middle at its own
+ * authored 0.62 as a fixed reference. Bank 34.2 m at ndc (0, -0.07) with ~220
+ * live sprites; craters 38.5 m at ndc (±0.36) with ~205.
+ *
+ *   0.58 / 1.0   there, but no more so than the wreck bank beside it — which is
+ *                the wrong answer for ground that was bombed ten seconds ago
+ *   1.1  / 1.25  a plume, thin
+ *   1.8  / 1.25  BILLOWS, and keeps its internal tonality against the ridge
+ *   2.8  / 1.1   brighter and bigger, form starting to flatten into one mass
+ *   14   / 1.6   a white cut-out. This is the shoulder, photographed.
+ *
+ * 1.9 / 1.25 is 1.8 rounded toward the light — three times the bank's 0.62,
+ * which is the right RELATION and not an accident: a bank is a wreck that has
+ * been burning for an hour and a crater is thirty kilos of high explosive that
+ * went off ten seconds ago.
+ *
+ * THE FIRST CUT WAS 0.58 AND IT WAS ARGUED FROM `plains-cover.js` RATHER THAN
+ * PHOTOGRAPHED, and three screenshot sets in a row were read as "the smoke is
+ * not drawing at all" before `_litcheck.mjs` proved the layer was fine and the
+ * vantage was the fault. Both are recorded here because the next person will
+ * reach for the same 0.62.
  */
-const DARK = 0.58;
+const DARK = 1.9;
+const OPACITY = 1.25;
 const RISE = 3.4;
 
 /** Seconds of guttering fire in the crater seat. @see `_ember`. */
@@ -198,6 +227,15 @@ export class CraterField {
     /** Live-sprite ceiling for the whole field, resolved off the real ring. */
     this.cap = Math.round((fx.lit?.capacity ?? 2805) * SHARE);
     this.enabled = true;
+    /**
+     * Held on the instance and not read from the const, so a probe can mutate
+     * it between two frames of the same view. That is how `SMOKE_DARK` was
+     * arrived at in `plains-cover.js` and it is the only way to compare
+     * paleness against nothing else moving. @see `DARK`.
+     */
+    this.dark = DARK;
+    /** Opacity multiplier, tunable for the same reason as `dark`. @see `OPACITY`. */
+    this.opacity = OPACITY;
     /** Reported by the probes; never read by anything that draws. */
     this.stats = { live: 0, demand: 0, scale: 1, sprites: 0 };
   }
@@ -340,7 +378,7 @@ export class CraterField {
       c.acc += c.rate * dt;
       // Guard identical to `Ambience.update`: a long frame may not be allowed
       // to spend the whole ring catching up.
-      let guard = 6;
+      let guard = 8;
       while (c.acc >= 1 && guard-- > 0) {
         c.acc -= 1;
         this._puff(c, dt);
@@ -393,7 +431,7 @@ export class CraterField {
     s.rot = rng.float() * TWO_PI;
     s.spin = rng.signed() * 0.3;
     // Warm at the seat while it is still burning, grey once it is not.
-    const d = DARK;
+    const d = this.dark;
     const warm = c.age < EMBER_FOR ? 1 - c.age / EMBER_FOR : 0;
     s.r0 = d * (1 + warm * 0.22);
     s.g0 = d * (0.95 - warm * 0.06);
@@ -403,7 +441,7 @@ export class CraterField {
     s.b1 = d * 1.24;
     s.i0 = 1;
     s.i1 = 0.5;
-    s.alpha = rng.range(0.3, 0.55);
+    s.alpha = rng.range(0.3, 0.55) * this.opacity;
     s.alphaCurve = 1.5;
     s.soft = 0.9;
     s.turb = r * 0.45;
