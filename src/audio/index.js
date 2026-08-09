@@ -90,6 +90,28 @@ const ROOF_PROBE = 12;
 /** Wetness a shot gets with open sky over the muzzle, and with a low ceiling. */
 const WET_OUTDOOR = 0.12;
 const WET_INDOOR = 0.95;
+/**
+ * WHERE A BODY STOPS BEING A BODY — 「ダメージ音は自分に関係ない音は鳴らさない
+ * ようにして 遠くの方でなってるダメージ音とか」.
+ *
+ * The range within which somebody else's damage is still an event in the
+ * player's own fight: the flesh impact in `_onImpact` and the death grunt in
+ * `_onDeath`. Beyond it, a hit belongs to two strangers and is refused unless
+ * the player is at one end of it. @see _relevantDamage.
+ *
+ * IT IS 60 BECAUSE THAT NUMBER ALREADY MEANS THIS. `_onFire` divides the map at
+ * 60 m into the fight the player is standing in — which gets a full
+ * `weaponShot` — and the war elsewhere, which goes to the coalescing far layer.
+ * Reusing it keeps one boundary in the file instead of two that can drift, and
+ * it is generous for the case that matters: the man he is shooting at is inside
+ * 60 m in every engagement this game stages except a sniper's, and that one is
+ * covered by the hitmarker, which is head-locked and has no range at all.
+ *
+ * THIS IS NOT A GATE ON GUNFIRE and must never become one. The distant war —
+ * `battle.js`'s far layer out to `FAR_MAX` 320, `_distantVolley`, the ambience
+ * bed — is what carries 「銃声が鳴り響く」 and none of it passes through here.
+ */
+const DAMAGE_NEAR = 60;
 const GESTURES = ['pointerdown', 'mousedown', 'keydown', 'touchstart', 'wheel'];
 
 /* ---------------------------------------------------------------------- */
@@ -483,7 +505,77 @@ export class AudioSystem {
      * @see SpatialField._busCap, and the 60 m cull in `_onFire` that runs first.
      */
     this._rate = { shot: 16, impact: 5, step: 4, shell: 2, whizz: 2, reload: 4, bodyfall: 2 };
-    this._rateNext = { shot: 0, impact: 0, step: 0, shell: 0, whizz: 0, reload: 0, bodyfall: 0 };
+    /**
+     * ════════════════════════════════════════════════════════════════════════
+     * HOW MANY MAY ARRIVE AT ONCE — 「敵味方連射しないね 単発を数回打つだけ」
+     * ════════════════════════════════════════════════════════════════════════
+     * The burst allowance of the token bucket in `_allow`. `_rate` above is
+     * unchanged and is still the LONG-RUN ceiling; this is the only new number,
+     * and it decides what happens to events that arrive CLUMPED rather than
+     * spread — which is what every event in this table actually does, because
+     * they are all made by a trigger being held down.
+     *
+     * ────────────────────────────────────────────────────────────────────────
+     * WHY THE OLD SHAPE THREW AWAY EXACTLY THE THING HE ASKED FOR
+     * ────────────────────────────────────────────────────────────────────────
+     * `_allow` was a strict minimum interval: an event is refused unless a full
+     * `1/rate` has passed since the last one that was allowed. Against a burst
+     * that is not a budget, it is a decimator, and the arithmetic is brutal at
+     * the boundary — a source firing at just under the gate rate loses every
+     * other event, because each round arrives a few milliseconds before its
+     * token is due and the refusal does not reschedule anything.
+     *
+     * MEASURED, ONE SHOOTER, NO WAR (`_burstvoice.mjs --mode=burst`, the war
+     * muted so the gate is not being shared): a 45-round burst at 30 m, 970 rpm,
+     * put 23 rounds through `_allow('shot')` and refused 22. Half a magazine,
+     * with an entire 72-emitter pool idle and nothing else on the map firing.
+     * At 800 rpm it was 24 and 21. That is 「単発を数回打つだけ」 arriving from the
+     * limiter rather than from the man pulling the trigger.
+     *
+     * The same shape had already been measured and misdiagnosed once, on the
+     * whizz voice: tripling its ceiling from 2/s to 6/s moved the pass rate by
+     * 0.6 points, and the reason a 3x ceiling bought nothing is that the events
+     * arrive tighter than ANY interval this side of the cyclic rate. A ceiling
+     * cannot fix a shape.
+     *
+     * ────────────────────────────────────────────────────────────────────────
+     * WHAT A BUCKET CHANGES, AND WHAT IT DELIBERATELY DOES NOT
+     * ────────────────────────────────────────────────────────────────────────
+     * The long-run rate is EXACTLY `_rate[kind]`, unchanged, to the sample. A
+     * bucket refills at that rate and cannot average more than it. So every
+     * budget in this file that was sized against `_rate` — the weapons quota,
+     * the ~0.9 s mean voice life, the `_busCap` floor of 10 slots the 16 was
+     * explicitly chosen against — is arithmetically untouched. What changes is
+     * only the SHORT TERM: up to `_burst[kind]` events may land together, and
+     * the gap that follows is longer by exactly as much. It is the same number
+     * of voices a second, delivered in the rhythm they were fired in.
+     *
+     * The cost is bounded and it is bounded by this table: the most extra
+     * concurrent voices a bucket can produce is its own depth. Six shots is
+     * well inside the weapons bus at full cap (32) and — this is the part that
+     * makes it safe at the pool FLOOR, where the bus has 10 and a busy match
+     * measurably sits — `acquire` enforces `busCap` on its own. Passing
+     * `_allow` has never been a promise of a slot, so the field's protection of
+     * itself is untouched and remains the real backstop.
+     *
+     * THE DEPTHS ARE PER KIND, because clumpiness is:
+     *   shot     6  one burst. `BIN_ROUNDS` in battle.js is 6 for the same
+     *              reason — it is this file's unit of "a burst" already.
+     *   impact   4  rounds land in the clump they were fired in.
+     *   shell    4  one case per round, so a burst ejects a handful.
+     *   whizz    3  a burst passing your head is the whole event; @see the
+     *              0.6-point measurement above, which this replaces.
+     *   step     2  footfalls are spread ACROSS actors rather than clumped
+     *              within one, so this kind gains least and is given least.
+     *   reload   2  naturally sparse.
+     *   bodyfall 2  naturally sparse.
+     */
+    this._burst = { shot: 6, impact: 4, step: 2, shell: 4, whizz: 3, reload: 2, bodyfall: 2 };
+    /** Tokens in hand per kind. Starts full so the first burst of a round is not
+     * the one that pays for the bucket being empty. @see _allow */
+    this._tokens = { shot: 6, impact: 4, step: 2, shell: 4, whizz: 3, reload: 2, bodyfall: 2 };
+    /** When each bucket was last refilled, on the audio clock. @see _allow */
+    this._tokenAt = { shot: 0, impact: 0, step: 0, shell: 0, whizz: 0, reload: 0, bodyfall: 0 };
     this._lastBarkTime = -99;
     this._lastEnemyFire = -99;
     /**
@@ -926,13 +1018,28 @@ export class AudioSystem {
 
   /**
    * Rate limit one category of spatialised one-shot. Frame-rate independent:
-   * the gate is a minimum interval on the audio clock, not a count per frame.
-   * @returns {boolean} true if this event may claim a voice
+   * the budget is carried on the audio clock, not counted per frame.
+   *
+   * A TOKEN BUCKET, NOT A MINIMUM INTERVAL. It refills at `_rate[kind]` a
+   * second and holds at most `_burst[kind]`, so the long-run ceiling is the
+   * same number it has always been and a CLUMP is no longer decimated by the
+   * arithmetic of arriving a few milliseconds early. @see `_burst` for the
+   * measurement that changed the shape, and for why the depth is per kind.
+   *
+   * Passing this is still not a promise of a voice: `SpatialField.acquire`
+   * enforces the per-bus quota underneath and is what actually protects the
+   * pool. This gate only decides what is worth OFFERING.
+   * @returns {boolean} true if this event may ask for a voice
    */
   _allow(kind) {
     const now = this.actx.currentTime;
-    if (now < this._rateNext[kind]) return false;
-    this._rateNext[kind] = now + 1 / this._rate[kind];
+    const cap = this._burst[kind];
+    // Refill for the time that has passed, then spend. Clamped at `cap` so idle
+    // time banks a burst and no more — a quiet minute must not buy a barrage.
+    const t = Math.min(cap, this._tokens[kind] + (now - this._tokenAt[kind]) * this._rate[kind]);
+    this._tokenAt[kind] = now;
+    if (t < 1) { this._tokens[kind] = t; return false; }
+    this._tokens[kind] = t - 1;
     return true;
   }
 
@@ -1021,13 +1128,30 @@ export class AudioSystem {
   }
 
   /**
-   * Open every rate gate immediately. The gates are absolute times on the AUDIO
-   * clock, so a clock that stalled while a gate was set holds that gate closed
-   * for as long as the stall lasted — a category that is rate limited to five a
-   * second can be silent for twenty seconds on a clock that only advanced one.
+   * Open every rate gate immediately. The gates are carried on the AUDIO clock,
+   * so a clock that stalled while a gate was set holds that gate closed for as
+   * long as the stall lasted — a category that is rate limited to five a second
+   * can be silent for twenty seconds on a clock that only advanced one. The
+   * watchdog calls this after a resume or a rebuild.
+   *
+   * REWRITTEN WITH THE BUCKET, AND IT HAD TO BE. This iterated `_rateNext`,
+   * which the token bucket replaced; `for (const k in undefined)` is legal
+   * JavaScript that runs zero times, so leaving it would not have thrown — it
+   * would have made the recovery hook a silent no-op, which is this file's
+   * oldest and most expensive class of defect (`AudioSystem.start()` latching
+   * `failed`, F9 registered inside `watchdog.start()`, `_playCollapse`
+   * dereferencing `this.field` above its own guard). A gate that stops working
+   * quietly is worse than one that breaks loudly.
+   *
+   * The bucket is inherently gentler here — after a stall `now - _tokenAt` is
+   * large, so it refills to `_burst[kind]` on its own rather than staying shut —
+   * but "inherently gentler" is not "correct", and the stamp still has to be
+   * moved to the present or the first event after a resume inherits an interval
+   * measured against a clock that no longer exists.
    */
   clearRateGates() {
-    for (const k in this._rateNext) this._rateNext[k] = 0;
+    const now = this.actx?.currentTime ?? 0;
+    for (const k in this._burst) { this._tokens[k] = this._burst[k]; this._tokenAt[k] = now; }
     this._lastBarkTime = -99;
     this._lastEnemyFire = -99;
   }
@@ -2150,9 +2274,56 @@ export class AudioSystem {
      * did. The pass is a property of the TRAJECTORY. @see _maybeWhizz
      */
     this._maybeWhizz(pt, p.incident);
-    if (!this._allow('impact')) return;
+    /**
+     * ───────────────────────────────────────────────────────────────────────
+     * THE CULL COMES FIRST — AND THIS IS THE THIRD TIME IN THIS FILE
+     * ───────────────────────────────────────────────────────────────────────
+     * `_allow('impact')` used to stand ABOVE the 90 m test, so a round landing
+     * on the far side of a 314 m plain spent the token that a round landing at
+     * the player's feet then had to do without. It is the same defect as
+     * `_onFire`'s (fixed: 1982 offers from beyond 70 m against 14 inside it)
+     * and `_onTracer`'s (fixed: 354 of 390 offers died to a budget spent on
+     * rounds in other streets), and it is written down twice already a few
+     * hundred lines from here.
+     *
+     * MEASURED at real simulation speed (`_burstvoice.mjs --mode=live --nocap`,
+     * NACHTFELD, 45 s, the player driven into contact): 5473 impacts offered,
+     * `_allow('impact')` refused **5392 of them — 98.5 %** — while the pool it
+     * was rationing sat with `dropped` and `stolen` accruing on OTHER buses.
+     * Five a second was never rationing rounds landing near the player; there
+     * were nowhere near five a second of those. It was rationing a 314 m map
+     * through one gate, and the ones that mattered had to win a lottery against
+     * the whole war.
+     *
+     * 90 m itself is unchanged and stays unchanged.
+     */
     const dist = this.field.distanceTo(pt.x, pt.y, pt.z);
     if (dist > 90) return;
+    /**
+     * ───────────────────────────────────────────────────────────────────────
+     * A ROUND IN A WALL IS THE WORLD; A ROUND IN A MAN IS DAMAGE
+     * ───────────────────────────────────────────────────────────────────────
+     * 「ダメージ音は自分に関係ない音は鳴らさないようにして 遠くの方でなってる
+     * ダメージ音とか」.
+     *
+     * These two are not the same event and only one of them is his. A round
+     * striking masonry near you is INFORMATION — it is how you learn you are
+     * being shot at, and it keeps the full 90 m. A round striking a body is
+     * damage feedback about somebody, and `p.actor` says whose: `physics`
+     * publishes the victim on every impact (@see `hit?.actor` in
+     * src/physics/index.js) and the flesh profile in foley.js is a wet, close,
+     * unmistakable sound that has been playing for strangers shot by strangers
+     * anywhere inside 90 m of him.
+     *
+     * So flesh keeps the near seam and nothing else: the 60 m that `_onFire`
+     * already uses to mean "the fight you are standing in" rather than "the war
+     * elsewhere", and his OWN body at any range. Rounds hitting the man he is
+     * shooting at are inside 60 m in every fight this game stages except a
+     * sniper's, and the hitmarker — which is his, head-locked and instant —
+     * carries that case already. @see _onDamageDealt.
+     */
+    if (p.surface === 'flesh' && dist > DAMAGE_NEAR && !this._isPlayerActor(p.actor)) return;
+    if (!this._allow('impact')) return;
     this._playAt('impact', pt.x, pt.y, pt.z, {
       surface: p.surface ?? 'concrete',
       energy: clamp((p.damage ?? 30) / 34, 0.35, 1.5),
@@ -2439,6 +2610,53 @@ export class AudioSystem {
     if (p.ads !== undefined) this._ads = p.ads;
   }
 
+  /**
+   * Is this the man holding the mouse? Used to decide whether a damage event is
+   * ABOUT HIM. Deliberately generous in one direction: `src/weapons` publishes
+   * the player as an object on some paths and as the string `'player'` on
+   * others, and `src/match/tank.js` publishes a source this file has never
+   * seen. @see _relevantDamage for why an unknown answer is treated as his.
+   */
+  _isPlayerActor(a) {
+    if (!a) return false;
+    return a === 'player' || a.isPlayer === true || a === this.ctx.peek('player');
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════════════════
+   * WHOSE DAMAGE IS THIS — 「ダメージ音は自分に関係ない音は鳴らさないようにして」
+   * ══════════════════════════════════════════════════════════════════════════
+   * A gunshot is the world and a hit is a fact about a body. He has asked for
+   * the first to ring out across a 314 m plain and for the second to be
+   * personal, and those are not in conflict once the split is made on IDENTITY
+   * rather than on distance: `damage:dealt` carries BOTH ends — `source` (the
+   * shooter, from `physics.fireBullet`'s `opts.shooter`) and `target` — and
+   * `actor:death` carries `by`. This file has been throwing all of it away.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * THE DIRECTION OF THE DOUBT IS THE WHOLE DESIGN
+   * ────────────────────────────────────────────────────────────────────────
+   * This returns true — plays the sound — whenever it cannot PROVE the event
+   * belongs to somebody else. A missing or unrecognised `source` is treated as
+   * his, so no path that publishes attribution this file has not seen can
+   * silently take his own hitmarker away. What it removes is only the case it
+   * can positively identify: a named actor who is not the player shooting a
+   * named actor who is not the player. On a 100-agent map that is the
+   * overwhelming majority and it is exactly what he described.
+   *
+   * A subtraction is the one change in this subsystem that cannot be heard
+   * going wrong — a voice that stops for the wrong reason is indistinguishable
+   * from one that plays — so it is measured in `_burstvoice.mjs` by counting
+   * refusals and passes separately in a live firefight, not at boot.
+   */
+  _relevantDamage(p) {
+    if (this._isPlayerActor(p?.source) || this._isPlayerActor(p?.target)) return true;
+    // Neither end is a body we can name: not provably somebody else's, so it
+    // plays. @see the block above on the direction of the doubt.
+    if (!p?.source && !p?.target) return true;
+    return false;
+  }
+
   _onDamageDealt(p) {
     if (!this.running || !p) return;
     // "Damage dealt TO p.target" — `ai` also uses this for rounds that hit the
@@ -2446,6 +2664,22 @@ export class AudioSystem {
     // damage is handled by _onDamageTaken.
     const t = p.target;
     if (t === 'player' || t?.isPlayer === true || t === this.ctx.peek('player')) return;
+    /**
+     * THE HITMARKER IS A UI SOUND AND IT WAS PLAYING FOR STRANGERS.
+     *
+     * `ui()` is `_playDry` — head-locked, no position, no distance, no rate
+     * limit — so every round any of the ninety-odd bots landed on any other bot
+     * anywhere on the map ticked inside his head at full level, identical to
+     * the tick that means HE hit somebody. That is the literal complaint, and
+     * it is the single loudest instance of it: a hitmarker is the most personal
+     * sound in the mix and it had the widest possible reach.
+     *
+     * MEASURED (`_burstvoice.mjs --mode=live --nocap`, NACHTFELD, 45 s at real
+     * simulation speed with the player driven into contact): see the report in
+     * `_relevantDamage` — this gate refuses the bot-on-bot traffic and passes
+     * every event with the player at either end.
+     */
+    if (!this._relevantDamage(p)) return;
     this.ui(p.headshot ? 'headshot' : 'hitmarker', 1);
     if (p.killed) this.ui('kill', 1);
     else if (p.point && p.target && this.rng.float() < 0.3) {
@@ -2466,6 +2700,34 @@ export class AudioSystem {
     if (!this.running) return;
     const pt = p?.point;
     if (!pt) return;
+    /**
+     * A MAN DYING 200 m AWAY IS NOT A SOUND HE IS OWED.
+     *
+     * 「遠くの方でなってるダメージ音とか」. The death grunt is the loudest surviving
+     * voice in the game by reach: `bark('death', …, { force: true })` skips the
+     * 0.42 s mush guard on purpose, asks at priority 0.85, and had no gate under
+     * it but `_playAt`'s default `maxDist` of 320 m. On a hundred-agent map on a
+     * 314 m plain that is a continuous stream of strangers crying out at full
+     * priority, and every one of them can evict something the player is standing
+     * next to.
+     *
+     * THE GRUNTS WERE KEPT WHEN THE RADIO WAS MUTED and that reasoning is
+     * respected rather than reversed: `isRadioKind` lets `hit`/`pain`/`death`
+     * through because a grunt is a BODY and not a handset. A body is exactly the
+     * argument for a distance — a body is a local event. So the voice is
+     * untouched, `RADIO_MUTED` is untouched, `WHIZZ_PRIORITY` and the bark
+     * priority are untouched, and what is added is the range at which a body is
+     * a body: `DAMAGE_NEAR`, the same 60 m `_onFire` already uses to divide the
+     * fight you are standing in from the war elsewhere — plus his own kills at
+     * any range, because a man he has just shot is his by definition.
+     *
+     * THE DISTANT WAR IS NOT CARRIED BY THIS AND CANNOT BE QUIETENED BY IT.
+     * 「銃声が鳴り響く」 is `battle.js`'s coalesced far layer, `_distantVolley` and
+     * the ambience bed, all of which are gunfire and none of which pass through
+     * here. @see FAR_FLOOR_SLOTS, FAR_MAX and playFar — untouched.
+     */
+    const dist = this.field.distanceTo(pt.x, pt.y, pt.z);
+    if (dist > DAMAGE_NEAR && !this._isPlayerActor(p?.by)) return;
     this.bark('death', pt, { level: 1, force: true, voice: (p?.actor?.id ?? 0) | 0 });
     if (!this._allow('bodyfall')) return;
     this._playAt('bodyfall', pt.x, pt.y, pt.z, {
