@@ -132,6 +132,61 @@ const res = await page.evaluate(async () => {
   out.cases.push(await run('ENEMY mine on the lane', 'enemy'));
   out.cases.push(await run('FRIENDLY mine on the lane', 'same'));
 
+  /**
+   * CAN A MAN BE KILLED BY AN ANTI-TANK MINE? Two halves, and they are
+   * different questions:
+   *   - can he SET ONE OFF?  No, by construction: `beamRange` is 0 and the
+   *     only sensor is a plate keyed to a hull footprint. Proved by standing
+   *     him ON it for four seconds and reading `tripped`.
+   *   - can he be killed BY one a TANK sets off?  Measured below: he stands
+   *     `STAND` metres off a plate on a live hull's leg and the run reads his
+   *     health across the blast.
+   */
+  const man = async (STAND) => {
+    const player = e.ctx.peek('player');
+    const tank = armour.tanks.find((t) => t.alive && t.state === 'advance');
+    if (!tank || !player) return { STAND, error: 'no hull / no player' };
+    const leg = tank.legs[tank.legIx];
+    const s = Math.min(leg.length - 0.5, tank.s + 40 * tank.legDir);
+    let i = 0;
+    while (i < leg.n - 1 && leg.S[i + 1] < s) i++;
+    const p = { x: leg.X[i], y: leg.Y[i] + 0.4, z: leg.Z[i] };
+    const team = tank.team === 0 ? 1 : 0;
+    const t0 = w.mineStats.tripped;
+    if (!w.layMine(p, { team, owner: null })) return { STAND, error: 'field full' };
+    // Put him beside the plate, square to the lane, and hold him there.
+    const ph = e.ctx.peek('physics');
+    const off = { x: p.x + Math.cos(leg.YAW[i]) * STAND, z: p.z - Math.sin(leg.YAW[i]) * STAND };
+    const gy = ph.groundHeight(off.x, off.z, p.y + 6);
+    const dst = armour.tanks[0].position.clone();
+    dst.set(off.x, Number.isFinite(gy) ? gy : p.y, off.z);
+    player.respawnAt(dst, leg.YAW[i]);
+    const h0 = player.health;
+    // 4 s of standing ON/BESIDE it before any hull arrives: nothing may happen.
+    let standTrips = 0;
+    const c0 = m.roundClock;
+    while (c0 - m.roundClock < 4) {
+      await frame();
+      player.respawnAt(dst, leg.YAW[i]);
+    }
+    standTrips = w.mineStats.tripped - t0;
+    const hStand = player.health;
+    // …and now let the hull come.
+    const c1 = m.roundClock;
+    let fired = false;
+    while (c1 - m.roundClock < 40) {
+      await frame();
+      player.respawnAt(dst, leg.YAW[i]);
+      if (w.mineStats.tripped > t0) { fired = true; for (let k = 0; k < 50; k++) await frame(); break; }
+    }
+    return {
+      STAND, h0: Math.round(h0), hStand: Math.round(hStand),
+      h1: Math.round(player.health), dead: player.dead === true,
+      standTrips, fired,
+    };
+  };
+  out.man = [await man(1.0), await man(5.0)];
+
   /* ---- the per-frame cost, measured ------------------------------------- */
   // Fill the field with mines on the lanes so the count is the worst case the
   // ration can produce (5 men x 2 x 2 sides = 20), then count pairs per frame.
@@ -169,6 +224,14 @@ for (const c of res.cases) {
     `trips=${c.tripped}   lastOrd=${c.lastOrd}   after ${c.secs}s\n` +
     `      armed mine sat at y=${c.armedY} on ground y=${c.groundY} ` +
     `(proud ${c.armedY !== null && c.groundY !== null ? (c.armedY - c.groundY).toFixed(3) : '?'} m)`
+  );
+}
+console.log(`\n=== CAN A MAN BE KILLED BY ONE? ===`);
+for (const c of res.man ?? []) {
+  if (c.error) { console.log(`  ${c.STAND} m: ${c.error}`); continue; }
+  console.log(
+    `  standing ${c.STAND} m from the plate: 4 s ON it set off ${c.standTrips} mine(s) — ` +
+    `health ${c.h0} -> ${c.hStand}; then a hull drove over it (fired=${c.fired}) — health ${c.h1}, dead=${c.dead}`
   );
 }
 console.log(`\n=== THE COST OF FINDING ONE ===`);
