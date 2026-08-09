@@ -66,6 +66,7 @@ import * as THREE from 'three';
 import { forMap } from './geography.js';
 import { mergeGeometries } from './airstrike.js';
 import { makeFireMaterial } from './fire.js';
+import { Skyfall } from './skyfall.js';
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
@@ -185,8 +186,18 @@ export class Crash {
     this._searLeft = 0;
     /** Set true on the frame the ground is struck, so `match` can announce it. */
     this.struck = false;
-    /** True while anything of this act is on screen. `match` reads it. */
-    this.busy = false;
+    /** Backing field for `busy`. @see the accessor below. */
+    this._busy = false;
+    /**
+     * THE OTHER TWO WAVES. `src/match/skyfall.js` — five unmanned bombers that
+     * lose the satellite and fall out of the sky behind it, and the carrier that
+     * launched them, which is 86 m long and takes a piece of the west off the
+     * map when it lands. It is built here, fired by `fire()` below, driven by
+     * `update()` and put away by `reset()`; it has NO entry point of its own,
+     * because Act III's `crash` beat calls `Crash.fire()` and nothing else.
+     * Null on any map with no crash track.
+     */
+    this._sky = null;
 
     /**
      * WHERE IT LANDS, PUBLISHED. The act's HUD reticle, its banner and its
@@ -222,6 +233,25 @@ export class Crash {
     this._plough = null;
     /** Seconds since the last trail puff, so the approach does not emit per frame. */
     this._puff = 0;
+  }
+
+  /**
+   * TRUE WHILE ANYTHING OF THIS ACT IS ON SCREEN — and it is an accessor now
+   * because the act no longer ends when the satellite stops.
+   *
+   * `MatchSystem` reads this to decide whether the sky is free. The satellite
+   * is at rest at t=18.4 and the CARRIER lands on that frame and ploughs for
+   * another five and a half seconds, so a plain `busy` field would have told
+   * `match` the sky was clear while the biggest object in the game was still
+   * moving across it. One `||`, and every existing writer of `this.busy` is
+   * unchanged.
+   */
+  get busy() {
+    return this._busy || !!this._sky?.busy;
+  }
+
+  set busy(v) {
+    this._busy = !!v;
   }
 
   /* ====================================================================== */
@@ -299,6 +329,13 @@ export class Crash {
     this._buildFlames(physics);
     this._park();
     ctx.scene.add(this.group);
+    /**
+     * THE OTHER TWO WAVES, BUILT ON THE SAME BOOT AND ON THE SAME MAPS.
+     * `Skyfall` bakes five drones, an 86 m carrier, 118 cells of fire and BOTH
+     * connected-component labellings of the nav grid here, so that the frame
+     * this act fires is still nothing but assignments. @see skyfall.js.
+     */
+    this._sky = new Skyfall(ctx, { rng: this.rng.fork() }).build();
     this.ready = true;
     this.buildMs = performance.now() - t0;
     console.info(
@@ -614,6 +651,14 @@ export class Crash {
     this._fireU.uT.value = -1;
     this._fireU.uFade.value = 1;
     this.flames.visible = false;
+    /**
+     * AND THE REST OF THE SKY, ON THIS SAME CLOCK. Every time in
+     * `src/match/skyfall.js` is seconds since THIS line, which is why the two
+     * later waves need no scheduler, no threshold and no second entry point:
+     * the drones lose their navigation because the satellite this call is
+     * dropping has just stopped existing.
+     */
+    this._sky?.fire();
     console.info(
       `[crash] INBOUND — ${this._fall.toFixed(1)}s to impact at ` +
         `(${this.impact.x.toFixed(0)}, ${this.impact.z.toFixed(0)}), ` +
@@ -664,6 +709,16 @@ export class Crash {
 
   update(dt) {
     if (!this.ready) return;
+
+    /**
+     * THE OTHER TWO WAVES FIRST, AND OUTSIDE EVERY EARLY RETURN BELOW.
+     * `Skyfall` keeps its own clock and its own burning region — the west is
+     * still on fire two hundred seconds after this file's own `_t` has gone
+     * back to -1 — so it may not be driven from inside a branch that ends when
+     * the satellite settles. It has its own `ready` guard and its own idle
+     * state; this is one call and a null check.
+     */
+    this._sky?.update(dt);
 
     /* ---- the ground, still burning ------------------------------------ */
     if (this._burn > 0) {
@@ -1002,6 +1057,14 @@ export class Crash {
      * Same shape as `fire()` and `update()`, which both open on `ready`. This
      * is the third entry point and it was the one without the test.
      */
+    /**
+     * BEFORE the `ready` guard and outside it, for the same reason
+     * `dispose()` puts `_stopPlough` outside its own: what `Skyfall.reset()`
+     * has to undo is a HOLE IN THE NAV GRID, and a hole that survived a round
+     * reset would be a map permanently missing five per cent of itself with
+     * nothing on screen to explain it. It has its own `ready` test.
+     */
+    this._sky?.reset();
     if (!this.ready) return;
     this._t = -1;
     this._cell = 0;
@@ -1026,6 +1089,7 @@ export class Crash {
      * shipped a crash, and a guard that is narrower is how audio shipped six.
      */
     this._stopPlough();
+    this._sky?.dispose();
     /** @see the note in `reset()` — a map with no track has nothing to put out. */
     if (this.ready) this._extinguish();
     this.hull?.geometry?.dispose();
