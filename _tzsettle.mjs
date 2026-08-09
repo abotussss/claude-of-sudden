@@ -4,17 +4,22 @@
  *  the match phase alongside it so the two cannot be confused. */
 import { chromium } from 'playwright';
 const BASE = process.env.BASE ?? 'http://127.0.0.1:4626/';
+/** The level dice are drawn from `Math.random()` unless `?seed=` pins them
+ *  (@see `Engine.levelSeed`), so a nav count is only comparable run to run
+ *  with this set. Absent, the boot is an ordinary one. */
+const SEED = process.env.SEED ?? '';
+const ID = process.env.ID ?? 'NF-TOWER';
 const b = await chromium.launch({ headless: true, args: ['--use-angle=metal','--ignore-gpu-blocklist','--mute-audio'] });
 const p = await b.newPage({ viewport: { width: 800, height: 600 } });
 const errs = []; p.on('pageerror', (e) => errs.push(String(e.message)));
-await p.goto(`${BASE}?map=plains&capture=1`, { waitUntil: 'domcontentloaded' });
+await p.goto(`${BASE}?map=plains&capture=1${SEED ? `&seed=${SEED}` : ''}`, { waitUntil: 'domcontentloaded' });
 await p.waitForFunction('window.__READY__===true', null, { timeout: 300000 });
-const out = await p.evaluate(async () => {
+const out = await p.evaluate(async (ID) => {
   const e = window.__ENGINE__;
   const m = e.ctx.peek('match');
   while (m.phase !== 'live') await new Promise((r) => requestAnimationFrame(r));
-  const s = m.airstrike.sites.find((k) => k.id === 'NF-TOWER');
-  m.airstrike.callDemolition('NF-TOWER');
+  const s = m.airstrike.sites.find((k) => k.id === ID);
+  m.airstrike.callDemolition(ID);
   const rows = [];
   for (let i = 0; i < 900; i++) {
     await new Promise((r) => requestAnimationFrame(r));
@@ -30,7 +35,7 @@ const out = await p.evaluate(async () => {
     if (s.baked && rows.length > 3 && rows[rows.length-1].t < 0) break;
   }
   return rows;
-});
+}, ID);
 for (const r of out) console.log('  ', JSON.stringify(r));
 console.log('pageerrors', errs.length, errs[0] ?? '');
 await b.close();

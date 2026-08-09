@@ -551,21 +551,74 @@ function depot(A, rng, y) {
 }
 
 /**
- * The falling mass, in `demolition._mass`' exact shape — see the long note on
- * `towerMass` in plains-tower.js, and the crash that produced it. The magazine
- * and the two gatehouses are what a strike takes; the curtain is not in the
- * list because the curtain does not go.
+ * ════════════════════════════════════════════════════════════════════════════
+ * HOW BIG A PIECE OF THIS FORTRESS IS WHEN IT LANDS, AND THEREFORE HOW TALL THE
+ * HEAP IS — 「要塞の破壊の時に出る瓦礫はもっと背を低くして」
+ * ════════════════════════════════════════════════════════════════════════════
+ * A chunk's size is `size / cut` per axis and nothing else, and its SETTLED
+ * HEIGHT is a function of that size and of nothing else either:
+ * `Airstrike._buildMesh` rests every piece at
+ *
+ *     ground + moundH·(1 - r²) + half·0.72,   half = max(hx, hy, hz)
+ *
+ * so the TOP of the drawn piece stands `moundH + 1.72·half` over the floor it
+ * came to rest on, and `moundH` for a demolition is 0.3 m. The complaint is
+ * about that top, so the answer is `half`, and `half` is this table.
+ *
+ * MEASURED, `_tzchunks.mjs` (which now reads the SETTLED matrix as well as the
+ * intact one), against the tower which has already been through this:
+ *
+ *            chunks   p25  median  p75   max   >2.0m │ top: median  max  >eye
+ *   fort before  610  1.62   1.81  2.08  2.71    183 │        2.69  4.13  578
+ *   tower        3365 1.11   1.30  1.44  1.89      0 │        1.61  2.48 1656
+ *
+ * — 578 of 610 pieces of this fortress stood ABOVE A STANDING EYE (1.62 m) and
+ * the tallest was over four metres, i.e. the courtyard after the strike was a
+ * wall of masonry rather than a field of it. That is 背が高い, exactly.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE LADDER IS THE TOWER'S, COMPRESSED, AND THE COMPRESSION IS THE POINT
+ * ────────────────────────────────────────────────────────────────────────────
+ * The tower's three targets run 0.85 / 1.15 / 1.25 finest-at-the-bottom, and the
+ * argument there is PERSPECTIVE: its cab is thirty metres up and nobody ever
+ * judges a piece he only sees falling. THIS BUILDING IS 8.2 m TALL. Every piece
+ * of it lands within a few metres of a man standing in the courtyard or on the
+ * gate road, so the spread between the bottom of the ladder and the top of it is
+ * 0.15 m rather than 0.40 — and the ladder still runs the same way, because the
+ * gatehouse blocks are the only mass on this fortress that is ever over a head.
+ *
+ *   CHUNK_LOW    the magazine. It stands ON the courtyard floor; a man walking
+ *                in through either gate has its walls and its roof at his feet.
+ *   CHUNK_MID    the two bridges over the passages, which fall INTO the road.
+ *   CHUNK_HIGH   the four gatehouse blocks, 4.4 to 8.2 m — the top of the pour.
+ *   RUN_LOW      the long axis of a wall whose other two axes are already a
+ *                chunk. @see the same constant on the tower: cutting a 14 m run
+ *                as fine as its 0.8 m section buys nothing from any bearing.
+ *
+ * The magazine and the two gatehouses are what a strike takes; the curtain is
+ * not in the list because the curtain does not go — @see the scope note in
+ * `buildFort`, and it is deliberately unchanged here. The parapet is not in the
+ * list either: it is drawn away with the shell and `buildFortRuin` lays it along
+ * the walk, so fracturing it would ADD rubble to a pass that exists to lower it.
  */
+const CHUNK_LOW = 0.90;
+const CHUNK_MID = 1.00;
+const CHUNK_HIGH = 1.05;
+const RUN_LOW = 1.10;
+
 function fortMass(y) {
-  const n = (m, per = 1.5) => Math.max(1, Math.round(m / per));
+  const n = (m, per) => Math.max(1, Math.round(m / per));
   const t = MAG.wall;
   const W = MAG.hw * 2, D = MAG.hd * 2, H = MAG.roof;
   const parts = [
-    { id: 'magXp', mat: 0, size: [t, H, D], at: [(W - t) / 2, y(H / 2), 0], cut: [1, n(H), n(D)] },
-    { id: 'magXn', mat: 0, size: [t, H, D], at: [-(W - t) / 2, y(H / 2), 0], cut: [1, n(H), n(D)] },
-    { id: 'magZp', mat: 0, size: [W - t * 2, H, t], at: [0, y(H / 2), (D - t) / 2], cut: [n(W), n(H), 1] },
-    { id: 'magZn', mat: 0, size: [W - t * 2, H, t], at: [0, y(H / 2), -(D - t) / 2], cut: [n(W), n(H), 1] },
-    { id: 'magroof', mat: 1, size: [W + 0.6, 0.44, D + 0.6], at: [0, y(H + 0.2), 0], cut: [n(W, 1.9), 1, n(D, 1.9)] },
+    { id: 'magXp', mat: 0, size: [t, H, D], at: [(W - t) / 2, y(H / 2), 0], cut: [1, n(H, CHUNK_LOW), n(D, RUN_LOW)] },
+    { id: 'magXn', mat: 0, size: [t, H, D], at: [-(W - t) / 2, y(H / 2), 0], cut: [1, n(H, CHUNK_LOW), n(D, RUN_LOW)] },
+    { id: 'magZp', mat: 0, size: [W - t * 2, H, t], at: [0, y(H / 2), (D - t) / 2], cut: [n(W - t * 2, RUN_LOW), n(H, CHUNK_LOW), 1] },
+    { id: 'magZn', mat: 0, size: [W - t * 2, H, t], at: [0, y(H / 2), -(D - t) / 2], cut: [n(W - t * 2, RUN_LOW), n(H, CHUNK_LOW), 1] },
+    {
+      id: 'magroof', mat: 1, size: [W + 0.6, 0.44, D + 0.6], at: [0, y(H + 0.2), 0],
+      cut: [n(W + 0.6, CHUNK_LOW), 1, n(D + 0.6, CHUNK_LOW)],
+    },
   ];
   // the two gatehouses, on the trace's ±Z flats
   for (const s of [-1, 1]) {
@@ -573,12 +626,14 @@ function fortMass(y) {
     for (const k of [-1, 1]) {
       parts.push({
         id: `gt${s}${k}`, mat: 1, size: [5.6, TOWER_H, 5.6],
-        at: [k * (GATE_W / 2 + 3.4), y(TOWER_H / 2), gz], cut: [4, n(TOWER_H), 4],
+        at: [k * (GATE_W / 2 + 3.4), y(TOWER_H / 2), gz],
+        cut: [n(5.6, CHUNK_HIGH), n(TOWER_H, CHUNK_HIGH), n(5.6, CHUNK_HIGH)],
       });
     }
     parts.push({
       id: `gb${s}`, mat: 1, size: [GATE_W + 7, TOWER_H - WALK_Y, RAMP_T],
-      at: [0, y((TOWER_H + WALK_Y) / 2), gz], cut: [n(GATE_W + 7), 2, n(RAMP_T)],
+      at: [0, y((TOWER_H + WALK_Y) / 2), gz],
+      cut: [n(GATE_W + 7, CHUNK_MID), n(TOWER_H - WALK_Y, CHUNK_MID), n(RAMP_T, CHUNK_MID)],
     });
   }
   return parts;
@@ -1407,12 +1462,42 @@ function glacis(A, rng, y, groundY) {
  * rubble pile across either is a fortress that is HARDER to move through after
  * it has been destroyed, which is the exact failure `demolition.js`' own header
  * is written about.
+ *
+ * ════════════════════════════════════════════════════════════════════════════
+ * …AND THE HEAP STANDS ON THIS, WHICH IS WHY THE HEIGHTS HERE CAME DOWN
+ * ════════════════════════════════════════════════════════════════════════════
+ * 「要塞の破壊の時に出る瓦礫はもっと背を低くして」 was answered first in `fortMass`,
+ * where the chunk went median 1.81 -> 1.21 m and 183 pieces over two metres went
+ * to none. It only bought a third of the height, and the measurement says why:
+ *
+ *   the drawn chunk tops, over the plain   median 2.69 -> 2.12 m   max 4.13 -> 3.34
+ *   the FLOOR under the mound, razed       median 0.81 m           max 2.06 m
+ *
+ * `Airstrike._buildMesh` rests every chunk on `physics.groundHeight` AGAINST THE
+ * RUIN, and the mound centre is `rec.position` = (0, 48), which is inside this
+ * magazine's own footprint. So 0.81 m of the 2.12 was not rubble at all — it was
+ * THIS PASS, carrying the whole heap up on top of itself. A metre of torn wall
+ * under a metre of chunk is two metres of masonry in a courtyard, and the player
+ * cannot tell which half of it is which.
+ *
+ * So the two things that stand under the mound come down: the debris field's
+ * peak (1.35 -> 0.55 m) and the torn walls (0.9-2.1 -> 0.35-0.95 m), and the
+ * gate-tower stumps come down with them (1.6-3.2 -> 0.5-1.15 m over the walk)
+ * because they are the OTHER thing a strike leaves standing and they were the
+ * tallest of it. The plan of the magazine is still legible — that is what the
+ * torn walls are for — at a height a man reads it from rather than one he
+ * shelters behind.
+ *
+ * NOTHING OUTSIDE THIS FUNCTION MOVES. It is on its own `Rng(0x50f7ae)` (@see
+ * `buildFort`), so re-rolling it re-rolls the ruin and nothing else on the map;
+ * `drawDebris` takes `max(2, round(hgt*4))` draws per cell, so a lower field
+ * takes fewer of them and the rest of the ruin's own stream shifts with it.
  */
 function buildFortRuin(A, rng, y) {
   const box = BOX(A);
   // the magazine, down
   const cx = FORT.x, cz = FORT.z - 3;
-  const field = debrisField(rng, cx, cz, MAG.hw + 2.5, 1.35, 2.2);
+  const field = debrisField(rng, cx, cz, MAG.hw + 2.5, 0.55, 2.2);
   drawDebris(A, rng, field, () => y(0.02), { key: 'plaster_sand', key2: 'concrete_dark' });
   // its walls, torn off low, so the plan is still legible
   for (let i = 0; i < 4; i++) {
@@ -1420,7 +1505,7 @@ function buildFortRuin(A, rng, y) {
     const nx = Math.sin(a), nz = Math.cos(a);
     const half = i % 2 ? MAG.hw : MAG.hd;
     const off = i % 2 ? MAG.hd : MAG.hw;
-    const h = rng.range(0.9, 2.1);
+    const h = rng.range(0.35, 0.95);
     A.add('plaster_sand', box, LL(IDENT, cx + nx * (off - MAG.wall / 2), y(h / 2), cz + nz * (off - MAG.wall / 2),
       a, MAG.wall, h, half * rng.range(0.6, 1.5)), { masks: [0.7, 0.6, 0.3] });
     A.box('concrete', cx + nx * (off - MAG.wall / 2), y(h / 2), cz + nz * (off - MAG.wall / 2),
@@ -1434,7 +1519,7 @@ function buildFortRuin(A, rng, y) {
     for (const k of [-1, 1]) {
       const px = e.mx + e.tx * k * (GATE_W / 2 + 3.4) - e.nx * 0.6;
       const pz = e.mz + e.tz * k * (GATE_W / 2 + 3.4) - e.nz * 0.6;
-      const h = rng.range(1.6, 3.2);
+      const h = rng.range(0.5, 1.15);
       for (let c = 0; c < 4; c++) {
         const ch = h / 4;
         A.add('concrete', box, LL(IDENT, px, y(WALK_Y + (c + 0.5) * ch), pz, e.yaw + rng.range(-0.02, 0.02),
@@ -1442,9 +1527,11 @@ function buildFortRuin(A, rng, y) {
           { masks: [0.6 + rng.float() * 0.35, 0.55, 0.3] });
       }
       A.box('concrete', px, y(WALK_Y + h / 2), pz, 5.6, h, 5.6, e.yaw);
+      // the reinforcement out of the break, shortened with the stump it stands
+      // out of — 1.9 m of bar on a 1.15 m stub is a fence, not a broken tower
       for (let r = 0; r < 5; r++) {
-        A.add('metal_rust', BOX_THIN(A), LL(IDENT, px + rng.range(-2.4, 2.4), y(WALK_Y + h + rng.range(0.2, 1.2)),
-          pz + rng.range(-2.4, 2.4), rng.float() * 6.28, 0.035, rng.range(0.6, 1.9), 0.035,
+        A.add('metal_rust', BOX_THIN(A), LL(IDENT, px + rng.range(-2.4, 2.4), y(WALK_Y + h + rng.range(0.1, 0.5)),
+          pz + rng.range(-2.4, 2.4), rng.float() * 6.28, 0.035, rng.range(0.35, 0.95), 0.035,
           rng.range(-0.5, 0.5), rng.range(-0.5, 0.5)), { masks: [0.95, 0.75, 0] });
       }
       // and what came off it, spread over the walk and down onto the road

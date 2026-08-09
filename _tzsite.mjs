@@ -4,6 +4,11 @@
  * ════════════════════════════════════════════════════════════════════════════
  *
  *   BASE=http://127.0.0.1:4626/ node _tzsite.mjs
+ *   BASE=… ID=NF-FORT R=41 node _tzsite.mjs
+ *
+ * `ID` and `R` pick WHICH razed site is measured (default the tower's, at its
+ * own 25.4 m). Everything below is written off `rec.position` and `R`, so the
+ * fortress is the same four questions asked of a different record.
  *
  * Four questions, on one boot, so the two states are measured against the same
  * map rather than against two:
@@ -22,24 +27,30 @@
  */
 import { chromium } from 'playwright';
 const BASE = process.env.BASE ?? 'http://127.0.0.1:4626/';
+/** The level dice are drawn from `Math.random()` unless `?seed=` pins them
+ *  (@see `Engine.levelSeed`), so a nav count is only comparable run to run
+ *  with this set. Absent, the boot is an ordinary one. */
+const SEED = process.env.SEED ?? '';
+const ID = process.env.ID ?? 'NF-TOWER';
+const RR = Number(process.env.R ?? 25.4);
 const b = await chromium.launch({ headless: true, args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--mute-audio'] });
 const page = await b.newPage({ viewport: { width: 900, height: 600 } });
 const errs = [];
 page.on('pageerror', (e) => errs.push(String(e.message)));
-await page.goto(`${BASE}?map=plains&capture=1`, { waitUntil: 'domcontentloaded' });
+await page.goto(`${BASE}?map=plains&capture=1${SEED ? `&seed=${SEED}` : ''}`, { waitUntil: 'domcontentloaded' });
 await page.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
 
-const out = await page.evaluate(() => {
+const out = await page.evaluate(([ID, RR]) => {
   const e = window.__ENGINE__;
   const w = e.ctx.peek('world');
   const ph = e.ctx.peek('physics');
   const ai = e.ctx.peek('ai');
   const m = e.ctx.peek('match');
   const air = m?.airstrike;
-  const rec = (w.demolitions ?? []).find((r) => r.id === 'NF-TOWER');
-  const site = (air?.sites ?? []).find((s) => s.id === 'NF-TOWER');
+  const rec = (w.demolitions ?? []).find((r) => r.id === ID);
+  const site = (air?.sites ?? []).find((s) => s.id === ID);
   const T = { x: rec.position.x, z: rec.position.z };
-  const R = 25.4;
+  const R = RR;
 
   /** The site's profile: height over the plain on a 0.25 m grid inside `R`. */
   const profile = () => {
@@ -106,7 +117,7 @@ const out = await page.evaluate(() => {
   };
 
   const caches = () => (m.caches?.list ?? [])
-    .filter((c) => String(c.id).startsWith('NF-TOWER'))
+    .filter((c) => String(c.id).startsWith(ID))
     .map((c) => ({ id: c.id, kind: c.kind, y: +c.position.y.toFixed(2), bot: !!c.botReachable, beacon: c.beacon !== false, disabled: !!c.disabled }));
 
   const res = { level: w.level.id, intact: {}, razed: {} };
@@ -126,7 +137,7 @@ const out = await page.evaluate(() => {
   res.dropped = !!site?.dropped;
   res.blocking = !!site?.blocking;
   return res;
-});
+}, [ID, RR]);
 
 console.log(JSON.stringify(out, null, 1));
 console.log('pageerrors', errs.length, errs[0] ?? '');
