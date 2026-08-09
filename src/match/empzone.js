@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { forMap } from './geography.js';
+import { mergeGeometries } from './airstrike.js';
 
 /**
  * ══════════════════════════════════════════════════════════════════════════
@@ -88,43 +90,135 @@ import * as THREE from 'three';
  * may not import `src/ui`.
  *
  * ──────────────────────────────────────────────────────────────────────────
- * 4. WHERE THEY ARE, AND WHY THEY ARE NOT WIRED THROUGH `MatchSystem`
+ * 4. WHERE THEY ARE — TWENTY OF THEM, AND THE SIZE IS DECIDED BY ONE NUMBER
  * ──────────────────────────────────────────────────────────────────────────
- * Derived, not authored: `ctx.peek('world').level.pads` is the plain's own
- * published pad table (`PADS` in `src/world/levels/plains.js`), and the field on
- * a pad is that pad's own `r1` — the radius at which its flattening has finished
- * blending back into the swell. So the field is exactly the made ground, and if
- * anybody moves zone A the field moves with it with nothing to keep in sync.
- * There is no entry in `MAP_RULES`, no line in `MatchSystem` and no second parse
- * of `?map=`: the selector is `world.level.id`, which is the rule
- * `src/match/geography.js` exists to state.
+ * 「EMPドームはもっと小さいのを至る所に設置して」.
  *
- * ZONES A AND B, WHICH IS TWO OF FIVE AND ONE PER SIDE. A is the north side's
- * shoulder (-118, -104) and B is the south's (118, 104): they are the FURTHEST
- * PAIR ON THE MAP, 314.6 m apart on opposite corners, which is the placement
- * that matters. Two fields next to each other would be one 70 m no-fly area on
- * one flank; at opposite corners each side has exactly one piece of drone-proof
- * ground and it is the piece furthest from the other man's. Between them they
- * take about 7 % of the play area. The middle — D with its tower and its
- * fortress, C, E, both bases and every metre between them — is drone country,
- * which it has to be or twenty launches a match have nowhere to go.
+ * It was two fields, each derived from a capture pad's own `r1`, i.e. 34 m at
+ * zone A and 34 m at zone B. That was two places on a 350 m plain, and both of
+ * them were a capture point — so the only drone-proof ground on the map was
+ * ground you had to be fighting over to stand on.
+ *
+ * IT IS TWENTY NOW, IN TEN PAIRS THROUGH THE ORIGIN, and the pairing is the
+ * plain's own symmetry rather than a preference: `PLAINS_RUNS` in `bomber.js`
+ * spells out why ("a line biased at one base is a line that permanently taxes
+ * one team"), and a field is a bigger favour than a bomb line. Every field has
+ * its exact image, so the two sides get the same map.
+ *
+ *   11 084 m², 11.4 % of the r 176 disc, against 7 263 m² and 7.5 % in two.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHY THERE ARE THREE SIZES AND NOT ONE — `RULES.droneAltitude` IS 22
+ * ────────────────────────────────────────────────────────────────────────────
+ * The volume that kills is the volume that is drawn (@see section 2, which is
+ * not negotiable), and what is drawn is a HEMISPHERE. So a field of radius r
+ * has its crown r metres over the pad, and a drone cruising at
+ * `RULES.droneAltitude` = 22 m flies straight over anything under 22.
+ *
+ * That is the whole cost of 「小さいの」 and it has to be paid explicitly rather
+ * than discovered: a map of nothing but 10 m domes would take a drone that
+ * DIVES at a man standing in one and would never once take a drone that was
+ * merely passing — and "a hazard nobody ever sees work is a hazard nobody
+ * believes in" is this file's own sentence about the other half of the same
+ * balance. So the set is graded:
+ *
+ *   r 24  x2   the only pair whose crown clears the cruise lane, sited on the
+ *              widest open ground either side of the centre. These are the
+ *              fields a drone flies INTO.
+ *   r 14  x6   the shoulder fields — a dive into one is dead, and a drone that
+ *              descends to lock is inside the top of one.
+ *   r 10  x12  the pockets: two hundred and thirty metres of frontage between
+ *              them, sixteen of the twenty within reach of a fight.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT DECIDES WHERE ONE MAY GO, MEASURED RATHER THAN ASSERTED
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE TRENCH NETWORK CONSTRAINS THEM, AND IT IS THE BINDING CONSTRAINT.
+ * `plains-trench.js` cuts 999 m over 44 bays and states its own coverage —
+ * "within 25 m of a cut, whole disc 79.4 %" — so a rule that keeps a whole dome
+ * off every cut leaves 8.3 % of the map eligible at r 8 and ONE lattice cell at
+ * r 26. Measured on the 2 m lattice this table was searched on. Every centre
+ * below is therefore held 14 m off the nearest centreline — nobody's fire bay
+ * is under the middle of a shell, where the shell is highest over his head —
+ * and the four that still take a length of cut inside their rim are the poses
+ * section 2's lid measurement is re-taken at, because a camera BELOW the
+ * surrounding ground is the case that cost this file two fixes.
+ *
+ * THE BOMBING RULES DO NOT CONSTRAIN THEM, and that is worth stating rather
+ * than leaving unsaid. `bomber.js`' eight runs, `airstrike.js`' salvos,
+ * `skyfall.js`' five drone craters and the mountain battery all resolve their
+ * impacts against `MASK.WORLD` and their clearances against capture radii and
+ * spawn pads; a field is `transparent`, `depthWrite: false`, has no collider,
+ * no nav cell and no entry in any keep-out — a bomb passes through one without
+ * knowing it was there. The one place a bombing rule and a field DO meet is
+ * `skyfall.js`' burning region, which denies 8 546 m² of the west for 260 s,
+ * and no centre is inside 30 m of that plough's spine: a drone-proof pocket in
+ * ground nobody may stand on is a pocket that does not exist.
+ *
+ * AND THEY ARE OFF THE CAPTURE CIRCLES' WALKABLE GROUND. Every centre clears
+ * `radius 14` plus its own rim plus 8 m, so no field touches a point a side is
+ * standing on to score. The argument for that is the one the old placement got
+ * wrong: A and B WERE the fields, so holding a point and being drone-proof were
+ * the same act, and a side that took A was also destroying its own drones on
+ * the rail (@see `Drones._clearOfDeadAir`, 7 of 20). Twenty pockets that are
+ * near the fighting and not on it is the counter-play without the coupling.
+ *
+ * THE SELECTOR IS `world.level.id` through `forMap`, which is the rule
+ * `src/match/geography.js` exists to state — no entry in `MAP_RULES`, no line
+ * in `MatchSystem`, no second parse of `?map=`.
  *
  * THE TOWN GETS NONE, and that is a decision rather than an omission. The town
  * is the map the player actually plays; its counter-play to a drone is already
  * authored and already measured (「one second out of its sight drops the lock —
  * the eight enterable buildings and every alley on this map are all inside that
- * second」), and dropping two 34 m domes into a street plan he knows would be a
- * change to a working map that nobody asked for. The plain is the map with no
- * roofs, and it is the map that needed this.
+ * second」), and dropping domes into a street plan he knows would be a change to
+ * a working map that nobody asked for. The plain is the map with no roofs, and
+ * it is the map that needed this.
  */
 
 /** Green-white. NOT the friend hex and NOT the enemy hex. @see the header. */
 const EMP_HEX = 0x7dffd6;
-/** Which pads carry a field. @see the header for why two, and why these two. */
-const EMP_PADS = ['A', 'B'];
+
+/**
+ * THE FIELDS, in world space (which on this map is level space — @see
+ * `geography.js`). Ten pairs; each entry's image through the origin is built
+ * with it, so the table says half of what is on the map and cannot go
+ * asymmetric by editing.
+ *
+ * Searched, not composed, on a 2 m lattice against the four constraints in the
+ * header — 14 m off every trench centreline, off every capture circle, off both
+ * base pads and both works, and clear of the plough's spine — taking the site
+ * that maximised distance from everything already placed, with the middle third
+ * weighted (the same trick `plains-trench.js` used for the same reason: the
+ * fight is in the middle). `cut` is the distance from the nearer of the pair to
+ * the nearest trench centreline, in metres, and it is the number to look at
+ * first if this table is ever moved.
+ */
+const PLAINS_FIELDS = [
+  { x: -70, z: -54, r: 24 },   // cut 36.2 / 14.0 · |r| 88 — the centre-west pair
+  { x: 70, z: -128, r: 14 },   // cut 20.3 / 19.0 · |r| 146
+  { x: 52, z: -52, r: 14 },    // cut 14.4 / 14.1 · |r| 74
+  { x: -8, z: -94, r: 14 },    // cut 20.4 / 18.3 · |r| 94
+  { x: 126, z: -28, r: 10 },   // cut 18.5 / 14.4 · |r| 129
+  { x: 32, z: 0, r: 10 },      // cut 29.2 / 15.7 · |r| 32 — 18 m off D's circle
+  { x: 102, z: -80, r: 10 },   // cut 23.4 / 28.4 · |r| 130
+  { x: -128, z: -22, r: 10 },  // cut 14.9 / 15.7 · |r| 130
+  { x: -54, z: -112, r: 10 },  // cut 14.2 / 14.2 · |r| 124
+  { x: 32, z: -146, r: 10 },   // cut 24.0 / 21.0 · |r| 149
+];
+
+/** @see `forMap` — an unknown map gets nothing, which is the town's answer. */
+const FIELDS = { plains: PLAINS_FIELDS, town: [] };
+
 /** Posts around the rim: the boundary at eye level. */
 const POSTS = 14;
-const POST_H = 11.5;
+/**
+ * A POST IS A FRACTION OF ITS OWN FIELD, not a constant. 11.5 m of post on a
+ * 34 m dome was 0.34 of the radius; the same fraction on a 10 m dome is 3.4 m,
+ * which is still over an eye and is what the posts are for. A constant 11.5
+ * would have stood a fence taller than the dome it marks.
+ */
+const POST_F = 0.34;
 /** Seconds a discharge flash takes to fall away. */
 const FLASH_FALL = 0.9;
 
@@ -363,6 +457,14 @@ class Zone {
     this.position = new THREE.Vector3(x, y, z);
     this.r = r;
     this.r2 = r * r;
+    /**
+     * How far outside the rim a CRUISING drone is steered. @see `deflect`.
+     * A fraction of the field rather than a constant 8 m: twenty fields at a
+     * flat 8 turned 28.5 % of the plain into ground no drone would fly over,
+     * where two of them made it 9.5 %. The margin is "do not blunder into it",
+     * and what counts as blundering scales with the size of the thing.
+     */
+    this.margin = Math.max(3, r * 0.34);
     /** Discharge, 1 at the flash and 0 at rest. */
     this.flash = 0;
     /** Drones this field has killed. Measurement only. */
@@ -395,19 +497,29 @@ export class EmpZones {
    */
   build() {
     const world = this.ctx.peek('world');
-    const pads = world?.level?.pads;
-    if (!Array.isArray(pads) || !pads.length) { this.ready = true; return this; }
+    /**
+     * TEN AUTHORED PAIRS -> TWENTY FIELDS. The mirror is built here rather than
+     * written down, so the table cannot go asymmetric by somebody editing one
+     * line of it. @see `PLAINS_FIELDS`.
+     */
+    const table = forMap(FIELDS, world, 'EMP fields');
+    const spec = [];
+    for (let i = 0; i < table.length; i++) {
+      const f = table[i];
+      spec.push({ id: `${i + 1}N`, x: f.x, z: f.z, r: f.r });
+      spec.push({ id: `${i + 1}S`, x: -f.x, z: -f.z, r: f.r });
+    }
+    if (!spec.length) { this.ready = true; return this; }
 
     const dome = new THREE.SphereGeometry(1, 48, 24, 0, Math.PI * 2, 0, Math.PI * 0.5);
-    const post = new THREE.CylinderGeometry(0.26, 0.85, POST_H, 7, 1, true);
+    /** Unit height, scaled per field — @see `POST_F`. */
+    const post = new THREE.CylinderGeometry(0.26, 0.85, 1, 7, 1, true);
     this._geo.push(dome, post);
 
-    for (const id of EMP_PADS) {
-      const p = pads.find((q) => q.id === id);
-      if (!p) continue;
-      const y = world.groundHeight ? world.groundHeight(p.x, p.z) : (p.y ?? 0);
-      const r = p.r1 ?? p.r0 ?? 30;
-      const z = new Zone(id, p.x, y, p.z, r);
+    for (const f of spec) {
+      const y = world.groundHeight ? world.groundHeight(f.x, f.z) : 0;
+      const r = f.r;
+      const z = new Zone(f.id, f.x, y, f.z, r);
 
       const mk = (ground) => {
         const m = new THREE.ShaderMaterial({
@@ -434,7 +546,7 @@ export class EmpZones {
       z.ringMat = mk(1);
 
       const g = new THREE.Group();
-      g.name = `emp-${id}`;
+      g.name = `emp-${f.id}`;
       const shell = new THREE.Mesh(dome, z.mat);
       /**
        * NAMED, AND THE NAMES ARE A MEASUREMENT TOOL. The shell, the fourteen
@@ -458,20 +570,37 @@ export class EmpZones {
        * radius is the pad's OUTER blend and the swell has come back by then — a
        * post placed at the centre's height would stand 1-2 m in the air on one
        * bearing and be buried on another.
+       *
+       * ONE MESH FOR ALL FOURTEEN, AND THAT IS A DRAW-CALL FACT RATHER THAN
+       * TIDINESS. Two fields at 16 meshes each was 32 draws; twenty would be
+       * 320 on a map that renders 960 in total, i.e. a third more of them for
+       * scenery that is `depthWrite: false` and sorted. Merging is free here
+       * because `FIELD_VS` hands the fragment stage the WORLD position (@see its
+       * own note) — the pattern is a function of where the surface IS, so
+       * fourteen posts baked into one static geometry look exactly like
+       * fourteen posts with fourteen matrices. It is 3 draws a field now.
        */
+      const postH = r * POST_F;
+      const parts = [];
       for (let i = 0; i < POSTS; i++) {
         const a = (i / POSTS) * Math.PI * 2;
         const px = z.position.x + Math.cos(a) * r;
         const pz = z.position.z + Math.sin(a) * r;
         const py = world.groundHeight ? world.groundHeight(px, pz) : z.position.y;
-        const m = new THREE.Mesh(post, z.mat);
-        m.name = 'emp-post';
-        m.position.set(px, py + POST_H * 0.5 - 0.4, pz);
-        m.userData.owNoShadow = true;
-        m.userData.owNoPrepass = true;
-        m.renderOrder = 6;
-        g.add(m);
+        const q = post.clone();
+        q.scale(1, postH, 1);
+        q.translate(px, py + postH * 0.5 - 0.4, pz);
+        parts.push(q);
       }
+      const postGeo = mergeGeometries(parts);
+      for (const q of parts) q.dispose();
+      this._geo.push(postGeo);
+      const posts = new THREE.Mesh(postGeo, z.mat);
+      posts.name = 'emp-post';
+      posts.userData.owNoShadow = true;
+      posts.userData.owNoPrepass = true;
+      posts.renderOrder = 6;
+      g.add(posts);
 
       const band = this._ringGeometry(world, z);
       this._geo.push(band);
@@ -489,9 +618,11 @@ export class EmpZones {
 
     if (this.zones.length) {
       this.ctx.scene.add(this.group);
+      let area = 0;
+      for (const z of this.zones) area += Math.PI * z.r * z.r;
       console.info(
-        `[match] EMP: ${this.zones.length} field(s) — ` +
-          this.zones.map((z) => `${z.id} r${z.r.toFixed(0)}m at (${z.position.x.toFixed(0)}, ${z.position.z.toFixed(0)})`).join(' · ')
+        `[match] EMP: ${this.zones.length} field(s), ${area.toFixed(0)} m2 — ` +
+          this.zones.map((z) => `${z.id}r${z.r.toFixed(0)}@(${z.position.x.toFixed(0)},${z.position.z.toFixed(0)})`).join(' ')
       );
     }
     this.ready = true;
@@ -506,7 +637,17 @@ export class EmpZones {
    * own 3.18 m quads — it cannot bridge a feature the ground has.
    */
   _ringGeometry(world, z) {
-    const N = 128;
+    /**
+     * …AND BOTH OF THESE ARE FRACTIONS OF THE FIELD NOW. 128 segments and a
+     * ±1.7 m band were a 1.7 m chord and a 10 % ribbon on a 34 m circle; on a
+     * 10 m one they would be a 0.5 m chord (two and a half times the vertices
+     * this needs) and a ribbon a THIRD of the radius wide, which is a disc with
+     * a hole in it rather than a mark on the floor. Held to a chord no coarser
+     * than 1.7 m — the number the original was chosen for, against the terrain
+     * mesh's own 3.18 m quads — and a band no wider than the original's.
+     */
+    const N = Math.max(40, Math.min(128, Math.round((Math.PI * 2 * z.r) / 1.7)));
+    const half = Math.max(0.75, Math.min(1.7, z.r * 0.09));
     const pos = new Float32Array(N * 2 * 3);
     const nor = new Float32Array(N * 2 * 3);
     const idx = new Uint16Array(N * 6);
@@ -515,7 +656,7 @@ export class EmpZones {
       const a = (i / N) * Math.PI * 2;
       const cx = Math.cos(a), cz = Math.sin(a);
       for (let k = 0; k < 2; k++) {
-        const rr = z.r + (k === 0 ? -1.7 : 1.7);
+        const rr = z.r + (k === 0 ? -half : half);
         const x = z.position.x + cx * rr;
         const zz = z.position.z + cz * rr;
         const o = (i * 2 + k) * 3;
@@ -568,10 +709,10 @@ export class EmpZones {
    * steering at a point on the rim orbits the field, which is the behaviour
    * wanted — it stays over the fight it is meant to be over.
    */
-  deflect(from, want, margin = 8) {
+  deflect(from, want, margin = 0) {
     for (let i = 0; i < this.zones.length; i++) {
       const z = this.zones[i];
-      const R = z.r + margin;
+      const R = z.r + (margin || z.margin);
       const dx = want.x - z.position.x;
       const dz = want.z - z.position.z;
       const d2 = dx * dx + dz * dz;
