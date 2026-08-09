@@ -83,6 +83,107 @@ const BIN_WINDOW = 0.34;
  */
 const BIN_ROUNDS = 6;
 /**
+ * ════════════════════════════════════════════════════════════════════════════
+ * HOW MANY ROUNDS ONE VOICE MAY CARRY — and it is NOT the number above
+ * ════════════════════════════════════════════════════════════════════════════
+ * ONE NUMBER WAS DOING TWO JOBS, and that is why moving it kept failing.
+ *
+ *   `BIN_ROUNDS` 6   "flush this bearing EARLY once six have arrived"
+ *                    -> decides VOICE COUNT, i.e. distinct directions a second
+ *   this            "a voice may carry this many"
+ *                    -> decides DENSITY, i.e. rounds a second
+ *
+ * They were the same constant, so raising it to 8 to get density bought fatter
+ * voices at the cost of fewer of them (95.3 -> 75.8 voices a minute against 377
+ * -> 490 rounds) and was correctly reverted: 「銃声が方方でなっている感じが戦争です」
+ * is a request for DIRECTIONS, and the revert protected that. The revert was
+ * right about the trade and wrong only in having no other lever.
+ *
+ * Split, there is no trade. `BIN_ROUNDS` stays at 6 and the early flush, the
+ * voice count and every word of that argument are untouched. This governs only
+ * what happens to the rounds ALREADY IN THE BIN when it is finally heard.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT WAS BEING THROWN AWAY, MEASURED AT REAL SIMULATION SPEED
+ * ────────────────────────────────────────────────────────────────────────────
+ * Every previous measurement of this layer was taken through `?capture=1`,
+ * which pumps a fixed 1/60 s step; under a headless renderer at 8.8 fps that is
+ * 0.147x wall clock, while `_farNext` and every audio gate run on
+ * `actx.currentTime`, which is real time. The load these numbers were sized
+ * against was therefore about SEVEN TIMES too small.
+ *
+ * Measured without it (`_burstvoice.mjs --mode=live --nocap`, NACHTFELD, player
+ * driven into contact): **3405 rounds binned, 279-392 carried.** `_updateFar`
+ * took `Math.min(BIN_ROUNDS, n)` and then set `_binN[b] = 0`, so a bin holding
+ * twenty-six rounds played six and dropped twenty.
+ *
+ * And the CADENCE lied on the way out, which is the audible half. `spacing` is
+ * `age / (rounds - 1)`, so six rounds were spread across a window that had
+ * actually held twenty-six — and a bin that had waited out a `BIN_STALE` 1.4 s
+ * of refusals played its six rounds 220 ms apart, at the clamp. Six taps a
+ * fifth of a second apart IS 「単発を数回打つだけ」, arriving from this file.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHY 18, AND WHY IT COSTS NO SLOT
+ * ────────────────────────────────────────────────────────────────────────────
+ * A round inside `distantFire` is five nodes — a source, a bandpass and a gain
+ * for the crack, an oscillator and a gain for the thump — on a voice that
+ * already builds ~13 shared ones. Eighteen rounds is ~103 nodes against an
+ * explosion's ~300, on ONE emitter instead of eighteen. That is the whole
+ * budget argument this layer was built on, used for what it was built for.
+ *
+ * It cannot lengthen a voice, and that bound is enforced rather than hoped for:
+ * the count is additionally capped at what fits in the bin's OWN window at the
+ * voice's own minimum spacing (@see `_updateFar`), so the burst never spans
+ * more time than it took to arrive, `end` does not move, and slot occupancy —
+ * the thing `FAR_FLOOR_SLOTS` rations at the pool floor — is unchanged.
+ *
+ * The roll cannot inflate either: `distantFire` clamps its envelope at
+ * `Math.min(1.6, 0.6 + rounds * 0.16)`, which is already at the ceiling by
+ * 6.25 rounds, so every round past that adds cracks and no level.
+ *
+ * `distantFire`'s own internal ceiling MUST move with this or the two disagree
+ * silently and the extra rounds are dropped one function further down — the
+ * same failure `FAR_MAX` and `playFar`'s `maxDist` are documented against.
+ * @see distantFire in src/audio/weapons.js
+ */
+const FAR_ROUNDS_MAX = 18;
+/**
+ * The tightest two rounds inside one coalesced voice may be, seconds. It is
+ * `distantFire`'s own floor restated so the cap above can be computed against
+ * it here; if they disagree the voice silently stretches past its bin's window.
+ *
+ * It is also very nearly the real number: measured at real simulation speed the
+ * plain offers ~196 rounds a second to this layer across 8 bearings, i.e. ~41 ms
+ * between rounds in one bearing. Coalescing at 45 ms is therefore not throwing
+ * information away — below this the ear has no separate events to lose.
+ */
+const FAR_SPACING_MIN = 0.045;
+/**
+ * The longest a coalesced voice's ROUNDS may span, seconds — and the number is
+ * not chosen, it is the one the shipped code already enforced.
+ *
+ * `BIN_ROUNDS` 6 at the 0.22 s spacing clamp is 1.1 s, so no far voice has ever
+ * laid its rounds out over more than that. Restating it explicitly is what lets
+ * the round count rise without the slot time rising with it.
+ *
+ * MEASURED, and this is why it exists. Taking the count from `age` alone gave
+ * a stale bin a 1.4 s burst where it used to get a 1.1 s one, and on a layer
+ * rationed to three concurrent slots at the pool floor that came straight out
+ * of the voice count: an A/B on one build at the same offered rate
+ * (`_burstvoice.mjs --nocap --clamp=72 --bin6`, 402 vs 415 rounds/s offered)
+ * gave 101 far rounds a second against 74.5 — but 12.4 far VOICES a second
+ * against 15.9. Rounds up 35 %, directions down 22 %, which is precisely the
+ * trade the `BIN_ROUNDS` 8 -> 6 revert refused, arriving by a different route.
+ *
+ * Bounding the span holds the slot time at exactly what it was, so the extra
+ * rounds are free and 「銃声が方方でなっている感じが戦争です」 keeps its voice count.
+ * The rounds are then laid out slightly compressed against the wall-clock
+ * window they arrived in — which the 0.22 clamp was already doing, and which is
+ * inaudible as a cadence error next to playing six of twenty-six.
+ */
+const FAR_SPAN_MAX = 1.1;
+/**
  * Voices a second, all bins together. 9, up from 5 — the THIRD round of
  * 「銃声が全然聞こえない、銃声が方方でなっている感じが戦争です」, and this round the
  * number under complaint is DENSITY, not level: MEASURED through a live 20v20
@@ -477,13 +578,34 @@ export class BattleLayer {
       }
       this._binCursor = (b + 1) % BINS;
       this._farNext = now + 1 / FAR_RATE;
-      const rounds = Math.min(BIN_ROUNDS, n);
+      /**
+       * TAKE WHAT ARRIVED, NOT SIX — @see FAR_ROUNDS_MAX for the measurement.
+       *
+       * Three bounds, and the third is what keeps this free:
+       *   `FAR_ROUNDS_MAX`  the node budget for one voice
+       *   `n`               there is no point inventing rounds nobody fired
+       *   the window        never more rounds than fit in the time they took to
+       *                     arrive, at the voice's own minimum spacing. This is
+       *                     what stops a deep bin stretching its burst past its
+       *                     own window: `end` cannot move, so the emitter is
+       *                     held no longer than before and `FAR_FLOOR_SLOTS`
+       *                     rations exactly what it rationed yesterday.
+       *
+       * A bin flushed on the 0.34 s window carries up to 9 rather than 6; one
+       * that waited out a `BIN_STALE` 1.4 s of refusals carries up to 18 rather
+       * than 6, and plays them 82 ms apart instead of six taps at the 220 ms
+       * clamp.
+       */
+      // The window the rounds are laid out over: what actually happened, but
+      // never more slot time than the shipped code took. @see FAR_SPAN_MAX.
+      const span = Math.min(age, FAR_SPAN_MAX);
+      const rounds = Math.min(FAR_ROUNDS_MAX, n, 1 + Math.round(span / FAR_SPACING_MIN));
       const x = this._binX[b] / n, y = this._binY[b] / n, z = this._binZ[b] / n;
       this._binN[b] = 0;
       // Spacing is the cadence that actually happened: the rounds arrived over
       // `age` seconds, so play them over `age` seconds. A bin that filled in
       // 40 ms was a burst and sounds like one.
-      const spacing = clamp(age / Math.max(1, rounds - 1), 0.05, 0.22);
+      const spacing = clamp(span / Math.max(1, rounds - 1), FAR_SPACING_MIN, 0.22);
       // The voice takes its distance from the emitter's own position, which is
       // the mean of the bin — so the band it is shaped for and the attenuation
       // it is played at are the same number by construction.

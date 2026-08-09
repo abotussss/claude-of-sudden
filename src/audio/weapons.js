@@ -651,6 +651,45 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
     end += t + 0.05;
   }
 
+  /* ---- 8b. the crest, at the edge of the map --------------------- */
+  /**
+   * ONE MORE RETURN, ABOUT A SECOND LATE — 「銃声が鳴り響く」.
+   *
+   * The three taps above are the street: 55-260 ms, the near facades. On a 352 m
+   * bowl there is one more, and it is the one that gives the place its voice —
+   * the rock wall 105-175 m out, answering at 610-1020 ms. Nothing in this file
+   * or in ir.js reached that far: the `open` IR's longest early tap is 620 ms
+   * and it is a diffuse wash rather than an arrival.
+   *
+   * `o.crest` is measured, not assumed: eight rays from the listener, nearest
+   * hit beyond 90 m, doubled and divided by the speed of sound. A map with no
+   * distant reflector passes 0 and this block does not exist — AL-MARIYA's
+   * farthest facade is 61 m, so the town is untouched.
+   * @see HORIZON_DIST in src/audio/index.js.
+   *
+   * IT IS AN ARRIVAL AND NOT MORE WET, which is the whole reason it is a delay
+   * and not a send. 「リバーブが強いです、まだ」 is standing and four reverb paths
+   * were cut for it; a convolver cannot make this sound anyway, because its
+   * energy arrives immediately and never resolves into an event.
+   *
+   * Dark, because 300 m of extra air is a lowpass long before it is an
+   * attenuator: ~-10 dB at 4 kHz and ~-30 dB at 8. Two nodes and a gain, only
+   * on a map that has a crest and only when the shot is loud enough to reach it.
+   */
+  const crest = o.crest ?? 0;
+  if (crest > 0.3 && nearP > 0.06) {
+    const sum2 = gain(actx, 1);
+    node.connect(sum2);
+    const dl = actx.createDelay(2.2);
+    dl.delayTime.value = Math.min(2.1, crest * rng.range(0.97, 1.03));
+    const lp = biquad(actx, 'lowpass', 600, 0.7);
+    const hp = biquad(actx, 'highpass', 110, 0.7);
+    const g = gain(actx, (o.crestLevel ?? 0.09) * nearP * profile.level);
+    series(node, dl, hp, lp, g).connect(sum2);
+    node = sum2;
+    end += crest + 0.25;
+  }
+
   // WET = character x room x distance. `profile.send` is the weapon's share,
   // `o.echoBoost` is the room the SHOOTER is standing in (see `_wetnessAt` in
   // index.js) and `far` is the fact that a distant shot reaches you as tail.
@@ -768,7 +807,15 @@ export function farGain(dist) {
 export function distantFire(actx, bank, rng, o = {}) {
   const t0 = o.when ?? actx.currentTime;
   const dist = clamp(o.distance ?? 90, 20, 400);
-  const rounds = Math.max(1, Math.min(8, (o.rounds ?? 1) | 0));
+  /**
+   * 8 -> 18, AND IT IS THE SAME DECISION AS `FAR_ROUNDS_MAX` IN battle.js.
+   * These two are one number in two files and the gap between them is rounds
+   * that the caller counted, budgeted and handed over, and that this line then
+   * silently threw away — the same class of defect `FAR_MAX` 320 against
+   * `playFar`'s `maxDist` 340 is documented against. If either moves, both move.
+   * @see FAR_ROUNDS_MAX in src/audio/battle.js for the measurement.
+   */
+  const rounds = Math.max(1, Math.min(18, (o.rounds ?? 1) | 0));
   const spacing = clamp(o.spacing ?? 0.09, 0.045, 0.5);
   const p = o.profile ?? WEAPON_PROFILES.rifle;
   const lvl = (o.level ?? 1) * (p.level ?? 1);
@@ -875,7 +922,24 @@ export function distantFire(actx, bank, rng, o = {}) {
    * the whole burst, envelope scaled by how many rounds were in it.
    */
   {
-    const dur = clamp(0.34 + dist * 0.0026, 0.34, 1.3) * (1 + rounds * 0.09);
+    /**
+     * THE ROLL'S LENGTH SATURATES AT SIX ROUNDS, and the clamp is new because
+     * the round ceiling moved from 8 to 18.
+     *
+     * `rounds * 0.09` was written when nothing could exceed 8, so it was a small
+     * correction. At 18 it is a 2.62x multiplier and MEASURED it took the far
+     * voice's span from 2.2-2.7 s to 2.9-3.6 s — 10-35 % more emitter time on
+     * the one layer that is rationed to three concurrent slots at the pool floor
+     * (`FAR_FLOOR_SLOTS`). Longer voices there mean FEWER voices, which would
+     * have spent the density this pass just bought and called it a gain.
+     *
+     * Six is not an arbitrary place to stop: the roll's LEVEL already saturates
+     * at 6.25 rounds on the line below, so past that a round adds cracks and
+     * neither level nor length. The swell is the burst's low-frequency envelope
+     * and a longer burst does not make the ground ring for longer; it makes it
+     * ring harder, which the level term already says.
+     */
+    const dur = clamp(0.34 + dist * 0.0026, 0.34, 1.3) * (1 + Math.min(6, rounds) * 0.09);
     const src = bank.source('brown', rng, rng.range(0.55, 0.95));
     const lp = biquad(actx, 'lowpass', 300, 0.8);
     const g = gain(actx, 0);
@@ -884,6 +948,37 @@ export function distantFire(actx, bank, rng, o = {}) {
     ad(g.gain, t0, 0.6 * lvl * Math.min(1.6, 0.6 + rounds * 0.16), 0.02 + dist * 0.0006, dur);
     src.start(t0, src._offset, dur * 1.3 + 0.05);
     end = Math.max(end, lastT + dur * 1.3);
+  }
+
+  /**
+   * THE CREST — the edge of the map answering the war, ~610-1020 ms late.
+   *
+   * The two taps above are facades between the player and the muzzle, at 340
+   * and 760 ms at 200 m. This is the rock wall around the bowl, measured from
+   * the listener (@see HORIZON_DIST in index.js), and it is the sound
+   * 「銃声が鳴り響く」 is asking for on a 352 m map.
+   *
+   * IT COSTS NO EMITTER TIME, which is what makes it affordable on the layer
+   * `FAR_FLOOR_SLOTS` rations to three voices at the pool floor: the roll below
+   * already runs 0.34-1.3 s past the last round and the measured voice span is
+   * 2.2-4.5 s, so a return at ~1 s lands INSIDE the envelope this voice was
+   * already holding its slot for. `end` is only raised if the crest genuinely
+   * outlasts what is there.
+   *
+   * Fed from `out` — the rounds — rather than from `sum`, so the facade taps do
+   * not go round again and turn a discrete answer into a wash.
+   */
+  const crest = o.crest ?? 0;
+  if (crest > 0.3) {
+    const d = actx.createDelay(2.2);
+    d.delayTime.value = Math.min(2.1, crest * rng.range(0.97, 1.03));
+    // Darker than the facade taps above and darker again with range: what comes
+    // back off a cliff 300 m round trip away has no top left at all.
+    const lp = biquad(actx, 'lowpass', clamp(520 * fall + 180, 200, 700), 0.7);
+    const hp = biquad(actx, 'highpass', 120, 0.7);
+    const g = gain(actx, o.crestLevel ?? 0.16);
+    series(out, d, hp, lp, g).connect(sum);
+    end = Math.max(end, lastT + crest + 0.3);
   }
 
   // Send stays LOW on purpose. See the head of this function: the room a distant
