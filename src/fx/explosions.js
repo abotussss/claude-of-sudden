@@ -200,6 +200,15 @@ export function explode(fx, o) {
     growth: 3.2,
   });
 
+  // ---- ground that keeps smoking -----------------------------------------
+  // 「爆撃されたところは硝煙、煙をもくもくさせて」. This is the ONE seam every bomb
+  // on either map already passes through — the line bombardment, `zoneBombard`,
+  // the satellite, the airstrikes, the acts — so a crater plume routed here
+  // reaches all of them without any of those files knowing this exists.
+  // `consider` owns the gate (blast radius, ground height, merging) and obeys
+  // an explicit `crater: true|false` on the payload. @see fx/craters.js.
+  fx.craters?.consider(px, py, pz, R, o);
+
   // ---- light + ground scorch ---------------------------------------------
   if (fx.lights) {
     fx.lights.flash(px, py + R * 0.15, pz, 1, 0.72, 0.4, 420 * (R / 4), 0.45, 8, R * 8, 4);

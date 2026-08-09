@@ -7,6 +7,7 @@ import { HazeSystem } from './haze.js';
 import { LightPool } from './lights.js';
 import { ShellSystem } from './shells.js';
 import { Ambience } from './ambience.js';
+import { CraterField } from './craters.js';
 import { spawnImpact } from './impacts.js';
 import { muzzleFlash } from './muzzle.js';
 import { spawnTracer } from './tracers.js';
@@ -123,6 +124,14 @@ export class FxSystem {
       motes: mote,
       shimmer: budget >= 4000,
     });
+
+    /**
+     * Ground that was bombed and is still smoking a minute later. Its own pool
+     * with its own stated share of `this.lit`, deliberately NOT one of
+     * `Ambience`'s 24 emitters — a sortie lays ten craters at once and would
+     * evict the plain's six permanent banks and both thrown cans. @see craters.js.
+     */
+    this.craters = new CraterField(this);
 
     // ---- lighting inputs (overridable by `sky` via setAmbient) ------------
     this._ambTop = new THREE.Vector3(0.42, 0.5, 0.66);
@@ -669,6 +678,15 @@ export class FxSystem {
     this.ambience.remove(tag);
   }
 
+  /**
+   * Smoking ground, bypassing `explode()`'s radius gate. For a caller that
+   * wants a crater without a detonation, or one whose blast is under `MIN_R`
+   * and knows better. @see craters.js.
+   */
+  craterSmoke(x, y, z, radius = 14) {
+    this.craters.add(x, y, z, radius);
+  }
+
   /** Let `sky` drive the values smoke and dust are lit with. */
   setAmbient(topColor, bottomColor, sunColor) {
     if (topColor) this._ambTop.set(topColor.r ?? topColor.x, topColor.g ?? topColor.y, topColor.b ?? topColor.z);
@@ -822,6 +840,7 @@ export class FxSystem {
     this._runScript(dt);
     this.ambience.sunFactor = this._sunFactor;
     this.ambience.update(dt, this.now, ctx.camera, ctx.scene);
+    this.craters.update(dt, this.now, ctx.camera);
   }
 
   lateUpdate(dt, ctx) {
