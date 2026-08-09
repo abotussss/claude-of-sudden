@@ -47,6 +47,20 @@ await page.goto(`${BASE}?capture=1&map=${MAP}&seed=7`, { waitUntil: 'domcontentl
 await page.waitForFunction('window.__READY__===true', null, { timeout: 240000 });
 console.log('map', await page.evaluate(() => window.__ENGINE__.ctx.peek('world').level.id));
 const sleep = (ms) => page.waitForTimeout(ms);
+/**
+ * ADVANCE THE SIM BY FRAMES, NOT BY WALL SECONDS. `?capture=1` pins the step to
+ * a fixed 1/60 PER FRAME and the engine keeps its own rAF loop, so a
+ * `waitForTimeout(7200)` buys 7.2 s of game only if the page is holding 60 fps
+ * — and NACHTFELD at 1280x720 with eighty bots on it is not. Measured: the
+ * first reshoot slept 7.2 s for a 6 s arming delay and photographed an UNARMED
+ * mine (`[shots] armed: null`, no marker ring). Frames are the unit the clock
+ * is actually in.
+ */
+const pump = (n) => page.evaluate((n) => new Promise((r) => {
+  let i = 0;
+  const t = () => (++i >= n ? r(i) : requestAnimationFrame(t));
+  requestAnimationFrame(t);
+}), n);
 const shot = (n) => page.screenshot({ path: `${SHOTS}/${n}.png` });
 
 /* The plain is a NIGHT map. The two "can you see it" frames are lit to daylight
@@ -66,7 +80,7 @@ await page.evaluate(() => {
   e.ctx.viewScene.visible = false;
   e.ctx.peek('sky')?.setTimeOfDay?.(10.5);
 });
-await sleep(900);
+await pump(30);
 
 /**
  * Put the eye `dist` from `p` on bearing `bear`, `eyeUp` metres above the
@@ -117,13 +131,19 @@ const mine = await page.evaluate(() => {
   const w = e.ctx.peek('weapons');
   const ph = e.ctx.peek('physics');
   // On a real lane, so the frame is ground armour actually drives over.
-  const ln = m.tank.laneNear(-60, -120, 200, -1);
-  const y = ph.groundHeight(ln.x, ln.z, 60);
-  w.layMine({ x: ln.x, y: y + 0.2, z: ln.z }, { team: 1, owner: null });
-  return { x: ln.x, y, z: ln.z, yaw: ln.yaw };
+  // The RED-W hub at (-88,-24) — 100 m of open plain, no trench, no works.
+  const ln = m.tank.laneNear(-88, -24, 200, -1);
+  // Eight metres down the lane from the sample: the nearest point happened to
+  // sit under an anti-tank hedgehog, and a photograph of a mine behind a girder
+  // answers nothing about whether a mine is visible.
+  const x = ln.x + Math.sin(ln.yaw) * 8;
+  const z = ln.z + Math.cos(ln.yaw) * 8;
+  const y = ph.groundHeight(x, z, 60);
+  w.layMine({ x, y: y + 0.2, z }, { team: 1, owner: null });
+  return { x, y, z, yaw: ln.yaw };
 });
 console.log('[shots] mine laid at', JSON.stringify(mine));
-await sleep(7200);                       // 6 s of arming, then the ring lights
+await pump(430);                         // 6 s of arming at 1/60 a frame, then the ring lights
 const armedAt = await page.evaluate(() => {
   const w = window.__ENGINE__.ctx.peek('weapons');
   const g = w.thrown.field.find((f) => f.live && f.armed);
@@ -131,15 +151,77 @@ const armedAt = await page.evaluate(() => {
 });
 console.log('[shots] armed:', JSON.stringify(armedAt));
 
-for (const [name, d, up] of [['20-mine-2m', 2.4, 1.0], ['21-mine-20m', 20, 1.2], ['22-mine-40m', 40, 1.4]]) {
-  // Eye RAISED and the look point ON the mine: a 97 mm object seen from a
-  // standing man's eye at ground level is below the bottom of the frame.
-  const r = await aim(mine, d, mine.yaw + Math.PI * 0.5, up, 0.05);
-  await sleep(600);
+/**
+ * THE TWO RANGE FRAMES ARE SHOT FROM A TANK COMMANDER'S EYE, BACK ALONG THE
+ * LANE, and both halves of that are the question rather than a preference.
+ *
+ *   ALONG THE LANE, because "can you see it before you drive onto it" is asked
+ *   from the driving line. Square to it, at 20 m, the first attempt put a
+ *   CREST between the camera and the mine and photographed a hillside — a true
+ *   picture of the plain and no answer at all about the object.
+ *   AT 2.4 m, because that is the height of this hull's turret roof
+ *   (`_buildColliders`: the turret box tops out at y 2.55, the hull roof at
+ *   2.15). A man on foot sees it from 1.66 m and sees less.
+ *
+ * `los` is `physics.lineOfSight` on `MASK.SIGHT` from the eye to the mine, so
+ * the log distinguishes "too small to see" from "behind a rise" — they are
+ * different answers and only one of them is about the mine.
+ */
+for (const [name, d, up] of [['20-mine-2m', 2.4, 1.7], ['21-mine-20m', 20, 2.4], ['22-mine-40m', 40, 2.4]]) {
+  const bear = name === '20-mine-2m' ? mine.yaw + Math.PI * 0.5 : mine.yaw + Math.PI;
+  const r = await aim(mine, d, bear, up, 0.05);
+  await pump(20);
+  const [where] = await ndc([{ x: mine.x, y: mine.y + 0.05, z: mine.z }]);
+  const los = await page.evaluate((m) => {
+    const e = window.__ENGINE__;
+    const ph = e.ctx.peek('physics');
+    const a = e.camera.position.clone();
+    const b = a.clone().set(m.x, m.y + 0.06, m.z);
+    return ph.lineOfSight ? ph.lineOfSight(a, b, ph.MASK.SIGHT) : null;
+  }, mine);
+  await shot(name);
+  /**
+   * …AND A 240 px CROP CENTRED ON THE MINE'S OWN PIXEL. At 20 m a 345 mm ring
+   * subtends about a degree — twelve pixels of a 1280-wide frame — and "is it
+   * visible" cannot be answered by looking at a picture in which it is twelve
+   * pixels. The crop is where the projection says it is, so it is the object
+   * and not a search.
+   */
+  const px = Math.round((where.x * 0.5 + 0.5) * 1280);
+  const py = Math.round((-where.y * 0.5 + 0.5) * 720);
+  await page.screenshot({
+    path: `${SHOTS}/${name}-crop.png`,
+    clip: { x: Math.max(0, px - 120), y: Math.max(0, py - 120), width: 240, height: 240 },
+  });
+  console.log(`  ${name}  camera ${JSON.stringify(r.camera)} at ${r.d} m — on screen: ${where.on} (${where.x}, ${where.y}) = pixel ${px},${py}, line of sight: ${los}`);
+}
+
+/**
+ * …AND THE SAME TWO RANGES AT THE MAP'S OWN TIME OF DAY.
+ *
+ * NACHTFELD is a NIGHT map and the frames above are lit to 10:30 so that "can
+ * you see it" is a question about the OBJECT rather than about the dark. But
+ * the marker ring is ADDITIVE (`_drawRing`), so daylight is the condition it
+ * reads WORST in and night is the condition it is actually played in. Both are
+ * photographed rather than argued about.
+ */
+await page.evaluate(() => window.__ENGINE__.ctx.peek('sky')?.setTimeOfDay?.(1.2));
+await pump(60);
+for (const [name, d] of [['21-mine-20m-night', 20], ['22-mine-40m-night', 40]]) {
+  const r = await aim(mine, d, mine.yaw + Math.PI, 2.4, 0.05);
+  await pump(20);
   const [where] = await ndc([{ x: mine.x, y: mine.y + 0.05, z: mine.z }]);
   await shot(name);
-  console.log(`  ${name}  camera ${JSON.stringify(r.camera)} at ${r.d} m — mine on screen: ${where.on} (${where.x}, ${where.y})`);
+  const px = Math.round((where.x * 0.5 + 0.5) * 1280);
+  const py = Math.round((-where.y * 0.5 + 0.5) * 720);
+  await page.screenshot({
+    path: `${SHOTS}/${name}-crop.png`,
+    clip: { x: Math.max(0, px - 120), y: Math.max(0, py - 120), width: 240, height: 240 },
+  });
+  console.log(`  ${name}  at ${r.d} m — pixel ${px},${py}`);
 }
+await page.evaluate(() => window.__ENGINE__.ctx.peek('sky')?.setTimeOfDay?.(10.5));
+await pump(40);
 
 /* ---- 4: a hull goes up on one ------------------------------------------- */
 const up = await page.evaluate(async () => {
@@ -239,7 +321,7 @@ if (duel) {
   let placed = null;
   for (const dist of [duel.apart * 1.0, duel.apart * 1.4, duel.apart * 1.9]) {
     await aim(mid, dist, bear, 6.0, 1.6);
-    await sleep(500);
+    await pump(20);
     const seen = await ndc([
       { x: duel.ap.x, y: duel.ap.y + 1.4, z: duel.ap.z },
       { x: duel.bp.x, y: duel.bp.y + 1.4, z: duel.bp.z },
