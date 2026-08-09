@@ -1955,8 +1955,17 @@ export const RULES = {
    * hidden squad's crossing — which is this battery's trigger and its only one
    * — actually happens, and how much match is left after it:
    *
-   *     seed  7   BLUE past 450 at t+304s   match ended t+532s   228s left
-   *     seed 11   BLUE past 450 at t+332s   match ended t+612s   280s left
+   *     seed  7   BLUE past 450 at t+373s — the human 54 BEHIND, so the squad
+   *                stood down under 「負けてたら隠し部隊は出さない」 and the battery
+   *                never deployed. That is the rule working, not a missing run.
+   *     seed 11   RED  past 450 at t+356s   match ended t+571s   214s left
+   *     seed 13   RED  past 450 at t+400s   match ended t+680s   280s left
+   *
+   * (Measured on the shipping build. An earlier pass on the build WITHOUT this
+   * feature read t+304 and t+332 for the same two seeds — adding a subsystem
+   * takes an `rng.fork()` and shifts every stream drawn after it, so the same
+   * seed is a different match. The BUDGET is what is being measured and it did
+   * not move.)
    *
    * SO THE BUDGET IS 228-280 SECONDS. Thirty rounds at one every ~13 s from the
    * BATTERY is 390 s — it would still be laying its eighteenth round when the
@@ -1964,12 +1973,15 @@ export const RULES = {
    * failure `hiddenSquadWaveGap`'s own note was written about. Thirty rounds at
    * one every ~13 s from EACH OF THREE GUNS is ten rounds a gun. MEASURED
    * end-to-end with `_battfire.mjs` at these numbers: per-gun mean gaps of
-   * 13.99 / 14.02 / 14.20 s, a battery round every 4.66 s, and 175 SECONDS from
-   * the first vehicle cresting the ridge to the last one going back over it —
-   * including the 21 s descent and the six berth shifts. All thirty delivered
-   * with 50-105 s of match still to run, which matters: the squad keeps
-   * arriving to the whistle and the deadlock has to still be a deadlock after
-   * the guns leave.
+   * 13.18-14.20 s over three engagements, a battery round every 4.5-4.7 s, and
+   * 165-183 SECONDS from the first vehicle cresting the ridge to the last one
+   * going back over it — including the ~21 s descent and the six berth shifts.
+   * END TO END on the two seeds that armed for real: 183 s of a 214 s budget and
+   * 175 s of a 280 s one, 30 of 30 rounds delivered in both. All thirty are away
+   * with 31-105 s of match still to run, which matters: the squad keeps arriving
+   * to the whistle and the deadlock has to still be a deadlock after the guns
+   * leave. If the whistle ever does come first, the magazine is simply not
+   * emptied — 30 is when they GO HOME, not a promise that the match will wait.
    *
    * IT IS A RANGE AND NOT A NUMBER so three guns on the same cycle do not
    * converge into a three-round volley; the first lay of each is additionally
