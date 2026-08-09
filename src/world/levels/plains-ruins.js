@@ -373,6 +373,44 @@ function fallenRoof(A, rng, gy, P, w, d, n) {
 }
 
 /**
+ * ────────────────────────────────────────────────────────────────────────────
+ * SOMETHING STILL BURNING IN IT — and this is a legibility fix, not decoration
+ * ────────────────────────────────────────────────────────────────────────────
+ * Photographed from inside the first blockhouse this file stood up, the frame
+ * came back a wall of brick courses two stops off black with a window in it.
+ * That is not a bug — the map is lit at 21:40 by a moon at 0.049 and five fires
+ * on the horizon, and a room with four walls round it is a room with none of
+ * that in it. It is also not something a light can fix here: Three bakes the
+ * number of visible point lights into every material's program cache key, so
+ * one crossing its cull radius recompiles every lit material in the scene
+ * (measured at +33-36 programs and 640-900 ms on that frame), and the plain's
+ * five fires already sit inside a fixed slot budget. Twenty-three more is not
+ * available at any price.
+ *
+ * `ember` is. It is emissive mass with no light attached — the same thing the
+ * burning ridges, the wreck fires and the tower's masthead are made of — so it
+ * costs a handful of boxes, blooms in the composite, and gives the inside of a
+ * shell something to be seen against. Two thirds of them, so a dark ruin is
+ * still a place you can be surprised in.
+ */
+function smoulder(A, rng, gy, P, w, d) {
+  const [cx, cz] = P(rng.range(-0.3, 0.3) * w, rng.range(-0.3, 0.3) * d);
+  const g = gy(cx, cz);
+  for (let i = 0; i < 7; i++) {
+    A.add('ember', BOX_SOFT(A), LL(IDENT,
+      cx + rng.range(-1.3, 1.3), g + rng.range(0.04, 0.8), cz + rng.range(-1.3, 1.3),
+      rng.float() * 6.28, rng.range(0.18, 0.7), rng.range(0.12, 0.6), rng.range(0.18, 0.7)));
+  }
+  /** What it is burning: the roof timbers, stacked where they fell. */
+  for (let i = 0; i < 3; i++) {
+    const [ax, az] = P(rng.range(-0.34, 0.34) * w, rng.range(-0.34, 0.34) * d);
+    A.add('wood_prop_dark', BOX(A), LL(IDENT, ax, gy(ax, az) + 0.16, az,
+      rng.float() * 6.28, rng.range(0.14, 0.24), 0.16, rng.range(1.4, 3.0),
+      rng.range(-0.16, 0.16), rng.range(-0.16, 0.16)), { masks: [0.95, 0.85, 0.3] });
+  }
+}
+
+/**
  * WHAT IS LEFT INSIDE. Kept clear of every opening — @see rule 4, and the
  * radius is the PROP'S, not the point's, because `interiors.js` tested the
  * centre of a cabinet against a doorway circle and put it half in the door.
@@ -521,6 +559,7 @@ function terrace(A, rng, gy, cx, cz, yaw, S) {
   const [rx, rz] = P((cuts[razed] + cuts[razed + 1]) / 2, rng.range(-0.2, 0.2) * d);
   drawDebris(A, rng, debrisField(rng, rx, rz, rng.range(6, 8.5), rng.range(0.9, 1.4), RUBBLE_CELL),
     gy, { key, key2: 'concrete_dark', surface: 'concrete' });
+  if (rng.float() < 0.66) smoulder(A, rng, gy, P, w, d);
   stores(A, rng, gy, P, w, d, clears, 10);
   return Math.hypot(w, d) / 2;
 }
@@ -610,6 +649,7 @@ function hall(A, rng, gy, cx, cz, yaw, S) {
     drawDebris(A, rng, debrisField(rng, rx, rz, rng.range(4.5, 6.5), rng.range(0.7, 1.2), RUBBLE_CELL),
       gy, { key: 'concrete', key2: 'metal_rust', surface: 'concrete' });
   }
+  if (rng.float() < 0.66) smoulder(A, rng, gy, P, w, d);
   stores(A, rng, gy, P, w, d, clears, 12);
   return Math.hypot(w, d) / 2;
 }
@@ -683,6 +723,7 @@ function blockhouse(A, rng, gy, cx, cz, yaw, S) {
   const [rx, rz] = P(rng.range(-0.4, 0.4) * w, rng.range(-0.4, 0.4) * d);
   drawDebris(A, rng, debrisField(rng, rx, rz, rng.range(5.5, 7.5), rng.range(0.9, 1.4), RUBBLE_CELL),
     gy, { key, key2: 'concrete_dark', surface: 'concrete' });
+  if (rng.float() < 0.66) smoulder(A, rng, gy, P, w, d);
   stores(A, rng, gy, P, w, d, clears, 8);
   return Math.hypot(w, d) / 2;
 }
@@ -724,6 +765,17 @@ function silos(A, rng, gy, cx, cz, yaw, S) {
     const face = 2 * r * Math.sin(Math.PI / segs);
     /** The breach: three staves out of eighteen, on its own bearing per silo. */
     const b0 = rng.int(0, segs - 1);
+    /**
+     * …AND ONE BITE OUT OF THE RIM, SOMEWHERE ELSE. The first cut jittered every
+     * stave's top over ±12 % independently, and photographed at 30 m eighteen
+     * staves each a random height apart read as a colonnade rather than as a
+     * cylinder — the eye needs a RIM to see a cylinder at all. So the rim is
+     * near level and the damage is one contiguous arc, which is also what a
+     * ruptured silo actually is.
+     */
+    const bite = (b0 + 6 + rng.int(0, 5)) % segs;
+    const biteW = 2 + rng.int(0, 2);
+    const tops = [];
     for (let i = 0; i < segs; i++) {
       const a = (i / segs) * Math.PI * 2 + yaw;
       const rr = r - 0.22;
@@ -732,10 +784,41 @@ function silos(A, rng, gy, cx, cz, yaw, S) {
       const ax = mx - Math.sin(tang) * face * 0.5, az = mz - Math.cos(tang) * face * 0.5;
       const bx = mx + Math.sin(tang) * face * 0.5, bz = mz + Math.cos(tang) * face * 0.5;
       const dd = Math.min((i - b0 + segs) % segs, (b0 - i + segs) % segs);
+      const db = Math.min((i - bite + segs) % segs, (bite - i + segs) % segs);
       /** Full height, so nothing overhangs the way in. @see rule 1. */
-      const hh = dd <= 1 ? 0 : dd === 2 ? h * rng.range(0.18, 0.4)
-        : h * rng.range(0.78, 1.02) * (dd < 5 ? 0.82 : 1);
+      let hh = dd <= 1 ? 0 : dd === 2 ? h * rng.range(0.2, 0.45) : h * rng.range(0.94, 1.02);
+      if (dd > 2 && db <= biteW) hh *= 0.44 + 0.16 * db;
+      tops.push(hh);
       panel(A, rng, gy, key, inner, ax, az, bx, bz, hh, 0.44, { course: 0.62, batter: 0 });
+      /**
+       * THE HOOP BANDS. Three proud rings up the outside, DRAWN ONLY — the one
+       * cue that says "cylinder" from any bearing, at one box per stave per
+       * band, and 0.14 m of relief is nothing to walk over or stand on.
+       */
+      for (const by of [2.4, 5.6, 8.8]) {
+        if (by > hh - 0.6) break;
+        A.add('metal_rust', BOX_FINE(A), LL(IDENT,
+          (ax + bx) / 2, gy((ax + bx) / 2, (az + bz) / 2) + by, (az + bz) / 2,
+          Math.atan2(bx - ax, bz - az), 0.58, 0.26, face + 0.06), { masks: [0.9, 0.62, 0.1] });
+      }
+    }
+    /**
+     * THE PLINTH the range stands on. 0.3 m, so it is a kerb and not the
+     * 0.42-0.68 m trip band 「石ころオブジェが移動の妨げです」 is about, and drawn
+     * only — what it buys is the base of the cylinder reading as a base rather
+     * than as eighteen posts pushed into the ground.
+     */
+    for (let i = 0; i < segs; i++) {
+      const dd = Math.min((i - b0 + segs) % segs, (b0 - i + segs) % segs);
+      if (dd <= 1) continue;
+      const a = (i / segs) * Math.PI * 2 + yaw;
+      const rr = r + 0.16;
+      const mx = ox + Math.cos(a) * rr, mz = oz + Math.sin(a) * rr;
+      const tang = a + Math.PI / 2;
+      const ax = mx - Math.sin(tang) * face * 0.6, az = mz - Math.cos(tang) * face * 0.6;
+      const bx = mx + Math.sin(tang) * face * 0.6, bz = mz + Math.cos(tang) * face * 0.6;
+      A.add(inner, BOX_FINE(A), LL(IDENT, mx, gy(mx, mz) + 0.15, mz,
+        Math.atan2(bx - ax, bz - az), 0.92, 0.3, face * 1.2), { masks: [0.5, 0.6, 0.45] });
     }
     /** The spill: what came out of the hole, relaxed so it is walkable. */
     const ba = (b0 / segs) * Math.PI * 2 + yaw;
